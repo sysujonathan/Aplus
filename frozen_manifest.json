@@ -1,0 +1,98 @@
+{
+  "source": "https://github.com/lhy438769415-wq/A",
+  "commit": "6bc1b9e1800d1523118fc862f3791edb8e7faa0f",
+  "files": [
+    {
+      "path": "core/__init__.py",
+      "sha256": "d673fd286e7d7f01352738e6b84d46bec6ac59458b28e72f629c0a573a26fd9d"
+    },
+    {
+      "path": "core/calculator.py",
+      "sha256": "5b89c924738478b22abd62480b09fe23787c3c2c7fd1fa29a6b2f964139386c8"
+    },
+    {
+      "path": "core/formatter.py",
+      "sha256": "ff4388c93a465ad75cd1365163c3c6cfa224e18dece8b8613814cccf04d9deea"
+    },
+    {
+      "path": "core/log_config.py",
+      "sha256": "93f2305b97db10f98755591f97d0f9786823723ef31adebc83a94805ee5140fd"
+    },
+    {
+      "path": "core/paths.py",
+      "sha256": "cb0afc8cc076dc6743d31fa438f3bb438ba7077f56530c8b79148a3b3418e39d"
+    },
+    {
+      "path": "core/rating_core.py",
+      "sha256": "5fd4d32414a3d1a428f43d218c3281e261b8489017ca5ece6704ffe276de91a2"
+    },
+    {
+      "path": "core/rating.py",
+      "sha256": "81b34141c6d797cd467ee62f27064a07466cb5b438e52d4b0513005728ca8ca5"
+    },
+    {
+      "path": "core/strategy_registry.py",
+      "sha256": "75ba7cd42102a0b4062fd0b9ec6f660dca569034d32b1ccb9ca39f77415e3358"
+    },
+    {
+      "path": "core/strategies/__init__.py",
+      "sha256": "914fbd4e0176bd9fcd0a35c3fa8b62d08aa43d0c1abf36b6ff395489a0354bd3"
+    },
+    {
+      "path": "core/strategies/awil_strategy.py",
+      "sha256": "d84c5a19de70934c4a060e1498b54124aeea898864613aea21c8d3d5664323a2"
+    },
+    {
+      "path": "core/strategies/base.py",
+      "sha256": "c5b4dadf7a574aff6544fa10a3ca88f172f26cf4846082ceadb387e8d3e648d2"
+    },
+    {
+      "path": "core/strategies/gap_h2_enhanced_strategy.py",
+      "sha256": "61387386bb2558e33543c1e1bb818b6cce10288e654a871036c6fdc37635f386"
+    },
+    {
+      "path": "core/strategies/gap_h2_strategy.py",
+      "sha256": "57e61feb07991feabca85b556ca3a6e5e66eb5258d6f3c4a58a16d753237a248"
+    },
+    {
+      "path": "core/strategies/gap_pinbar_strategy.py",
+      "sha256": "53f79f022e95aa52ab1351bc7285b7942664f25f66860fcd8f1c101cd4a1b9bf"
+    },
+    {
+      "path": "core/strategies/geometric_engine.py",
+      "sha256": "d34e1a7c2a6c2413a987c6eaeb0e5b136bbf0390abd50f5e9418025c25e3a184"
+    },
+    {
+      "path": "core/strategies/monthly_range_break_strategy.py",
+      "sha256": "80bfcd8eae3ab527e8a625f33da811ae1e5726f23977c805643a7ff201144ac4"
+    },
+    {
+      "path": "core/strategies/mtr_strategy.py",
+      "sha256": "6d4335b15ef9865e32bd99186e66c5a688b0a8b915c3e5b50aae94c2e8a1a184"
+    },
+    {
+      "path": "core/strategies/mtr_structural_v35.py",
+      "sha256": "32b88d4ba919fbab86ee8a55b9efed13345538b10c2bb664c657ca13d9402c38"
+    },
+    {
+      "path": "core/strategies/structural_gap_strategy.py",
+      "sha256": "5d3627b27719bdcd8306692919e392951eadf3808a7a6820910934c55d0780c2"
+    },
+    {
+      "path": "core/strategies/three_k_strategy.py",
+      "sha256": "cb7a908ecc18396b6617988e633a28963a257b3ffa27c31bcec8eee14e8ba9ee"
+    },
+    {
+      "path": "config/__init__.py",
+      "sha256": "a90ee7673bc67bd4c441a2f9f97e88025e13e62585d354ac3b2b34566a7c9624"
+    },
+    {
+      "path": "config/rating_factors.json",
+      "sha256": "508d42deb24f90dfe9836da854c964c6b53e344cea156dbd81e192d1cff182c0"
+    },
+    {
+      "path": "config/settings.py",
+      "sha256": "084275f21930a9ec7a2257c2b2ed20063837c0c471d9d35871207dfde2413e96"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+# ---- 虚拟环境 / 缓存 ----
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+.mypy_cache/
+
+# ---- 运行产物 / 数据（体积大，或含本地行情/账本数据，不入库）----
+runtime/
+data/
+*.sqlite3
+*.db
+*.db-journal
+logs/
+*.log
+
+# ---- 测试临时目录 ----
+.test-temp/
+.test-incremental-installed/
+.test-*/
+
+# ---- 备份产物 ----
+upgrade-backups/
+*.bak
+
+# ---- 本地配置 / 密钥 ----
+.streamlit/
+.env
+.env.*
+*.pem
+*.key
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
