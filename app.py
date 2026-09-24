@@ -51,6 +51,16 @@ def submit(kind,spec):
         st.error(str(exc))
 
 
+def coverage_panel(audit):
+    st.write(f"应有 {audit['expected']} 只 · 日期就绪 {audit['ready']} 只 · "
+             f"当日停牌不扫描 {audit['suspended']} 只 · 待处理缺口 {len(audit['gaps'])} 项")
+    st.caption(f"应有行情日：{audit['expected_day'] or '尚未核验'}。股票数量与日期核验不等于逐根历史行情无缺失。")
+    if audit['gaps']:
+        st.warning('数据尚未齐全，不会把缺少的股票当成没有信号。请先同步补齐。')
+        with st.expander('查看缺口及原因', expanded=False):
+            st.dataframe(pd.DataFrame(audit['gaps']).rename(columns={'code':'股票','error':'原因'}),hide_index=True)
+
+
 @st.fragment(run_every=2)
 def current_job():
     jobs = store.rows('SELECT * FROM jobs ORDER BY created DESC,rowid DESC LIMIT 1')
@@ -64,6 +74,9 @@ def current_job():
             if job['kind']=='scan':
                 settings = json.loads(job['spec'])
                 stocks = len(settings.get('datasets',[]))
+                receipt = json.loads(job['result'])
+                if receipt.get('coverage'):
+                    stocks = receipt['coverage']['ready']
                 strategies = max(1,len(settings.get('strategies',[])))
                 message = f"已扫描 {min(stocks,job['progress']//strategies)}/{stocks} 只股票 · {strategies} 个策略 · 已计算 {job['progress']}/{stocks*strategies} 次"
             st.progress(min(job['progress']/max(1,job['total']),1.0), text=message)
@@ -80,6 +93,8 @@ def current_job():
                 st.write(f"已有行情跳过 {receipt['skipped']} 只 · 新下载 {receipt['downloaded']} 只 · "
                          f"补齐 {receipt['updated']} 只 · 历史刷新 {receipt['refreshed']} 只 · "
                          f"失败 {len(receipt['errors'])} 只")
+            if receipt.get('coverage'):
+                coverage_panel(receipt['coverage'])
         if job['kind']=='scan':
             receipt = json.loads(job['result'])
             if 'reused' in receipt:
@@ -164,7 +179,7 @@ def market_page():
         left,right = st.columns(2)
         start = left.date_input('历史起点',date(2016,1,1),key='sync_start')
         end = right.date_input('同步至',date.fromisoformat(completed_date()),max_value=date.fromisoformat(completed_date()),key='sync_end')
-        st.caption('默认跳过已有范围，只补较早历史和新增日期；追加时核对衔接价格，发现变化才刷新该股票。停止后再次同步会复用已完成部分。')
+        st.caption('先核对交易日和股票目录，已有范围跳过，只补历史和新增日期；追加时核对衔接价格。出现缺口后再次同步会复用已完成部分，不需要重新下载全部。')
         force = st.checkbox('重新核验并刷新历史（仅在怀疑数据有误时使用，耗时较长）',value=False)
         if st.button('同步市场数据',type='primary'):
             try:
@@ -212,9 +227,15 @@ def scan_page():
         st.caption(f'本次扫描 {len(ids)} 只股票 × {len(selected)} 个策略，共 {len(ids)*len(selected)} 次策略计算。')
         asof = st.date_input('只使用此日期之前已完成的 K 线',date.fromisoformat(completed_date()),max_value=date.fromisoformat(completed_date()))
         st.caption('扫描只读取本地行情，不自动补数据。列表会显示实际行情日；旧行情命中不等于今天的新机会。')
-        if st.button('匹配策略',type='primary'):
-            from workbench.scope import selected_boards
-            submit('scan',{'datasets':ids,'strategies':selected,'timeframe':tf,'asof':str(asof),'boards':selected_boards(store)})
+        from workbench.scope import selected_boards
+        source = st.session_state.get('scan_source','baostock')
+        audit = None
+        if source == 'baostock':
+            from workbench.readiness import audit_scope
+            audit = audit_scope(store,selected_boards(store),str(asof),ids)
+            coverage_panel(audit)
+        if st.button('匹配策略',type='primary',disabled=bool(audit and not audit['complete'])):
+            submit('scan',{'datasets':ids,'strategies':selected,'timeframe':tf,'asof':str(asof),'boards':selected_boards(store),'source':source})
     current_job()
     st.subheader('扫描结果')
     scans = store.rows("SELECT * FROM jobs WHERE kind='scan' ORDER BY created DESC,rowid DESC LIMIT 100")
@@ -225,6 +246,8 @@ def scan_page():
     jid = st.selectbox('选择扫描回执',list(by_id),format_func=lambda k:f"{by_id[k]['created']} · {STATUS[by_id[k]['status']]} · {k}")
     job = by_id[jid]
     report = json.loads(job['result'])
+    if report.get('coverage'):
+        coverage_panel(report['coverage'])
     cols = st.columns(3)
     cols[0].metric('成功匹配',report.get('success',0))
     cols[1].metric('命中',report.get('signals',0))
@@ -486,7 +509,7 @@ def operations_page():
 
 with st.sidebar:
     st.markdown('## ◈ A WORKBENCH')
-    st.caption('PA 交易工作台 · 本地版 1.0')
+    st.caption('PA 交易工作台 · 本地版 1.0.1')
     page = st.radio('工作区',['市场数据','日常扫描','我的计划','回测研究','策略工厂','运行与文件','使用说明'],label_visibility='collapsed')
     st.divider()
     st.caption('策略提供线索\n\n你负责判断与执行')

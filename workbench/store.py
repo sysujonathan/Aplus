@@ -7,6 +7,7 @@ import json
 import os
 import math
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ def digest(data: bytes):
 
 class Store:
     def __init__(self, root=None):
+        self._files_lock = threading.RLock()
         self.root = Path(root or os.environ.get("A_WORKBENCH_HOME", ROOT / "runtime")).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "workbench.sqlite3"
@@ -106,9 +108,16 @@ class Store:
                      (now(), job, action, str(path), dumps(detail)))
 
     def write_artifact(self, relative, content: bytes, job=None):
+        # Windows non-strict resolve can return an extended path while another
+        # thread creates the parent. Serialize path creation and atomic writes;
+        # downloads remain parallel and the containment check stays mandatory.
+        with self._files_lock:
+            return self._write_artifact(relative, content, job)
+
+    def _write_artifact(self, relative, content: bytes, job=None):
         path = (self.root / relative).resolve()
         if not path.is_relative_to(self.root):
-            raise ValueError("文件必须保存在新版 A 的运行目录中")
+            raise ValueError(f"文件必须保存在新版 A 的运行目录中：{path}（根目录 {self.root}）")
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and path.read_bytes() == content:
             self.event(job, "复用已有文件", path, bytes=len(content))

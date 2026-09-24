@@ -95,13 +95,21 @@ class BaoStock:
         if self.cancel_event.wait(.3):
             self._stop()
             raise InterruptedError('已停止下载，已保存行情保留')
-        return pd.DataFrame(self._request(operation,args,self.query_timeout))
+        result = self._request(operation,args,self.query_timeout)
+        if isinstance(result, dict) and 'rows' in result:
+            frame = pd.DataFrame(result['rows'])
+            frame.attrs.update(result.get('evidence', {}))
+            return frame
+        return pd.DataFrame(result)
 
     def fetch(self, code, start, end):
         return self._query('fetch',[code,start,end])
 
     def universe(self, date):
         return self._query('universe',[date])
+
+    def calendar(self, start, end):
+        return self._query('calendar',[start,end])
 
     def __exit__(self,*exc):
         try:

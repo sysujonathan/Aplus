@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .market import FIELDS, load_dataset, save_dataset, validate_bars
+from .readiness import check_response_dates
 
 
 def local_history(store, code, job):
@@ -48,6 +49,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False):
     def fetch(a, b):
         store.event(job, '请求行情区间', code=code, start=a, end=b)
         result = provider().fetch(code, a, b)
+        check_response_dates(store, result, a, b)
         if result.empty:
             return pd.DataFrame(columns=FIELDS)
         result = validate_bars(result)

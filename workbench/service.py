@@ -6,7 +6,6 @@ import json
 import threading
 import traceback
 import uuid
-from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
@@ -18,6 +17,8 @@ from .market import BaoStock, completed_date, load_dataset, save_dataset, valida
 from .store import ROOT, digest, dumps, now
 from .strategies import calculate, catalog, prepare, signal_at_end, verify_frozen
 from .sync import sync_stock
+from .readiness import audit_scope, expected_day, save_calendar, save_directory
+from .sync_batch import sync_results
 
 
 class Service:
@@ -85,7 +86,7 @@ class Service:
                 self.check_stop(job)
                 result = provider.universe((day-timedelta(days=n)).isoformat())
                 if not result.empty:
-                    self.store.write_artifact('universe.csv',result.to_csv(index=False).encode('utf-8-sig'),job)
+                    save_directory(self.store,result,str(day-timedelta(days=n)),job)
                     return {'stocks':len(result),'date':str(day-timedelta(days=n))}
         raise ValueError('最近十天未取得股票名单，请检查行情服务')
 
@@ -96,9 +97,16 @@ class Service:
         if 'boards' in spec:
             if not spec['boards']:
                 raise ValueError('请至少勾选一个板块')
-            if not (self.store.root/'universe.csv').exists():
-                self.progress(job,0,1,'正在获取股票目录')
-                self._universe(job, {'date':end})
+            self.progress(job,0,1,'核对交易日历和当日股票目录')
+            candidate = BaoStock()
+            candidate.cancel_event = self.cancel_flags[job]
+            with candidate:
+                save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
+                end = expected_day(self.store, end)
+                directory = candidate.universe(end)
+                if directory.empty:
+                    raise ValueError('应有交易日股票目录为空，未开始下载')
+                save_directory(self.store, directory, end, job)
             universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
             codes = select_board_codes(universe,spec['boards'])
         else:
@@ -106,48 +114,73 @@ class Service:
         if not codes:
             raise ValueError('请先选择股票范围')
         report = {'requested':len(codes),'success':0,'errors':[], 'datasets':[], 'end_requested':end,
-                  'skipped':0,'downloaded':0,'updated':0,'refreshed':0}
+                  'skipped':0,'downloaded':0,'updated':0,'refreshed':0,'suspended':0}
         report['boards'] = spec.get('boards',[])
-        with ExitStack() as stack:
-            connection = None
-            failures = 0
-            def provider():
-                nonlocal connection
-                if connection is None:
-                    candidate = BaoStock()
-                    candidate.cancel_event = self.cancel_flags[job]
-                    candidate.on_wait = lambda op,secs: self.progress(job,i,len(codes),f'{code} 等待行情响应 {secs} 秒，超时将结束请求')
-                    connection = stack.enter_context(candidate)
-                return connection
-            for i,code in enumerate(codes):
-                if self.cancel_flags[job].is_set():
-                    break
-                self.progress(job,i,len(codes),f'检查 {code}，已有行情跳过，缺少部分补齐')
-                try:
-                    did, outcome = sync_stock(self.store,provider,code,start,end,job,spec.get('force',False))
+        suspended = set()
+        if 'boards' in spec and 'tradeStatus' in universe.columns:
+            suspended = set(universe.loc[universe.tradeStatus.astype(str) == '0', 'code'])
+        suspended &= set(codes)
+        for code in suspended:
+            self.store.event(job,'当日停牌，暂不扫描',code=code,date=end)
+        report['suspended'] = report['success'] = len(suspended)
+        failures, processed = 0, len(suspended)
+        halt = threading.Event()
+        def waiting(code, operation, seconds):
+            self.progress(job,processed,len(codes),f'{code} 等待行情响应 {seconds} 秒，超时将结束请求')
+        workers = 2 if 'boards' in spec else 1
+        report['connections'] = workers
+        self.progress(job,processed,len(codes),f'使用 {workers} 条独立连接补齐行情；已保存数据继续复用')
+        results = sync_results(self.store, BaoStock, [c for c in codes if c not in suspended], start, end,
+                               job, spec.get('force',False), self.cancel_flags[job], halt, workers, waiting)
+        try:
+            for code,did,outcome,exc in results:
+                if isinstance(exc, InterruptedError):
+                    continue
+                processed += 1
+                if exc is None:
                     report[outcome] += 1
                     report['datasets'].append(did)
                     report['success'] += 1
                     failures = 0
-                except InterruptedError:
-                    break
-                except Exception as exc:
+                else:
                     failures += 1
                     report['errors'].append({'code':code,'error':str(exc)})
                     self.store.event(job,'股票同步失败',code=code,error=str(exc))
                     if '黑名单' in str(exc) or 'blacklist' in str(exc).lower():
                         report['stop_reason'] = '数据源限制访问，已停止整批同步，请稍后再试'
-                        break
-                    if failures >= 3:
+                        halt.set()
+                    elif failures >= 3:
                         report['stop_reason'] = '连续三只股票下载失败，已停止，避免反复请求'
-                        break
-                self.progress(job,i+1,len(codes),f"已处理 {i+1}/{len(codes)} · 跳过 {report['skipped']} · "
-                              f"新下载 {report['downloaded']} · 补齐 {report['updated']} · 历史刷新 {report['refreshed']}")
+                        halt.set()
+                self.progress(job,processed,len(codes),f"已处理 {processed}/{len(codes)} · 跳过 {report['skipped']} · "
+                              f"补齐 {report['updated']} · 失败 {len(report['errors'])}")
                 self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+        finally:
+            results.close()
         report['remaining'] = len(codes)-report['success']-len(report['errors'])
+        if 'boards' in spec:
+            audit = audit_scope(self.store, spec['boards'], end)
+            report['coverage'] = audit
+            if not audit['complete']:
+                report['stop_reason'] = f"已处理不等于数据已齐：应有 {audit['expected']} 只，就绪 {audit['ready']} 只，确认停牌 {audit['suspended']} 只；请查看缺口"
+                existing = {e['code'] for e in report['errors']}
+                report['errors'].extend(g for g in audit['gaps'] if g['code'] not in existing)
         return report
 
     def _scan(self, job,spec):
+        coverage = None
+        # Daily market scans must not silently shrink the universe to downloaded files.
+        if spec.get('source') == 'baostock' or ('boards' in spec and any(
+                r['source'] == 'baostock' for did in spec['datasets']
+                for r in self.store.rows('SELECT source FROM datasets WHERE id=?', (did,)))):
+            coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'])
+            if not coverage['complete']:
+                return {'success': 0, 'signals': 0, 'errors': coverage['gaps'], 'coverage': coverage,
+                        'observation_ids': [], 'stop_reason': '行情范围或日期未齐，已拦截扫描；先到市场数据补齐缺口'}
+            spec = dict(spec, datasets=coverage['eligible_ids'])
+            if not spec['datasets']:
+                return {'success': 0, 'signals': 0, 'errors': [], 'coverage': coverage,
+                        'observation_ids': [], 'note': '所选范围当日全部停牌，没有可扫描股票'}
         entries = catalog(self.store)
         strategies = [entries[k] for k in spec['strategies']]
         timeframe = spec['timeframe']
@@ -157,6 +190,8 @@ class Service:
             raise ValueError('日常扫描只能使用已启用且支持所选周期的策略')
         report = {'success':0,'signals':0,'errors':[], 'no_signal':0,'observation_ids':[], 'datasets':spec['datasets'],
                   'strategy_versions':{s.id:s.version for s in strategies},'reused':0,'calculated':0}
+        if coverage is not None:
+            report['coverage'] = coverage
         total = len(spec['datasets'])*len(strategies)
         done = 0
         asof = min(spec['asof'],completed_date())

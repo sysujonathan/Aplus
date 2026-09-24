@@ -155,13 +155,22 @@ class DirectBaoStock:
         result = self.collect(self.bs.query_all_stock(day=date))
         return result[result.code.map(board_of).notna()]
 
+    def calendar(self, start, end):
+        return self.collect(self.bs.query_trade_dates(start_date=start, end_date=end))
+
     def fetch(self, code, start, end):
         result = self.collect(self.bs.query_history_k_data_plus(
             code, 'date,open,high,low,close,volume,tradestatus', start_date=start,
             end_date=end, frequency='d', adjustflag='2'))
+        evidence = {'returned_dates': result.date.tolist() if not result.empty else [],
+                    'suspended_dates': result.loc[result.tradestatus == '0', 'date'].tolist() if not result.empty else []}
         if not result.empty:
+            if not result.tradestatus.isin(['0', '1']).all():
+                raise ValueError('行情交易状态不明，拒绝静默丢弃 K 线')
             result = result[result.tradestatus == '1']
-        return validate_bars(result) if not result.empty else pd.DataFrame(columns=FIELDS)
+        frame = validate_bars(result) if not result.empty else pd.DataFrame(columns=FIELDS)
+        frame.attrs.update(evidence)
+        return frame
 
 
 # Keep the provider interface while isolating all vendor socket operations.

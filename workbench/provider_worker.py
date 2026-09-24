@@ -18,8 +18,11 @@ def main():
                 elif operation == 'logout':
                     provider.__exit__()
                     result = None
-                elif operation in {'fetch','universe'}:
-                    result = getattr(provider,operation)(*request['args']).to_dict(orient='records')
+                elif operation in {'fetch','universe','calendar'}:
+                    frame = getattr(provider,operation)(*request['args'])
+                    result = frame.to_dict(orient='records')
+                    if operation == 'fetch':
+                        result = {'rows': result, 'evidence': frame.attrs}
                 else:
                     raise ValueError('Unknown provider operation')
             response = {'data':result}
