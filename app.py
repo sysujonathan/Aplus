@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+from pathlib import Path
 from datetime import date
 from urllib.parse import urlencode
 
@@ -20,17 +22,20 @@ st.set_page_config(page_title='A · PA 交易工作台', page_icon='◈', layout
 
 
 @st.cache_resource
-def resources():
-    store = Store()
+def resources(runtime_root=None):
+    store = Store(Path(runtime_root)) if runtime_root else Store()
     return store, Service(store)
 
 
-store, service = resources()
+store, service = resources(os.environ.get('A_WORKBENCH_HOME',str(ROOT/'runtime')))
 st.markdown('''<style>
-.stApp {background:#f5f7fa;color:#182b38}
-[data-testid="stSidebar"] {background:#e8eef2}
+.stApp {background:#11151c;color:#e3e8ef}
+[data-testid="stSidebar"] {background:#171e28}
+.block-container {padding-top:1.4rem;padding-bottom:1rem;max-width:1920px}
+h1 {font-size:1.8rem!important}
+[data-testid="stHeader"] {background:#11151c}
 h1,h2,h3 {letter-spacing:-.035em}
-[data-testid="stMetric"] {background:white;border:1px solid #dde5ea;border-radius:12px;padding:16px}
+[data-testid="stMetric"] {background:#1b2330;border:1px solid #303b4b;border-radius:8px;padding:10px}
 div.stButton>button[kind="primary"] {background:#176b64;border-color:#176b64}
 .eyebrow {font:600 12px monospace;letter-spacing:3px;color:#52777b;margin-bottom:6px}
 [data-testid="stAppDeployButton"] {display:none}
@@ -78,7 +83,7 @@ def current_job():
                 if receipt.get('coverage'):
                     stocks = receipt['coverage']['ready']
                 strategies = max(1,len(settings.get('strategies',[])))
-                message = f"已扫描 {min(stocks,job['progress']//strategies)}/{stocks} 只股票 · {strategies} 个策略 · 已计算 {job['progress']}/{stocks*strategies} 次"
+                message = f"{stocks} 只股票 · {strategies} 个策略 · 已处理 {job['progress']}/{job['total']} 次 · {job['message']}"
             st.progress(min(job['progress']/max(1,job['total']),1.0), text=message)
             if st.button('停止任务',key='stop_'+job['id']):
                 service.cancel(job['id'])
@@ -139,195 +144,20 @@ def candles(frame,entry=None,stop=None,target=None):
                          annotation_text=f'{value:.3f}'.rstrip('0').rstrip('.'),
                          annotation_position='top right')
     fig.update_layout(height=460,margin=dict(l=10,r=65,t=20,b=10),xaxis_rangeslider_visible=False,
-                      paper_bgcolor='white',plot_bgcolor='white',font=dict(color='#253b48'))
+                      paper_bgcolor='#171e28',plot_bgcolor='#171e28',font=dict(color='#dce3ef'),
+                      xaxis=dict(gridcolor='#2a3443'),yaxis=dict(gridcolor='#2a3443'),template='plotly_dark')
     st.plotly_chart(fig,width='stretch')
 
 
-def tv_link(code):
+def tv_link(code,timeframe='daily'):
     prefix,ticker = code.split('.')
-    return 'https://www.tradingview.com/chart/?'+urlencode({'symbol':{'sh':'SSE','sz':'SZSE','bj':'BSE'}[prefix]+':'+ticker})
+    return 'https://www.tradingview.com/chart/?'+urlencode({'symbol':{'sh':'SSE','sz':'SZSE','bj':'BSE'}[prefix]+':'+ticker,
+                                                        'interval':'W' if timeframe=='weekly' else 'D'})
 
 
-def market_page():
-    st.title('市场数据')
-    st.write('先取得已完成的行情，再匹配策略。每次同步保留可追溯的行情版本，不覆盖旧项目。')
-    a,b,c = st.tabs(['在线同步','导入行情','数据清单'])
-    with a:
-        st.caption('BaoStock · A 股日线 · 前复权。联网情况与供应商数据可用性会影响同步。')
-        from workbench.market import BOARDS, board_of, select_board_codes
-        st.write('选择要更新行情的板块（可多选）')
-        columns = st.columns(4)
-        from workbench.scope import selected_boards, save_boards
-        saved_boards = selected_boards(store)
-        boards = [name for column,name in zip(columns,BOARDS)
-                  if column.checkbox(name,value=name in saved_boards,key='sync_board_'+name)]
-        save_boards(store,boards)
-        universe = store.root/'universe.csv'
-        if universe.exists():
-            directory = pd.read_csv(universe)
-            counts = directory.code.map(board_of).value_counts()
-            st.caption(' · '.join(f'{name} {int(counts.get(name,0))} 只' for name in BOARDS))
-            st.caption(f'本次选择 {sum(int(counts.get(name,0)) for name in boards)} 只股票；仅更新所选板块，不删除其他板块已存行情。')
-            if '北交所' in boards and not counts.get('北交所',0):
-                st.warning('当前数据源目录未提供北交所股票，暂不能在线同步该板块。请取消北交所后同步其他板块；北交所行情仍可通过“导入行情”导入。')
-        else:
-            st.caption('首次同步会自动获取股票目录，再按勾选板块更新行情。')
-        with st.expander('股票目录（新股上市后可更新）'):
-            if st.button('更新股票目录'):
-                submit('universe',{'date':completed_date()})
-            st.caption('目录用于识别各板块的股票代码，不是行情数据；不包含退市历史全集。')
-        left,right = st.columns(2)
-        start = left.date_input('历史起点',date(2016,1,1),key='sync_start')
-        end = right.date_input('同步至',date.fromisoformat(completed_date()),max_value=date.fromisoformat(completed_date()),key='sync_end')
-        st.caption('先核对交易日和股票目录，已有范围跳过，只补历史和新增日期；追加时核对衔接价格。出现缺口后再次同步会复用已完成部分，不需要重新下载全部。')
-        force = st.checkbox('重新核验并刷新历史（仅在怀疑数据有误时使用，耗时较长）',value=False)
-        if st.button('同步市场数据',type='primary'):
-            try:
-                if not boards:
-                    raise ValueError('请至少勾选一个板块')
-                if universe.exists():
-                    select_board_codes(directory,boards)
-                submit('sync',{'boards':boards,'start':str(start),'end':str(end),'force':force})
-            except Exception as exc:
-                st.error(str(exc))
-    with b:
-        st.write('CSV 必须包含：date、open、high、low、close、volume。日期使用 YYYY-MM-DD；每份文件一只股票。')
-        st.download_button('下载 CSV 格式示例','date,open,high,low,close,volume\n2025-01-02,10,10.5,9.8,10.2,100000\n','行情格式示例.csv')
-        uploaded = st.file_uploader('行情 CSV',type=['csv'])
-        code = st.text_input('该文件对应股票','sh.600000')
-        adjustment = st.selectbox('价格口径',['前复权','后复权','不复权'])
-        if st.button('检查并导入'):
-            try:
-                if uploaded is None:
-                    raise ValueError('请先选择 CSV 文件')
-                identifier = import_csv(store,uploaded.getvalue(),parse_codes(code)[0],adjustment)
-                st.success(f'已导入并留存快照：{identifier[:12]}')
-            except Exception as exc:
-                st.error(str(exc))
-        with st.expander('没有行情？先用演示数据熟悉操作'):
-            st.caption('生成三只股票代码下的合成走势，独立标记为 demo，不会混入真实行情。')
-            if st.button('生成演示行情'):
-                demo_data(store)
-                st.success('演示行情已生成。扫描或研究时请选择“演示行情”来源。')
-    with c:
-        rows = store.rows('SELECT code,timeframe,source,adjustment,start,end,rows,created,id FROM datasets ORDER BY created DESC,rowid DESC')
-        st.dataframe(pd.DataFrame(rows).rename(columns={'code':'股票','source':'来源','adjustment':'复权口径','start':'开始','end':'结束','rows':'根数','created':'保存时间','id':'快照编号','timeframe':'周期'}),hide_index=True,width='stretch')
-        st.caption('同一股票可以有多个历史版本，回测始终指向当时选中的版本。这里不提供删除历史数据按钮。')
-    current_job()
-
-
-def scan_page():
-    st.title('日常扫描')
-    st.write('同步 → 匹配策略 → 到 TradingView 分析 → 记录自己的计划。工具不代替你下单。')
-    with st.expander('开始一次扫描',expanded=True):
-        ids = choose_data('scan')
-        tf = st.selectbox('扫描周期',['daily','weekly'],format_func=TF.get)
-        available = {k:s for k,s in entries.items() if s.state=='active' and tf in s.timeframes}
-        selected = st.multiselect('启用的策略',list(available),default=list(available),format_func=lambda k:available[k].name)
-        st.caption(f'本次扫描 {len(ids)} 只股票 × {len(selected)} 个策略，共 {len(ids)*len(selected)} 次策略计算。')
-        asof = st.date_input('只使用此日期之前已完成的 K 线',date.fromisoformat(completed_date()),max_value=date.fromisoformat(completed_date()))
-        st.caption('扫描只读取本地行情，不自动补数据。列表会显示实际行情日；旧行情命中不等于今天的新机会。')
-        from workbench.scope import selected_boards
-        source = st.session_state.get('scan_source','baostock')
-        audit = None
-        if source == 'baostock':
-            from workbench.readiness import audit_scope
-            audit = audit_scope(store,selected_boards(store),str(asof),ids)
-            coverage_panel(audit)
-        if st.button('匹配策略',type='primary',disabled=bool(audit and not audit['complete'])):
-            submit('scan',{'datasets':ids,'strategies':selected,'timeframe':tf,'asof':str(asof),'boards':selected_boards(store),'source':source})
-    current_job()
-    st.subheader('扫描结果')
-    scans = store.rows("SELECT * FROM jobs WHERE kind='scan' ORDER BY created DESC,rowid DESC LIMIT 100")
-    if not scans:
-        st.info('运行一次扫描后，这里显示命中结果；没有命中与计算失败会分别说明。')
-        return
-    by_id = {j['id']:j for j in scans}
-    jid = st.selectbox('选择扫描回执',list(by_id),format_func=lambda k:f"{by_id[k]['created']} · {STATUS[by_id[k]['status']]} · {k}")
-    job = by_id[jid]
-    report = json.loads(job['result'])
-    if report.get('coverage'):
-        coverage_panel(report['coverage'])
-    cols = st.columns(3)
-    cols[0].metric('成功匹配',report.get('success',0))
-    cols[1].metric('命中',report.get('signals',0))
-    cols[2].metric('失败',len(report.get('errors',[])))
-    if report.get('errors'):
-        st.warning('部分股票或策略未完成，不能把它们视为“没有信号”。')
-        st.dataframe(report['errors'],hide_index=True)
-    settings = json.loads(job['spec'])
-    # A re-run may reuse an immutable observation written by a prior job.
-    rows = store.rows('SELECT o.*,d.source,d.adjustment FROM observations o JOIN datasets d ON d.id=o.dataset_id ORDER BY o.asof DESC,o.created DESC')
-    rows = [r for r in rows if r['dataset_id'] in settings['datasets'] and r['strategy'] in settings['strategies']
-            and r['timeframe']==settings['timeframe'] and r['asof']<=settings['asof']
-            and (r['job_id']==jid or (report.get('strategy_versions',{}).get(r['strategy'])==r['version']))]
-    # Only observations actually seen as of the scan date, not all historical hits.
-    if report.get('observation_ids') is not None:
-        rows = [r for r in rows if r['id'] in report['observation_ids']]
-    if not rows:
-        st.info('这次回执没有命中记录。请同时查看任务是否完整成功。')
-        return
-    counts = {key:sum(r['strategy']==key for r in rows) for key in settings['strategies']}
-    total_hits = len(rows)
-    group = st.radio('按策略查看',['all',*counts],horizontal=True,key='result_group_'+jid,
-                     format_func=lambda k:f"全部（{total_hits}）" if k=='all' else f"{entries[k].name}（{counts[k]}）")
-    all_rows = rows
-    rows = [r for r in all_rows if group=='all' or r['strategy']==group]
-    if not rows:
-        st.info('该策略在这次扫描中没有命中。')
-        return
-    display = []
-    for r in rows:
-        p = json.loads(r['payload'])
-        display.append({'股票':r['code'],'策略':entries[r['strategy']].name,'行情日':r['asof'],'形态日':r['setup_date'],
-                        '入场参考':p['entry'],'止损参考':p['stop'],'目标参考':p['target'],'来源':SOURCE[r['source']]})
-    st.caption('点击股票所在行查看 K 线，也可用“上一只 / 下一只”连续翻看。')
-    view_key = 'result_view_'+jid+'_'+group
-    chosen = st.dataframe(display,hide_index=True,width='stretch',height=260,
-                          on_select='rerun',selection_mode='single-row',key=view_key)
-    position_key = view_key+'_position'
-    last_key = view_key+'_last_click'
-    selected_rows = chosen.selection.rows
-    if selected_rows and selected_rows != st.session_state.get(last_key):
-        st.session_state[position_key] = selected_rows[0]
-    st.session_state[last_key] = list(selected_rows)
-    index = min(st.session_state.get(position_key,0),len(rows)-1)
-    previous, counter, following = st.columns([1,3,1])
-    if previous.button('← 上一只',disabled=index==0,key=view_key+'_previous'):
-        index -= 1
-    if following.button('下一只 →',disabled=index==len(rows)-1,key=view_key+'_next'):
-        index += 1
-    st.session_state[position_key] = index
-    counter.markdown(f"**{index+1} / {len(rows)} · {rows[index]['code']} · {entries[rows[index]['strategy']].name}**")
-    st.download_button('导出当前分类 CSV',pd.DataFrame(display).to_csv(index=False).encode('utf-8-sig'),f'候选-{jid}-{group}.csv')
-    o = rows[index]
-    p = json.loads(o['payload'])
-    st.link_button('打开 TradingView，人工分析',tv_link(o['code']))
-    st.caption(f"价格口径：{o['adjustment']}。请核对 TradingView 的复权与周期设置；参考价格不是委托单。")
-    if o['source']=='demo':
-        st.warning('这是合成演示走势，与 TradingView 的真实行情不一致。')
-    if p['warning']:
-        st.warning(p['warning'])
-    frame,_ = load_dataset(store,o['dataset_id'])
-    candles(prepare(frame,o['timeframe'],o['asof']),p['entry'],p['stop'],p['target'])
-    with st.expander('原始信号与评级'):
-        st.json(p)
-    with st.form('plan_'+o['id']):
-        st.subheader('我的交易计划')
-        st.caption('策略给出参考，你可以独立修改自己的计划；不回写策略。重复保存保留修改历史。')
-        state = st.selectbox('我的决定',['观察','计划交易','已手工入场','已手工退出','忽略'])
-        c1,c2,c3,c4 = st.columns(4)
-        entry = c1.number_input('计划入场',min_value=0.,value=float(p['entry'] or 0),format='%.3f')
-        stop = c2.number_input('计划止损',min_value=0.,value=float(p['stop'] or 0),format='%.3f')
-        target = c3.number_input('计划目标',min_value=0.,value=float(p['target'] or 0),format='%.3f')
-        quantity = c4.number_input('计划股数',min_value=0,value=100,step=100)
-        notes = st.text_area('行情背景、入场条件、放弃条件与复盘备注')
-        if st.form_submit_button('保存我的计划',type='primary'):
-            try:
-                store.save_plan(o['id'],state,entry,stop,target,quantity,notes)
-                st.success('已保存，可到“我的计划”继续管理。')
-            except Exception as exc:
-                st.error(str(exc))
+def desk_page():
+    from workbench.dashboard import render
+    render(store,service,entries,candles,tv_link,coverage_panel,current_job)
 
 
 def plans_page():
@@ -509,16 +339,16 @@ def operations_page():
 
 with st.sidebar:
     st.markdown('## ◈ A WORKBENCH')
-    st.caption('PA 交易工作台 · 本地版 1.0.1')
-    page = st.radio('工作区',['市场数据','日常扫描','我的计划','回测研究','策略工厂','运行与文件','使用说明'],label_visibility='collapsed')
+    st.caption('PA 交易工作台 · 本地版 1.1.0')
+    page = st.radio('工作区',['交易工作台','我的计划','回测研究','策略工厂','运行与文件','使用说明'],label_visibility='collapsed')
     st.divider()
     st.caption('策略提供线索\n\n你负责判断与执行')
-    st.caption('首次使用：市场数据 → 同步 / 导入 → 日常扫描')
+    st.caption('同步与扫描在同一页；关注跨天保留。')
 
 st.markdown('<div class="eyebrow">OBSERVE / RESEARCH / DECIDE</div>',unsafe_allow_html=True)
 try:
     entries = catalog(store)
-    {'日常扫描':scan_page,'市场数据':market_page,'我的计划':plans_page,'回测研究':research_page,
+    {'交易工作台':desk_page,'我的计划':plans_page,'回测研究':research_page,
      '策略工厂':registry_page,'运行与文件':operations_page,
      '使用说明':lambda:st.markdown((ROOT/'docs/使用说明.md').read_text(encoding='utf-8'))}[page]()
 except Exception as exc:

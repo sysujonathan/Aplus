@@ -3,22 +3,52 @@ import json
 
 import pandas as pd
 
-from .market import latest_datasets, select_board_codes
+from .market import latest_datasets, select_board_codes, board_of
 from .store import dumps
 
 
-def save_directory(store, directory, day, job=None):
+def save_directory(store, directory, day, job=None, basics=None):
     """Never silently reduce an established universe after a short provider reply."""
     if directory.empty or 'code' not in directory or directory.code.duplicated().any():
         raise ValueError('股票目录为空、缺代码或有重复，未覆盖原目录')
+    retired = set()
+    if basics is not None:
+        required = {'code','ipoDate','outDate','type','status'}
+        if not required.issubset(basics.columns) or basics.code.duplicated().any():
+            raise ValueError('证券档案缺字段或重复，不能判断上市与退市')
+        basics = basics.fillna('').astype(str)
+        stocks = basics[(basics.type == '1') & basics.code.map(board_of).notna()]
+        for column in ['ipoDate','outDate']:
+            values = stocks.loc[stocks[column] != '',column]
+            if pd.to_datetime(values,format='%Y-%m-%d',errors='coerce').isna().any():
+                raise ValueError('证券档案日期无效，不能判断上市与退市')
+        retired = set(stocks.loc[(stocks.outDate != '') & (stocks.outDate <= day), 'code'])
+        eligible = stocks[(stocks.ipoDate != '') & (stocks.ipoDate <= day) &
+                          ((stocks.outDate == '') | (stocks.outDate > day))]
+        missing_active = sorted(set(eligible.code) - set(directory.code))
+        unexplained = sorted(set(directory.code) - set(eligible.code))
+        if missing_active or unexplained:
+            raise ValueError(f'当日目录与证券档案不一致：应在市却缺少 {len(missing_active)} 只，状态待核对 {len(unexplained)} 只；'
+                             + '、'.join((missing_active+unexplained)[:8]) + '。不会自动视为退市，请稍后重试')
+        if not {'tradeStatus','code_name'}.issubset(directory.columns) or not directory.tradeStatus.astype(str).isin(['0','1']).all():
+            raise ValueError('股票目录缺少名称或有效交易状态，拒绝猜测停牌')
     path = store.root/'universe.csv'
     if path.exists():
         old = pd.read_csv(path, dtype=str)
-        missing = sorted(set(old.code) - set(directory.code))
+        removed = set(old.code) - set(directory.code)
+        missing = sorted(removed - retired)
         if missing:
             store.event(job, '股票目录缩减待核对', expected=len(old), received=len(directory), missing=missing)
             raise ValueError(f'股票目录原有 {len(old)} 只，本次返回 {len(directory)} 只，缺少 {len(missing)} 只：'
                              + '、'.join(missing[:8]) + '。未覆盖原目录；可能是接口不完整或退市变化，需核对，不能自动缩小扫描范围')
+        if removed & retired:
+            store.event(job,'确认退市，保留历史与关注记录',date=day,codes=sorted(removed & retired))
+        added = set(directory.code) - set(old.code)
+        if added:
+            store.event(job,'新增上市股票',date=day,codes=sorted(added))
+    if basics is not None:
+        store.write_artifact(f'directories/{day}-basics.csv', basics.to_csv(index=False).encode('utf-8-sig'), job)
+    store.write_artifact(f'directories/{day}.csv', directory.to_csv(index=False).encode('utf-8-sig'), job)
     store.write_artifact('universe.csv', directory.to_csv(index=False).encode('utf-8-sig'), job)
     store.execute("INSERT INTO meta VALUES('universe_date',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (day,))
 

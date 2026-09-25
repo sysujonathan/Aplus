@@ -158,6 +158,9 @@ class DirectBaoStock:
     def calendar(self, start, end):
         return self.collect(self.bs.query_trade_dates(start_date=start, end_date=end))
 
+    def basics(self):
+        return self.collect(self.bs.query_stock_basic())
+
     def fetch(self, code, start, end):
         result = self.collect(self.bs.query_history_k_data_plus(
             code, 'date,open,high,low,close,volume,tradestatus', start_date=start,

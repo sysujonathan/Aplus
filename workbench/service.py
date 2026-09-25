@@ -21,6 +21,16 @@ from .readiness import audit_scope, expected_day, save_calendar, save_directory
 from .sync_batch import sync_results
 
 
+def merge_scan_reports(previous, current):
+    merged = dict(previous, **current)
+    for key in ['success','signals','no_signal','reused','calculated','total']:
+        merged[key] = previous.get(key,0) + current.get(key,0)
+    for key in ['errors','observation_ids']:
+        merged[key] = previous.get(key,[]) + current.get(key,[])
+    merged['strategy_versions'] = dict(previous.get('strategy_versions',{}), **current.get('strategy_versions',{}))
+    return merged
+
+
 class Service:
     def __init__(self, store):
         self.store = store
@@ -106,7 +116,9 @@ class Service:
                 directory = candidate.universe(end)
                 if directory.empty:
                     raise ValueError('应有交易日股票目录为空，未开始下载')
-                save_directory(self.store, directory, end, job)
+                self.progress(job,0,1,'自动核对新增上市、退市与停牌状态')
+                basics = candidate.basics()
+                save_directory(self.store, directory, end, job, basics=basics)
             universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
             codes = select_board_codes(universe,spec['boards'])
         else:
@@ -168,6 +180,34 @@ class Service:
         return report
 
     def _scan(self, job,spec):
+        if 'timeframes' not in spec:
+            return self._scan_one(job,spec)
+        periods = spec['timeframes']
+        if periods not in [['daily'], ['daily','weekly']]:
+            raise ValueError('请选择日线，或日线加周线')
+        entries = catalog(self.store)
+        if not spec['strategies']:
+            raise ValueError('请至少勾选一个策略')
+        groups = {tf:[key for key in spec['strategies'] if tf in entries[key].timeframes] for tf in periods}
+        if any(not group for group in groups.values()):
+            raise ValueError('所选周期没有可用策略，请检查勾选')
+        total = len(spec['datasets']) * sum(len(v) for v in groups.values())
+        if spec.get('source') == 'baostock':
+            coverage = audit_scope(self.store,spec['boards'],min(spec['asof'],completed_date()),spec['datasets'])
+            if coverage['complete']:
+                total = len(coverage['eligible_ids']) * sum(len(v) for v in groups.values())
+        aggregate = {}
+        for tf, keys in groups.items():
+            self.check_stop(job)
+            report = self._scan_one(job,dict(spec,timeframe=tf,strategies=keys),aggregate,total)
+            aggregate = merge_scan_reports(aggregate,report)
+            if report.get('coverage') and not report['coverage']['complete']:
+                break
+        aggregate['timeframes'] = periods
+        return aggregate
+
+    def _scan_one(self, job,spec,previous=None,overall_total=None):
+        previous = previous or {}
         coverage = None
         # Daily market scans must not silently shrink the universe to downloaded files.
         if spec.get('source') == 'baostock' or ('boards' in spec and any(
@@ -198,7 +238,7 @@ class Service:
         engine = digest(b''.join((ROOT/'workbench'/name).read_bytes() for name in
                                 ['strategies.py','market.py','service.py']) + verify_frozen().encode())
         report.update(engine_version=engine,asof=asof,total=total)
-        self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+        self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(merge_scan_reports(previous,report)),job))
         for did in spec['datasets']:
             self.check_stop(job)
             try:
@@ -210,7 +250,7 @@ class Service:
                 record = {'code':did}
             for strategy in strategies:
                 self.check_stop(job)
-                self.progress(job,done,total,f"匹配 {record['code']} · {strategy.name}")
+                self.progress(job,previous.get('total',0)+done,overall_total or total,f"{timeframe} · {record['code']} · {strategy.name}")
                 try:
                     if data_error:
                         raise ValueError(data_error)
@@ -239,11 +279,12 @@ class Service:
                     self.store.execute('INSERT OR IGNORE INTO scan_cache VALUES(?,?,?)',(key,dumps(signal),now()))
                     report['success'] += 1
                 except Exception as exc:
-                    report['errors'].append({'code':record['code'],'strategy':strategy.id,'error':str(exc)})
+                    report['errors'].append({'code':record['code'],'strategy':strategy.id,'timeframe':timeframe,'error':str(exc)})
                     self.store.event(job,'策略计算失败',strategy.file,code=record['code'],error=str(exc))
                 done += 1
                 self.store.execute('UPDATE jobs SET progress=?,total=?,result=?,message=? WHERE id=?',
-                    (done,total,dumps(report),f"已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
+                    (previous.get('total',0)+done,overall_total or total,dumps(merge_scan_reports(previous,report)),
+                     f"{timeframe} 已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
         return report
 
     def _backtest(self, job,spec):

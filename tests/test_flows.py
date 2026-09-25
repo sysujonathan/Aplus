@@ -109,7 +109,7 @@ def test_ui_with_saved_signal_and_plan(tmp_path,monkeypatch,frame):
     root = tmp_path/'ui-with-results'
     monkeypatch.setenv('A_WORKBENCH_HOME',str(root))
     store = Store(root)
-    did = save_dataset(store,'sh.600000',frame,'demo','合成测试')
+    did = save_dataset(store,'sh.600000',frame,'baostock','前复权')
     strategy = 'STRATEGY_3K'
     spec = catalog(store)[strategy]
     payload = {'entry':22.,'stop':20.,'target':26.,'score':1.,'rating':None,'warning':'',
@@ -120,7 +120,7 @@ def test_ui_with_saved_signal_and_plan(tmp_path,monkeypatch,frame):
                   ('scan','scan','completed',now(),dumps({'datasets':[did],'strategies':[strategy],'timeframe':'daily','asof':'2024-12-31'}),
                    dumps({'success':1,'signals':1,'errors':[],'observation_ids':['obs'],'strategy_versions':{strategy:spec.version}})))
     app = AppTest.from_file(str(ROOT/'app.py'),default_timeout=30).run()
-    app.sidebar.radio[0].set_value('日常扫描').run()
+    app.sidebar.radio[0].set_value('交易工作台').run()
     assert not app.exception
     assert not app.error, [e.value for e in app.error]
     button = next(b for b in app.button if b.label=='保存我的计划')

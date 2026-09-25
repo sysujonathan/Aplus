@@ -42,7 +42,7 @@ def test_market_ui_has_four_boards_without_three_stock_input(tmp_path,monkeypatc
     resources.clear()
     monkeypatch.setenv('A_WORKBENCH_HOME',str(tmp_path/'board-ui'))
     app=AppTest.from_file(str(ROOT/'app.py'),default_timeout=30).run()
-    app.sidebar.radio[0].set_value('市场数据').run()
+    app.sidebar.radio[0].set_value('交易工作台').run()
     assert not app.exception
     for name in ['沪深主板','创业板','科创板','北交所']:
         assert any(c.label==name for c in app.checkbox)
@@ -105,7 +105,7 @@ def test_upgrade_reuses_v1_success_even_cancelled_job(store, frame):
                   ('old','sync','cancelled',now(),dumps({'start':'2013-01-01','end':frame.date.iloc[-1]})))
     did = save_dataset(store,'sh.600000',frame,'baostock','前复权','old')
     upgraded = Store(store.root)
-    assert upgraded.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='3'
+    assert upgraded.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='4'
     def offline():
         raise AssertionError('Upgrade must reuse successfully saved history')
     assert sync_stock(upgraded,offline,'sh.600000','2013-01-01',frame.date.iloc[-1])==(did,'skipped')

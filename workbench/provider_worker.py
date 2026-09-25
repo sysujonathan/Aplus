@@ -18,7 +18,7 @@ def main():
                 elif operation == 'logout':
                     provider.__exit__()
                     result = None
-                elif operation in {'fetch','universe','calendar'}:
+                elif operation in {'fetch','universe','calendar','basics'}:
                     frame = getattr(provider,operation)(*request['args'])
                     result = frame.to_dict(orient='records')
                     if operation == 'fetch':

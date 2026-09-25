@@ -120,7 +120,10 @@ def test_board_sync_checks_dates_and_repeat_reuses_all_bars(store, frame, monkey
             return pd.DataFrame({'calendar_date':dates.strftime('%Y-%m-%d'),
                                  'is_trading_day':[str(int(d.weekday()<5)) for d in dates]})
         def universe(self, day):
-            return pd.DataFrame({'code':['sh.600000','sh.600001'], 'tradeStatus':['1','1']})
+            return pd.DataFrame({'code':['sh.600000','sh.600001'], 'tradeStatus':['1','1'],'code_name':['甲','乙']})
+        def basics(self):
+            return pd.DataFrame({'code':['sh.600000','sh.600001'], 'ipoDate':['2000-01-01']*2,
+                                 'outDate':['',''],'status':['1','1'],'type':['1','1']})
         def fetch(self, code, start, end):
             calls.append(code)
             return frame.loc[frame.date.between(start,end)].copy()

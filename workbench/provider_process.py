@@ -111,6 +111,9 @@ class BaoStock:
     def calendar(self, start, end):
         return self._query('calendar',[start,end])
 
+    def basics(self):
+        return self._query('basics',[])
+
     def __exit__(self,*exc):
         try:
             if self.process is not None and not self.cancel_event.is_set():

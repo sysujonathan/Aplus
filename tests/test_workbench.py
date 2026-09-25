@@ -223,7 +223,7 @@ def test_ui_pages_no_exceptions(tmp_path,monkeypatch):
     monkeypatch.setenv('A_WORKBENCH_HOME',str(tmp_path/'ui-runtime'))
     app = AppTest.from_file(str(ROOT/'app.py'),default_timeout=30).run()
     assert not app.exception
-    for page in ['市场数据','我的计划','回测研究','策略工厂','运行与文件','使用说明','日常扫描']:
+    for page in ['交易工作台','我的计划','回测研究','策略工厂','运行与文件','使用说明']:
         app.sidebar.radio[0].set_value(page).run()
         assert not app.exception, (page,list(app.exception))
         assert not app.error, (page,[e.value for e in app.error])

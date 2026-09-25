@@ -74,12 +74,14 @@ class Store:
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id,seq);
             """)
             version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-            if version not in {'1', '2', '3'}:
+            if version not in {'1', '2', '3', '4'}:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             db.execute("CREATE TABLE IF NOT EXISTS sync_coverage(code TEXT PRIMARY KEY, "
                        "dataset_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS scan_cache(key TEXT PRIMARY KEY, signal TEXT NOT NULL, created TEXT NOT NULL)")
-            db.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
+            db.execute("CREATE TABLE IF NOT EXISTS watchlist(code TEXT PRIMARY KEY, observation_id TEXT NOT NULL, "
+                       "notes TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL)")
+            db.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
 
     @contextlib.contextmanager
     def connect(self):
@@ -162,3 +164,20 @@ class Store:
             db.execute("INSERT INTO plan_history(plan_id,time,payload) VALUES(?,?,?)", (pid, now(), dumps(values)))
         self.event(None, "保存人工计划", self.path, plan_id=pid, state=state)
         return pid
+
+    def watch(self, observation_id):
+        rows = self.rows('SELECT code FROM observations WHERE id=?', (observation_id,))
+        if not rows:
+            raise ValueError('原始信号不存在')
+        code = rows[0]['code']
+        self.execute('INSERT INTO watchlist VALUES(?,?,?,1,?,?) ON CONFLICT(code) DO UPDATE SET '
+                     'observation_id=excluded.observation_id,active=1,updated=excluded.updated',
+                     (code, observation_id, '', now(), now()))
+        self.event(None, '加入关注', code=code, observation=observation_id)
+
+    def update_watch(self, code, notes, active=True):
+        changed = self.execute('UPDATE watchlist SET notes=?,active=?,updated=? WHERE code=?',
+                               (notes, int(active), now(), code))
+        if not changed:
+            raise ValueError('关注记录不存在')
+        self.event(None, '更新关注' if active else '结束关注', code=code, notes=notes)
