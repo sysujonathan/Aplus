@@ -4,6 +4,9 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
+      # 冻结校验按字节比对 sha256：checkout 前必须禁用行尾转换，
+      # 否则 LF/CRLF 改变文件字节，verify_frozen 全线失败（2026-09-28 定位）
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:

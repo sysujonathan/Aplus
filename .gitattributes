@@ -1,0 +1,4 @@
+# 本项目以「字节冻结」为第一约束：frozen_manifest.json 按工作区原始字节记录 sha256，
+# 任何 checkout/commit 的行尾转换都会破坏校验（CI 上 verify_frozen 全线失败的根因）。
+# 因此全仓库禁用 git 行尾转换：入库与检出都按原字节。
+* -text
