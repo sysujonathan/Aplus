@@ -1,141 +1,91 @@
-"""Aplus 桌面工作台主窗口（第二批：视觉还原旧 A + 接真实数据）。
-
-布局沿用旧 A 主区网格：左栏固定 180（策略候选 Tab）/ 中栏固定 420（K 线）/ 右栏自适应（关注）。
-深色主题、字体与配色对齐旧 A。后端 service / store 通过构造参数注入；
-store 连接时启动即从 observations 加载真实候选、K 线读真实行情快照。
-"""
+"""工程 A 桌面布局，使用 Aplus Service/Store 后端。"""
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox
+import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
 from .chart_panel import ChartPanel
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
 
-_DARK_BG = "#11151c"
-_PANEL_BG = "#171e28"
 
-
-class AplusMainWindow(tk.Tk):
+class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None):
-        super().__init__()
+        super().__init__(themename="darkly", title="Brooks-AI 操盘台")
+        self.style.colors.primary = "#007AFF"
+        self.style.configure("Treeview", rowheight=34)
+        self.style.configure("Treeview.Heading", font=("Microsoft YaHei", 11, "bold"))
         self.service = service
         self.store = store
-
-        self.title("Aplus 交易工作台")
-        self.geometry("1500x900")
-        self.configure(bg=_DARK_BG)
-
+        self.geometry("1600x1000")
+        self.minsize(1280, 760)
         self._tf_var = tk.StringVar(value="daily")
-        self._apply_dark_style()
         self._build_ui()
         self._load_strategies()
 
-    # ---- 外观（深色，对齐旧 A / 1.1.0）----
-    def _apply_dark_style(self):
-        style = ttk.Style(self)
-        try:
-            style.theme_use("default")
-        except Exception:
-            pass
-        style.configure("TFrame", background=_PANEL_BG)
-        style.configure("TLabel", background=_PANEL_BG, foreground="#e3e8ef")
-        style.configure(
-            "Treeview",
-            background="#1b2330",
-            foreground="#e3e8ef",
-            fieldbackground="#1b2330",
-            rowheight=26,
-        )
-        style.configure("Treeview.Heading", background="#222c3a", foreground="#e3e8ef")
-        style.configure("Notebook", background=_DARK_BG)
-        style.configure(
-            "Notebook.Tab",
-            background="#222c3a",
-            foreground="#e3e8ef",
-            padding=(5, 4),
-            font=("Microsoft YaHei", 9),
-        )
-        style.map("Notebook.Tab", background=[("selected", "#176b64")])
-        style.configure("TButton", background="#222c3a", foreground="#e3e8ef")
-        style.configure("TCheckbutton", background=_PANEL_BG, foreground="#e3e8ef")
-        style.configure("TRadiobutton", background=_PANEL_BG, foreground="#e3e8ef")
-        style.configure(
-            "TCombobox", fieldbackground="#1b2330", background="#222c3a", foreground="#e3e8ef"
-        )
-        # 日期/搜索控件在 Windows 下 ttk.Combobox/Entry 常忽略 fieldbackground（只读态字段变浅），
-        # 近白文字会白底白字看不清。专用样式强制浅字段 + 深色文字，跨主题可读。
-        style.configure(
-            "Date.TCombobox", fieldbackground="#eef2f7", background="#222c3a",
-            foreground="#0e1218",
-        )
-        style.map(
-            "Date.TCombobox",
-            fieldbackground=[("readonly", "#eef2f7"), ("disabled", "#eef2f7")],
-            foreground=[("readonly", "#0e1218"), ("disabled", "#8e8e93")],
-        )
-        style.configure(
-            "Search.TEntry", fieldbackground="#eef2f7", foreground="#0e1218",
-            insertcolor="#0e1218",
-        )
-
-    # ---- 结构（三栏比例对齐旧 A：180 / 420 / 自适应）----
     def _build_ui(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
         self.toolbar = ToolBar(
-            self,
-            self.service,
-            self.store,
-            tf_var=self._tf_var,
+            self, self.service, self.store, tf_var=self._tf_var,
             on_timeframe_change=self._on_timeframe,
             on_date_change=self._on_date_change,
             on_job_finished=self._on_job_finished,
         )
-        self.toolbar.pack(side=tk.TOP, fill=tk.X)
-        ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X)
+        self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
-        body = ttk.Frame(self)
-        body.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
-        body.columnconfigure(0, weight=0, minsize=300)  # 左：策略候选（固定，容纳 6 页签不溢出）
-        body.columnconfigure(1, weight=1, minsize=420)  # 中：K 线（主力扩张）
-        body.columnconfigure(2, weight=0, minsize=260)  # 右：观察池（P2 扩列后加宽）
+        self.body = body = ttk.Frame(self, padding=(10, 8))
+        body.grid(row=1, column=0, sticky=tk.NSEW)
+        body.columnconfigure(0, weight=0)
+        body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
-
         self.candidates = CandidateTabs(
             body, self.on_stock_selected, on_context=self._candidate_context
         )
         self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
-        # 固定侧栏宽度：weight=0 的列默认会撑到内容请求宽度（页签/列宽），
-        # 关掉传播 + 显式 width 才能把宽度钉死，给中间 K 线让路。
-        self.candidates.configure(width=300)
+        self.candidates.configure(width=420)
         self.candidates.grid_propagate(False)
-        self.candidates.pack_propagate(False)
 
-        self.chart = ChartPanel(body, self.store)
-        self.chart.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 16))
-
-        self.watch = WatchPanel(body, self.store, on_select=self.on_stock_selected)
-        self.watch.grid(row=0, column=2, sticky=tk.NSEW)
-        self.watch.configure(width=260)
-        self.watch.grid_propagate(False)
+        right = ttk.Frame(body)
+        right.grid(row=0, column=1, sticky=tk.NSEW)
+        right.columnconfigure(0, weight=1)
+        right.columnconfigure(1, weight=0)
+        right.rowconfigure(0, weight=1)
+        self.chart = ChartPanel(right, self.store)
+        self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
+        self.watch = WatchPanel(right, self.store, on_select=self.on_stock_selected)
+        self.watch.grid(row=0, column=1, sticky=tk.NSEW)
+        self.watch.configure(width=240)
         self.watch.pack_propagate(False)
+        self.chart.tv_button(right).grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0), ipady=6)
 
-        # 底部状态栏
-        status_bar = ttk.Frame(self)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        self._status_text = tk.StringVar(value="就绪")
-        ttk.Label(
-            status_bar, textvariable=self._status_text, font=("Consolas", 10),
-            foreground="#a1a1a6",
-        ).pack(side=tk.RIGHT, padx=8, pady=4)
+        status_bar = ttk.Frame(self, padding=(18, 8))
+        status_bar.grid(row=2, column=0, sticky=tk.EW)
+        self._status_text = self.toolbar._status
+        ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
+                  foreground="#a1a1a6").pack(side=tk.RIGHT)
+        self.bind("<Configure>", self._resize_layout)
+
+    def _resize_layout(self, event):
+        if event.widget is not self:
+            return
+        # Match the reference proportions without letting lists cover the chart.
+        width = self.winfo_width()
+        self.candidates.configure(width=max(460, min(640, round(width * .225))))
+        self.watch.configure(width=max(280, min(360, round(width * .125))))
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):
+        self._cur_date = self.toolbar.selected_date()
+        self.chart.set_timeframe(tf)
+        self.chart.show_observation(None, None)
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store, timeframe=tf, asof_filter=getattr(self, "_cur_date", None)
             )
+        self.toolbar.date_label.configure(text="截至周" if tf == "weekly" else "信号日")
         self._status_text.set(f"周期：{tf}")
 
     # ---- 信号日筛选：重读候选 ----
@@ -153,7 +103,7 @@ class AplusMainWindow(tk.Tk):
 
     # ---- 策略 Tab（动态取真实名称，只读，不碰冻结文件）----
     def _load_strategies(self):
-        self._cur_date = None
+        self._cur_date = self.toolbar.selected_date()
         try:
             from core.strategy_registry import StrategyRegistry as R
 

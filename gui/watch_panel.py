@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog
+import ttkbootstrap as ttk
 
 # 与 store.save_plan 的合法状态保持一致（勿在此处增删）
 _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", "忽略")
@@ -24,18 +25,20 @@ class WatchPanel(ttk.Frame):
 
         ttk.Label(
             self,
-            text="观察池",
+            text="关注列表",
             font=("Microsoft YaHei", 12, "bold"),
-        ).pack(anchor=tk.W, padx=6, pady=4)
+        ).pack(anchor=tk.W, padx=4, pady=(0, 12))
 
         self.tree = ttk.Treeview(
             self,
-            columns=("code", "name", "strategy", "date", "state", "notes"),
+            columns=("number", "code", "name", "strategy", "date", "state", "notes"),
+            displaycolumns=("number", "code", "name"),
             show="headings",
         )
         for col, text, width, stretch in (
-            ("code", "代码", 56, False),
-            ("name", "名称", 52, False),
+            ("number", "序", 32, False),
+            ("code", "代码", 130, False),
+            ("name", "名称", 100, True),
             ("strategy", "策略", 52, False),
             ("date", "信号日", 56, False),
             ("state", "状态", 52, False),
@@ -79,12 +82,13 @@ class WatchPanel(ttk.Frame):
         from .data import code_names
 
         names = code_names(self.store)
-        for r in rows:
+        for number, r in enumerate(rows, 1):
             code = r["code"]
             state = r["state"] if r["state"] else "关注中"
             iid = self.tree.insert(
                 "", tk.END,
                 values=(
+                    number,
                     code,
                     names.get(code, ""),
                     r["strategy"] or "",
