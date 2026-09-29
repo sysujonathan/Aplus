@@ -205,6 +205,7 @@ class AplusMainWindow(tk.Tk):
             )
             self.watch.reload()
             self.toolbar._load_date_options()
+            self.toolbar._load_market_status()
         except Exception:
             pass
         self._status_text.set(f"{kind}结束（{status}），候选与观察池已刷新")

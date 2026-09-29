@@ -15,6 +15,19 @@ _PLACEHOLDER_FG = "#8e8e93"
 _ALL = "全部"
 
 
+def _two_years_ago():
+    """默认同步起点：最新交易日往前推 2 年（轻量首跑）；完整历史由勾选框控制。"""
+    from datetime import date
+
+    from workbench.market import completed_date
+
+    d = date.fromisoformat(completed_date())
+    try:
+        return d.replace(year=d.year - 2).isoformat()
+    except ValueError:  # 2/29 闰年边界
+        return d.replace(year=d.year - 2, day=28).isoformat()
+
+
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
                  on_timeframe_change=None, on_date_change=None, on_job_finished=None):
@@ -27,6 +40,9 @@ class ToolBar(ttk.Frame):
         self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态)，主窗口借此刷新列表
         self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
+        self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
+        self._universe_total = None                           # 市场总量（首次渲染时缓存）
+        self.full_history_var = tk.BooleanVar(value=False)    # 完整历史(2016)勾选，默认近2年
 
         self.configure(padding=(18, 12))
         self._all_years = []
@@ -69,6 +85,7 @@ class ToolBar(ttk.Frame):
         self.btn_scan = ttk.Button(self, text="扫描", command=self._on_scan)
         self.btn_scan.pack(side=tk.LEFT, padx=5)
         ttk.Button(self, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(self, text="完整历史", variable=self.full_history_var).pack(side=tk.LEFT, padx=5)
 
         # AI 复核
         self.ai_var = tk.BooleanVar(value=False)
@@ -96,8 +113,15 @@ class ToolBar(ttk.Frame):
 
         # 依赖 store 的真实信号日填充下拉
         self._load_date_options()
+        # 常驻行情健康状态（只读，不依赖任务）
+        self._load_market_status()
 
-        # 右侧状态
+        # 行情健康状态（常驻，只读现有表；置于右侧、作业状态左侧）
+        ttk.Label(
+            self, textvariable=self._mkt_var, font=("Consolas", 10),
+            foreground=("#6fcf97" if service is not None else _LABEL_FG),
+        ).pack(side=tk.RIGHT, padx=(6, 2))
+        # 右侧状态（作业进度反馈）
         self._status = tk.StringVar(value="就绪（后端未连线）" if service is None else "就绪")
         ttk.Label(
             self, textvariable=self._status, font=("Consolas", 10), foreground=_LABEL_FG
@@ -240,14 +264,46 @@ class ToolBar(ttk.Frame):
         if self._on_date:
             self._on_date(y, m, d)
 
+    # ---- 行情健康状态（常驻，只读现有表）----
+    def _load_market_status(self):
+        if self.store is None:
+            self._mkt_var.set("行情：未连接")
+            return
+        try:
+            from workbench.market import completed_date
+
+            latest = completed_date()
+        except Exception:
+            latest = "?"
+        try:
+            cov = self.store.rows("SELECT COUNT(*) c FROM sync_coverage")[0]["c"]
+        except Exception:
+            cov = 0
+        if self._universe_total is None:
+            try:
+                p = self.store.root / "universe.csv"
+                if p.exists():
+                    with open(p, "r", encoding="utf-8") as fh:
+                        self._universe_total = max(0, sum(1 for _ in fh) - 1)
+            except Exception:
+                self._universe_total = 0
+        total = self._universe_total if self._universe_total else "?"
+        last_sync = self.store.rows(
+            "SELECT finished FROM jobs WHERE kind='sync' AND status='completed' ORDER BY finished DESC LIMIT 1"
+        )
+        ls = last_sync[0]["finished"][:19].replace("T", " ") if last_sync else "—"
+        self._mkt_var.set(f"行情 {latest} · 覆盖 {cov}/{total} · BaoStock · 同步 {ls}")
+
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _on_sync(self):
         if self.service is None:
             self.set_status("后端未连接：下载行情需接 service")
             return
+        # 默认近 2 年（轻量首跑）；勾选"完整历史"才拉 2016 起全市场全历史
+        start = "2016-01-01" if self.full_history_var.get() else _two_years_ago()
         spec = {
             "boards": ["沪深主板", "创业板", "科创板"],
-            "start": "2016-01-01",
+            "start": start,
             "end": None,
             "force": False,
         }
@@ -356,6 +412,7 @@ class ToolBar(ttk.Frame):
         else:
             text = f"{kind}结束（{status}）：{message[:56]}"
         self.set_status(text)
+        self._load_market_status()
         if self._on_job_finished:
             try:
                 self._on_job_finished(kind, status)
