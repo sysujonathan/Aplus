@@ -17,13 +17,16 @@ _ALL = "全部"
 
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
-                 on_timeframe_change=None, on_date_change=None):
+                 on_timeframe_change=None, on_date_change=None, on_job_finished=None):
         super().__init__(parent)
         self.service = service
         self.store = store
         self._tf_var = tf_var or tk.StringVar(value="daily")
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
+        self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态)，主窗口借此刷新列表
+        self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
+        self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
 
         self.configure(padding=(18, 12))
         self._all_years = []
@@ -60,9 +63,11 @@ class ToolBar(ttk.Frame):
         self.ent_code.bind("<FocusOut>", self._search_blur)
         self.ent_code.bind("<Return>", lambda e: self._open_tv_for_entry())
 
-        # 动作按钮
-        ttk.Button(self, text="下载行情", command=self._on_sync).pack(side=tk.LEFT, padx=5)
-        ttk.Button(self, text="扫描", command=self._on_scan).pack(side=tk.LEFT, padx=5)
+        # 动作按钮（保留引用：运行中禁用、结束后恢复）
+        self.btn_sync = ttk.Button(self, text="下载行情", command=self._on_sync)
+        self.btn_sync.pack(side=tk.LEFT, padx=5)
+        self.btn_scan = ttk.Button(self, text="扫描", command=self._on_scan)
+        self.btn_scan.pack(side=tk.LEFT, padx=5)
         ttk.Button(self, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=5)
 
         # AI 复核
@@ -235,43 +240,137 @@ class ToolBar(ttk.Frame):
         if self._on_date:
             self._on_date(y, m, d)
 
-    # ---- 动作（第二批：提交 service 任务）----
+    # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _on_sync(self):
         if self.service is None:
             self.set_status("后端未连接：下载行情需接 service")
             return
-        try:
-            spec = {
-                "boards": ["沪深主板", "创业板", "科创板"],
-                "start": "2016-01-01",
-                "end": None,
-                "force": False,
-            }
-            self.service.submit("sync", spec)
-            self.set_status("已提交行情同步")
-        except Exception as exc:
-            self.set_status(f"同步提交失败：{exc}")
+        spec = {
+            "boards": ["沪深主板", "创业板", "科创板"],
+            "start": "2016-01-01",
+            "end": None,
+            "force": False,
+        }
+        self._submit_job("sync", "下载行情", spec)
 
     def _on_scan(self):
         if self.service is None:
             self.set_status("后端未连接：扫描需接 service")
             return
         try:
-            from workbench.market import latest_datasets
+            from workbench.market import latest_datasets, completed_date
 
             ids = [r["id"] for r in latest_datasets(self.store, "baostock")]
+            if not ids:
+                self.set_status("没有可用行情快照：先下载行情，再扫描")
+                return
+            # 全部已启用策略（GUI 无勾选界面，扫描即全量）
+            try:
+                from core.strategy_registry import StrategyRegistry
+
+                strategies = list(StrategyRegistry.list_strategies())
+            except Exception:
+                strategies = ["MTR_MASTER", "STRATEGY_GAP_H2", "STRATEGY_AWIL"]
             spec = {
                 "source": "baostock",
                 "boards": ["沪深主板", "创业板", "科创板"],
                 "datasets": ids,
-                "strategies": None,
+                "strategies": strategies,
                 "timeframes": [self._tf_var.get()],
-                "asof": None,
+                "asof": completed_date(),
             }
-            self.service.submit("scan", spec)
-            self.set_status("已提交策略扫描")
         except Exception as exc:
-            self.set_status(f"扫描提交失败：{exc}")
+            self.set_status(f"扫描准备失败：{exc}")
+            return
+        self._submit_job("scan", "扫描策略", spec)
+
+    def _submit_job(self, kind, label, spec):
+        """提交任务并启动轮询。service 的互斥拒绝（已有任务）在这里转成人话。"""
+        try:
+            job = self.service.submit(kind, spec)
+        except ValueError as exc:
+            self.set_status(f"{label}未开始：{exc}")
+            return
+        except Exception as exc:
+            self.set_status(f"{label}提交失败：{exc}")
+            return
+        self._job_id, self._job_kind = job, label
+        (self.btn_sync if kind == "sync" else self.btn_scan).state(["disabled"])
+        self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
+        self.after(800, self._poll_job)
+
+    def _poll_job(self):
+        """每 800ms 查一次 jobs 表，把进度滚到状态栏；终态时出简报并恢复按钮。"""
+        if not self._job_id or self.store is None:
+            return
+        try:
+            rows = self.store.rows(
+                "SELECT status, progress, total, message, result FROM jobs WHERE id=?",
+                (self._job_id,),
+            )
+        except Exception:
+            rows = []
+        if not rows:
+            self._finish_job("failed", "任务记录丢失")
+            return
+        j = rows[0]
+        status = j["status"]
+        if status in ("queued", "running"):
+            prog, total = j["progress"] or 0, j["total"] or 0
+            msg = (j["message"] or "").strip()
+            if total:
+                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:56]}")
+            else:
+                self.set_status(f"⏳ {self._job_kind}：{msg[:64] or '排队中…'}")
+            self.after(800, self._poll_job)
+            return
+        self._finish_job(status, j["message"] or "", j["result"] or "")
+
+    def _finish_job(self, status, message="", result_json=""):
+        """终态：解析回执出简报、恢复按钮、通知主窗口刷新。"""
+        import json
+
+        kind = self._job_kind or "任务"
+        self._job_id = None
+        self._job_kind = ""
+        for btn in (self.btn_sync, self.btn_scan):
+            btn.state(["!disabled"])
+        try:
+            r = json.loads(result_json) if result_json else {}
+        except Exception:
+            r = {}
+        if status == "completed" and kind == "扫描策略":
+            text = (f"✓ 扫描完成：命中 {r.get('signals', 0)} 个信号 · "
+                    f"检查 {r.get('success', 0)} 项 · 复用 {r.get('reused', 0)}")
+        elif status == "completed":
+            text = (f"✓ 行情更新完成：补齐 {r.get('updated', 0)} · 复用已存 {r.get('refreshed', 0)} · "
+                    f"停牌 {r.get('suspended', 0)} · 失败 {len(r.get('errors', []))}")
+        elif status == "partial":
+            head = (f"命中 {r.get('signals', 0)} 个信号" if kind == "扫描策略"
+                    else f"补齐 {r.get('updated', 0)} · 失败 {len(r.get('errors', []))} 项")
+            text = f"⚠ {kind}部分完成：{head} —— {str(r.get('stop_reason', ''))[:44]}"
+        elif status == "cancelled":
+            text = f"⏹ {kind}已停止（已保存的记录保留）：{message[:48]}"
+        elif status == "failed":
+            text = f"✗ {kind}失败：{message[:64]}"
+        else:
+            text = f"{kind}结束（{status}）：{message[:56]}"
+        self.set_status(text)
+        if self._on_job_finished:
+            try:
+                self._on_job_finished(kind, status)
+            except Exception:
+                pass
 
     def _on_stop(self):
-        self.set_status("停止指令（第二批接 service 停止接口）")
+        if self.service is None:
+            self.set_status("后端未连接")
+            return
+        if not self._job_id:
+            self.set_status("当前没有运行中的任务")
+            return
+        try:
+            self.service.cancel(self._job_id)
+            self.set_status(f"⏹ 已请求停止{self._job_kind}（当前股票/请求结束后生效）")
+        except Exception as exc:
+            self.set_status(f"停止失败：{exc}")

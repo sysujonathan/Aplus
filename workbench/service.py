@@ -101,7 +101,10 @@ class Service:
         raise ValueError('最近十天未取得股票名单，请检查行情服务')
 
     def _sync(self, job,spec):
-        start,end = spec['start'],min(spec['end'],completed_date())
+        # end=None 表示“直到最新交易日”。completed_date() 返回字符串，不能与 None
+        # 直接 min（会报 "'<' not supported between str and NoneType"），故先归一化。
+        end = completed_date() if not spec.get('end') else min(spec['end'], completed_date())
+        start = spec['start']
         if start > end:
             raise ValueError('同步开始日期不能晚于已完成行情日期')
         if 'boards' in spec:

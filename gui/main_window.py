@@ -7,7 +7,7 @@ store 连接时启动即从 observations 加载真实候选、K 线读真实行�
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from .candidate_tabs import CandidateTabs
 from .chart_panel import ChartPanel
@@ -90,6 +90,7 @@ class AplusMainWindow(tk.Tk):
             tf_var=self._tf_var,
             on_timeframe_change=self._on_timeframe,
             on_date_change=self._on_date_change,
+            on_job_finished=self._on_job_finished,
         )
         self.toolbar.pack(side=tk.TOP, fill=tk.X)
         ttk.Separator(self, orient=tk.HORIZONTAL).pack(fill=tk.X)
@@ -98,10 +99,12 @@ class AplusMainWindow(tk.Tk):
         body.pack(fill=tk.BOTH, expand=True, padx=16, pady=12)
         body.columnconfigure(0, weight=0, minsize=300)  # 左：策略候选（固定，容纳 6 页签不溢出）
         body.columnconfigure(1, weight=1, minsize=420)  # 中：K 线（主力扩张）
-        body.columnconfigure(2, weight=0, minsize=200)  # 右：关注（固定窄栏）
+        body.columnconfigure(2, weight=0, minsize=260)  # 右：观察池（P2 扩列后加宽）
         body.rowconfigure(0, weight=1)
 
-        self.candidates = CandidateTabs(body, self.on_stock_selected)
+        self.candidates = CandidateTabs(
+            body, self.on_stock_selected, on_context=self._candidate_context
+        )
         self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
         # 固定侧栏宽度：weight=0 的列默认会撑到内容请求宽度（页签/列宽），
         # 关掉传播 + 显式 width 才能把宽度钉死，给中间 K 线让路。
@@ -112,9 +115,9 @@ class AplusMainWindow(tk.Tk):
         self.chart = ChartPanel(body, self.store)
         self.chart.grid(row=0, column=1, sticky=tk.NSEW, padx=(0, 16))
 
-        self.watch = WatchPanel(body, self.store)
+        self.watch = WatchPanel(body, self.store, on_select=self.on_stock_selected)
         self.watch.grid(row=0, column=2, sticky=tk.NSEW)
-        self.watch.configure(width=200)
+        self.watch.configure(width=260)
         self.watch.grid_propagate(False)
         self.watch.pack_propagate(False)
 
@@ -190,3 +193,38 @@ class AplusMainWindow(tk.Tk):
                 self._status_text.set(f"无 {code} 的行情快照")
         else:
             self.chart.show_observation(None, None)
+
+    # ---- 任务结束（下载/扫描）：刷新候选、观察池与信号日下拉 ----
+    def _on_job_finished(self, kind, status):
+        if self.store is None:
+            return
+        try:
+            self.candidates.load_from_store(
+                self.store, timeframe=self._tf_var.get(),
+                asof_filter=getattr(self, "_cur_date", None),
+            )
+            self.watch.reload()
+            self.toolbar._load_date_options()
+        except Exception:
+            pass
+        self._status_text.set(f"{kind}结束（{status}），候选与观察池已刷新")
+
+    # ---- 左栏候选右键：加入关注（写只走 store.watch）----
+    def _candidate_context(self, event, code, observation_id):
+        if self.store is None or not observation_id:
+            return
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(
+            label=f"加入关注（{code}）",
+            command=lambda: self._add_watch(code, observation_id),
+        )
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _add_watch(self, code, observation_id):
+        try:
+            self.store.watch(observation_id)
+        except Exception as exc:
+            messagebox.showerror("加入关注失败", str(exc), parent=self)
+            return
+        self.watch.reload()
+        self._status_text.set(f"已加入关注：{code}")

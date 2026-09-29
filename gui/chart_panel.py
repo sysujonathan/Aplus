@@ -16,6 +16,7 @@ _TEXT = "#dce3ef"
 _ENTRY = "#487cb6"
 _STOP = "#bd594f"
 _TARGET = "#298975"
+_SIGNAL = "#c9a227"   # 信号日竖线（金黄，与三线区分）
 _BG = "#171e28"
 _TITLE_FG = "#f5f5f7"
 
@@ -26,6 +27,7 @@ class ChartPanel(ttk.Frame):
         self.store = store
         self._data = None  # (frame, payload)
         self._code = None
+        self._signal_date = None  # P3：信号日（observations.asof 前 10 位），画竖线用
 
         self._tf = "daily"
         self._title = ttk.Label(
@@ -49,6 +51,7 @@ class ChartPanel(ttk.Frame):
     def show_observation(self, store, observation_id):
         self.store = store
         self._code = None
+        self._signal_date = None
         if store is None or observation_id is None:
             self._data = None
             self._title.config(text="K 线区域（未选择标的）")
@@ -80,6 +83,7 @@ class ChartPanel(ttk.Frame):
             )
             self._code = o["code"]
             self._tf = o["timeframe"] or self._tf
+            self._signal_date = (o["asof"] or "")[:10]
         self._tv_btn.config(state=tk.NORMAL)
         self._redraw()
 
@@ -185,6 +189,33 @@ class ChartPanel(ttk.Frame):
                     pad_l + plot_w + 4, yy, text=f"{float(value):.2f}", fill=color,
                     anchor=tk.W, font=("Consolas", 9),
                 )
+
+        # P3：信号日竖线（金黄虚线，与三线区分）
+        if self._signal_date:
+            for i, d in enumerate(dates):
+                if d[:10] == self._signal_date:
+                    xx = x(i)
+                    canvas.create_line(
+                        xx, pad_t, xx, pad_t + plot_h, fill=_SIGNAL, dash=(2, 2), width=1
+                    )
+                    canvas.create_text(
+                        xx + 3, pad_t + 2, text="信号", fill=_SIGNAL,
+                        anchor=tk.NW, font=("Microsoft YaHei", 8),
+                    )
+                    break
+
+        # P3：信号说明标签（图内左上角，与价轴同色系）
+        tx = pad_l + 6
+        for name, key, color in (
+            ("入场", "entry", _ENTRY), ("止损", "stop", _STOP), ("目标", "target", _TARGET),
+        ):
+            value = payload.get(key)
+            if value and float(value) > 0:
+                canvas.create_text(
+                    tx, pad_t + 20, text=f"{name} {float(value):.2f}", fill=color,
+                    anchor=tk.W, font=("Consolas", 9),
+                )
+                tx += 78
 
         # 日期轴（稀疏标注）
         step = max(1, n // 6)
