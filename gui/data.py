@@ -9,6 +9,14 @@ import json
 import pandas as pd
 
 
+LEGACY_MARKET_SOURCE = "legacy-engine-a"
+
+
+def _visible_sources(source):
+    """Realtime views also show immutable Engineering A history."""
+    return (source, LEGACY_MARKET_SOURCE) if source == "baostock" else (source,)
+
+
 def code_names(store):
     """复刻 workbench/dashboard.py 的命名：代码 -> 名称。失败返回空字典。"""
     try:
@@ -33,12 +41,14 @@ def load_candidates(store, timeframe="daily", source="baostock", asof_filter=Non
     asof_filter: (year, month, day) 三元组，元素为 None 表示该位不约束。
     用 LIKE 前缀匹配 asof（形如 2026-09-20 或带时间），避免依赖具体存储格式。
     """
+    sources = _visible_sources(source)
+    placeholders = ",".join("?" for _ in sources)
     sql = (
         "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id "
         "FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source=? AND o.timeframe=?"
+        f"WHERE d.source IN ({placeholders}) AND o.timeframe=?"
     )
-    params = [source, timeframe]
+    params = [*sources, timeframe]
     pattern = _build_asof_pattern(asof_filter)
     if pattern is not None:
         sql += " AND o.asof LIKE ?"
@@ -96,9 +106,12 @@ def load_observation_candles(store, observation_id):
 
 def latest_observation(store, code, timeframe="daily", source="baostock"):
     """按代码取最近一条观察 id（用于从搜索/关注定位 K 线）。无则返回 None。"""
+    sources = _visible_sources(source)
+    placeholders = ",".join("?" for _ in sources)
     rows = store.rows(
         "SELECT o.id FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source=? AND o.timeframe=? AND o.code=? ORDER BY o.created DESC LIMIT 1",
-        (source, timeframe, code),
+        f"WHERE d.source IN ({placeholders}) AND o.timeframe=? AND o.code=? "
+        "ORDER BY o.created DESC LIMIT 1",
+        (*sources, timeframe, code),
     )
     return rows[0]["id"] if rows else None

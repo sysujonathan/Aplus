@@ -1,6 +1,7 @@
 import os
 import uuid
 
+import pandas as pd
 import pytest
 
 from gui.candidate_tabs import (
@@ -10,7 +11,10 @@ from gui.candidate_tabs import (
 )
 from gui.toolbar import format_board_scope
 from gui.chart_panel import layout_shape, page_start_for
+from gui.data import latest_observation, load_candidates
 from launch_dashboard import acquire_single_instance, release_single_instance
+from workbench.market import save_dataset
+from workbench.store import Store, now
 
 
 def test_candidate_labels_fit_horizontal_strategy_bar():
@@ -48,6 +52,37 @@ def test_multichart_layouts_and_candidate_pages_are_stable():
     assert page_start_for(3, 4) == 0
     assert page_start_for(4, 4) == 4
     assert page_start_for(17, 9) == 9
+
+
+def test_legacy_candidates_remain_visible_without_entering_live_market_source(tmp_path):
+    store = Store(tmp_path)
+    frame = pd.DataFrame(
+        {
+            "date": ["2026-09-28", "2026-09-29"],
+            "open": [10.0, 10.2],
+            "high": [10.5, 10.6],
+            "low": [9.8, 10.0],
+            "close": [10.2, 10.4],
+            "volume": [1000.0, 1200.0],
+        }
+    )
+    legacy = save_dataset(store, "sz.000001", frame, "legacy-engine-a", "前复权（工程A只读迁移）")
+    live = save_dataset(store, "sh.600000", frame, "baostock", "前复权")
+    created = now()
+    with store.connect() as db:
+        db.executemany(
+            "INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                ("legacy-observation", "legacy-job", "sz.000001", "STRATEGY_GAP_H2", "legacy", "daily", "2026-09-29", "2026-09-29", legacy, "{}", created),
+                ("live-observation", "live-job", "sh.600000", "MTR_MASTER", "live", "daily", "2026-09-29", "2026-09-29", live, "{}", created),
+            ],
+        )
+
+    visible = load_candidates(store, "daily")
+    assert visible["STRATEGY_GAP_H2"][0]["observation_id"] == "legacy-observation"
+    assert visible["MTR_MASTER"][0]["observation_id"] == "live-observation"
+    assert latest_observation(store, "sz.000001") == "legacy-observation"
+    assert set(load_candidates(store, "daily", source="legacy-engine-a")) == {"STRATEGY_GAP_H2"}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named mutex")
