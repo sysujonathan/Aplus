@@ -1,18 +1,29 @@
-"""顶部工具栏（旧 A 风格还原 + 接 service）。
-
-旧 A 顶栏参数：标题 Microsoft YaHei 16 bold #f5f5f7；日线/周线切换；搜索框；
-下载行情 / 扫描 / 停止；AI 复核；信号日；右侧状态。按钮在后端连接时提交 service 任务，
-未连接时明确提示（调试壳）。
-"""
+"""盘前任务工具栏：周期、范围、行情更新、扫描与信号日。"""
 from __future__ import annotations
 
 import tkinter as tk
 import ttkbootstrap as ttk
 
 _LABEL_FG = "#a1a1a6"
-_TITLE_FG = "#f5f5f7"
-_PLACEHOLDER_FG = "#8e8e93"
 _ALL = "全部"
+_BOARD_SHORT = {
+    "沪深主板": "主板",
+    "创业板": "创业",
+    "科创板": "科创",
+    "北交所": "北交",
+}
+
+
+def format_board_scope(boards):
+    """给紧凑工具栏使用的板块范围文案。"""
+    from workbench.market import BOARDS
+
+    selected = [board for board in BOARDS if board in boards]
+    if selected == list(BOARDS):
+        return "范围：全市场"
+    if not selected:
+        return "范围：未选择"
+    return "范围：" + "+".join(_BOARD_SHORT[board] for board in selected)
 
 
 def _two_years_ago():
@@ -30,7 +41,8 @@ def _two_years_ago():
 
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
-                 on_timeframe_change=None, on_date_change=None, on_job_finished=None):
+                 on_timeframe_change=None, on_date_change=None, on_job_finished=None,
+                 on_chart_page=None, on_chart_layout=None):
         super().__init__(parent)
         self.service = service
         self.store = store
@@ -38,11 +50,26 @@ class ToolBar(ttk.Frame):
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
         self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态)，主窗口借此刷新列表
+        self._on_chart_page = on_chart_page
+        self._on_chart_layout = on_chart_layout
         self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
         self._universe_total = None                           # 市场总量（首次渲染时缓存）
         self.full_history_var = tk.BooleanVar(value=False)    # 完整历史(2016)勾选，默认近2年
+        try:
+            from workbench.scope import selected_boards
+
+            saved_boards = selected_boards(store) if store is not None else []
+        except Exception:
+            saved_boards = []
+        from workbench.market import BOARDS
+
+        if not saved_boards:
+            saved_boards = list(BOARDS[:3])
+        self.board_vars = {
+            board: tk.BooleanVar(value=board in saved_boards) for board in BOARDS
+        }
 
         self.configure(padding=(18, 12))
         self._all_years = []
@@ -55,17 +82,12 @@ class ToolBar(ttk.Frame):
         header.grid(row=0, column=0, sticky=tk.W)
         self.actions = actions = ttk.Frame(self)
         actions.grid(row=0, column=1, sticky=tk.W)
-        self.columnconfigure(2, weight=1)
-        ttk.Label(
-            header,
-            text="Brooks-AI 操盘台",
-            font=("Microsoft YaHei", 16, "bold"),
-            foreground=_TITLE_FG,
-        ).pack(side=tk.LEFT, padx=(4, 20))
-
+        self.filters = filters = ttk.Frame(self)
+        filters.grid(row=0, column=2, sticky=tk.W)
+        self.columnconfigure(3, weight=1)
         # 日线 / 周线（只由用户手动切换）
         tf_f = ttk.Frame(header)
-        tf_f.pack(side=tk.LEFT, padx=(0, 18))
+        tf_f.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Radiobutton(
             tf_f, text="日线", value="daily", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
@@ -73,22 +95,29 @@ class ToolBar(ttk.Frame):
             tf_f, text="周线", value="weekly", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
 
-        # 搜索框（回车 -> TradingView）
-        search_f = ttk.Frame(header)
-        search_f.pack(side=tk.LEFT, padx=(0, 20))
-        self.ent_code = ttk.Entry(search_f, width=14, font=("Consolas", 12))
-        self.ent_code.pack(side=tk.LEFT, ipady=3)
-        self.ent_code.insert(0, "输入代码送 TV")
-        self.ent_code.config(foreground="#8e8e93")
-        self.ent_code.bind("<FocusIn>", self._search_focus)
-        self.ent_code.bind("<FocusOut>", self._search_blur)
-        self.ent_code.bind("<Return>", lambda e: self._open_tv_for_entry())
-
-        # 动作按钮（保留引用：运行中禁用、结束后恢复）
-        self.btn_scan = ttk.Button(actions, text="策略扫描", command=self._on_scan, bootstyle="primary")
-        self.btn_scan.pack(side=tk.LEFT, padx=5)
-        self.btn_sync = ttk.Button(actions, text="下载行情", command=self._on_sync, bootstyle="secondary-outline")
+        # 日常顺序固定为：选择范围 → 更新行情 → 策略扫描。
+        self.scope_button = ttk.Menubutton(
+            actions,
+            text=format_board_scope(self._selected_boards()),
+            bootstyle="secondary-outline",
+        )
+        scope_menu = tk.Menu(self.scope_button, tearoff=0)
+        for board, variable in self.board_vars.items():
+            scope_menu.add_checkbutton(
+                label=board,
+                variable=variable,
+                command=self._on_board_change,
+            )
+        self.scope_button.configure(menu=scope_menu)
+        self.scope_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.btn_sync = ttk.Button(
+            actions, text="更新行情", command=self._on_sync, bootstyle="primary"
+        )
         self.btn_sync.pack(side=tk.LEFT, padx=5)
+        self.btn_scan = ttk.Button(
+            actions, text="策略扫描", command=self._on_scan, bootstyle="secondary-outline"
+        )
+        self.btn_scan.pack(side=tk.LEFT, padx=5)
         self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, bootstyle="danger")
         sync_menu = tk.Menu(self, tearoff=0)
         sync_menu.add_checkbutton(label="完整历史（2016 年起）", variable=self.full_history_var)
@@ -99,23 +128,81 @@ class ToolBar(ttk.Frame):
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
         # 信号日（年/月/日三联 Combobox，联动筛选；对齐旧 A gui_dashboard.py:210）
-        self.date_label = ttk.Label(actions, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
+        self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
         self.day_var = tk.StringVar(value=_ALL)
-        combo_kw = {"state": "readonly", "width": 6, "font": ("Consolas", 11)}
-        self.year_combo = ttk.Combobox(actions, textvariable=self.year_var, **combo_kw)
+        combo_kw = {"state": "readonly", "font": ("Consolas", 11)}
+        self.year_combo = ttk.Combobox(
+            filters, textvariable=self.year_var, width=5, **combo_kw
+        )
         self.year_combo.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(actions, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
-        self.month_combo = ttk.Combobox(actions, textvariable=self.month_var, **combo_kw)
+        ttk.Label(filters, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
+        self.month_combo = ttk.Combobox(
+            filters, textvariable=self.month_var, width=3, **combo_kw
+        )
         self.month_combo.pack(side=tk.LEFT, padx=(2, 2))
-        ttk.Label(actions, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
-        self.day_combo = ttk.Combobox(actions, textvariable=self.day_var, **combo_kw)
+        ttk.Label(filters, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
+        self.day_combo = ttk.Combobox(
+            filters, textvariable=self.day_var, width=3, **combo_kw
+        )
         self.day_combo.pack(side=tk.LEFT, padx=(2, 0))
         self.year_combo.bind("<<ComboboxSelected>>", self._on_year_change)
         self.month_combo.bind("<<ComboboxSelected>>", self._on_month_change)
         self.day_combo.bind("<<ComboboxSelected>>", self._on_day_change)
+
+        # TradingView 式多图控制：布局选择 + 整组左右翻页，放在信号日同一行。
+        ttk.Separator(filters, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(12, 8), pady=2
+        )
+        self.layout_var = tk.StringVar(value="2×2")
+        self.layout_combo = ttk.Combobox(
+            filters,
+            textvariable=self.layout_var,
+            values=("2×2", "2×3", "3×3"),
+            state="readonly",
+            width=3,
+            font=("Consolas", 9),
+        )
+        self.layout_combo.pack(side=tk.LEFT, padx=(0, 5))
+        self.layout_combo.bind("<<ComboboxSelected>>", self._fire_layout)
+        self.btn_chart_prev = tk.Button(
+            filters,
+            text="‹",
+            width=2,
+            command=lambda: self._fire_chart_page(-1),
+            bg="#2c2c2e",
+            fg="#f5f5f7",
+            activebackground="#007AFF",
+            activeforeground="white",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.btn_chart_prev.pack(side=tk.LEFT, ipady=4)
+        self.chart_page_var = tk.StringVar(value="0 / 0")
+        tk.Label(
+            filters,
+            textvariable=self.chart_page_var,
+            width=9,
+            anchor=tk.CENTER,
+            font=("Consolas", 9),
+            fg=_LABEL_FG,
+            bg="#212121",
+        ).pack(side=tk.LEFT, padx=3)
+        self.btn_chart_next = tk.Button(
+            filters,
+            text="›",
+            width=2,
+            command=lambda: self._fire_chart_page(1),
+            bg="#2c2c2e",
+            fg="#f5f5f7",
+            activebackground="#007AFF",
+            activeforeground="white",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.btn_chart_next.pack(side=tk.LEFT, ipady=4)
 
         # 依赖 store 的真实信号日填充下拉
         self._load_date_options()
@@ -124,23 +211,32 @@ class ToolBar(ttk.Frame):
 
         self._status = tk.StringVar(value=self._mkt_var.get())
         self.status_label = ttk.Label(self, textvariable=self._status, font=("Consolas", 10), foreground=_LABEL_FG)
-        self.status_label.grid(row=0, column=2, sticky=tk.E, padx=6)
+        self.status_label.grid(row=0, column=3, sticky=tk.E, padx=6)
         self.bind("<Configure>", self._responsive)
         self._select_latest_date()
 
     def _responsive(self, event):
         if event.widget is not self:
             return
-        needed = self.header.winfo_reqwidth() + self.actions.winfo_reqwidth() + 40
-        if event.width < needed:
-            self.actions.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
-            self.status_label.grid_remove()
-        else:
+        header_width = self.header.winfo_reqwidth()
+        actions_width = self.actions.winfo_reqwidth()
+        filters_width = self.filters.winfo_reqwidth()
+        needed = header_width + actions_width + filters_width + 40
+        if event.width >= needed:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
+            self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
             if event.width > needed + self.status_label.winfo_reqwidth():
-                self.status_label.grid(row=0, column=2, sticky=tk.E)
+                self.status_label.grid(row=0, column=3, sticky=tk.E)
             else:
                 self.status_label.grid_remove()
+        elif event.width >= actions_width + filters_width + 40:
+            self.actions.grid(row=1, column=0, columnspan=1, sticky=tk.W, pady=(6, 0))
+            self.filters.grid(row=1, column=1, columnspan=3, sticky=tk.W, pady=(6, 0))
+            self.status_label.grid_remove()
+        else:
+            self.actions.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(6, 0))
+            self.filters.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+            self.status_label.grid_remove()
 
     def _explain_ai(self):
         from tkinter import messagebox
@@ -150,6 +246,28 @@ class ToolBar(ttk.Frame):
     def selected_date(self):
         return tuple(v.get() if v.get() != _ALL else None
                      for v in (self.year_var, self.month_var, self.day_var))
+
+    def _selected_boards(self):
+        """按固定市场顺序返回当前勾选范围。"""
+        from workbench.market import BOARDS
+
+        return [board for board in BOARDS if self.board_vars[board].get()]
+
+    def _on_board_change(self):
+        boards = self._selected_boards()
+        self.scope_button.configure(text=format_board_scope(boards))
+        if not boards:
+            self.set_status("请至少选择一个行情板块")
+            return
+        if self.store is not None:
+            try:
+                from workbench.scope import save_boards
+
+                save_boards(self.store, boards)
+            except Exception as exc:
+                self.set_status(f"行情范围保存失败：{exc}")
+                return
+        self.set_status("行情与扫描范围：" + "、".join(boards))
 
     def _select_latest_date(self):
         if not self.store:
@@ -177,30 +295,25 @@ class ToolBar(ttk.Frame):
     def set_status(self, text):
         self._status.set(text)
 
-    # ---- 搜索框占位 ----
-    def _search_focus(self, _e):
-        if self.ent_code.get() == "输入代码送 TV":
-            self.ent_code.delete(0, tk.END)
-            self.ent_code.config(foreground="#f5f5f7")
+    def set_chart_page_status(self, start, end, total):
+        self.chart_page_var.set(f"{start}–{end} / {total}" if total else "0 / 0")
+        if start <= 1:
+            self.btn_chart_prev.configure(state=tk.DISABLED)
+        else:
+            self.btn_chart_prev.configure(state=tk.NORMAL)
+        if not total or end >= total:
+            self.btn_chart_next.configure(state=tk.DISABLED)
+        else:
+            self.btn_chart_next.configure(state=tk.NORMAL)
 
-    def _search_blur(self, _e):
-        if not self.ent_code.get().strip():
-            self.ent_code.insert(0, "输入代码送 TV")
-            self.ent_code.config(foreground="#8e8e93")
+    def _fire_chart_page(self, delta):
+        if self._on_chart_page:
+            self._on_chart_page(delta)
 
-    def _open_tv_for_entry(self):
-        code = self.ent_code.get().strip()
-        if not code or code == "输入代码送 TV":
-            return
-        try:
-            from .tv import tv_link
-            import webbrowser
-
-            url = tv_link(code, self._tf_var.get())
-            webbrowser.open(url)
-            self.set_status(f"已打开 TradingView：{code}")
-        except Exception:
-            self.set_status(f"TV 链接：{code}")
+    def _fire_layout(self, _event=None):
+        count = {"2×2": 4, "2×3": 6, "3×3": 9}.get(self.layout_var.get(), 4)
+        if self._on_chart_layout:
+            self._on_chart_layout(count)
 
     # ---- 信号日三联 Combobox 联动 ----
     def _load_date_options(self):
@@ -341,28 +454,45 @@ class ToolBar(ttk.Frame):
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _on_sync(self):
         if self.service is None:
-            self.set_status("后端未连接：下载行情需接 service")
+            self.set_status("后端未连接：更新行情需接 service")
+            return
+        boards = self._selected_boards()
+        if not boards:
+            self.set_status("更新未开始：请至少选择一个行情板块")
+            return
+        try:
+            from workbench.scope import save_boards
+
+            save_boards(self.store, boards)
+        except Exception as exc:
+            self.set_status(f"行情范围保存失败：{exc}")
             return
         # 默认近 2 年（轻量首跑）；勾选"完整历史"才拉 2016 起全市场全历史
         start = "2016-01-01" if self.full_history_var.get() else _two_years_ago()
         spec = {
-            "boards": ["沪深主板", "创业板", "科创板"],
+            "boards": boards,
             "start": start,
             "end": None,
             "force": False,
         }
-        self._submit_job("sync", "下载行情", spec)
+        self._submit_job("sync", "更新行情", spec)
 
     def _on_scan(self):
         if self.service is None:
             self.set_status("后端未连接：扫描需接 service")
             return
+        boards = self._selected_boards()
+        if not boards:
+            self.set_status("扫描未开始：请至少选择一个行情板块")
+            return
         try:
-            from workbench.market import latest_datasets, completed_date
+            from workbench.market import completed_date
+            from workbench.scope import save_boards, scan_datasets
 
-            ids = [r["id"] for r in latest_datasets(self.store, "baostock")]
+            save_boards(self.store, boards)
+            ids = [r["id"] for r in scan_datasets(self.store, "baostock")]
             if not ids:
-                self.set_status("没有可用行情快照：先下载行情，再扫描")
+                self.set_status("所选板块没有可用行情：请先更新行情，再扫描")
                 return
             # 全部已启用策略（GUI 无勾选界面，扫描即全量）
             try:
@@ -373,7 +503,7 @@ class ToolBar(ttk.Frame):
                 strategies = ["MTR_MASTER", "STRATEGY_GAP_H2", "STRATEGY_AWIL"]
             spec = {
                 "source": "baostock",
-                "boards": ["沪深主板", "创业板", "科创板"],
+                "boards": boards,
                 "datasets": ids,
                 "strategies": strategies,
                 "timeframes": [self._tf_var.get()],
@@ -395,8 +525,9 @@ class ToolBar(ttk.Frame):
             self.set_status(f"{label}提交失败：{exc}")
             return
         self._job_id, self._job_kind = job, label
-        self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_sync)
-        (self.btn_sync if kind == "sync" else self.btn_scan).state(["disabled"])
+        self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_scan)
+        for button in (self.btn_sync, self.btn_scan, self.scope_button):
+            button.state(["disabled"])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
 
@@ -435,7 +566,7 @@ class ToolBar(ttk.Frame):
         self._job_id = None
         self._job_kind = ""
         self.btn_stop.pack_forget()
-        for btn in (self.btn_sync, self.btn_scan):
+        for btn in (self.btn_sync, self.btn_scan, self.scope_button):
             btn.state(["!disabled"])
         try:
             r = json.loads(result_json) if result_json else {}

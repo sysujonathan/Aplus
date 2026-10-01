@@ -52,3 +52,4 @@ cycler==0.12.1
 fonttools==4.66.0
 kiwisolver==1.5.1
 pyparsing==3.3.3
+pystray==0.19.5

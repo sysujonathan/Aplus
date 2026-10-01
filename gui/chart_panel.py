@@ -1,4 +1,4 @@
-"""工程 A 白底 K 线、量能和下方交易详情；仅读取新工程快照。"""
+"""工程 A 白底 K 线与量能；仅读取新工程快照。"""
 from __future__ import annotations
 import io
 import tkinter as tk
@@ -70,50 +70,128 @@ def render_chart(frame, payload, title, meta):
             plt.close(fig)
 
 
+_LAYOUT_SHAPES = {4: (2, 2), 6: (2, 3), 9: (3, 3)}
+
+
+def layout_shape(count):
+    """返回多图布局的行列；只开放交易员确认的 4/6/9 格。"""
+    return _LAYOUT_SHAPES.get(int(count), _LAYOUT_SHAPES[4])
+
+
+def page_start_for(index, count):
+    """让指定候选落在其所在整页，避免逐股切换时整组不停抖动。"""
+    count = int(count) if int(count) in _LAYOUT_SHAPES else 4
+    return max(0, int(index) // count * count)
+
+
 class ChartPanel(ttk.Frame):
-    def __init__(self, parent, store=None):
+    """一个独立图格：自身标的、活动状态以及独立 TradingView 入口。"""
+
+    def __init__(self, parent, store=None, on_activate=None, image_cache=None):
         super().__init__(parent)
         self.store = store
+        self._on_activate = on_activate
+        self._image_cache = image_cache if image_cache is not None else {}
         self._code = None
+        self._observation_id = None
         self._tf = "daily"
         self._image = None
         self._photo = None
-        self._tv_btn = None
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        self.header = tk.Frame(self, bg="#3a3a3c", height=28)
+        self.header.grid(row=0, column=0, sticky=tk.EW)
+        self.header.grid_propagate(False)
+        self._title_var = tk.StringVar(value="空位")
+        self.title_label = tk.Label(
+            self.header,
+            textvariable=self._title_var,
+            bg="#3a3a3c",
+            fg="#f5f5f7",
+            anchor=tk.W,
+            font=("Microsoft YaHei", 9, "bold"),
+            padx=7,
+        )
+        self.title_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._tv_btn = tk.Button(
+            self.header,
+            text="TV ↗",
+            command=self._open_tv,
+            state=tk.DISABLED,
+            bg="#3a3a3c",
+            fg="#d1d1d6",
+            activebackground="#007AFF",
+            activeforeground="white",
+            borderwidth=0,
+            padx=8,
+            cursor="hand2",
+        )
+        self._tv_btn.pack(side=tk.RIGHT, fill=tk.Y)
+
         self.chart_frame = ttk.Frame(self)
-        self.chart_frame.grid(row=0, column=0, sticky=tk.NSEW, pady=(0, 14))
+        self.chart_frame.grid(row=1, column=0, sticky=tk.NSEW)
         self.chart_frame.grid_propagate(False)
         self.chart_frame.columnconfigure(0, weight=1)
         self.chart_frame.rowconfigure(0, weight=1)
-        self.chart_label = ttk.Label(self.chart_frame, text="选中左侧标的查看缩略图",
-                                     foreground="#8e8e93", anchor=tk.W)
+        self.chart_label = ttk.Label(
+            self.chart_frame,
+            text="等待候选",
+            foreground="#8e8e93",
+            anchor=tk.CENTER,
+        )
         self.chart_label.grid(row=0, column=0, sticky=tk.NSEW)
-        self.chart_frame.bind("<Configure>", lambda e: self._fit_image())
-        self._title = ttk.Label(self, text="", font=("Microsoft YaHei", 14, "bold"))
-        self._title.grid(row=1, column=0, sticky=tk.W, pady=(0, 12))
-        self._facts = ttk.Label(self, text="", font=("Consolas", 12), foreground="#d1d1d6", justify=tk.LEFT)
-        self._facts.grid(row=2, column=0, sticky=tk.W, pady=(0, 12))
+        self.chart_frame.bind("<Configure>", lambda _event: self._fit_image())
+        for widget in (self, self.header, self.title_label, self.chart_label):
+            widget.bind("<Button-1>", self._activate, add="+")
 
-    def tv_button(self, parent):
-        self._tv_btn = ttk.Button(parent, text="在 TradingView 打开", bootstyle="primary",
-                                  command=self._open_tv, state=tk.DISABLED)
+    def tv_button(self, _parent=None):
+        """兼容旧调用；多图模式下按钮固定在各自图格右上角。"""
         return self._tv_btn
 
     def set_timeframe(self, tf):
         self._tf = tf or "daily"
 
+    def set_active(self, active):
+        color = "#007AFF" if active else "#3a3a3c"
+        self.header.configure(bg=color)
+        self.title_label.configure(bg=color)
+        self._tv_btn.configure(bg=color)
+
+    def set_drop_target(self, active):
+        if active:
+            self.header.configure(bg="#bf6b00")
+            self.title_label.configure(bg="#bf6b00")
+            self._tv_btn.configure(bg="#bf6b00")
+
+    def show_placeholder(self, title="空位"):
+        self._code = None
+        self._observation_id = None
+        self._image = None
+        self._photo = None
+        self._title_var.set(title)
+        self.chart_label.configure(image="", text="拖入关注标的或切换候选页")
+        self._tv_btn.configure(state=tk.DISABLED)
+
     def show_observation(self, store, observation_id):
         self.store = store
         self._code = None
+        self._observation_id = observation_id
         self._image = None
         self._photo = None
-        self._title.configure(text="")
-        self._facts.configure(text="")
-        self.chart_label.configure(image="", text="选中左侧标的查看缩略图")
-        if self._tv_btn:
-            self._tv_btn.configure(state=tk.DISABLED)
+        self._title_var.set("加载中…")
+        self.chart_label.configure(image="", text="正在生成 K 线…")
+        self._tv_btn.configure(state=tk.DISABLED)
         if store is None or observation_id is None:
+            self.show_placeholder()
+            return
+        cache = getattr(self, "_image_cache", None)
+        cached = cache.get(observation_id) if isinstance(cache, dict) else None
+        if cached is not None:
+            self._image, self._code, self._tf, title = cached
+            self._title_var.set(title)
+            self._tv_btn.configure(state=tk.NORMAL)
+            self._fit_image()
             return
         from .data import load_observation_candles, code_names
         from workbench.strategies import catalog, prepare, calculate
@@ -129,21 +207,30 @@ class ChartPanel(ttk.Frame):
             bars = prepare(frame, self._tf, str(observation["asof"])[:10])
             instance, calculated = calculate(spec, bars)
             name = code_names(store).get(self._code, "")
-            title = f"{name}（{self._code}） {spec.name} · {'周K' if self._tf == 'weekly' else '日K'}"
+            period = "周K" if self._tf == "weekly" else "日K"
+            # 股票身份固定在深色图格标题条；白底图内只保留策略与周期，避免九格时重复挤占空间。
+            title = f"{spec.name} · {period}"
             self._image = render_chart(calculated, payload, title, instance.get_metadata())
-            self._title.configure(text=f"{spec.name}  {self._code} {name}")
-            facts = []
-            for label, key in (("触发价", "entry"), ("止损价", "stop"), ("目标价", "target")):
-                if payload.get(key) is not None:
-                    facts.append(f"{label}  {float(payload[key]):.2f}")
-            facts.append(f"信号日  {str(observation['asof'])[:10]}")
-            self._facts.configure(text="\n".join(facts))
-            if self._tv_btn:
-                self._tv_btn.configure(state=tk.NORMAL)
+            self._title_var.set(f"{self._code}  {name}")
+            if isinstance(cache, dict):
+                cache[observation_id] = (
+                    self._image,
+                    self._code,
+                    self._tf,
+                    self._title_var.get(),
+                )
+                if len(cache) > 72:
+                    cache.pop(next(iter(cache)))
+            self._tv_btn.configure(state=tk.NORMAL)
             self._fit_image()
         except Exception as exc:
             self._code = None
+            self._title_var.set("加载失败")
             self.chart_label.configure(image="", text=f"图表加载失败：{exc}")
+
+    def _activate(self, _event=None):
+        if self._on_activate:
+            self._on_activate()
 
     def _fit_image(self):
         if self._image is None:
@@ -153,7 +240,8 @@ class ChartPanel(ttk.Frame):
             return
         scale = min(w / self._image.width, h / self._image.height)
         size = (max(1, int(self._image.width * scale)), max(1, int(self._image.height * scale)))
-        self._photo = ImageTk.PhotoImage(self._image.resize(size, Image.Resampling.LANCZOS), master=self)
+        resized = self._image.resize(size, Image.Resampling.LANCZOS)
+        self._photo = ImageTk.PhotoImage(resized, master=self)
         self.chart_label.configure(image=self._photo, text="")
 
     def _open_tv(self):
@@ -161,3 +249,217 @@ class ChartPanel(ttk.Frame):
             import webbrowser
             from .tv import tv_link
             webbrowser.open(tv_link(self._code, self._tf))
+
+
+class ChartGrid(ttk.Frame):
+    """TradingView 式活动图格：候选分页，关注点击/拖拽只替换指定格。"""
+
+    def __init__(self, parent, store=None, layout_count=4, on_page_state=None,
+                 on_active_item=None):
+        super().__init__(parent)
+        self.store = store
+        self._layout_count = layout_count if layout_count in _LAYOUT_SHAPES else 4
+        self._on_page_state = on_page_state
+        self._on_active_item = on_active_item
+        self._items = []
+        self._display_items = []
+        self._page_start = 0
+        self._active_slot = 0
+        self._render_token = 0
+        self._image_cache = {}
+        self._slots = []
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.host = ttk.Frame(self)
+        self.host.grid(row=0, column=0, sticky=tk.NSEW)
+        self._build_slots()
+
+    @property
+    def layout_count(self):
+        return self._layout_count
+
+    def set_items(self, rows, selected_index=0):
+        self._items = []
+        for index, row in enumerate(rows or []):
+            item = dict(row)
+            item["candidate_index"] = index
+            self._items.append(item)
+        if self._items:
+            selected_index = max(0, min(int(selected_index), len(self._items) - 1))
+            self._page_start = page_start_for(selected_index, self._layout_count)
+            self._active_slot = selected_index - self._page_start
+        else:
+            self._page_start = 0
+            self._active_slot = 0
+        self._render_page()
+
+    def set_layout(self, count):
+        count = int(count)
+        if count not in _LAYOUT_SHAPES or count == self._layout_count:
+            return
+        active_index = self._page_start + self._active_slot
+        self._layout_count = count
+        self._page_start = page_start_for(active_index, count)
+        self._active_slot = max(0, active_index - self._page_start)
+        self._build_slots()
+        self._render_page()
+
+    def page(self, delta):
+        if not self._items:
+            return
+        last_start = page_start_for(len(self._items) - 1, self._layout_count)
+        new_start = self._page_start + int(delta) * self._layout_count
+        self._page_start = max(0, min(new_start, last_start))
+        self._active_slot = 0
+        self._render_page()
+        item = self.current_item()
+        if item and self._on_active_item:
+            self._on_active_item(item.get("observation_id"))
+
+    def focus_observation(self, observation_id):
+        if not observation_id:
+            return False
+        for index, item in enumerate(self._items):
+            if item.get("observation_id") == observation_id:
+                start = page_start_for(index, self._layout_count)
+                if start != self._page_start:
+                    self._page_start = start
+                    self._active_slot = index - start
+                    self._render_page()
+                else:
+                    self._active_slot = index - start
+                    displayed = self._display_items[self._active_slot]
+                    if not displayed or displayed.get("observation_id") != observation_id:
+                        base_item = self._items[index]
+                        self._display_items[self._active_slot] = base_item
+                        self._slots[self._active_slot].show_observation(
+                            self.store, observation_id
+                        )
+                    self._refresh_active_styles()
+                    self._notify_page_state()
+                return True
+        return False
+
+    def replace_active(self, code, observation_id):
+        return self.replace_slot(self._active_slot, code, observation_id)
+
+    def replace_slot(self, slot_index, code, observation_id):
+        if not observation_id or not 0 <= int(slot_index) < len(self._slots):
+            return False
+        slot_index = int(slot_index)
+        item = {
+            "code": code,
+            "name": "",
+            "observation_id": observation_id,
+            "candidate_index": None,
+            "watch_override": True,
+        }
+        while len(self._display_items) < len(self._slots):
+            self._display_items.append(None)
+        self._display_items[slot_index] = item
+        self._active_slot = slot_index
+        self._slots[slot_index].show_observation(self.store, observation_id)
+        self._refresh_active_styles()
+        return True
+
+    def replace_at_point(self, code, observation_id, root_x, root_y):
+        index = self.slot_at_point(root_x, root_y)
+        if index is None:
+            return False
+        return self.replace_slot(index, code, observation_id)
+
+    def highlight_drop(self, root_x, root_y):
+        target = self.slot_at_point(root_x, root_y)
+        self._refresh_active_styles()
+        if target is not None:
+            self._slots[target].set_drop_target(True)
+        return target is not None
+
+    def clear_drop_highlight(self):
+        self._refresh_active_styles()
+
+    def slot_at_point(self, root_x, root_y):
+        for index, slot in enumerate(self._slots):
+            x, y = slot.winfo_rootx(), slot.winfo_rooty()
+            if x <= root_x < x + slot.winfo_width() and y <= root_y < y + slot.winfo_height():
+                return index
+        return None
+
+    def current_item(self):
+        if 0 <= self._active_slot < len(self._display_items):
+            return self._display_items[self._active_slot]
+        return None
+
+    def set_timeframe(self, tf):
+        for slot in self._slots:
+            slot.set_timeframe(tf)
+
+    def clear(self):
+        self.set_items([])
+
+    def _build_slots(self):
+        for child in self.host.winfo_children():
+            child.destroy()
+        self._slots = []
+        rows, columns = layout_shape(self._layout_count)
+        for row in range(3):
+            self.host.rowconfigure(row, weight=1 if row < rows else 0)
+        for column in range(3):
+            self.host.columnconfigure(column, weight=1 if column < columns else 0)
+        for index in range(self._layout_count):
+            row, column = divmod(index, columns)
+            slot = ChartPanel(
+                self.host,
+                self.store,
+                on_activate=lambda i=index: self._activate_slot(i),
+                image_cache=self._image_cache,
+            )
+            slot.grid(row=row, column=column, sticky=tk.NSEW, padx=2, pady=2)
+            self._slots.append(slot)
+
+    def _render_page(self):
+        self._render_token += 1
+        token = self._render_token
+        page = self._items[self._page_start:self._page_start + self._layout_count]
+        self._display_items = list(page) + [None] * (self._layout_count - len(page))
+        for index, slot in enumerate(self._slots):
+            item = self._display_items[index]
+            if item is None:
+                slot.show_placeholder()
+            else:
+                label = item.get("name") or item.get("code") or "加载中"
+                slot.show_placeholder(label)
+                self.after(
+                    index * 12,
+                    lambda i=index, value=item, generation=token: self._render_slot(
+                        i, value, generation
+                    ),
+                )
+        self._refresh_active_styles()
+        self._notify_page_state()
+
+    def _render_slot(self, index, item, token):
+        if token != self._render_token or not self.winfo_exists():
+            return
+        if index >= len(self._display_items) or self._display_items[index] is not item:
+            return
+        self._slots[index].show_observation(self.store, item.get("observation_id"))
+
+    def _activate_slot(self, index):
+        self._active_slot = index
+        self._refresh_active_styles()
+        item = self.current_item()
+        if item and self._on_active_item:
+            self._on_active_item(item.get("observation_id"))
+
+    def _refresh_active_styles(self):
+        for index, slot in enumerate(self._slots):
+            slot.set_active(index == self._active_slot)
+
+    def _notify_page_state(self):
+        if not self._on_page_state:
+            return
+        total = len(self._items)
+        start = self._page_start + 1 if total else 0
+        end = min(self._page_start + self._layout_count, total)
+        self._on_page_state(start, end, total)
