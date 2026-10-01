@@ -1,9 +1,26 @@
-"""工程 A 白底 K 线与量能；仅读取新工程快照。"""
+"""工程 A K 线与量能的石墨主题呈现；仅读取新工程快照。"""
 from __future__ import annotations
 import io
 import tkinter as tk
 import ttkbootstrap as ttk
 from PIL import Image, ImageTk
+
+from .theme import (
+    ACCENT,
+    APP_BG,
+    AVERAGE,
+    BORDER,
+    CHART_BG,
+    CONTROL_BG,
+    DOWN,
+    DROP_TARGET,
+    GRID,
+    MUTED,
+    STOP,
+    TARGET,
+    TEXT,
+    UP,
+)
 
 
 def render_chart(frame, payload, title, meta):
@@ -17,21 +34,46 @@ def render_chart(frame, payload, title, meta):
 
     plot = frame.tail(120).copy()
     plot.index = pd.to_datetime(plot["date"])
-    colors = mpf.make_marketcolors(up="red", down="green", edge="inherit", wick="inherit", volume="in")
-    style = mpf.make_mpf_style(marketcolors=colors, gridstyle=":", y_on_right=True,
-                              rc={"font.family": ["Microsoft YaHei", "DejaVu Sans"], "axes.unicode_minus": False})
+    colors = mpf.make_marketcolors(
+        up=UP,
+        down=DOWN,
+        edge="inherit",
+        wick="inherit",
+        volume="in",
+    )
+    style = mpf.make_mpf_style(
+        marketcolors=colors,
+        facecolor=CHART_BG,
+        figcolor=APP_BG,
+        gridcolor=GRID,
+        gridstyle="-",
+        y_on_right=True,
+        rc={
+            "font.family": ["Microsoft YaHei", "DejaVu Sans"],
+            "axes.unicode_minus": False,
+            "axes.edgecolor": BORDER,
+            "axes.labelcolor": MUTED,
+            "text.color": TEXT,
+            "xtick.color": MUTED,
+            "ytick.color": MUTED,
+        },
+    )
     adds = []
     if "ema20" in plot:
-        adds.append(mpf.make_addplot(plot.ema20, color="orange", width=1.5))
+        adds.append(mpf.make_addplot(plot.ema20, color=AVERAGE, width=1.35))
     signal_column = meta.get("signal_column")
     has_marks = False
     if signal_column in plot:
         marks = plot.low.where(plot[signal_column].fillna(False).astype(bool)) * .98
         if marks.notna().any():
-            adds.append(mpf.make_addplot(marks, type="scatter", marker="*", markersize=150, color="red"))
+            adds.append(
+                mpf.make_addplot(
+                    marks, type="scatter", marker="*", markersize=95, color=TARGET
+                )
+            )
             has_marks = True
     lines, line_colors, styles = [], [], []
-    for key, color, dash in (("stop", "#2962FF", "-."), ("target", "red", "--")):
+    for key, color, dash in (("stop", STOP, "-."), ("target", TARGET, "--")):
         if payload.get(key) is not None and float(payload[key]) > 0:
             lines.append(float(payload[key]))
             line_colors.append(color)
@@ -46,23 +88,59 @@ def render_chart(frame, payload, title, meta):
         fig, axes = mpf.plot(plot, type="candle", style=style, volume=True, title=title,
                             ylabel="", figsize=(11, 8), returnfig=True, **kwargs)
         ax = axes[0]
+        for axis in axes:
+            axis.set_facecolor(CHART_BG)
+            axis.tick_params(colors=MUTED, labelsize=8)
+            for spine in axis.spines.values():
+                spine.set_color(BORDER)
         facts = []
         for label, key in (("Entry", "entry"), ("SL", "stop"), ("TP1", "target")):
             if payload.get(key) is not None:
                 facts.append(f"{label}: {float(payload[key]):.2f}")
         if facts:
-            ax.text(.02, .965, "\n".join(facts), transform=ax.transAxes, fontsize=9, va="top",
-                    bbox=dict(boxstyle="round", facecolor="white", alpha=.86, edgecolor="gray"))
-        for key, label, color in (("stop", "SL", "#2962FF"), ("target", "TP1", "red")):
+            ax.text(
+                .02,
+                .965,
+                "\n".join(facts),
+                transform=ax.transAxes,
+                fontsize=8,
+                color=TEXT,
+                va="top",
+                bbox=dict(
+                    boxstyle="round,pad=.28",
+                    facecolor=CONTROL_BG,
+                    alpha=.94,
+                    edgecolor=BORDER,
+                ),
+            )
+        for key, label, color in (("stop", "SL", STOP), ("target", "TP1", TARGET)):
             if payload.get(key) is not None and float(payload[key]) > 0:
                 value = float(payload[key])
                 ax.text(.99, value, f"{label}: {value:.2f}", transform=ax.get_yaxis_transform(),
                         ha="right", va="bottom", color=color, fontsize=8)
         if has_marks:
-            ax.legend(handles=[Line2D([0], [0], marker="*", color="w", label="Entry",
-                                     markerfacecolor="red", markersize=12)], loc="lower left")
+            legend = ax.legend(
+                handles=[
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="*",
+                        color=CHART_BG,
+                        label="Entry",
+                        markerfacecolor=TARGET,
+                        markersize=9,
+                    )
+                ],
+                loc="lower left",
+                framealpha=.9,
+                fontsize=8,
+            )
+            legend.get_frame().set_facecolor(CONTROL_BG)
+            legend.get_frame().set_edgecolor(BORDER)
+            for label in legend.get_texts():
+                label.set_color(TEXT)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor="white")
+        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor=APP_BG)
         buf.seek(0)
         return Image.open(buf).copy()
     finally:
@@ -84,11 +162,18 @@ def page_start_for(index, count):
     return max(0, int(index) // count * count)
 
 
-class ChartPanel(ttk.Frame):
+class ChartPanel(tk.Frame):
     """一个独立图格：自身标的、活动状态以及独立 TradingView 入口。"""
 
     def __init__(self, parent, store=None, on_activate=None, image_cache=None):
-        super().__init__(parent)
+        super().__init__(
+            parent,
+            bg=BORDER,
+            bd=0,
+            highlightbackground=BORDER,
+            highlightcolor=BORDER,
+            highlightthickness=2,
+        )
         self.store = store
         self._on_activate = on_activate
         self._image_cache = image_cache if image_cache is not None else {}
@@ -100,15 +185,15 @@ class ChartPanel(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
-        self.header = tk.Frame(self, bg="#3a3a3c", height=28)
+        self.header = tk.Frame(self, bg=CONTROL_BG, height=28)
         self.header.grid(row=0, column=0, sticky=tk.EW)
         self.header.grid_propagate(False)
         self._title_var = tk.StringVar(value="空位")
         self.title_label = tk.Label(
             self.header,
             textvariable=self._title_var,
-            bg="#3a3a3c",
-            fg="#f5f5f7",
+            bg=CONTROL_BG,
+            fg=TEXT,
             anchor=tk.W,
             font=("Microsoft YaHei", 9, "bold"),
             padx=7,
@@ -119,26 +204,28 @@ class ChartPanel(ttk.Frame):
             text="TV ↗",
             command=self._open_tv,
             state=tk.DISABLED,
-            bg="#3a3a3c",
-            fg="#d1d1d6",
-            activebackground="#007AFF",
-            activeforeground="white",
+            bg=CONTROL_BG,
+            fg=MUTED,
+            activebackground=ACCENT,
+            activeforeground=TEXT,
             borderwidth=0,
             padx=8,
             cursor="hand2",
         )
         self._tv_btn.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.chart_frame = ttk.Frame(self)
+        self.chart_frame = tk.Frame(self, bg=CHART_BG, bd=0)
         self.chart_frame.grid(row=1, column=0, sticky=tk.NSEW)
         self.chart_frame.grid_propagate(False)
         self.chart_frame.columnconfigure(0, weight=1)
         self.chart_frame.rowconfigure(0, weight=1)
-        self.chart_label = ttk.Label(
+        self.chart_label = tk.Label(
             self.chart_frame,
             text="等待候选",
-            foreground="#8e8e93",
+            foreground=MUTED,
+            background=CHART_BG,
             anchor=tk.CENTER,
+            borderwidth=0,
         )
         self.chart_label.grid(row=0, column=0, sticky=tk.NSEW)
         self.chart_frame.bind("<Configure>", lambda _event: self._fit_image())
@@ -153,16 +240,19 @@ class ChartPanel(ttk.Frame):
         self._tf = tf or "daily"
 
     def set_active(self, active):
-        color = "#007AFF" if active else "#3a3a3c"
+        color = ACCENT if active else CONTROL_BG
+        border = ACCENT if active else BORDER
+        self.configure(highlightbackground=border, highlightcolor=border)
         self.header.configure(bg=color)
         self.title_label.configure(bg=color)
         self._tv_btn.configure(bg=color)
 
     def set_drop_target(self, active):
         if active:
-            self.header.configure(bg="#bf6b00")
-            self.title_label.configure(bg="#bf6b00")
-            self._tv_btn.configure(bg="#bf6b00")
+            self.configure(highlightbackground=DROP_TARGET, highlightcolor=DROP_TARGET)
+            self.header.configure(bg=DROP_TARGET)
+            self.title_label.configure(bg=DROP_TARGET)
+            self._tv_btn.configure(bg=DROP_TARGET)
 
     def show_placeholder(self, title="空位"):
         self._code = None
@@ -208,7 +298,7 @@ class ChartPanel(ttk.Frame):
             instance, calculated = calculate(spec, bars)
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
-            # 股票身份固定在深色图格标题条；白底图内只保留策略与周期，避免九格时重复挤占空间。
+            # 股票身份固定在图格标题条；图内只保留策略与周期，避免九格时重复挤占空间。
             title = f"{spec.name} · {period}"
             self._image = render_chart(calculated, payload, title, instance.get_metadata())
             self._title_var.set(f"{self._code}  {name}")
@@ -270,7 +360,7 @@ class ChartGrid(ttk.Frame):
         self._slots = []
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self.host = ttk.Frame(self)
+        self.host = tk.Frame(self, bg=APP_BG, bd=0)
         self.host.grid(row=0, column=0, sticky=tk.NSEW)
         self._build_slots()
 
@@ -414,7 +504,7 @@ class ChartGrid(ttk.Frame):
                 on_activate=lambda i=index: self._activate_slot(i),
                 image_cache=self._image_cache,
             )
-            slot.grid(row=row, column=column, sticky=tk.NSEW, padx=2, pady=2)
+            slot.grid(row=row, column=column, sticky=tk.NSEW, padx=3, pady=3)
             self._slots.append(slot)
 
     def _render_page(self):

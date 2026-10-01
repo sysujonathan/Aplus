@@ -4,7 +4,9 @@ from __future__ import annotations
 import tkinter as tk
 import ttkbootstrap as ttk
 
-_LABEL_FG = "#a1a1a6"
+from .theme import ACCENT, APP_BG, CONTROL_BG, MUTED, TEXT
+
+_LABEL_FG = MUTED
 _ALL = "全部"
 _BOARD_SHORT = {
     "沪深主板": "主板",
@@ -71,7 +73,7 @@ class ToolBar(ttk.Frame):
             board: tk.BooleanVar(value=board in saved_boards) for board in BOARDS
         }
 
-        self.configure(padding=(18, 12))
+        self.configure(padding=(10, 8))
         self._all_years = []
         self._all_months = []
         self._all_days = []
@@ -172,10 +174,10 @@ class ToolBar(ttk.Frame):
             text="‹",
             width=2,
             command=lambda: self._fire_chart_page(-1),
-            bg="#2c2c2e",
-            fg="#f5f5f7",
-            activebackground="#007AFF",
-            activeforeground="white",
+            bg=CONTROL_BG,
+            fg=TEXT,
+            activebackground=ACCENT,
+            activeforeground=TEXT,
             borderwidth=0,
             cursor="hand2",
         )
@@ -189,17 +191,17 @@ class ToolBar(ttk.Frame):
             anchor=tk.CENTER,
             font=("Consolas", 9),
             fg=_LABEL_FG,
-            bg="#212121",
+            bg=APP_BG,
         ).pack(side=tk.LEFT, padx=3)
         self.btn_chart_next = tk.Button(
             filters,
             text="›",
             width=2,
             command=lambda: self._fire_chart_page(1),
-            bg="#2c2c2e",
-            fg="#f5f5f7",
-            activebackground="#007AFF",
-            activeforeground="white",
+            bg=CONTROL_BG,
+            fg=TEXT,
+            activebackground=ACCENT,
+            activeforeground=TEXT,
             borderwidth=0,
             cursor="hand2",
         )

@@ -9,6 +9,7 @@ from gui.candidate_tabs import (
     candidate_repeat_counts,
     collapse_candidate_rows,
     short_strategy_label,
+    strategy_window,
 )
 from gui.toolbar import ToolBar, format_board_scope
 from gui.chart_panel import layout_shape, page_start_for
@@ -21,8 +22,16 @@ from workbench.store import Store, now
 
 def test_candidate_labels_fit_horizontal_strategy_bar():
     assert short_strategy_label("MTR Master") == "MTR"
-    assert short_strategy_label("GAP PINBAR") == "G-PB"
-    assert short_strategy_label("STRATEGY_GAP_H2") == "G-H2"
+    assert short_strategy_label("GAP PINBAR") == "GPb"
+    assert short_strategy_label("STRATEGY_GAP_H1") == "GH1"
+    assert short_strategy_label("STRATEGY_GAP_H2") == "GH2"
+
+
+def test_strategy_bar_shows_four_groups_and_keeps_last_window_full():
+    keys = ["MTR", "3K", "GH1", "GPb", "GH2", "AIL"]
+    assert strategy_window(keys, 0) == (["MTR", "3K", "GH1", "GPb"], 0)
+    assert strategy_window(keys, 4) == (["GH1", "GPb", "GH2", "AIL"], 2)
+    assert strategy_window(keys, -4) == (["MTR", "3K", "GH1", "GPb"], 0)
 
 
 def test_repeated_candidates_are_counted_within_current_filter():
@@ -74,9 +83,9 @@ def test_single_chart_toolbar_option_and_compact_sidebars():
 
     narrow = side_panel_widths(1280)
     wide = side_panel_widths(2880)
-    assert narrow == (286, 246)
-    assert wide == (318, 260)
-    assert sum(wide) < 600
+    assert narrow == (238, 222)
+    assert wide == (260, 242)
+    assert sum(wide) < 520
 
 
 def test_watch_selection_switches_chart_paging_to_watchlist():

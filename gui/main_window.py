@@ -10,22 +10,70 @@ from .candidate_tabs import CandidateTabs
 from .chart_panel import ChartGrid
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
+from .theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    APP_BG,
+    CONTROL_BG,
+    MUTED,
+    PANEL_BG,
+    SELECTION,
+    TEXT,
+)
 
 
 def side_panel_widths(window_width):
     """按窗口宽度收紧两侧清单，优先把水平空间留给 K 线。"""
     width = max(1280, int(window_width or 0))
-    candidates = max(286, min(318, round(width * 0.17)))
-    watch = max(246, min(260, round(width * 0.125)))
+    candidates = max(238, min(260, round(width * 0.145)))
+    watch = max(222, min(242, round(width * 0.115)))
     return candidates, watch
 
 
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
         super().__init__(themename="darkly", title="Brooks-AI 操盘台")
-        self.style.colors.primary = "#007AFF"
-        self.style.configure("Treeview", rowheight=34)
-        self.style.configure("Treeview.Heading", font=("Microsoft YaHei", 11, "bold"))
+        self.style.colors.primary = ACCENT
+        self.configure(background=APP_BG)
+        self.style.configure("TFrame", background=APP_BG)
+        self.style.configure("TLabel", background=APP_BG, foreground=TEXT)
+        self.style.configure(
+            "Treeview",
+            rowheight=26,
+            background=PANEL_BG,
+            fieldbackground=PANEL_BG,
+            foreground=TEXT,
+            borderwidth=0,
+        )
+        self.style.map(
+            "Treeview",
+            background=[("selected", SELECTION)],
+            foreground=[("selected", TEXT)],
+        )
+        self.style.configure(
+            "Treeview.Heading",
+            font=("Microsoft YaHei", 9, "bold"),
+            background=CONTROL_BG,
+            foreground=TEXT,
+            relief="flat",
+        )
+        self.style.configure(
+            "primary.TButton",
+            background=ACCENT,
+            bordercolor=ACCENT,
+            foreground=TEXT,
+        )
+        self.style.map(
+            "primary.TButton",
+            background=[("active", ACCENT_HOVER)],
+            bordercolor=[("active", ACCENT_HOVER)],
+        )
+        self.style.configure(
+            "secondary.TButton",
+            background=CONTROL_BG,
+            bordercolor=CONTROL_BG,
+            foreground=TEXT,
+        )
         self.service = service
         self.store = store
         self.geometry("1600x1000")
@@ -45,7 +93,7 @@ class AplusMainWindow(ttk.Window):
         self.rowconfigure(1, weight=1)
 
         # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
-        self.section_nav = ttk.Frame(self, padding=(10, 8))
+        self.section_nav = ttk.Frame(self, padding=(8, 6))
         self.section_nav.grid(row=0, column=0, sticky=tk.EW)
         self._section_buttons = {}
         self._pages = {}
@@ -62,7 +110,7 @@ class AplusMainWindow(ttk.Window):
                 bootstyle="secondary",
                 command=lambda k=key: self._switch_section(k),
             )
-            button.pack(side=tk.LEFT, padx=(0, 6), ipady=3)
+            button.pack(side=tk.LEFT, padx=(0, 5), ipady=2)
             self._section_buttons[key] = button
 
         self.page_host = ttk.Frame(self)
@@ -85,7 +133,7 @@ class AplusMainWindow(ttk.Window):
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
-        self.body = body = ttk.Frame(premarket, padding=(10, 8))
+        self.body = body = ttk.Frame(premarket, padding=(8, 6))
         body.grid(row=1, column=0, sticky=tk.NSEW)
         body.columnconfigure(0, weight=0)
         body.columnconfigure(1, weight=1)
@@ -97,8 +145,8 @@ class AplusMainWindow(ttk.Window):
             on_rows_changed=self._on_candidate_rows,
             on_page_request=self._on_chart_page,
         )
-        self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
-        self.candidates.configure(width=286)
+        self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
+        self.candidates.configure(width=238)
         self.candidates.grid_propagate(False)
 
         right = ttk.Frame(body)
@@ -113,7 +161,7 @@ class AplusMainWindow(ttk.Window):
             on_page_state=self.toolbar.set_chart_page_status,
             on_active_item=self._on_chart_item_activated,
         )
-        self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
+        self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
         self.watch = WatchPanel(
             right,
             self.store,
@@ -124,14 +172,14 @@ class AplusMainWindow(ttk.Window):
             on_page_request=self._on_chart_page,
         )
         self.watch.grid(row=0, column=1, sticky=tk.NSEW)
-        self.watch.configure(width=246)
+        self.watch.configure(width=222)
         self.watch.pack_propagate(False)
 
-        status_bar = ttk.Frame(premarket, padding=(18, 8))
+        status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
         self._status_text = self.toolbar._status
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
-                  foreground="#a1a1a6").pack(side=tk.RIGHT)
+                  foreground=MUTED).pack(side=tk.RIGHT)
 
         self._pages["afterhours"] = self._placeholder_page(
             "盘后回测",
@@ -158,13 +206,13 @@ class AplusMainWindow(ttk.Window):
             page,
             text=title,
             font=("Microsoft YaHei", 24, "bold"),
-            foreground="#f5f5f7",
+            foreground=TEXT,
         ).pack(anchor=tk.W)
         ttk.Label(
             page,
             text=subtitle,
             font=("Microsoft YaHei", 12),
-            foreground="#d1d1d6",
+            foreground=TEXT,
             wraplength=680,
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(16, 8))
@@ -172,7 +220,7 @@ class AplusMainWindow(ttk.Window):
             page,
             text=boundary,
             font=("Microsoft YaHei", 10),
-            foreground="#8e8e93",
+            foreground=MUTED,
             wraplength=680,
             justify=tk.LEFT,
         ).pack(anchor=tk.W)

@@ -13,6 +13,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 
+from .theme import APP_BG, TEXT
+
 # 与 store.save_plan 的合法状态保持一致（勿在此处增删）
 _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", "忽略")
 
@@ -35,8 +37,9 @@ class WatchPanel(ttk.Frame):
         ttk.Label(
             self,
             text="关注列表",
-            font=("Microsoft YaHei", 12, "bold"),
-        ).pack(anchor=tk.W, padx=4, pady=(0, 12))
+            font=("Microsoft YaHei", 10, "bold"),
+            foreground=TEXT,
+        ).pack(anchor=tk.W, padx=2, pady=(0, 6))
 
         self.tree = ttk.Treeview(
             self,
@@ -45,16 +48,16 @@ class WatchPanel(ttk.Frame):
             show="headings",
         )
         for col, text, width, stretch in (
-            ("number", "序", 34, False),
-            ("code", "代码", 104, False),
-            ("name", "名称", 90, True),
+            ("number", "序", 30, False),
+            ("code", "代码", 88, False),
+            ("name", "名称", 84, True),
             ("strategy", "策略", 52, False),
             ("date", "信号日", 56, False),
             ("state", "状态", 52, False),
             ("notes", "备注", 40, True),
         ):
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=width, minwidth=34, anchor=tk.W, stretch=stretch)
+            self.tree.column(col, width=width, minwidth=28, anchor=tk.W, stretch=stretch)
         self.tree.pack(fill=tk.BOTH, expand=True)
         self.tree._obs = {}    # iid -> observation_id
         self.tree._codes = {}  # iid -> code
@@ -332,7 +335,7 @@ class _PlanDialog:
         self.notes = ""
         self.top = tk.Toplevel(parent)
         self.top.title(f"计划状态：{state} · {code}")
-        self.top.configure(bg="#171e28")
+        self.top.configure(bg=APP_BG)
         self.top.transient(parent.winfo_toplevel())
         self.top.grab_set()
         self.top.resizable(False, False)
