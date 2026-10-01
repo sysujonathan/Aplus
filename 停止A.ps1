@@ -1,6 +1,17 @@
 $ErrorActionPreference = 'Stop'
 $appRoot = $PSScriptRoot
-$recordPath = Join-Path $appRoot 'runtime\server.json'
+$runtimeHome = [Environment]::GetEnvironmentVariable('A_WORKBENCH_HOME', 'Process')
+if ([string]::IsNullOrWhiteSpace($runtimeHome)) {
+    $runtimeHome = [Environment]::GetEnvironmentVariable('A_WORKBENCH_HOME', 'User')
+}
+if ([string]::IsNullOrWhiteSpace($runtimeHome)) {
+    $runtimeHome = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Aplus\runtime'
+}
+$legacyRecord = Join-Path $appRoot 'runtime\server.json'
+$recordPath = Join-Path $runtimeHome 'server.json'
+if (-not (Test-Path -LiteralPath $recordPath) -and (Test-Path -LiteralPath $legacyRecord)) {
+    $recordPath = $legacyRecord
+}
 if (-not (Test-Path -LiteralPath $recordPath)) { Write-Output 'A is not running from this launcher.'; exit }
 $record = Get-Content -LiteralPath $recordPath -Raw | ConvertFrom-Json
 $appProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($record.pid)" -ErrorAction SilentlyContinue

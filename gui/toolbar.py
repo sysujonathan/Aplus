@@ -4,7 +4,9 @@ from __future__ import annotations
 import tkinter as tk
 import ttkbootstrap as ttk
 
-_LABEL_FG = "#a1a1a6"
+from .theme import ACCENT, APP_BG, CONTROL_BG, MUTED, TEXT
+
+_LABEL_FG = MUTED
 _ALL = "全部"
 _BOARD_SHORT = {
     "沪深主板": "主板",
@@ -27,7 +29,7 @@ def format_board_scope(boards):
 
 
 def _two_years_ago():
-    """默认同步起点：最新交易日往前推 2 年（轻量首跑）；完整历史由勾选框控制。"""
+    """已有本地历史时，日常更新只要求最近两年的覆盖。"""
     from datetime import date
 
     from workbench.market import completed_date
@@ -37,6 +39,22 @@ def _two_years_ago():
         return d.replace(year=d.year - 2).isoformat()
     except ValueError:  # 2/29 闰年边界
         return d.replace(year=d.year - 2, day=28).isoformat()
+
+
+def sync_start_date(store, full_history=False):
+    """First use builds full history; later runs reuse coverage incrementally."""
+    if full_history:
+        return "2016-01-01"
+    try:
+        state = store.rows(
+            "SELECT COUNT(*) AS count, MAX(start) AS latest_start FROM sync_coverage"
+        )[0]
+        covered = state["count"]
+        latest_start = state["latest_start"]
+    except (IndexError, KeyError, TypeError):
+        covered, latest_start = 0, None
+    full_history_ready = covered and latest_start and latest_start <= "2016-01-01"
+    return _two_years_ago() if full_history_ready else "2016-01-01"
 
 
 class ToolBar(ttk.Frame):
@@ -56,7 +74,7 @@ class ToolBar(ttk.Frame):
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
         self._universe_total = None                           # 市场总量（首次渲染时缓存）
-        self.full_history_var = tk.BooleanVar(value=False)    # 完整历史(2016)勾选，默认近2年
+        self.full_history_var = tk.BooleanVar(value=False)    # 首次自动完整历史；也可手动要求重新核对
         try:
             from workbench.scope import selected_boards
 
@@ -71,7 +89,7 @@ class ToolBar(ttk.Frame):
             board: tk.BooleanVar(value=board in saved_boards) for board in BOARDS
         }
 
-        self.configure(padding=(18, 12))
+        self.configure(padding=(10, 8))
         self._all_years = []
         self._all_months = []
         self._all_days = []
@@ -127,7 +145,7 @@ class ToolBar(ttk.Frame):
                                      bootstyle="round-toggle", command=self._explain_ai)
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
-        # 信号日（年/月/日三联 Combobox，联动筛选；对齐旧 A gui_dashboard.py:210）
+        # 信号日来自本地策略结果时间线；启动时自动定位最新有效结果。
         self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
@@ -160,7 +178,7 @@ class ToolBar(ttk.Frame):
         self.layout_combo = ttk.Combobox(
             filters,
             textvariable=self.layout_var,
-            values=("2×2", "2×3", "3×3"),
+            values=("1×1", "2×2", "2×3", "3×3"),
             state="readonly",
             width=3,
             font=("Consolas", 9),
@@ -172,33 +190,34 @@ class ToolBar(ttk.Frame):
             text="‹",
             width=2,
             command=lambda: self._fire_chart_page(-1),
-            bg="#2c2c2e",
-            fg="#f5f5f7",
-            activebackground="#007AFF",
-            activeforeground="white",
+            bg=CONTROL_BG,
+            fg=TEXT,
+            activebackground=ACCENT,
+            activeforeground=TEXT,
             borderwidth=0,
             cursor="hand2",
         )
         self.btn_chart_prev.pack(side=tk.LEFT, ipady=4)
         self.chart_page_var = tk.StringVar(value="0 / 0")
+        self._chart_source_label = "策略"
         tk.Label(
             filters,
             textvariable=self.chart_page_var,
-            width=9,
+            width=14,
             anchor=tk.CENTER,
             font=("Consolas", 9),
             fg=_LABEL_FG,
-            bg="#212121",
+            bg=APP_BG,
         ).pack(side=tk.LEFT, padx=3)
         self.btn_chart_next = tk.Button(
             filters,
             text="›",
             width=2,
             command=lambda: self._fire_chart_page(1),
-            bg="#2c2c2e",
-            fg="#f5f5f7",
-            activebackground="#007AFF",
-            activeforeground="white",
+            bg=CONTROL_BG,
+            fg=TEXT,
+            activebackground=ACCENT,
+            activeforeground=TEXT,
             borderwidth=0,
             cursor="hand2",
         )
@@ -272,8 +291,9 @@ class ToolBar(ttk.Frame):
     def _select_latest_date(self):
         if not self.store:
             return
-        rows = self.store.rows("SELECT MAX(asof) AS day FROM observations WHERE timeframe=?", (self._tf_var.get(),))
-        day = rows[0]["day"] if rows else None
+        from .data import latest_candidate_date
+
+        day = latest_candidate_date(self.store, self._tf_var.get())
         if not day:
             for value in (self.year_var, self.month_var, self.day_var):
                 value.set(_ALL)
@@ -296,7 +316,13 @@ class ToolBar(ttk.Frame):
         self._status.set(text)
 
     def set_chart_page_status(self, start, end, total):
-        self.chart_page_var.set(f"{start}–{end} / {total}" if total else "0 / 0")
+        if not total:
+            page = "0 / 0"
+        elif start == end:
+            page = f"{start} / {total}"
+        else:
+            page = f"{start}–{end} / {total}"
+        self.chart_page_var.set(f"{self._chart_source_label} {page}")
         if start <= 1:
             self.btn_chart_prev.configure(state=tk.DISABLED)
         else:
@@ -310,8 +336,12 @@ class ToolBar(ttk.Frame):
         if self._on_chart_page:
             self._on_chart_page(delta)
 
+    def set_chart_source(self, label):
+        self._chart_source_label = "关注" if label == "关注" else "策略"
+
     def _fire_layout(self, _event=None):
-        count = {"2×2": 4, "2×3": 6, "3×3": 9}.get(self.layout_var.get(), 4)
+        label = self.layout_var.get().strip().lower().replace("✖", "×").replace("x", "×")
+        count = {"1×1": 1, "2×2": 4, "2×3": 6, "3×3": 9}.get(label, 4)
         if self._on_chart_layout:
             self._on_chart_layout(count)
 
@@ -329,7 +359,11 @@ class ToolBar(ttk.Frame):
             return
         rows = []
         try:
-            rows = self.store.rows("SELECT DISTINCT asof FROM observations ORDER BY asof DESC")
+            from .data import candidate_dates
+
+            rows = [{"asof": value} for value in candidate_dates(
+                self.store, self._tf_var.get()
+            )]
         except Exception:
             rows = []
         for r in rows:
@@ -467,8 +501,8 @@ class ToolBar(ttk.Frame):
         except Exception as exc:
             self.set_status(f"行情范围保存失败：{exc}")
             return
-        # 默认近 2 年（轻量首跑）；勾选"完整历史"才拉 2016 起全市场全历史
-        start = "2016-01-01" if self.full_history_var.get() else _two_years_ago()
+        # 空仓首次更新自动建立完整历史；已有覆盖后仍由同步器只补缺口。
+        start = sync_start_date(self.store, self.full_history_var.get())
         spec = {
             "boards": boards,
             "start": start,

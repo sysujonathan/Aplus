@@ -11,7 +11,7 @@ from streamlit.testing.v1 import AppTest
 from workbench.backtest import Assumptions, run_study, simulate, summarize
 from workbench.market import code_of, load_dataset, save_dataset, validate_bars, weekly_bars
 from workbench.service import Service, demo_data, import_csv
-from workbench.store import ROOT, Store, dumps, now
+from workbench.store import ROOT, Store, dumps, now, resolve_runtime_root
 from workbench.strategies import calculate, catalog, register, set_active, signal_at_end, verify_frozen
 
 
@@ -43,6 +43,30 @@ def plugin(store):
 
 def test_frozen_integrity():
     assert len(verify_frozen())==64
+
+
+def test_default_runtime_is_stable_per_user_without_configuration(tmp_path, monkeypatch):
+    monkeypatch.delenv('A_WORKBENCH_HOME', raising=False)
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'LocalAppData'))
+    monkeypatch.setattr('workbench.store.ROOT', tmp_path/'fresh-checkout')
+    assert resolve_runtime_root() == (tmp_path/'LocalAppData'/'Aplus'/'runtime').resolve()
+
+
+def test_runtime_environment_override_remains_available(tmp_path, monkeypatch):
+    chosen = tmp_path/'portable-data'
+    monkeypatch.setenv('A_WORKBENCH_HOME', str(chosen))
+    assert resolve_runtime_root() == chosen.resolve()
+
+
+def test_default_runtime_preserves_existing_checkout_data(tmp_path, monkeypatch):
+    monkeypatch.delenv('A_WORKBENCH_HOME', raising=False)
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path/'LocalAppData'))
+    checkout = tmp_path/'existing-checkout'
+    legacy = checkout/'runtime'
+    legacy.mkdir(parents=True)
+    (legacy/'workbench.sqlite3').write_bytes(b'existing user data')
+    monkeypatch.setattr('workbench.store.ROOT', checkout)
+    assert resolve_runtime_root() == legacy.resolve()
 
 
 @pytest.mark.parametrize('key', ['MTR_MASTER','STRATEGY_3K','STRATEGY_STRUCTURAL_GAP','STRATEGY_GAP_PINBAR',

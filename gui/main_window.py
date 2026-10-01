@@ -7,17 +7,76 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
+from .chart_items import ChartItem, chart_items
 from .chart_panel import ChartGrid
+from .data import REALTIME_MARKET_SOURCE
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
+from .theme import (
+    ACCENT,
+    ACCENT_HOVER,
+    APP_BG,
+    CONTROL_BG,
+    MUTED,
+    PANEL_BG,
+    SELECTION,
+    TEXT,
+)
+
+
+def side_panel_widths(window_width):
+    """按窗口宽度收紧两侧清单，优先把水平空间留给 K 线。"""
+    width = max(1280, int(window_width or 0))
+    candidates = max(238, min(260, round(width * 0.145)))
+    watch = max(222, min(242, round(width * 0.115)))
+    return candidates, watch
 
 
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
         super().__init__(themename="darkly", title="Brooks-AI 操盘台")
-        self.style.colors.primary = "#007AFF"
-        self.style.configure("Treeview", rowheight=34)
-        self.style.configure("Treeview.Heading", font=("Microsoft YaHei", 11, "bold"))
+        self.style.colors.primary = ACCENT
+        self.configure(background=APP_BG)
+        self.style.configure("TFrame", background=APP_BG)
+        self.style.configure("TLabel", background=APP_BG, foreground=TEXT)
+        self.style.configure(
+            "Treeview",
+            font=("Microsoft YaHei UI", 9),
+            rowheight=26,
+            background=PANEL_BG,
+            fieldbackground=PANEL_BG,
+            foreground=TEXT,
+            borderwidth=0,
+        )
+        self.style.map(
+            "Treeview",
+            background=[("selected", SELECTION)],
+            foreground=[("selected", TEXT)],
+        )
+        self.style.configure(
+            "Treeview.Heading",
+            font=("Microsoft YaHei", 9, "bold"),
+            background=CONTROL_BG,
+            foreground=TEXT,
+            relief="flat",
+        )
+        self.style.configure(
+            "primary.TButton",
+            background=ACCENT,
+            bordercolor=ACCENT,
+            foreground=TEXT,
+        )
+        self.style.map(
+            "primary.TButton",
+            background=[("active", ACCENT_HOVER)],
+            bordercolor=[("active", ACCENT_HOVER)],
+        )
+        self.style.configure(
+            "secondary.TButton",
+            background=CONTROL_BG,
+            bordercolor=CONTROL_BG,
+            foreground=TEXT,
+        )
         self.service = service
         self.store = store
         self.geometry("1600x1000")
@@ -26,6 +85,8 @@ class AplusMainWindow(ttk.Window):
         self._tray_icon = None
         self._tray_actions = queue.SimpleQueue()
         self._closing = False
+        self._chart_mode = "candidates"
+        self._candidate_source = REALTIME_MARKET_SOURCE
         self._build_ui()
         self._load_strategies()
         if enable_tray:
@@ -36,7 +97,7 @@ class AplusMainWindow(ttk.Window):
         self.rowconfigure(1, weight=1)
 
         # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
-        self.section_nav = ttk.Frame(self, padding=(10, 8))
+        self.section_nav = ttk.Frame(self, padding=(8, 6))
         self.section_nav.grid(row=0, column=0, sticky=tk.EW)
         self._section_buttons = {}
         self._pages = {}
@@ -53,7 +114,7 @@ class AplusMainWindow(ttk.Window):
                 bootstyle="secondary",
                 command=lambda k=key: self._switch_section(k),
             )
-            button.pack(side=tk.LEFT, padx=(0, 6), ipady=3)
+            button.pack(side=tk.LEFT, padx=(0, 5), ipady=2)
             self._section_buttons[key] = button
 
         self.page_host = ttk.Frame(self)
@@ -76,7 +137,7 @@ class AplusMainWindow(ttk.Window):
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
-        self.body = body = ttk.Frame(premarket, padding=(10, 8))
+        self.body = body = ttk.Frame(premarket, padding=(8, 6))
         body.grid(row=1, column=0, sticky=tk.NSEW)
         body.columnconfigure(0, weight=0)
         body.columnconfigure(1, weight=1)
@@ -88,8 +149,8 @@ class AplusMainWindow(ttk.Window):
             on_rows_changed=self._on_candidate_rows,
             on_page_request=self._on_chart_page,
         )
-        self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
-        self.candidates.configure(width=460)
+        self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
+        self.candidates.configure(width=238)
         self.candidates.grid_propagate(False)
 
         right = ttk.Frame(body)
@@ -104,7 +165,7 @@ class AplusMainWindow(ttk.Window):
             on_page_state=self.toolbar.set_chart_page_status,
             on_active_item=self._on_chart_item_activated,
         )
-        self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
+        self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
         self.watch = WatchPanel(
             right,
             self.store,
@@ -112,16 +173,17 @@ class AplusMainWindow(ttk.Window):
             on_drag_motion=self._on_watch_drag_motion,
             on_drop=self._on_watch_drop,
             on_drag_end=self.chart.clear_drop_highlight,
+            on_page_request=self._on_chart_page,
         )
         self.watch.grid(row=0, column=1, sticky=tk.NSEW)
-        self.watch.configure(width=240)
+        self.watch.configure(width=222)
         self.watch.pack_propagate(False)
 
-        status_bar = ttk.Frame(premarket, padding=(18, 8))
+        status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
         self._status_text = self.toolbar._status
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
-                  foreground="#a1a1a6").pack(side=tk.RIGHT)
+                  foreground=MUTED).pack(side=tk.RIGHT)
 
         self._pages["afterhours"] = self._placeholder_page(
             "盘后回测",
@@ -148,13 +210,13 @@ class AplusMainWindow(ttk.Window):
             page,
             text=title,
             font=("Microsoft YaHei", 24, "bold"),
-            foreground="#f5f5f7",
+            foreground=TEXT,
         ).pack(anchor=tk.W)
         ttk.Label(
             page,
             text=subtitle,
             font=("Microsoft YaHei", 12),
-            foreground="#d1d1d6",
+            foreground=TEXT,
             wraplength=680,
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(16, 8))
@@ -162,7 +224,7 @@ class AplusMainWindow(ttk.Window):
             page,
             text=boundary,
             font=("Microsoft YaHei", 10),
-            foreground="#8e8e93",
+            foreground=MUTED,
             wraplength=680,
             justify=tk.LEFT,
         ).pack(anchor=tk.W)
@@ -253,19 +315,24 @@ class AplusMainWindow(ttk.Window):
     def _resize_layout(self, event):
         if event.widget is not self:
             return
-        # Match the reference proportions without letting lists cover the chart.
+        # Lists follow their actual three-column content and yield spare width to charts.
         width = self.page_host.winfo_width()
-        self.candidates.configure(width=max(460, min(640, round(width * .225))))
-        self.watch.configure(width=max(280, min(360, round(width * .125))))
+        candidate_width, watch_width = side_panel_widths(width)
+        self.candidates.configure(width=candidate_width)
+        self.watch.configure(width=watch_width)
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):
         self._cur_date = self.toolbar.selected_date()
+        self._candidate_source = self._source_for_current_date(tf)
         self.chart.set_timeframe(tf)
         self.chart.clear()
         if self.store is not None:
             self.candidates.load_from_store(
-                self.store, timeframe=tf, asof_filter=getattr(self, "_cur_date", None)
+                self.store,
+                timeframe=tf,
+                asof_filter=getattr(self, "_cur_date", None),
+                source=self._candidate_source,
             )
         self.toolbar.date_label.configure(text="截至周" if tf == "weekly" else "信号日")
         self._status_text.set(f"周期：{tf}")
@@ -273,11 +340,13 @@ class AplusMainWindow(ttk.Window):
     # ---- 信号日筛选：重读候选 ----
     def _on_date_change(self, year, month, day):
         self._cur_date = (year, month, day)
+        self._candidate_source = self._source_for_current_date(self._tf_var.get())
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store,
                 timeframe=self._tf_var.get(),
                 asof_filter=self._cur_date,
+                source=self._candidate_source,
             )
         label = f"{year or '*'}-{month or '*'}-{day or '*'}"
         self._status_text.set(f"信号日筛选：{label}")
@@ -286,6 +355,7 @@ class AplusMainWindow(ttk.Window):
     # ---- 策略 Tab（动态取真实名称，只读，不碰冻结文件）----
     def _load_strategies(self):
         self._cur_date = self.toolbar.selected_date()
+        self._candidate_source = self._source_for_current_date(self._tf_var.get())
         try:
             from core.strategy_registry import StrategyRegistry as R
 
@@ -305,23 +375,53 @@ class AplusMainWindow(ttk.Window):
         self.candidates.build_tabs(strategies)
         if self.store is not None:
             self.candidates.load_from_store(
-                self.store, timeframe=self._tf_var.get(), asof_filter=self._cur_date
+                self.store,
+                timeframe=self._tf_var.get(),
+                asof_filter=self._cur_date,
+                source=self._candidate_source,
             )
 
     # ---- 候选与多图联动 ----
     def _on_candidate_rows(self, rows):
-        self.chart.set_items(rows)
+        self._chart_mode = "candidates"
+        self.toolbar.set_chart_source("策略")
+        self.chart.set_items(chart_items(rows, "candidate"))
 
     def on_stock_selected(self, code, observation_id=None):
         if observation_id and self.store is not None:
-            self.chart.focus_observation(observation_id)
+            if self._chart_mode != "candidates":
+                rows = self.candidates.rows()
+                items = chart_items(rows, "candidate")
+                index = next(
+                    (i for i, item in enumerate(items)
+                     if item.observation_id == observation_id),
+                    0,
+                )
+                self._chart_mode = "candidates"
+                self.toolbar.set_chart_source("策略")
+                self.chart.set_items(items, selected_index=index)
+            else:
+                self.chart.focus_observation(observation_id)
             self._status_text.set(f"已加载：{code}")
         elif code and self.store is not None:
             from .data import latest_observation
 
-            oid = latest_observation(self.store, code, timeframe=self._tf_var.get())
+            oid = latest_observation(
+                self.store,
+                code,
+                timeframe=self._tf_var.get(),
+                source=self._candidate_source,
+            )
             if oid:
-                self.chart.replace_active(code, oid)
+                item = ChartItem(
+                    code=code,
+                    name="",
+                    observation_id=oid,
+                    source=self._candidate_source,
+                    mode="candidate",
+                    timeframe=self._tf_var.get(),
+                )
+                self.chart.replace_active(item)
                 self._status_text.set(f"已加载：{code}")
             else:
                 self._status_text.set(f"无 {code} 的行情快照")
@@ -335,10 +435,34 @@ class AplusMainWindow(ttk.Window):
             from .data import latest_observation
 
             observation_id = latest_observation(
-                self.store, code, timeframe=self._tf_var.get()
+                self.store,
+                code,
+                timeframe=self._tf_var.get(),
+                source=self._candidate_source,
             )
-        if observation_id and self.chart.replace_active(code, observation_id):
-            self._status_text.set(f"活动图已切换为关注标的：{code}")
+        if observation_id:
+            rows = self.watch.rows()
+            items = chart_items(rows, "watch")
+            if not any(item.observation_id == observation_id for item in items):
+                items.append(
+                    ChartItem(
+                        code=code,
+                        name="",
+                        observation_id=observation_id,
+                        source=self._candidate_source,
+                        mode="watch",
+                        timeframe=self._tf_var.get(),
+                    )
+                )
+            index = next(
+                (i for i, item in enumerate(items)
+                 if item.observation_id == observation_id or item.code == code),
+                0,
+            )
+            self._chart_mode = "watch"
+            self.toolbar.set_chart_source("关注")
+            self.chart.set_items(items, selected_index=index)
+            self._status_text.set(f"关注浏览：{code}（左右键切换关注列表）")
         else:
             self._status_text.set(f"无 {code} 的可用行情快照")
 
@@ -351,7 +475,10 @@ class AplusMainWindow(ttk.Window):
 
     def _on_chart_item_activated(self, observation_id):
         if observation_id is not None:
-            self.candidates.select_observation(observation_id)
+            if self._chart_mode == "watch":
+                self.watch.select_observation(observation_id)
+            else:
+                self.candidates.select_observation(observation_id)
 
     def _on_watch_drag_motion(self, root_x, root_y):
         self.chart.highlight_drop(root_x, root_y)
@@ -361,9 +488,28 @@ class AplusMainWindow(ttk.Window):
             from .data import latest_observation
 
             observation_id = latest_observation(
-                self.store, code, timeframe=self._tf_var.get()
+                self.store,
+                code,
+                timeframe=self._tf_var.get(),
+                source=self._candidate_source,
             )
-        if self.chart.replace_at_point(code, observation_id, root_x, root_y):
+        rows = self.watch.rows()
+        matching = [
+            row for row in rows
+            if row.get("observation_id") == observation_id or row.get("code") == code
+        ]
+        items = chart_items(matching[:1], "watch")
+        item = items[0] if items else None
+        if observation_id and item is None:
+            item = ChartItem(
+                code=code,
+                name="",
+                observation_id=observation_id,
+                source=self._candidate_source,
+                mode="watch",
+                timeframe=self._tf_var.get(),
+            )
+        if item and self.chart.replace_at_point(item, root_x, root_y):
             self._status_text.set(f"已把关注标的 {code} 放入指定图格")
         else:
             self._status_text.set("拖拽未落在 K 线图格内，未替换")
@@ -373,16 +519,32 @@ class AplusMainWindow(ttk.Window):
         if self.store is None:
             return
         try:
+            self.toolbar._load_date_options()
+            self.toolbar._select_latest_date()
+            self._cur_date = self.toolbar.selected_date()
+            self._candidate_source = self._source_for_current_date(self._tf_var.get())
             self.candidates.load_from_store(
                 self.store, timeframe=self._tf_var.get(),
                 asof_filter=getattr(self, "_cur_date", None),
+                source=self._candidate_source,
             )
             self.watch.reload()
-            self.toolbar._load_date_options()
             self.toolbar._load_market_status()
         except Exception:
             pass
         self._status_text.set(f"{kind}结束（{status}），候选与观察池已刷新")
+
+    def _source_for_current_date(self, timeframe):
+        """每个日期只选一个来源；正式 Aplus 同日结果优先于迁入基线。"""
+        if self.store is None:
+            return REALTIME_MARKET_SOURCE
+        from .data import candidate_source_for_date
+
+        return candidate_source_for_date(
+            self.store,
+            timeframe=timeframe,
+            asof_filter=getattr(self, "_cur_date", None),
+        )
 
     # ---- 左栏候选右键：加入关注（写只走 store.watch）----
     def _candidate_context(self, event, code, observation_id):

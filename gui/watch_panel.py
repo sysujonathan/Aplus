@@ -13,19 +13,23 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 
+from .theme import APP_BG, TEXT
+
 # 与 store.save_plan 的合法状态保持一致（勿在此处增删）
 _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", "忽略")
 
 
 class WatchPanel(ttk.Frame):
     def __init__(self, parent, store=None, on_select=None, on_drag_motion=None,
-                 on_drop=None, on_drag_end=None):
+                 on_drop=None, on_drag_end=None, on_page_request=None):
         super().__init__(parent)
         self.store = store
         self.on_select = on_select
         self.on_drag_motion = on_drag_motion
         self.on_drop = on_drop
         self.on_drag_end = on_drag_end
+        self.on_page_request = on_page_request
+        self._display_rows = []
         self._drag_item = None
         self._drag_origin = None
         self._dragging = False
@@ -33,8 +37,9 @@ class WatchPanel(ttk.Frame):
         ttk.Label(
             self,
             text="关注列表",
-            font=("Microsoft YaHei", 12, "bold"),
-        ).pack(anchor=tk.W, padx=4, pady=(0, 12))
+            font=("Microsoft YaHei", 10, "bold"),
+            foreground=TEXT,
+        ).pack(anchor=tk.W, padx=2, pady=(0, 6))
 
         self.tree = ttk.Treeview(
             self,
@@ -43,16 +48,17 @@ class WatchPanel(ttk.Frame):
             show="headings",
         )
         for col, text, width, stretch in (
-            ("number", "序", 32, False),
-            ("code", "代码", 130, False),
-            ("name", "名称", 100, True),
+            ("number", "序", 24, False),
+            ("code", "代码", 96, False),
+            ("name", "名称", 78, True),
             ("strategy", "策略", 52, False),
             ("date", "信号日", 56, False),
             ("state", "状态", 52, False),
             ("notes", "备注", 40, True),
         ):
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=width, minwidth=34, anchor=tk.W, stretch=stretch)
+            minwidth = 22 if col == "number" else (92 if col == "code" else 28)
+            self.tree.column(col, width=width, minwidth=minwidth, anchor=tk.W, stretch=stretch)
         self.tree.pack(fill=tk.BOTH, expand=True)
         self.tree._obs = {}    # iid -> observation_id
         self.tree._codes = {}  # iid -> code
@@ -64,6 +70,10 @@ class WatchPanel(ttk.Frame):
         self.tree.bind("<ButtonPress-1>", self._drag_start, add="+")
         self.tree.bind("<B1-Motion>", self._drag_motion, add="+")
         self.tree.bind("<ButtonRelease-1>", self._drag_release, add="+")
+        self.tree.bind("<Left>", lambda _event: self._request_page(-1))
+        self.tree.bind("<Right>", lambda _event: self._request_page(1))
+        self.tree.bind("<Up>", lambda _event: self._move_selection(-1))
+        self.tree.bind("<Down>", lambda _event: self._move_selection(1))
 
         if self.store is not None:
             self.reload()
@@ -75,15 +85,18 @@ class WatchPanel(ttk.Frame):
             self.tree.delete(child)
         self.tree._obs = {}
         self.tree._codes = {}
+        self._display_rows = []
         if self.store is None:
             return
         try:
             rows = self.store.rows(
                 "SELECT w.code AS code, w.notes AS wnotes, "
                 "o.id AS observation_id, o.strategy AS strategy, o.asof AS asof, "
+                "o.timeframe AS timeframe, d.source AS source, "
                 "p.state AS state "
                 "FROM watchlist w "
                 "LEFT JOIN observations o ON o.id = w.observation_id "
+                "LEFT JOIN datasets d ON d.id = o.dataset_id "
                 "LEFT JOIN plans p ON p.observation_id = o.id "
                 "WHERE w.active=1 ORDER BY w.updated DESC"
             )
@@ -95,12 +108,21 @@ class WatchPanel(ttk.Frame):
         for number, r in enumerate(rows, 1):
             code = r["code"]
             state = r["state"] if r["state"] else "关注中"
+            item = {
+                "code": code,
+                "name": names.get(code, ""),
+                "observation_id": r["observation_id"],
+                "source": r["source"] or "unknown",
+                "strategy": r["strategy"],
+                "timeframe": r["timeframe"],
+            }
+            self._display_rows.append(item)
             iid = self.tree.insert(
                 "", tk.END,
                 values=(
                     number,
                     code,
-                    names.get(code, ""),
+                    item["name"],
                     r["strategy"] or "",
                     (r["asof"] or "")[:10],
                     state,
@@ -109,6 +131,44 @@ class WatchPanel(ttk.Frame):
             )
             self.tree._obs[iid] = r["observation_id"]
             self.tree._codes[iid] = code
+
+    def rows(self):
+        """按关注列表当前顺序提供 K 线分页数据。"""
+        return [dict(row) for row in self._display_rows]
+
+    def select_observation(self, observation_id):
+        for iid, value in self.tree._obs.items():
+            if value == observation_id:
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
+                self.tree.focus_set()
+                return True
+        return False
+
+    def _move_selection(self, delta):
+        children = self.tree.get_children()
+        if not children:
+            return "break"
+        selection = self.tree.selection()
+        try:
+            index = children.index(selection[0]) if selection else 0
+        except ValueError:
+            index = 0
+        index = max(0, min(index + int(delta), len(children) - 1))
+        iid = children[index]
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        self.tree.see(iid)
+        self.tree.focus_set()
+        if self.on_select:
+            self.on_select(self.tree._codes.get(iid), self.tree._obs.get(iid))
+        return "break"
+
+    def _request_page(self, delta):
+        if self.on_page_request:
+            self.on_page_request(delta)
+        return "break"
 
     # ---- 选中 -> 主窗口联动 K 线 ----
     def _on_select(self, event):
@@ -281,7 +341,7 @@ class _PlanDialog:
         self.notes = ""
         self.top = tk.Toplevel(parent)
         self.top.title(f"计划状态：{state} · {code}")
-        self.top.configure(bg="#171e28")
+        self.top.configure(bg=APP_BG)
         self.top.transient(parent.winfo_toplevel())
         self.top.grab_set()
         self.top.resizable(False, False)

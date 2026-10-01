@@ -27,7 +27,7 @@ def resources(runtime_root=None):
     return store, Service(store)
 
 
-store, service = resources(os.environ.get('A_WORKBENCH_HOME',str(ROOT/'runtime')))
+store, service = resources(os.environ.get('A_WORKBENCH_HOME'))
 st.markdown('''<style>
 .stApp {background:#11151c;color:#e3e8ef}
 [data-testid="stSidebar"] {background:#171e28}

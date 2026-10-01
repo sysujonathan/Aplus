@@ -9,6 +9,11 @@ import json
 import pandas as pd
 
 
+REALTIME_MARKET_SOURCE = "baostock"
+LEGACY_MARKET_SOURCE = "legacy-engine-a"
+LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, LEGACY_MARKET_SOURCE)
+
+
 def code_names(store):
     """复刻 workbench/dashboard.py 的命名：代码 -> 名称。失败返回空字典。"""
     try:
@@ -27,14 +32,15 @@ def code_names(store):
         return {}
 
 
-def load_candidates(store, timeframe="daily", source="baostock", asof_filter=None):
-    """读真实扫描观察，按 strategy 分组。返回 {strategy_key: [row, ...]}。
+def load_candidates(store, timeframe="daily", source=REALTIME_MARKET_SOURCE, asof_filter=None):
+    """按一个明确行情来源读取扫描观察，返回 {strategy_key: [row, ...]}。
 
     asof_filter: (year, month, day) 三元组，元素为 None 表示该位不约束。
     用 LIKE 前缀匹配 asof（形如 2026-09-20 或带时间），避免依赖具体存储格式。
     """
     sql = (
-        "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id "
+        "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id, "
+        "d.source AS source "
         "FROM observations o JOIN datasets d ON d.id=o.dataset_id "
         "WHERE d.source=? AND o.timeframe=?"
     )
@@ -56,9 +62,60 @@ def load_candidates(store, timeframe="daily", source="baostock", asof_filter=Non
                 "date": r["asof"],
                 "observation_id": r["id"],
                 "dataset_id": r["dataset_id"],
+                "source": r["source"],
+                "strategy": r["strategy"],
+                "timeframe": r["timeframe"],
             }
         )
     return grouped
+
+
+def load_legacy_candidates(store, timeframe="daily", asof_filter=None):
+    """只读工程 A 历史候选；调用方必须来自显式历史浏览入口。"""
+    return load_candidates(
+        store,
+        timeframe=timeframe,
+        source=LEGACY_MARKET_SOURCE,
+        asof_filter=asof_filter,
+    )
+
+
+def candidate_dates(store, timeframe="daily"):
+    """本地策略结果时间线；只返回日期，不把不同来源的候选混在一起。"""
+    rows = store.rows(
+        "SELECT DISTINCT o.asof FROM observations o "
+        "JOIN datasets d ON d.id=o.dataset_id "
+        "WHERE d.source IN (?,?) AND o.timeframe=? ORDER BY o.asof DESC",
+        (*LOCAL_CANDIDATE_SOURCES, timeframe),
+    )
+    return [row["asof"] for row in rows if row.get("asof")]
+
+
+def latest_candidate_date(store, timeframe="daily"):
+    """返回本地时间线上最新的有效策略结果日期。"""
+    dates = candidate_dates(store, timeframe)
+    return dates[0] if dates else None
+
+
+def candidate_source_for_date(store, timeframe="daily", asof_filter=None):
+    """为一个日期筛选选择单一来源；同日优先当前 Aplus 正式扫描。"""
+    pattern = _build_asof_pattern(asof_filter)
+    sql = (
+        "SELECT d.source, MAX(o.asof) AS latest FROM observations o "
+        "JOIN datasets d ON d.id=o.dataset_id "
+        "WHERE d.source IN (?,?) AND o.timeframe=?"
+    )
+    params = [*LOCAL_CANDIDATE_SOURCES, timeframe]
+    if pattern is not None:
+        sql += " AND o.asof LIKE ?"
+        params.append(pattern)
+    sql += (
+        " GROUP BY d.source ORDER BY latest DESC, "
+        "CASE d.source WHEN ? THEN 0 ELSE 1 END LIMIT 1"
+    )
+    params.append(REALTIME_MARKET_SOURCE)
+    rows = store.rows(sql, params)
+    return rows[0]["source"] if rows else REALTIME_MARKET_SOURCE
 
 
 def _build_asof_pattern(asof_filter):
@@ -94,11 +151,22 @@ def load_observation_candles(store, observation_id):
     return frame, record, payload
 
 
-def latest_observation(store, code, timeframe="daily", source="baostock"):
-    """按代码取最近一条观察 id（用于从搜索/关注定位 K 线）。无则返回 None。"""
+def latest_observation(store, code, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """在一个明确行情来源内按代码取最近观察；无则返回 None。"""
     rows = store.rows(
         "SELECT o.id FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source=? AND o.timeframe=? AND o.code=? ORDER BY o.created DESC LIMIT 1",
+        "WHERE d.source=? AND o.timeframe=? AND o.code=? "
+        "ORDER BY o.created DESC LIMIT 1",
         (source, timeframe, code),
     )
     return rows[0]["id"] if rows else None
+
+
+def latest_legacy_observation(store, code, timeframe="daily"):
+    """只在工程 A 历史快照中定位最近观察。"""
+    return latest_observation(
+        store,
+        code,
+        timeframe=timeframe,
+        source=LEGACY_MARKET_SOURCE,
+    )
