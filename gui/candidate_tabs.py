@@ -73,7 +73,7 @@ class CandidateTabs(ttk.Frame):
             show="headings",
             selectmode="browse",
         )
-        for col, width in (("number", 54), ("code", 132), ("name", 150)):
+        for col, width in (("number", 40), ("code", 104), ("name", 120)):
             self.tree.heading(
                 col,
                 text=_COLUMN_TITLES[col],
@@ -83,7 +83,7 @@ class CandidateTabs(ttk.Frame):
             self.tree.column(
                 col,
                 width=width,
-                minwidth=54 if col == "number" else 90,
+                minwidth=36 if col == "number" else 86,
                 stretch=col == "name",
                 anchor=tk.CENTER,
             )

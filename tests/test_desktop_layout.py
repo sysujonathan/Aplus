@@ -1,5 +1,6 @@
 import os
 import uuid
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -9,9 +10,10 @@ from gui.candidate_tabs import (
     collapse_candidate_rows,
     short_strategy_label,
 )
-from gui.toolbar import format_board_scope
+from gui.toolbar import ToolBar, format_board_scope
 from gui.chart_panel import layout_shape, page_start_for
 from gui.data import latest_observation, load_candidates
+from gui.main_window import AplusMainWindow, side_panel_widths
 from launch_dashboard import acquire_single_instance, release_single_instance
 from workbench.market import save_dataset
 from workbench.store import Store, now
@@ -45,6 +47,7 @@ def test_board_scope_label_is_compact_but_unambiguous():
 
 
 def test_multichart_layouts_and_candidate_pages_are_stable():
+    assert layout_shape(1) == (1, 1)
     assert layout_shape(4) == (2, 2)
     assert layout_shape(6) == (2, 3)
     assert layout_shape(9) == (3, 3)
@@ -52,6 +55,28 @@ def test_multichart_layouts_and_candidate_pages_are_stable():
     assert page_start_for(3, 4) == 0
     assert page_start_for(4, 4) == 4
     assert page_start_for(17, 9) == 9
+    assert page_start_for(17, 1) == 17
+
+
+def test_single_chart_toolbar_option_and_compact_sidebars():
+    toolbar = Mock()
+    toolbar.layout_var.get.return_value = "1×1"
+    ToolBar._fire_layout(toolbar)
+    toolbar._on_chart_layout.assert_called_once_with(1)
+
+    narrow = side_panel_widths(1280)
+    wide = side_panel_widths(2880)
+    assert narrow == (286, 246)
+    assert wide == (318, 260)
+    assert sum(wide) < 600
+
+
+def test_watch_selection_replaces_the_active_chart_slot():
+    window = Mock(store=object())
+    window.chart.replace_active.return_value = True
+    AplusMainWindow.on_watch_selected(window, "sz.003006", "legacy-observation")
+    window.chart.replace_active.assert_called_once_with("sz.003006", "legacy-observation")
+    window._status_text.set.assert_called_once_with("活动图已切换为关注标的：sz.003006")
 
 
 def test_legacy_candidates_remain_visible_without_entering_live_market_source(tmp_path):

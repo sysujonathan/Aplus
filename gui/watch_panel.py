@@ -43,9 +43,9 @@ class WatchPanel(ttk.Frame):
             show="headings",
         )
         for col, text, width, stretch in (
-            ("number", "序", 32, False),
-            ("code", "代码", 130, False),
-            ("name", "名称", 100, True),
+            ("number", "序", 34, False),
+            ("code", "代码", 104, False),
+            ("name", "名称", 90, True),
             ("strategy", "策略", 52, False),
             ("date", "信号日", 56, False),
             ("state", "状态", 52, False),

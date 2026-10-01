@@ -12,6 +12,14 @@ from .watch_panel import WatchPanel
 from .toolbar import ToolBar
 
 
+def side_panel_widths(window_width):
+    """按窗口宽度收紧两侧清单，优先把水平空间留给 K 线。"""
+    width = max(1280, int(window_width or 0))
+    candidates = max(286, min(318, round(width * 0.17)))
+    watch = max(246, min(260, round(width * 0.125)))
+    return candidates, watch
+
+
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
         super().__init__(themename="darkly", title="Brooks-AI 操盘台")
@@ -89,7 +97,7 @@ class AplusMainWindow(ttk.Window):
             on_page_request=self._on_chart_page,
         )
         self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
-        self.candidates.configure(width=460)
+        self.candidates.configure(width=286)
         self.candidates.grid_propagate(False)
 
         right = ttk.Frame(body)
@@ -114,7 +122,7 @@ class AplusMainWindow(ttk.Window):
             on_drag_end=self.chart.clear_drop_highlight,
         )
         self.watch.grid(row=0, column=1, sticky=tk.NSEW)
-        self.watch.configure(width=240)
+        self.watch.configure(width=246)
         self.watch.pack_propagate(False)
 
         status_bar = ttk.Frame(premarket, padding=(18, 8))
@@ -253,10 +261,11 @@ class AplusMainWindow(ttk.Window):
     def _resize_layout(self, event):
         if event.widget is not self:
             return
-        # Match the reference proportions without letting lists cover the chart.
+        # Lists follow their actual three-column content and yield spare width to charts.
         width = self.page_host.winfo_width()
-        self.candidates.configure(width=max(460, min(640, round(width * .225))))
-        self.watch.configure(width=max(280, min(360, round(width * .125))))
+        candidate_width, watch_width = side_panel_widths(width)
+        self.candidates.configure(width=candidate_width)
+        self.watch.configure(width=watch_width)
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):

@@ -160,7 +160,7 @@ class ToolBar(ttk.Frame):
         self.layout_combo = ttk.Combobox(
             filters,
             textvariable=self.layout_var,
-            values=("2×2", "2×3", "3×3"),
+            values=("1×1", "2×2", "2×3", "3×3"),
             state="readonly",
             width=3,
             font=("Consolas", 9),
@@ -311,7 +311,7 @@ class ToolBar(ttk.Frame):
             self._on_chart_page(delta)
 
     def _fire_layout(self, _event=None):
-        count = {"2×2": 4, "2×3": 6, "3×3": 9}.get(self.layout_var.get(), 4)
+        count = {"1×1": 1, "2×2": 4, "2×3": 6, "3×3": 9}.get(self.layout_var.get(), 4)
         if self._on_chart_layout:
             self._on_chart_layout(count)
 

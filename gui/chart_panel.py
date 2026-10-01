@@ -70,11 +70,11 @@ def render_chart(frame, payload, title, meta):
             plt.close(fig)
 
 
-_LAYOUT_SHAPES = {4: (2, 2), 6: (2, 3), 9: (3, 3)}
+_LAYOUT_SHAPES = {1: (1, 1), 4: (2, 2), 6: (2, 3), 9: (3, 3)}
 
 
 def layout_shape(count):
-    """返回多图布局的行列；只开放交易员确认的 4/6/9 格。"""
+    """返回多图布局的行列；支持专注单图和 4/6/9 格。"""
     return _LAYOUT_SHAPES.get(int(count), _LAYOUT_SHAPES[4])
 
 
