@@ -1,5 +1,6 @@
 import os
 import uuid
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,6 +16,9 @@ from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
 from gui.main_window import AplusMainWindow, side_panel_widths
 from launch_dashboard import acquire_single_instance, release_single_instance
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_candidate_labels_fit_horizontal_strategy_bar():
@@ -155,6 +159,15 @@ def test_chart_items_keep_mode_and_source_explicit():
             timeframe="daily",
         )
     ]
+
+
+def test_windows_launchers_forward_persisted_runtime_home():
+    vbs = (ROOT / "启动A.vbs").read_text(encoding="utf-8")
+    cmd = (ROOT / "启动A.cmd").read_text(encoding="utf-8")
+
+    for launcher in (vbs, cmd):
+        assert "A_WORKBENCH_HOME" in launcher
+        assert "HKCU\\Environment" in launcher
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named mutex")
