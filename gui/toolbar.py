@@ -41,7 +41,8 @@ def _two_years_ago():
 
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
-                 on_timeframe_change=None, on_date_change=None, on_job_finished=None):
+                 on_timeframe_change=None, on_date_change=None, on_job_finished=None,
+                 on_chart_page=None, on_chart_layout=None):
         super().__init__(parent)
         self.service = service
         self.store = store
@@ -49,6 +50,8 @@ class ToolBar(ttk.Frame):
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
         self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态)，主窗口借此刷新列表
+        self._on_chart_page = on_chart_page
+        self._on_chart_layout = on_chart_layout
         self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
@@ -79,7 +82,9 @@ class ToolBar(ttk.Frame):
         header.grid(row=0, column=0, sticky=tk.W)
         self.actions = actions = ttk.Frame(self)
         actions.grid(row=0, column=1, sticky=tk.W)
-        self.columnconfigure(2, weight=1)
+        self.filters = filters = ttk.Frame(self)
+        filters.grid(row=0, column=2, sticky=tk.W)
+        self.columnconfigure(3, weight=1)
         # 日线 / 周线（只由用户手动切换）
         tf_f = ttk.Frame(header)
         tf_f.pack(side=tk.LEFT, padx=(0, 10))
@@ -123,23 +128,81 @@ class ToolBar(ttk.Frame):
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
         # 信号日（年/月/日三联 Combobox，联动筛选；对齐旧 A gui_dashboard.py:210）
-        self.date_label = ttk.Label(actions, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
+        self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
         self.day_var = tk.StringVar(value=_ALL)
-        combo_kw = {"state": "readonly", "width": 6, "font": ("Consolas", 11)}
-        self.year_combo = ttk.Combobox(actions, textvariable=self.year_var, **combo_kw)
+        combo_kw = {"state": "readonly", "font": ("Consolas", 11)}
+        self.year_combo = ttk.Combobox(
+            filters, textvariable=self.year_var, width=5, **combo_kw
+        )
         self.year_combo.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(actions, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
-        self.month_combo = ttk.Combobox(actions, textvariable=self.month_var, **combo_kw)
+        ttk.Label(filters, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
+        self.month_combo = ttk.Combobox(
+            filters, textvariable=self.month_var, width=3, **combo_kw
+        )
         self.month_combo.pack(side=tk.LEFT, padx=(2, 2))
-        ttk.Label(actions, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
-        self.day_combo = ttk.Combobox(actions, textvariable=self.day_var, **combo_kw)
+        ttk.Label(filters, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
+        self.day_combo = ttk.Combobox(
+            filters, textvariable=self.day_var, width=3, **combo_kw
+        )
         self.day_combo.pack(side=tk.LEFT, padx=(2, 0))
         self.year_combo.bind("<<ComboboxSelected>>", self._on_year_change)
         self.month_combo.bind("<<ComboboxSelected>>", self._on_month_change)
         self.day_combo.bind("<<ComboboxSelected>>", self._on_day_change)
+
+        # TradingView 式多图控制：布局选择 + 整组左右翻页，放在信号日同一行。
+        ttk.Separator(filters, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(12, 8), pady=2
+        )
+        self.layout_var = tk.StringVar(value="2×2")
+        self.layout_combo = ttk.Combobox(
+            filters,
+            textvariable=self.layout_var,
+            values=("2×2", "2×3", "3×3"),
+            state="readonly",
+            width=3,
+            font=("Consolas", 9),
+        )
+        self.layout_combo.pack(side=tk.LEFT, padx=(0, 5))
+        self.layout_combo.bind("<<ComboboxSelected>>", self._fire_layout)
+        self.btn_chart_prev = tk.Button(
+            filters,
+            text="‹",
+            width=2,
+            command=lambda: self._fire_chart_page(-1),
+            bg="#2c2c2e",
+            fg="#f5f5f7",
+            activebackground="#007AFF",
+            activeforeground="white",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.btn_chart_prev.pack(side=tk.LEFT, ipady=4)
+        self.chart_page_var = tk.StringVar(value="0 / 0")
+        tk.Label(
+            filters,
+            textvariable=self.chart_page_var,
+            width=9,
+            anchor=tk.CENTER,
+            font=("Consolas", 9),
+            fg=_LABEL_FG,
+            bg="#212121",
+        ).pack(side=tk.LEFT, padx=3)
+        self.btn_chart_next = tk.Button(
+            filters,
+            text="›",
+            width=2,
+            command=lambda: self._fire_chart_page(1),
+            bg="#2c2c2e",
+            fg="#f5f5f7",
+            activebackground="#007AFF",
+            activeforeground="white",
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.btn_chart_next.pack(side=tk.LEFT, ipady=4)
 
         # 依赖 store 的真实信号日填充下拉
         self._load_date_options()
@@ -148,23 +211,32 @@ class ToolBar(ttk.Frame):
 
         self._status = tk.StringVar(value=self._mkt_var.get())
         self.status_label = ttk.Label(self, textvariable=self._status, font=("Consolas", 10), foreground=_LABEL_FG)
-        self.status_label.grid(row=0, column=2, sticky=tk.E, padx=6)
+        self.status_label.grid(row=0, column=3, sticky=tk.E, padx=6)
         self.bind("<Configure>", self._responsive)
         self._select_latest_date()
 
     def _responsive(self, event):
         if event.widget is not self:
             return
-        needed = self.header.winfo_reqwidth() + self.actions.winfo_reqwidth() + 40
-        if event.width < needed:
-            self.actions.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
-            self.status_label.grid_remove()
-        else:
+        header_width = self.header.winfo_reqwidth()
+        actions_width = self.actions.winfo_reqwidth()
+        filters_width = self.filters.winfo_reqwidth()
+        needed = header_width + actions_width + filters_width + 40
+        if event.width >= needed:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
+            self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
             if event.width > needed + self.status_label.winfo_reqwidth():
-                self.status_label.grid(row=0, column=2, sticky=tk.E)
+                self.status_label.grid(row=0, column=3, sticky=tk.E)
             else:
                 self.status_label.grid_remove()
+        elif event.width >= actions_width + filters_width + 40:
+            self.actions.grid(row=1, column=0, columnspan=1, sticky=tk.W, pady=(6, 0))
+            self.filters.grid(row=1, column=1, columnspan=3, sticky=tk.W, pady=(6, 0))
+            self.status_label.grid_remove()
+        else:
+            self.actions.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(6, 0))
+            self.filters.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+            self.status_label.grid_remove()
 
     def _explain_ai(self):
         from tkinter import messagebox
@@ -222,6 +294,26 @@ class ToolBar(ttk.Frame):
 
     def set_status(self, text):
         self._status.set(text)
+
+    def set_chart_page_status(self, start, end, total):
+        self.chart_page_var.set(f"{start}–{end} / {total}" if total else "0 / 0")
+        if start <= 1:
+            self.btn_chart_prev.configure(state=tk.DISABLED)
+        else:
+            self.btn_chart_prev.configure(state=tk.NORMAL)
+        if not total or end >= total:
+            self.btn_chart_next.configure(state=tk.DISABLED)
+        else:
+            self.btn_chart_next.configure(state=tk.NORMAL)
+
+    def _fire_chart_page(self, delta):
+        if self._on_chart_page:
+            self._on_chart_page(delta)
+
+    def _fire_layout(self, _event=None):
+        count = {"2×2": 4, "2×3": 6, "3×3": 9}.get(self.layout_var.get(), 4)
+        if self._on_chart_layout:
+            self._on_chart_layout(count)
 
     # ---- 信号日三联 Combobox 联动 ----
     def _load_date_options(self):

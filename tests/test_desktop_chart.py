@@ -47,3 +47,12 @@ def test_chart_without_signal_or_price_levels_renders_without_mutation():
     image = render_chart(frame, {}, 'Chart', {})
     assert image.width > 500 and image.height > 300
     pd.testing.assert_frame_equal(frame, before)
+
+
+def test_each_chart_slot_opens_its_own_tradingview_symbol():
+    panel = Mock(_code="sz.002011", _tf="daily")
+    with patch("gui.tv.tv_link", return_value="https://example.test/chart") as link, \
+         patch("webbrowser.open") as open_browser:
+        ChartPanel._open_tv(panel)
+    link.assert_called_once_with("sz.002011", "daily")
+    open_browser.assert_called_once_with("https://example.test/chart")

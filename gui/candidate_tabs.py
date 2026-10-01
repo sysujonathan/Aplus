@@ -51,10 +51,14 @@ def collapse_candidate_rows(rows):
 
 
 class CandidateTabs(ttk.Frame):
-    def __init__(self, parent, callback, on_context=None):
+    def __init__(self, parent, callback, on_context=None, on_rows_changed=None,
+                 on_page_request=None):
         super().__init__(parent)
         self.callback, self.on_context = callback, on_context
+        self.on_rows_changed = on_rows_changed
+        self.on_page_request = on_page_request
         self._labels, self._buttons, self._rows = {}, {}, {}
+        self._display_rows = []
         self._selected = None
         self._timeframe = None
         self._sort_next_desc = {key: False for key in _COLUMN_TITLES}
@@ -86,6 +90,10 @@ class CandidateTabs(ttk.Frame):
         self.tree.grid(row=1, column=0, sticky=tk.NSEW)
         self.tree.bind("<<TreeviewSelect>>", self._select)
         self.tree.bind("<Button-3>", self._context)
+        self.tree.bind("<Up>", lambda _event: self._move_selection(-1))
+        self.tree.bind("<Down>", lambda _event: self._move_selection(1))
+        self.tree.bind("<Left>", lambda _event: self._request_page(-1))
+        self.tree.bind("<Right>", lambda _event: self._request_page(1))
         self.tree._obs = {}
         self.tree._codes = {}
         self.tree._base_tags = {}
@@ -167,8 +175,8 @@ class CandidateTabs(ttk.Frame):
         self.tree._obs = {}
         self.tree._codes = {}
         self.tree._base_tags = {}
-        rows = collapse_candidate_rows(self._rows.get(key, []))
-        for number, row in enumerate(rows, 1):
+        self._display_rows = collapse_candidate_rows(self._rows.get(key, []))
+        for number, row in enumerate(self._display_rows, 1):
             count = row["repeat_count"]
             name = row["name"] or ""
             if count > 1:
@@ -178,6 +186,8 @@ class CandidateTabs(ttk.Frame):
             self.tree._obs[iid] = row["observation_id"]
             self.tree._codes[iid] = row["code"]
             self.tree._base_tags[iid] = tags
+        if self.on_rows_changed:
+            self.on_rows_changed(list(self._display_rows))
         self._reset_headings()
         children = self.tree.get_children()
         if children:
@@ -185,6 +195,47 @@ class CandidateTabs(ttk.Frame):
             self.tree.focus(children[0])
         else:
             self.callback(None, None)
+
+    def select_index(self, index):
+        """选中当前策略结果中的指定行，供多图分页和图格点击联动。"""
+        children = self.tree.get_children()
+        if not children:
+            return False
+        index = max(0, min(int(index), len(children) - 1))
+        iid = children[index]
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        self.tree.see(iid)
+        self.tree.focus_set()
+        return True
+
+    def select_observation(self, observation_id):
+        """按稳定观察编号定位行；列表排序后仍能选中正确股票。"""
+        for iid, value in self.tree._obs.items():
+            if value == observation_id:
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
+                self.tree.focus_set()
+                return True
+        return False
+
+    def _move_selection(self, delta):
+        children = self.tree.get_children()
+        if not children:
+            return "break"
+        selection = self.tree.selection()
+        try:
+            index = children.index(selection[0]) if selection else 0
+        except ValueError:
+            index = 0
+        self.select_index(index + delta)
+        return "break"
+
+    def _request_page(self, delta):
+        if self.on_page_request:
+            self.on_page_request(delta)
+        return "break"
 
     def _reset_headings(self):
         self._sort_next_desc = {key: False for key in _COLUMN_TITLES}

@@ -7,7 +7,7 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
-from .chart_panel import ChartPanel
+from .chart_panel import ChartGrid
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
 
@@ -71,6 +71,8 @@ class AplusMainWindow(ttk.Window):
             on_timeframe_change=self._on_timeframe,
             on_date_change=self._on_date_change,
             on_job_finished=self._on_job_finished,
+            on_chart_page=self._on_chart_page,
+            on_chart_layout=self._on_chart_layout,
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
@@ -80,7 +82,11 @@ class AplusMainWindow(ttk.Window):
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
         self.candidates = CandidateTabs(
-            body, self.on_stock_selected, on_context=self._candidate_context
+            body,
+            self.on_stock_selected,
+            on_context=self._candidate_context,
+            on_rows_changed=self._on_candidate_rows,
+            on_page_request=self._on_chart_page,
         )
         self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
         self.candidates.configure(width=460)
@@ -91,13 +97,25 @@ class AplusMainWindow(ttk.Window):
         right.columnconfigure(0, weight=1)
         right.columnconfigure(1, weight=0)
         right.rowconfigure(0, weight=1)
-        self.chart = ChartPanel(right, self.store)
+        self.chart = ChartGrid(
+            right,
+            self.store,
+            layout_count=4,
+            on_page_state=self.toolbar.set_chart_page_status,
+            on_active_item=self._on_chart_item_activated,
+        )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
-        self.watch = WatchPanel(right, self.store, on_select=self.on_stock_selected)
+        self.watch = WatchPanel(
+            right,
+            self.store,
+            on_select=self.on_watch_selected,
+            on_drag_motion=self._on_watch_drag_motion,
+            on_drop=self._on_watch_drop,
+            on_drag_end=self.chart.clear_drop_highlight,
+        )
         self.watch.grid(row=0, column=1, sticky=tk.NSEW)
         self.watch.configure(width=240)
         self.watch.pack_propagate(False)
-        self.chart.tv_button(right).grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0), ipady=6)
 
         status_bar = ttk.Frame(premarket, padding=(18, 8))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
@@ -244,7 +262,7 @@ class AplusMainWindow(ttk.Window):
     def _on_timeframe(self, tf):
         self._cur_date = self.toolbar.selected_date()
         self.chart.set_timeframe(tf)
-        self.chart.show_observation(None, None)
+        self.chart.clear()
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store, timeframe=tf, asof_filter=getattr(self, "_cur_date", None)
@@ -290,23 +308,65 @@ class AplusMainWindow(ttk.Window):
                 self.store, timeframe=self._tf_var.get(), asof_filter=self._cur_date
             )
 
-    # ---- 选中标的：展示 K 线 ----
+    # ---- 候选与多图联动 ----
+    def _on_candidate_rows(self, rows):
+        self.chart.set_items(rows)
+
     def on_stock_selected(self, code, observation_id=None):
         if observation_id and self.store is not None:
-            self.chart.show_observation(self.store, observation_id)
+            self.chart.focus_observation(observation_id)
             self._status_text.set(f"已加载：{code}")
         elif code and self.store is not None:
             from .data import latest_observation
 
             oid = latest_observation(self.store, code, timeframe=self._tf_var.get())
             if oid:
-                self.chart.show_observation(self.store, oid)
+                self.chart.replace_active(code, oid)
                 self._status_text.set(f"已加载：{code}")
             else:
-                self.chart.show_observation(None, None)
                 self._status_text.set(f"无 {code} 的行情快照")
         else:
-            self.chart.show_observation(None, None)
+            self.chart.clear()
+
+    def on_watch_selected(self, code, observation_id=None):
+        if not code or self.store is None:
+            return
+        if not observation_id:
+            from .data import latest_observation
+
+            observation_id = latest_observation(
+                self.store, code, timeframe=self._tf_var.get()
+            )
+        if observation_id and self.chart.replace_active(code, observation_id):
+            self._status_text.set(f"活动图已切换为关注标的：{code}")
+        else:
+            self._status_text.set(f"无 {code} 的可用行情快照")
+
+    def _on_chart_page(self, delta):
+        self.chart.page(delta)
+
+    def _on_chart_layout(self, count):
+        self.chart.set_layout(count)
+        self._status_text.set(f"K 线布局：{count} 格")
+
+    def _on_chart_item_activated(self, observation_id):
+        if observation_id is not None:
+            self.candidates.select_observation(observation_id)
+
+    def _on_watch_drag_motion(self, root_x, root_y):
+        self.chart.highlight_drop(root_x, root_y)
+
+    def _on_watch_drop(self, code, observation_id, root_x, root_y):
+        if not observation_id and code and self.store is not None:
+            from .data import latest_observation
+
+            observation_id = latest_observation(
+                self.store, code, timeframe=self._tf_var.get()
+            )
+        if self.chart.replace_at_point(code, observation_id, root_x, root_y):
+            self._status_text.set(f"已把关注标的 {code} 放入指定图格")
+        else:
+            self._status_text.set("拖拽未落在 K 线图格内，未替换")
 
     # ---- 任务结束（下载/扫描）：刷新候选、观察池与信号日下拉 ----
     def _on_job_finished(self, kind, status):

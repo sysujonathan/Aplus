@@ -9,6 +9,7 @@ from gui.candidate_tabs import (
     short_strategy_label,
 )
 from gui.toolbar import format_board_scope
+from gui.chart_panel import layout_shape, page_start_for
 from launch_dashboard import acquire_single_instance, release_single_instance
 
 
@@ -37,6 +38,16 @@ def test_board_scope_label_is_compact_but_unambiguous():
     assert format_board_scope(["沪深主板", "创业板"]) == "范围：主板+创业"
     assert format_board_scope(["沪深主板", "创业板", "科创板", "北交所"]) == "范围：全市场"
     assert format_board_scope([]) == "范围：未选择"
+
+
+def test_multichart_layouts_and_candidate_pages_are_stable():
+    assert layout_shape(4) == (2, 2)
+    assert layout_shape(6) == (2, 3)
+    assert layout_shape(9) == (3, 3)
+    assert page_start_for(0, 4) == 0
+    assert page_start_for(3, 4) == 0
+    assert page_start_for(4, 4) == 4
+    assert page_start_for(17, 9) == 9
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named mutex")

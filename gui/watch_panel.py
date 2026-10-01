@@ -3,7 +3,7 @@
 读：watchlist LEFT JOIN observations（取策略/信号日）LEFT JOIN plans（取人工状态）。
 写：加入关注来自左栏候选右键（main_window 调 store.watch）；
     本面板右键菜单：修改备注（update_watch）/ 切换计划状态（save_plan）/ 结束关注（update_watch）。
-单击行 -> on_select(code, observation_id) 联动中栏 K 线。
+单击行 -> on_select(code, observation_id) 替换活动图；拖拽可替换指定图格。
 零 schema 改动：全部复用 store 现有表与方法。
 """
 from __future__ import annotations
@@ -18,10 +18,17 @@ _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", 
 
 
 class WatchPanel(ttk.Frame):
-    def __init__(self, parent, store=None, on_select=None):
+    def __init__(self, parent, store=None, on_select=None, on_drag_motion=None,
+                 on_drop=None, on_drag_end=None):
         super().__init__(parent)
         self.store = store
         self.on_select = on_select
+        self.on_drag_motion = on_drag_motion
+        self.on_drop = on_drop
+        self.on_drag_end = on_drag_end
+        self._drag_item = None
+        self._drag_origin = None
+        self._dragging = False
 
         ttk.Label(
             self,
@@ -50,10 +57,13 @@ class WatchPanel(ttk.Frame):
         self.tree._obs = {}    # iid -> observation_id
         self.tree._codes = {}  # iid -> code
 
-        # 单击（选中即切换）联动 K 线
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        # 单击在松开时切换活动图；拖拽时不先误改活动图。
         # 右键操作菜单
         self.tree.bind("<Button-3>", self._context_menu)
+        # 左键仍可直接切换活动图；按住拖到某个图格则精确替换该格。
+        self.tree.bind("<ButtonPress-1>", self._drag_start, add="+")
+        self.tree.bind("<B1-Motion>", self._drag_motion, add="+")
+        self.tree.bind("<ButtonRelease-1>", self._drag_release, add="+")
 
         if self.store is not None:
             self.reload()
@@ -112,12 +122,53 @@ class WatchPanel(ttk.Frame):
         obs_id = self.tree._obs.get(iid)
         self.on_select(code, obs_id)
 
+    def _drag_start(self, event):
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            self._drag_item = None
+            return
+        self.tree.selection_set(iid)
+        self._drag_item = (
+            self.tree._codes.get(iid),
+            self.tree._obs.get(iid),
+        )
+        self._drag_origin = (event.x_root, event.y_root)
+        self._dragging = False
+
+    def _drag_motion(self, event):
+        if not self._drag_item or not self._drag_origin:
+            return
+        dx = abs(event.x_root - self._drag_origin[0])
+        dy = abs(event.y_root - self._drag_origin[1])
+        if max(dx, dy) < 6:
+            return
+        self._dragging = True
+        self.tree.configure(cursor="hand2")
+        if self.on_drag_motion:
+            self.on_drag_motion(event.x_root, event.y_root)
+
+    def _drag_release(self, event):
+        try:
+            if self._dragging and self._drag_item and self.on_drop:
+                code, observation_id = self._drag_item
+                self.on_drop(code, observation_id, event.x_root, event.y_root)
+            elif self._drag_item and self.on_select:
+                code, observation_id = self._drag_item
+                self.on_select(code, observation_id)
+        finally:
+            self.tree.configure(cursor="")
+            self._drag_item = None
+            self._drag_origin = None
+            self._dragging = False
+            if self.on_drag_end:
+                self.on_drag_end()
+
     # ---- 右键菜单 ----
     def _context_menu(self, event):
         iid = self.tree.identify_row(event.y)
         if not iid:
             return
-        self.tree.selection_set(iid)  # 选中该行，K 线联动
+        self.tree.selection_set(iid)
         code = self.tree._codes.get(iid)
         obs_id = self.tree._obs.get(iid)
         menu = tk.Menu(self, tearoff=0)
