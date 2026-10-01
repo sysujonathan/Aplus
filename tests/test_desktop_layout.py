@@ -13,7 +13,7 @@ from gui.candidate_tabs import (
 from gui.toolbar import ToolBar, format_board_scope
 from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
-from gui.data import LEGACY_MARKET_SOURCE
+from gui.data import REALTIME_MARKET_SOURCE
 from gui.main_window import AplusMainWindow, side_panel_widths
 from launch_dashboard import acquire_single_instance, release_single_instance
 
@@ -120,22 +120,19 @@ def test_candidate_selection_exits_watch_paging():
     window.toolbar.set_chart_source.assert_called_once_with("策略")
 
 
-def test_candidate_source_switch_is_explicit_and_clears_old_chart_page():
-    window = Mock(store=object())
-    window.toolbar.selected_date.return_value = ("2025", "04", "16")
-    window._tf_var.get.return_value = "daily"
+def test_toolbar_starts_from_latest_aplus_signal_date_only():
+    toolbar = Mock()
+    toolbar.store.rows.return_value = [{"day": "2026-09-30"}]
+    toolbar._tf_var.get.return_value = "daily"
 
-    AplusMainWindow._on_source_change(window, LEGACY_MARKET_SOURCE)
+    ToolBar._select_latest_date(toolbar)
 
-    assert window._candidate_source == LEGACY_MARKET_SOURCE
-    window.chart.clear.assert_called_once_with()
-    window.candidates.load_from_store.assert_called_once_with(
-        window.store,
-        timeframe="daily",
-        asof_filter=("2025", "04", "16"),
-        source=LEGACY_MARKET_SOURCE,
-    )
-    window._status_text.set.assert_called_once_with("候选来源：工程A历史")
+    query, args = toolbar.store.rows.call_args.args
+    assert "d.source=?" in query
+    assert args == (REALTIME_MARKET_SOURCE, "daily")
+    toolbar.year_var.set.assert_called_once_with("2026")
+    toolbar.month_var.set.assert_called_once_with("09")
+    toolbar.day_var.set.assert_called_once_with("30")
 
 
 def test_chart_items_keep_mode_and_source_explicit():

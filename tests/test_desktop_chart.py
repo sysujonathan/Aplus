@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from gui.chart_panel import ChartPanel, render_chart
-from gui.theme import APP_BG
+from gui.theme import CHART_BG
 from workbench.strategies import prepare, calculate, catalog
 from workbench.store import Store
 
@@ -48,7 +48,7 @@ def test_chart_without_signal_or_price_levels_renders_without_mutation():
     image = render_chart(frame, {}, 'Chart', {})
     assert image.width > 500 and image.height > 300
     corner = image.convert("RGB").getpixel((0, 0))
-    expected = tuple(int(APP_BG[i:i + 2], 16) for i in (1, 3, 5))
+    expected = tuple(int(CHART_BG[i:i + 2], 16) for i in (1, 3, 5))
     assert max(abs(a - b) for a, b in zip(corner, expected)) <= 2
     pd.testing.assert_frame_equal(frame, before)
 

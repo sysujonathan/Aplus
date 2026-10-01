@@ -5,14 +5,10 @@ import tkinter as tk
 import ttkbootstrap as ttk
 
 from .theme import ACCENT, APP_BG, CONTROL_BG, MUTED, TEXT
-from .data import LEGACY_MARKET_SOURCE, REALTIME_MARKET_SOURCE
+from .data import REALTIME_MARKET_SOURCE
 
 _LABEL_FG = MUTED
 _ALL = "全部"
-_SOURCE_LABELS = {
-    "实时候选": REALTIME_MARKET_SOURCE,
-    "工程A历史": LEGACY_MARKET_SOURCE,
-}
 _BOARD_SHORT = {
     "沪深主板": "主板",
     "创业板": "创业",
@@ -49,14 +45,13 @@ def _two_years_ago():
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
                  on_timeframe_change=None, on_date_change=None, on_job_finished=None,
-                 on_chart_page=None, on_chart_layout=None, on_source_change=None):
+                 on_chart_page=None, on_chart_layout=None):
         super().__init__(parent)
         self.service = service
         self.store = store
         self._tf_var = tf_var or tk.StringVar(value="daily")
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
-        self._on_source = on_source_change
         self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态)，主窗口借此刷新列表
         self._on_chart_page = on_chart_page
         self._on_chart_layout = on_chart_layout
@@ -135,25 +130,9 @@ class ToolBar(ttk.Frame):
                                      bootstyle="round-toggle", command=self._explain_ai)
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
-        # 候选数据来源必须显式切换；默认实时，历史 A 不混入实时查询。
-        ttk.Label(filters, text="候选", foreground=_LABEL_FG).pack(
-            side=tk.LEFT, padx=(12, 4)
-        )
-        self.source_var = tk.StringVar(value="实时候选")
-        self.source_combo = ttk.Combobox(
-            filters,
-            textvariable=self.source_var,
-            values=tuple(_SOURCE_LABELS),
-            state="readonly",
-            width=9,
-            font=("Microsoft YaHei", 9),
-        )
-        self.source_combo.pack(side=tk.LEFT, padx=(0, 4))
-        self.source_combo.bind("<<ComboboxSelected>>", self._fire_source)
-
-        # 信号日（年/月/日三联 Combobox，联动筛选；对齐旧 A gui_dashboard.py:210）
+        # 信号日只读取当前 Aplus 实时候选；启动时自动定位最新信号日。
         self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
-        self.date_label.pack(side=tk.LEFT, padx=(6, 4))
+        self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
         self.day_var = tk.StringVar(value=_ALL)
@@ -272,10 +251,6 @@ class ToolBar(ttk.Frame):
         return tuple(v.get() if v.get() != _ALL else None
                      for v in (self.year_var, self.month_var, self.day_var))
 
-    def selected_source(self):
-        """返回当前显式候选来源；未知标签安全回落到实时。"""
-        return _SOURCE_LABELS.get(self.source_var.get(), REALTIME_MARKET_SOURCE)
-
     def _selected_boards(self):
         """按固定市场顺序返回当前勾选范围。"""
         from workbench.market import BOARDS
@@ -305,7 +280,7 @@ class ToolBar(ttk.Frame):
             "SELECT MAX(o.asof) AS day FROM observations o "
             "JOIN datasets d ON d.id=o.dataset_id "
             "WHERE d.source=? AND o.timeframe=?",
-            (self.selected_source(), self._tf_var.get()),
+            (REALTIME_MARKET_SOURCE, self._tf_var.get()),
         )
         day = rows[0]["day"] if rows else None
         if not day:
@@ -325,12 +300,6 @@ class ToolBar(ttk.Frame):
         self._select_latest_date()
         if self._on_tf:
             self._on_tf(self._tf_var.get())
-
-    def _fire_source(self, _event=None):
-        self._load_date_options()
-        self._select_latest_date()
-        if self._on_source:
-            self._on_source(self.selected_source())
 
     def set_status(self, text):
         self._status.set(text)
@@ -383,7 +352,7 @@ class ToolBar(ttk.Frame):
                 "SELECT DISTINCT o.asof FROM observations o "
                 "JOIN datasets d ON d.id=o.dataset_id "
                 "WHERE d.source=? AND o.timeframe=? ORDER BY o.asof DESC",
-                (self.selected_source(), self._tf_var.get()),
+                (REALTIME_MARKET_SOURCE, self._tf_var.get()),
             )
         except Exception:
             rows = []

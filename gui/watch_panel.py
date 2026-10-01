@@ -48,16 +48,17 @@ class WatchPanel(ttk.Frame):
             show="headings",
         )
         for col, text, width, stretch in (
-            ("number", "序", 30, False),
-            ("code", "代码", 88, False),
-            ("name", "名称", 84, True),
+            ("number", "序", 24, False),
+            ("code", "代码", 96, False),
+            ("name", "名称", 78, True),
             ("strategy", "策略", 52, False),
             ("date", "信号日", 56, False),
             ("state", "状态", 52, False),
             ("notes", "备注", 40, True),
         ):
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=width, minwidth=28, anchor=tk.W, stretch=stretch)
+            minwidth = 22 if col == "number" else (92 if col == "code" else 28)
+            self.tree.column(col, width=width, minwidth=minwidth, anchor=tk.W, stretch=stretch)
         self.tree.pack(fill=tk.BOTH, expand=True)
         self.tree._obs = {}    # iid -> observation_id
         self.tree._codes = {}  # iid -> code

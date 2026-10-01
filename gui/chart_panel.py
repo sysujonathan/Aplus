@@ -46,7 +46,7 @@ def render_chart(frame, payload, title, meta):
     style = mpf.make_mpf_style(
         marketcolors=colors,
         facecolor=CHART_BG,
-        figcolor=APP_BG,
+        figcolor=CHART_BG,
         gridcolor=GRID,
         gridstyle="-",
         y_on_right=True,
@@ -85,10 +85,32 @@ def render_chart(frame, payload, title, meta):
         kwargs["addplot"] = adds
     if lines:
         kwargs["hlines"] = dict(hlines=lines, colors=line_colors, linestyle=styles, linewidths=1)
+    # 远离当前价格区间的止损/目标仍显示在参数框中，但不再把整段 K 线
+    # 压缩到图角。接近当前行情的价位线会纳入可视范围。
+    price_low = float(plot["low"].min())
+    price_high = float(plot["high"].max())
+    price_span = max(price_high - price_low, abs(price_high) * .02, .01)
+    view_low = price_low - price_span * .06
+    view_high = price_high + price_span * .06
+    for level in lines:
+        if price_low - price_span * .18 <= level <= price_high + price_span * .18:
+            view_low = min(view_low, level - price_span * .02)
+            view_high = max(view_high, level + price_span * .02)
+    kwargs["ylim"] = (view_low, view_high)
     fig = None
     try:
-        fig, axes = mpf.plot(plot, type="candle", style=style, volume=True, title=title,
-                            ylabel="", figsize=(11, 8), returnfig=True, **kwargs)
+        fig, axes = mpf.plot(
+            plot,
+            type="candle",
+            style=style,
+            volume=True,
+            title=title,
+            ylabel="",
+            figsize=(12.2, 7.5),
+            tight_layout=True,
+            returnfig=True,
+            **kwargs,
+        )
         ax = axes[0]
         for axis in axes:
             axis.set_facecolor(CHART_BG)
@@ -118,8 +140,22 @@ def render_chart(frame, payload, title, meta):
         for key, label, color in (("stop", "SL", STOP), ("target", "TP1", TARGET)):
             if payload.get(key) is not None and float(payload[key]) > 0:
                 value = float(payload[key])
-                ax.text(.99, value, f"{label}: {value:.2f}", transform=ax.get_yaxis_transform(),
-                        ha="right", va="bottom", color=color, fontsize=8)
+                if value > view_high:
+                    ax.text(
+                        .99, .985, f"{label}↑ {value:.2f}", transform=ax.transAxes,
+                        ha="right", va="top", color=color, fontsize=8,
+                    )
+                elif value < view_low:
+                    ax.text(
+                        .99, .015, f"{label}↓ {value:.2f}", transform=ax.transAxes,
+                        ha="right", va="bottom", color=color, fontsize=8,
+                    )
+                else:
+                    ax.text(
+                        .99, value, f"{label}: {value:.2f}",
+                        transform=ax.get_yaxis_transform(), ha="right", va="bottom",
+                        color=color, fontsize=8,
+                    )
         if has_marks:
             legend = ax.legend(
                 handles=[
@@ -142,7 +178,14 @@ def render_chart(frame, payload, title, meta):
             for label in legend.get_texts():
                 label.set_color(TEXT)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor=APP_BG)
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=110,
+            bbox_inches="tight",
+            pad_inches=.02,
+            facecolor=CHART_BG,
+        )
         buf.seek(0)
         return Image.open(buf).copy()
     finally:
@@ -204,7 +247,7 @@ class ChartPanel(native_ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
-        self.header = tk.Frame(self, bg=CONTROL_BG, height=28)
+        self.header = tk.Frame(self, bg=CONTROL_BG, height=24)
         self.header.grid(row=0, column=0, sticky=tk.EW)
         self.header.grid_propagate(False)
         self._title_var = tk.StringVar(value="空位")
@@ -316,10 +359,10 @@ class ChartPanel(native_ttk.Frame):
             instance, calculated = calculate(spec, bars)
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
-            # 股票身份固定在图格标题条；图内只保留策略与周期，避免九格时重复挤占空间。
-            title = f"{spec.name} · {period}"
-            self._image = render_chart(calculated, payload, title, instance.get_metadata())
-            self._title_var.set(f"{self._code}  {name}")
+            # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
+            self._image = render_chart(calculated, payload, "", instance.get_metadata())
+            chart_identity = f"{self._code}  {name}".rstrip()
+            self._title_var.set(f"{chart_identity}  ·  {spec.name} · {period}")
             if isinstance(cache, dict):
                 cache[observation_id] = (
                     self._image,

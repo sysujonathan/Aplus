@@ -41,6 +41,7 @@ class AplusMainWindow(ttk.Window):
         self.style.configure("TLabel", background=APP_BG, foreground=TEXT)
         self.style.configure(
             "Treeview",
+            font=("Microsoft YaHei UI", 9),
             rowheight=26,
             background=PANEL_BG,
             fieldbackground=PANEL_BG,
@@ -133,7 +134,6 @@ class AplusMainWindow(ttk.Window):
             on_job_finished=self._on_job_finished,
             on_chart_page=self._on_chart_page,
             on_chart_layout=self._on_chart_layout,
-            on_source_change=self._on_source_change,
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
@@ -349,21 +349,6 @@ class AplusMainWindow(ttk.Window):
         label = f"{year or '*'}-{month or '*'}-{day or '*'}"
         self._status_text.set(f"信号日筛选：{label}")
         self.chart.set_timeframe(self._tf_var.get())
-
-    def _on_source_change(self, source):
-        """显式切换实时或工程 A 历史候选；两类数据不在查询层混合。"""
-        self._candidate_source = source or REALTIME_MARKET_SOURCE
-        self._cur_date = self.toolbar.selected_date()
-        self.chart.clear()
-        if self.store is not None:
-            self.candidates.load_from_store(
-                self.store,
-                timeframe=self._tf_var.get(),
-                asof_filter=self._cur_date,
-                source=self._candidate_source,
-            )
-        label = "工程A历史" if self._candidate_source != REALTIME_MARKET_SOURCE else "实时候选"
-        self._status_text.set(f"候选来源：{label}")
 
     # ---- 策略 Tab（动态取真实名称，只读，不碰冻结文件）----
     def _load_strategies(self):
