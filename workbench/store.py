@@ -7,12 +7,36 @@ import json
 import os
 import math
 import sqlite3
+import sys
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_runtime_root(root=None):
+    """Return one stable per-user data home without requiring setup."""
+    configured = root or os.environ.get("A_WORKBENCH_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    preferred = (base / "Aplus" / "runtime").resolve()
+
+    # Preserve data created by releases that stored runtime beside the code.
+    # A fresh checkout has no database here and therefore uses the stable
+    # per-user location above.
+    legacy = (ROOT / "runtime").resolve()
+    if not (preferred / "workbench.sqlite3").exists() and (legacy / "workbench.sqlite3").exists():
+        return legacy
+    return preferred
 
 
 def now():
@@ -30,7 +54,7 @@ def digest(data: bytes):
 class Store:
     def __init__(self, root=None):
         self._files_lock = threading.RLock()
-        self.root = Path(root or os.environ.get("A_WORKBENCH_HOME", ROOT / "runtime")).resolve()
+        self.root = resolve_runtime_root(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "workbench.sqlite3"
         with self.connect() as db:

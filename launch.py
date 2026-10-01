@@ -8,6 +8,8 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+from workbench.store import resolve_runtime_root
+
 ROOT = Path(__file__).resolve().parent
 PORT = 8517
 URL = f'http://127.0.0.1:{PORT}'
@@ -22,13 +24,13 @@ def healthy():
 
 
 def main():
+    runtime = resolve_runtime_root()
+    runtime.mkdir(parents=True, exist_ok=True)
     if healthy():
-        record = ROOT/'runtime/server.json'
+        record = runtime/'server.json'
         if not record.exists() or json.loads(record.read_text(encoding='utf-8')).get('root') != str(ROOT):
             raise RuntimeError('Port 8517 is already in use by another instance. Stop that instance first.')
     else:
-        runtime = ROOT/'runtime'
-        runtime.mkdir(exist_ok=True)
         flags = subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0
         with (runtime/'startup.log').open('a',encoding='utf-8') as out:
             process = subprocess.Popen([sys.executable,'-m','streamlit','run',str(ROOT/'app.py'),

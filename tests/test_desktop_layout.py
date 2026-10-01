@@ -11,7 +11,7 @@ from gui.candidate_tabs import (
     short_strategy_label,
     strategy_window,
 )
-from gui.toolbar import ToolBar, format_board_scope
+from gui.toolbar import ToolBar, format_board_scope, sync_start_date
 from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
 from gui.main_window import AplusMainWindow, side_panel_widths
@@ -134,6 +134,21 @@ def test_toolbar_starts_from_latest_local_signal_date():
     toolbar.year_var.set.assert_called_once_with("2026")
     toolbar.month_var.set.assert_called_once_with("09")
     toolbar.day_var.set.assert_called_once_with("30")
+
+
+def test_first_market_update_builds_full_history_then_uses_incremental_window():
+    empty = Mock()
+    empty.rows.return_value = [{"count": 0, "latest_start": None}]
+    assert sync_start_date(empty) == "2016-01-01"
+
+    partial = Mock()
+    partial.rows.return_value = [{"count": 5211, "latest_start": "2024-10-01"}]
+    assert sync_start_date(partial) == "2016-01-01"
+
+    existing = Mock()
+    existing.rows.return_value = [{"count": 5211, "latest_start": "2016-01-01"}]
+    with patch("gui.toolbar._two_years_ago", return_value="2024-10-01"):
+        assert sync_start_date(existing) == "2024-10-01"
 
 
 def test_chart_items_keep_mode_and_source_explicit():
