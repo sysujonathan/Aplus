@@ -1,17 +1,10 @@
-"""顶部工具栏（旧 A 风格还原 + 接 service）。
-
-旧 A 顶栏参数：标题 Microsoft YaHei 16 bold #f5f5f7；日线/周线切换；搜索框；
-下载行情 / 扫描 / 停止；AI 复核；信号日；右侧状态。按钮在后端连接时提交 service 任务，
-未连接时明确提示（调试壳）。
-"""
+"""盘前任务工具栏：周期、范围、行情更新、扫描与信号日。"""
 from __future__ import annotations
 
 import tkinter as tk
 import ttkbootstrap as ttk
 
 _LABEL_FG = "#a1a1a6"
-_TITLE_FG = "#f5f5f7"
-_PLACEHOLDER_FG = "#8e8e93"
 _ALL = "全部"
 _BOARD_SHORT = {
     "沪深主板": "主板",
@@ -87,33 +80,15 @@ class ToolBar(ttk.Frame):
         self.actions = actions = ttk.Frame(self)
         actions.grid(row=0, column=1, sticky=tk.W)
         self.columnconfigure(2, weight=1)
-        ttk.Label(
-            header,
-            text="Brooks-AI 操盘台",
-            font=("Microsoft YaHei", 16, "bold"),
-            foreground=_TITLE_FG,
-        ).pack(side=tk.LEFT, padx=(4, 20))
-
         # 日线 / 周线（只由用户手动切换）
         tf_f = ttk.Frame(header)
-        tf_f.pack(side=tk.LEFT, padx=(0, 18))
+        tf_f.pack(side=tk.LEFT, padx=(0, 10))
         ttk.Radiobutton(
             tf_f, text="日线", value="daily", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
         ttk.Radiobutton(
             tf_f, text="周线", value="weekly", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
-
-        # 搜索框（回车 -> TradingView）
-        search_f = ttk.Frame(header)
-        search_f.pack(side=tk.LEFT, padx=(0, 20))
-        self.ent_code = ttk.Entry(search_f, width=14, font=("Consolas", 12))
-        self.ent_code.pack(side=tk.LEFT, ipady=3)
-        self.ent_code.insert(0, "输入代码送 TV")
-        self.ent_code.config(foreground="#8e8e93")
-        self.ent_code.bind("<FocusIn>", self._search_focus)
-        self.ent_code.bind("<FocusOut>", self._search_blur)
-        self.ent_code.bind("<Return>", lambda e: self._open_tv_for_entry())
 
         # 日常顺序固定为：选择范围 → 更新行情 → 策略扫描。
         self.scope_button = ttk.Menubutton(
@@ -247,31 +222,6 @@ class ToolBar(ttk.Frame):
 
     def set_status(self, text):
         self._status.set(text)
-
-    # ---- 搜索框占位 ----
-    def _search_focus(self, _e):
-        if self.ent_code.get() == "输入代码送 TV":
-            self.ent_code.delete(0, tk.END)
-            self.ent_code.config(foreground="#f5f5f7")
-
-    def _search_blur(self, _e):
-        if not self.ent_code.get().strip():
-            self.ent_code.insert(0, "输入代码送 TV")
-            self.ent_code.config(foreground="#8e8e93")
-
-    def _open_tv_for_entry(self):
-        code = self.ent_code.get().strip()
-        if not code or code == "输入代码送 TV":
-            return
-        try:
-            from .tv import tv_link
-            import webbrowser
-
-            url = tv_link(code, self._tf_var.get())
-            webbrowser.open(url)
-            self.set_status(f"已打开 TradingView：{code}")
-        except Exception:
-            self.set_status(f"TV 链接：{code}")
 
     # ---- 信号日三联 Combobox 联动 ----
     def _load_date_options(self):

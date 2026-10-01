@@ -1,6 +1,7 @@
 """工程 A 桌面布局，使用 Aplus Service/Store 后端。"""
 from __future__ import annotations
 
+import queue
 import tkinter as tk
 from tkinter import messagebox
 import ttkbootstrap as ttk
@@ -12,7 +13,7 @@ from .toolbar import ToolBar
 
 
 class AplusMainWindow(ttk.Window):
-    def __init__(self, service=None, store=None):
+    def __init__(self, service=None, store=None, enable_tray=False):
         super().__init__(themename="darkly", title="Brooks-AI 操盘台")
         self.style.colors.primary = "#007AFF"
         self.style.configure("Treeview", rowheight=34)
@@ -22,22 +23,21 @@ class AplusMainWindow(ttk.Window):
         self.geometry("1600x1000")
         self.minsize(1280, 760)
         self._tf_var = tk.StringVar(value="daily")
+        self._tray_icon = None
+        self._tray_actions = queue.SimpleQueue()
+        self._closing = False
         self._build_ui()
         self._load_strategies()
+        if enable_tray:
+            self._setup_tray()
 
     def _build_ui(self):
-        self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
 
-        self.section_nav = ttk.Frame(self, padding=(10, 14), width=138)
-        self.section_nav.grid(row=0, column=0, sticky=tk.NS)
-        self.section_nav.grid_propagate(False)
-        ttk.Label(
-            self.section_nav,
-            text="A · 工作台",
-            font=("Microsoft YaHei", 13, "bold"),
-            foreground="#f5f5f7",
-        ).pack(anchor=tk.W, padx=4, pady=(0, 18))
+        # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
+        self.section_nav = ttk.Frame(self, padding=(10, 8))
+        self.section_nav.grid(row=0, column=0, sticky=tk.EW)
         self._section_buttons = {}
         self._pages = {}
         section_names = (
@@ -53,19 +53,11 @@ class AplusMainWindow(ttk.Window):
                 bootstyle="secondary",
                 command=lambda k=key: self._switch_section(k),
             )
-            button.pack(fill=tk.X, pady=(0, 7), ipady=5)
+            button.pack(side=tk.LEFT, padx=(0, 6), ipady=3)
             self._section_buttons[key] = button
-        ttk.Separator(self.section_nav).pack(fill=tk.X, pady=(14, 12))
-        ttk.Label(
-            self.section_nav,
-            text="盘前：行情 → 扫描\n盘后：回测 → 复盘",
-            font=("Microsoft YaHei", 9),
-            foreground="#8e8e93",
-            justify=tk.LEFT,
-        ).pack(anchor=tk.W, padx=4)
 
         self.page_host = ttk.Frame(self)
-        self.page_host.grid(row=0, column=1, sticky=tk.NSEW)
+        self.page_host.grid(row=1, column=0, sticky=tk.NSEW)
         self.page_host.columnconfigure(0, weight=1)
         self.page_host.rowconfigure(0, weight=1)
 
@@ -165,6 +157,80 @@ class AplusMainWindow(ttk.Window):
             self._section_buttons[name].configure(
                 bootstyle="primary" if name == key else "secondary"
             )
+
+    def _setup_tray(self):
+        """关闭窗口时驻留系统托盘；托盘回调不直接跨线程操作 Tk。"""
+        try:
+            from pathlib import Path
+
+            from PIL import Image
+            import pystray
+
+            icon_path = Path(__file__).resolve().parents[1] / "icon_aplus.ico"
+            image = Image.open(icon_path).convert("RGBA")
+            menu = pystray.Menu(
+                pystray.MenuItem(
+                    "打开主界面",
+                    lambda _icon, _item: self._tray_actions.put("show"),
+                    default=True,
+                ),
+                pystray.MenuItem(
+                    "退出",
+                    lambda _icon, _item: self._tray_actions.put("quit"),
+                ),
+            )
+            self._tray_icon = pystray.Icon(
+                "aplus-workbench", image, "Brooks-AI 操盘台", menu
+            )
+            self._tray_icon.run_detached()
+            self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
+            self.after(200, self._poll_tray_actions)
+        except Exception as exc:
+            self.protocol("WM_DELETE_WINDOW", self.destroy)
+            self._status_text.set(f"系统托盘启动失败：{exc}")
+
+    def _hide_to_tray(self):
+        if self._closing:
+            return
+        self.withdraw()
+
+    def _show_from_tray(self):
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.focus_force()
+
+    def _poll_tray_actions(self):
+        if self._closing:
+            return
+        try:
+            while True:
+                action = self._tray_actions.get_nowait()
+                if action == "show":
+                    self._show_from_tray()
+                elif action == "quit":
+                    self._exit_from_tray()
+                    return
+        except queue.Empty:
+            pass
+        self.after(200, self._poll_tray_actions)
+
+    def _exit_from_tray(self):
+        """托盘“退出”才是真正关闭；运行任务先请求安全停止。"""
+        if self._closing:
+            return
+        self._closing = True
+        if self.toolbar._job_id and self.service is not None:
+            try:
+                self.service.cancel(self.toolbar._job_id)
+            except Exception:
+                pass
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+        self.destroy()
 
     def _resize_layout(self, event):
         if event.widget is not self:

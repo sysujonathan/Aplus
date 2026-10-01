@@ -1,4 +1,4 @@
-"""工程 A 白底 K 线、量能和下方交易详情；仅读取新工程快照。"""
+"""工程 A 白底 K 线与量能；仅读取新工程快照。"""
 from __future__ import annotations
 import io
 import tkinter as tk
@@ -82,7 +82,7 @@ class ChartPanel(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self.chart_frame = ttk.Frame(self)
-        self.chart_frame.grid(row=0, column=0, sticky=tk.NSEW, pady=(0, 14))
+        self.chart_frame.grid(row=0, column=0, sticky=tk.NSEW)
         self.chart_frame.grid_propagate(False)
         self.chart_frame.columnconfigure(0, weight=1)
         self.chart_frame.rowconfigure(0, weight=1)
@@ -90,10 +90,6 @@ class ChartPanel(ttk.Frame):
                                      foreground="#8e8e93", anchor=tk.W)
         self.chart_label.grid(row=0, column=0, sticky=tk.NSEW)
         self.chart_frame.bind("<Configure>", lambda e: self._fit_image())
-        self._title = ttk.Label(self, text="", font=("Microsoft YaHei", 14, "bold"))
-        self._title.grid(row=1, column=0, sticky=tk.W, pady=(0, 12))
-        self._facts = ttk.Label(self, text="", font=("Consolas", 12), foreground="#d1d1d6", justify=tk.LEFT)
-        self._facts.grid(row=2, column=0, sticky=tk.W, pady=(0, 12))
 
     def tv_button(self, parent):
         self._tv_btn = ttk.Button(parent, text="在 TradingView 打开", bootstyle="primary",
@@ -108,8 +104,6 @@ class ChartPanel(ttk.Frame):
         self._code = None
         self._image = None
         self._photo = None
-        self._title.configure(text="")
-        self._facts.configure(text="")
         self.chart_label.configure(image="", text="选中左侧标的查看缩略图")
         if self._tv_btn:
             self._tv_btn.configure(state=tk.DISABLED)
@@ -131,13 +125,6 @@ class ChartPanel(ttk.Frame):
             name = code_names(store).get(self._code, "")
             title = f"{name}（{self._code}） {spec.name} · {'周K' if self._tf == 'weekly' else '日K'}"
             self._image = render_chart(calculated, payload, title, instance.get_metadata())
-            self._title.configure(text=f"{spec.name}  {self._code} {name}")
-            facts = []
-            for label, key in (("触发价", "entry"), ("止损价", "stop"), ("目标价", "target")):
-                if payload.get(key) is not None:
-                    facts.append(f"{label}  {float(payload[key]):.2f}")
-            facts.append(f"信号日  {str(observation['asof'])[:10]}")
-            self._facts.configure(text="\n".join(facts))
             if self._tv_btn:
                 self._tv_btn.configure(state=tk.NORMAL)
             self._fit_image()

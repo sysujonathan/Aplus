@@ -15,11 +15,11 @@ def short_strategy_label(label):
     text = str(label or "").strip()
     upper = text.upper().replace("_", " ")
     if "PINBAR" in upper or "PIN BAR" in upper:
-        return "GAP PB"
+        return "G-PB"
     if "GAP" in upper and "H1" in upper:
-        return "GAP H1"
+        return "G-H1"
     if "GAP" in upper and "H2" in upper:
-        return "GAP H2"
+        return "G-H2"
     if "MTR" in upper:
         return "MTR"
     if "3K" in upper or "THREE K" in upper:
@@ -34,6 +34,22 @@ def candidate_repeat_counts(rows):
     return Counter(row.get("code") for row in rows if row.get("code"))
 
 
+def collapse_candidate_rows(rows):
+    """每只股票只展示最新观察，同时保留当前筛选范围内的出现次数。"""
+    counts = candidate_repeat_counts(rows)
+    seen = set()
+    collapsed = []
+    for row in rows:
+        code = row.get("code")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        item = dict(row)
+        item["repeat_count"] = counts[code]
+        collapsed.append(item)
+    return collapsed
+
+
 class CandidateTabs(ttk.Frame):
     def __init__(self, parent, callback, on_context=None):
         super().__init__(parent)
@@ -41,17 +57,12 @@ class CandidateTabs(ttk.Frame):
         self._labels, self._buttons, self._rows = {}, {}, {}
         self._selected = None
         self._timeframe = None
-        self._date_title = "今日信号"
         self._sort_next_desc = {key: False for key in _COLUMN_TITLES}
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(1, weight=1)
 
         self.sidebar = ttk.Frame(self)
-        self.sidebar.grid(row=0, column=0, sticky=tk.EW, pady=(0, 10))
-        self.list_title = ttk.Label(
-            self, text="今日信号", font=("Microsoft YaHei", 14, "bold")
-        )
-        self.list_title.grid(row=1, column=0, sticky=tk.W, pady=(0, 10))
+        self.sidebar.grid(row=0, column=0, sticky=tk.EW, pady=(0, 8))
         self.tree = ttk.Treeview(
             self,
             columns=("number", "code", "name"),
@@ -72,7 +83,7 @@ class CandidateTabs(ttk.Frame):
                 stretch=col == "name",
                 anchor=tk.CENTER,
             )
-        self.tree.grid(row=2, column=0, sticky=tk.NSEW)
+        self.tree.grid(row=1, column=0, sticky=tk.NSEW)
         self.tree.bind("<<TreeviewSelect>>", self._select)
         self.tree.bind("<Button-3>", self._context)
         self.tree._obs = {}
@@ -88,32 +99,28 @@ class CandidateTabs(ttk.Frame):
             widget.destroy()
         self._labels = dict(strategies)
         self._buttons = {}
-        for col in range(4):
+        for col in range(6):
             self.sidebar.columnconfigure(col, weight=1, uniform="strategy")
         for index, (key, label) in enumerate(strategies):
-            button = tk.Button(
+            button = tk.Label(
                 self.sidebar,
                 text=f"{short_strategy_label(label)}\n0",
-                width=7,
-                height=2,
-                font=("Microsoft YaHei", 9),
+                font=("Microsoft YaHei", 8),
                 foreground="#f5f5f7",
                 background="#3a3a3c",
-                activeforeground="#ffffff",
-                activebackground="#4a4a4e",
+                justify=tk.CENTER,
+                cursor="hand2",
+                padx=1,
+                pady=3,
                 relief=tk.FLAT,
-                borderwidth=0,
                 highlightthickness=0,
-                command=lambda k=key: self._choose(k),
             )
-            row, col = divmod(index, 4)
+            button.bind("<Button-1>", lambda _event, k=key: self._choose(k))
             button.grid(
-                row=row,
-                column=col,
+                row=0,
+                column=index,
                 sticky=tk.EW,
-                padx=(0 if col == 0 else 3, 0),
-                pady=(0 if row == 0 else 4, 0),
-                ipady=2,
+                padx=(0 if index == 0 else 3, 0),
             )
             self._buttons[key] = button
         self._selected = next(iter(self._labels), None)
@@ -128,22 +135,17 @@ class CandidateTabs(ttk.Frame):
             self._selected = None
         self._timeframe = timeframe
         self._rows = load_candidates(store, timeframe=timeframe, asof_filter=asof_filter)
-        parts = asof_filter or (None, None, None)
-        self._date_title = ("-".join(parts) + " 信号") if all(parts) else "全部信号"
         visible = []
         for button in self._buttons.values():
             button.grid_remove()
         visible_index = 0
         for key, button in self._buttons.items():
             if key in entries and timeframe in entries[key].timeframes:
-                row, col = divmod(visible_index, 4)
                 button.grid(
-                    row=row,
-                    column=col,
+                    row=0,
+                    column=visible_index,
                     sticky=tk.EW,
-                    padx=(0 if col == 0 else 3, 0),
-                    pady=(0 if row == 0 else 4, 0),
-                    ipady=2,
+                    padx=(0 if visible_index == 0 else 3, 0),
                 )
                 button.configure(
                     text=f"{short_strategy_label(self._labels[key])}\n{len(self._rows.get(key, []))}"
@@ -160,17 +162,14 @@ class CandidateTabs(ttk.Frame):
             selected = k == key
             button.configure(
                 background="#007AFF" if selected else "#3a3a3c",
-                activebackground="#0a84ff" if selected else "#4a4a4e",
             )
-        self.list_title.configure(text=f"{self._date_title} · {self._labels.get(key, '')}")
         self.tree.delete(*self.tree.get_children())
         self.tree._obs = {}
         self.tree._codes = {}
         self.tree._base_tags = {}
-        rows = self._rows.get(key, [])
-        repeats = candidate_repeat_counts(rows)
+        rows = collapse_candidate_rows(self._rows.get(key, []))
         for number, row in enumerate(rows, 1):
-            count = repeats.get(row["code"], 1)
+            count = row["repeat_count"]
             name = row["name"] or ""
             if count > 1:
                 name = f"{name} ×{count}" if name else f"×{count}"
