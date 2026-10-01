@@ -2,9 +2,11 @@
 from __future__ import annotations
 import io
 import tkinter as tk
+from tkinter import ttk as native_ttk
 import ttkbootstrap as ttk
 from PIL import Image, ImageTk
 
+from .chart_items import ChartItem
 from .theme import (
     ACCENT,
     APP_BG,
@@ -162,18 +164,35 @@ def page_start_for(index, count):
     return max(0, int(index) // count * count)
 
 
-class ChartPanel(tk.Frame):
+def _configure_chart_styles():
+    # ttkbootstrap 会把任意样式前缀解析成 Bootstyle；这里用原生 ttk
+    # 注册项目局部样式，避免把 ChartCanvas 误判为不存在的控件类型。
+    style = native_ttk.Style()
+    for name, border in (
+        ("ChartPanel.TFrame", BORDER),
+        ("Active.ChartPanel.TFrame", ACCENT),
+        ("Drop.ChartPanel.TFrame", DROP_TARGET),
+    ):
+        style.configure(
+            name,
+            background=CHART_BG,
+            bordercolor=border,
+            lightcolor=border,
+            darkcolor=border,
+        )
+    style.configure("ChartBody.TFrame", background=CHART_BG)
+    style.configure(
+        "ChartBody.TLabel", background=CHART_BG, foreground=MUTED, borderwidth=0
+    )
+    style.configure("ChartHost.TFrame", background=APP_BG)
+
+
+class ChartPanel(native_ttk.Frame):
     """一个独立图格：自身标的、活动状态以及独立 TradingView 入口。"""
 
     def __init__(self, parent, store=None, on_activate=None, image_cache=None):
-        super().__init__(
-            parent,
-            bg=BORDER,
-            bd=0,
-            highlightbackground=BORDER,
-            highlightcolor=BORDER,
-            highlightthickness=2,
-        )
+        _configure_chart_styles()
+        super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
         self.store = store
         self._on_activate = on_activate
         self._image_cache = image_cache if image_cache is not None else {}
@@ -214,18 +233,16 @@ class ChartPanel(tk.Frame):
         )
         self._tv_btn.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.chart_frame = tk.Frame(self, bg=CHART_BG, bd=0)
+        self.chart_frame = native_ttk.Frame(self, style="ChartBody.TFrame")
         self.chart_frame.grid(row=1, column=0, sticky=tk.NSEW)
         self.chart_frame.grid_propagate(False)
         self.chart_frame.columnconfigure(0, weight=1)
         self.chart_frame.rowconfigure(0, weight=1)
-        self.chart_label = tk.Label(
+        self.chart_label = native_ttk.Label(
             self.chart_frame,
             text="等待候选",
-            foreground=MUTED,
-            background=CHART_BG,
+            style="ChartBody.TLabel",
             anchor=tk.CENTER,
-            borderwidth=0,
         )
         self.chart_label.grid(row=0, column=0, sticky=tk.NSEW)
         self.chart_frame.bind("<Configure>", lambda _event: self._fit_image())
@@ -241,15 +258,16 @@ class ChartPanel(tk.Frame):
 
     def set_active(self, active):
         color = ACCENT if active else CONTROL_BG
-        border = ACCENT if active else BORDER
-        self.configure(highlightbackground=border, highlightcolor=border)
+        self.configure(
+            style="Active.ChartPanel.TFrame" if active else "ChartPanel.TFrame"
+        )
         self.header.configure(bg=color)
         self.title_label.configure(bg=color)
         self._tv_btn.configure(bg=color)
 
     def set_drop_target(self, active):
         if active:
-            self.configure(highlightbackground=DROP_TARGET, highlightcolor=DROP_TARGET)
+            self.configure(style="Drop.ChartPanel.TFrame")
             self.header.configure(bg=DROP_TARGET)
             self.title_label.configure(bg=DROP_TARGET)
             self._tv_btn.configure(bg=DROP_TARGET)
@@ -360,7 +378,8 @@ class ChartGrid(ttk.Frame):
         self._slots = []
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self.host = tk.Frame(self, bg=APP_BG, bd=0)
+        _configure_chart_styles()
+        self.host = native_ttk.Frame(self, style="ChartHost.TFrame")
         self.host.grid(row=0, column=0, sticky=tk.NSEW)
         self._build_slots()
 
@@ -369,11 +388,10 @@ class ChartGrid(ttk.Frame):
         return self._layout_count
 
     def set_items(self, rows, selected_index=0):
-        self._items = []
-        for index, row in enumerate(rows or []):
-            item = dict(row)
-            item["candidate_index"] = index
-            self._items.append(item)
+        values = list(rows or [])
+        if any(not isinstance(item, ChartItem) for item in values):
+            raise TypeError("ChartGrid 只接受 ChartItem，调用方必须明确数据来源和模式")
+        self._items = values
         if self._items:
             selected_index = max(0, min(int(selected_index), len(self._items) - 1))
             self._page_start = page_start_for(selected_index, self._layout_count)
@@ -404,13 +422,13 @@ class ChartGrid(ttk.Frame):
         self._render_page()
         item = self.current_item()
         if item and self._on_active_item:
-            self._on_active_item(item.get("observation_id"))
+            self._on_active_item(item.observation_id)
 
     def focus_observation(self, observation_id):
         if not observation_id:
             return False
         for index, item in enumerate(self._items):
-            if item.get("observation_id") == observation_id:
+            if item.observation_id == observation_id:
                 start = page_start_for(index, self._layout_count)
                 if start != self._page_start:
                     self._page_start = start
@@ -419,7 +437,7 @@ class ChartGrid(ttk.Frame):
                 else:
                     self._active_slot = index - start
                     displayed = self._display_items[self._active_slot]
-                    if not displayed or displayed.get("observation_id") != observation_id:
+                    if not displayed or displayed.observation_id != observation_id:
                         base_item = self._items[index]
                         self._display_items[self._active_slot] = base_item
                         self._slots[self._active_slot].show_observation(
@@ -430,33 +448,28 @@ class ChartGrid(ttk.Frame):
                 return True
         return False
 
-    def replace_active(self, code, observation_id):
-        return self.replace_slot(self._active_slot, code, observation_id)
+    def replace_active(self, item):
+        return self.replace_slot(self._active_slot, item)
 
-    def replace_slot(self, slot_index, code, observation_id):
-        if not observation_id or not 0 <= int(slot_index) < len(self._slots):
+    def replace_slot(self, slot_index, item):
+        if not isinstance(item, ChartItem):
+            raise TypeError("替换图格需要 ChartItem")
+        if not item.observation_id or not 0 <= int(slot_index) < len(self._slots):
             return False
         slot_index = int(slot_index)
-        item = {
-            "code": code,
-            "name": "",
-            "observation_id": observation_id,
-            "candidate_index": None,
-            "watch_override": True,
-        }
         while len(self._display_items) < len(self._slots):
             self._display_items.append(None)
         self._display_items[slot_index] = item
         self._active_slot = slot_index
-        self._slots[slot_index].show_observation(self.store, observation_id)
+        self._slots[slot_index].show_observation(self.store, item.observation_id)
         self._refresh_active_styles()
         return True
 
-    def replace_at_point(self, code, observation_id, root_x, root_y):
+    def replace_at_point(self, item, root_x, root_y):
         index = self.slot_at_point(root_x, root_y)
         if index is None:
             return False
-        return self.replace_slot(index, code, observation_id)
+        return self.replace_slot(index, item)
 
     def highlight_drop(self, root_x, root_y):
         target = self.slot_at_point(root_x, root_y)
@@ -517,7 +530,7 @@ class ChartGrid(ttk.Frame):
             if item is None:
                 slot.show_placeholder()
             else:
-                label = item.get("name") or item.get("code") or "加载中"
+                label = item.name or item.code or "加载中"
                 slot.show_placeholder(label)
                 self.after(
                     index * 12,
@@ -533,14 +546,14 @@ class ChartGrid(ttk.Frame):
             return
         if index >= len(self._display_items) or self._display_items[index] is not item:
             return
-        self._slots[index].show_observation(self.store, item.get("observation_id"))
+        self._slots[index].show_observation(self.store, item.observation_id)
 
     def _activate_slot(self, index):
         self._active_slot = index
         self._refresh_active_styles()
         item = self.current_item()
         if item and self._on_active_item:
-            self._on_active_item(item.get("observation_id"))
+            self._on_active_item(item.observation_id)
 
     def _refresh_active_styles(self):
         for index, slot in enumerate(self._slots):

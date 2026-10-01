@@ -7,7 +7,9 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
+from .chart_items import ChartItem, chart_items
 from .chart_panel import ChartGrid
+from .data import REALTIME_MARKET_SOURCE
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
 from .theme import (
@@ -83,6 +85,7 @@ class AplusMainWindow(ttk.Window):
         self._tray_actions = queue.SimpleQueue()
         self._closing = False
         self._chart_mode = "candidates"
+        self._candidate_source = REALTIME_MARKET_SOURCE
         self._build_ui()
         self._load_strategies()
         if enable_tray:
@@ -130,6 +133,7 @@ class AplusMainWindow(ttk.Window):
             on_job_finished=self._on_job_finished,
             on_chart_page=self._on_chart_page,
             on_chart_layout=self._on_chart_layout,
+            on_source_change=self._on_source_change,
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
@@ -324,7 +328,10 @@ class AplusMainWindow(ttk.Window):
         self.chart.clear()
         if self.store is not None:
             self.candidates.load_from_store(
-                self.store, timeframe=tf, asof_filter=getattr(self, "_cur_date", None)
+                self.store,
+                timeframe=tf,
+                asof_filter=getattr(self, "_cur_date", None),
+                source=self._candidate_source,
             )
         self.toolbar.date_label.configure(text="截至周" if tf == "weekly" else "信号日")
         self._status_text.set(f"周期：{tf}")
@@ -337,10 +344,26 @@ class AplusMainWindow(ttk.Window):
                 self.store,
                 timeframe=self._tf_var.get(),
                 asof_filter=self._cur_date,
+                source=self._candidate_source,
             )
         label = f"{year or '*'}-{month or '*'}-{day or '*'}"
         self._status_text.set(f"信号日筛选：{label}")
         self.chart.set_timeframe(self._tf_var.get())
+
+    def _on_source_change(self, source):
+        """显式切换实时或工程 A 历史候选；两类数据不在查询层混合。"""
+        self._candidate_source = source or REALTIME_MARKET_SOURCE
+        self._cur_date = self.toolbar.selected_date()
+        self.chart.clear()
+        if self.store is not None:
+            self.candidates.load_from_store(
+                self.store,
+                timeframe=self._tf_var.get(),
+                asof_filter=self._cur_date,
+                source=self._candidate_source,
+            )
+        label = "工程A历史" if self._candidate_source != REALTIME_MARKET_SOURCE else "实时候选"
+        self._status_text.set(f"候选来源：{label}")
 
     # ---- 策略 Tab（动态取真实名称，只读，不碰冻结文件）----
     def _load_strategies(self):
@@ -364,35 +387,53 @@ class AplusMainWindow(ttk.Window):
         self.candidates.build_tabs(strategies)
         if self.store is not None:
             self.candidates.load_from_store(
-                self.store, timeframe=self._tf_var.get(), asof_filter=self._cur_date
+                self.store,
+                timeframe=self._tf_var.get(),
+                asof_filter=self._cur_date,
+                source=self._candidate_source,
             )
 
     # ---- 候选与多图联动 ----
     def _on_candidate_rows(self, rows):
         self._chart_mode = "candidates"
         self.toolbar.set_chart_source("策略")
-        self.chart.set_items(rows)
+        self.chart.set_items(chart_items(rows, "candidate"))
 
     def on_stock_selected(self, code, observation_id=None):
         if observation_id and self.store is not None:
             if self._chart_mode != "candidates":
                 rows = self.candidates.rows()
+                items = chart_items(rows, "candidate")
                 index = next(
-                    (i for i, row in enumerate(rows) if row.get("observation_id") == observation_id),
+                    (i for i, item in enumerate(items)
+                     if item.observation_id == observation_id),
                     0,
                 )
                 self._chart_mode = "candidates"
                 self.toolbar.set_chart_source("策略")
-                self.chart.set_items(rows, selected_index=index)
+                self.chart.set_items(items, selected_index=index)
             else:
                 self.chart.focus_observation(observation_id)
             self._status_text.set(f"已加载：{code}")
         elif code and self.store is not None:
             from .data import latest_observation
 
-            oid = latest_observation(self.store, code, timeframe=self._tf_var.get())
+            oid = latest_observation(
+                self.store,
+                code,
+                timeframe=self._tf_var.get(),
+                source=self._candidate_source,
+            )
             if oid:
-                self.chart.replace_active(code, oid)
+                item = ChartItem(
+                    code=code,
+                    name="",
+                    observation_id=oid,
+                    source=self._candidate_source,
+                    mode="candidate",
+                    timeframe=self._tf_var.get(),
+                )
+                self.chart.replace_active(item)
                 self._status_text.set(f"已加载：{code}")
             else:
                 self._status_text.set(f"无 {code} 的行情快照")
@@ -406,18 +447,33 @@ class AplusMainWindow(ttk.Window):
             from .data import latest_observation
 
             observation_id = latest_observation(
-                self.store, code, timeframe=self._tf_var.get()
+                self.store,
+                code,
+                timeframe=self._tf_var.get(),
+                source=self._candidate_source,
             )
         if observation_id:
             rows = self.watch.rows()
+            items = chart_items(rows, "watch")
+            if not any(item.observation_id == observation_id for item in items):
+                items.append(
+                    ChartItem(
+                        code=code,
+                        name="",
+                        observation_id=observation_id,
+                        source=self._candidate_source,
+                        mode="watch",
+                        timeframe=self._tf_var.get(),
+                    )
+                )
             index = next(
-                (i for i, row in enumerate(rows)
-                 if row.get("observation_id") == observation_id or row.get("code") == code),
+                (i for i, item in enumerate(items)
+                 if item.observation_id == observation_id or item.code == code),
                 0,
             )
             self._chart_mode = "watch"
             self.toolbar.set_chart_source("关注")
-            self.chart.set_items(rows, selected_index=index)
+            self.chart.set_items(items, selected_index=index)
             self._status_text.set(f"关注浏览：{code}（左右键切换关注列表）")
         else:
             self._status_text.set(f"无 {code} 的可用行情快照")
@@ -444,9 +500,28 @@ class AplusMainWindow(ttk.Window):
             from .data import latest_observation
 
             observation_id = latest_observation(
-                self.store, code, timeframe=self._tf_var.get()
+                self.store,
+                code,
+                timeframe=self._tf_var.get(),
+                source=self._candidate_source,
             )
-        if self.chart.replace_at_point(code, observation_id, root_x, root_y):
+        rows = self.watch.rows()
+        matching = [
+            row for row in rows
+            if row.get("observation_id") == observation_id or row.get("code") == code
+        ]
+        items = chart_items(matching[:1], "watch")
+        item = items[0] if items else None
+        if observation_id and item is None:
+            item = ChartItem(
+                code=code,
+                name="",
+                observation_id=observation_id,
+                source=self._candidate_source,
+                mode="watch",
+                timeframe=self._tf_var.get(),
+            )
+        if item and self.chart.replace_at_point(item, root_x, root_y):
             self._status_text.set(f"已把关注标的 {code} 放入指定图格")
         else:
             self._status_text.set("拖拽未落在 K 线图格内，未替换")
@@ -459,6 +534,7 @@ class AplusMainWindow(ttk.Window):
             self.candidates.load_from_store(
                 self.store, timeframe=self._tf_var.get(),
                 asof_filter=getattr(self, "_cur_date", None),
+                source=self._candidate_source,
             )
             self.watch.reload()
             self.toolbar._load_date_options()

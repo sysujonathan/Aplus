@@ -9,12 +9,8 @@ import json
 import pandas as pd
 
 
+REALTIME_MARKET_SOURCE = "baostock"
 LEGACY_MARKET_SOURCE = "legacy-engine-a"
-
-
-def _visible_sources(source):
-    """Realtime views also show immutable Engineering A history."""
-    return (source, LEGACY_MARKET_SOURCE) if source == "baostock" else (source,)
 
 
 def code_names(store):
@@ -35,20 +31,19 @@ def code_names(store):
         return {}
 
 
-def load_candidates(store, timeframe="daily", source="baostock", asof_filter=None):
-    """读真实扫描观察，按 strategy 分组。返回 {strategy_key: [row, ...]}。
+def load_candidates(store, timeframe="daily", source=REALTIME_MARKET_SOURCE, asof_filter=None):
+    """按一个明确行情来源读取扫描观察，返回 {strategy_key: [row, ...]}。
 
     asof_filter: (year, month, day) 三元组，元素为 None 表示该位不约束。
     用 LIKE 前缀匹配 asof（形如 2026-09-20 或带时间），避免依赖具体存储格式。
     """
-    sources = _visible_sources(source)
-    placeholders = ",".join("?" for _ in sources)
     sql = (
-        "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id "
+        "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id, "
+        "d.source AS source "
         "FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-        f"WHERE d.source IN ({placeholders}) AND o.timeframe=?"
+        "WHERE d.source=? AND o.timeframe=?"
     )
-    params = [*sources, timeframe]
+    params = [source, timeframe]
     pattern = _build_asof_pattern(asof_filter)
     if pattern is not None:
         sql += " AND o.asof LIKE ?"
@@ -66,9 +61,22 @@ def load_candidates(store, timeframe="daily", source="baostock", asof_filter=Non
                 "date": r["asof"],
                 "observation_id": r["id"],
                 "dataset_id": r["dataset_id"],
+                "source": r["source"],
+                "strategy": r["strategy"],
+                "timeframe": r["timeframe"],
             }
         )
     return grouped
+
+
+def load_legacy_candidates(store, timeframe="daily", asof_filter=None):
+    """只读工程 A 历史候选；调用方必须来自显式历史浏览入口。"""
+    return load_candidates(
+        store,
+        timeframe=timeframe,
+        source=LEGACY_MARKET_SOURCE,
+        asof_filter=asof_filter,
+    )
 
 
 def _build_asof_pattern(asof_filter):
@@ -104,14 +112,22 @@ def load_observation_candles(store, observation_id):
     return frame, record, payload
 
 
-def latest_observation(store, code, timeframe="daily", source="baostock"):
-    """按代码取最近一条观察 id（用于从搜索/关注定位 K 线）。无则返回 None。"""
-    sources = _visible_sources(source)
-    placeholders = ",".join("?" for _ in sources)
+def latest_observation(store, code, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """在一个明确行情来源内按代码取最近观察；无则返回 None。"""
     rows = store.rows(
         "SELECT o.id FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-        f"WHERE d.source IN ({placeholders}) AND o.timeframe=? AND o.code=? "
+        "WHERE d.source=? AND o.timeframe=? AND o.code=? "
         "ORDER BY o.created DESC LIMIT 1",
-        (*sources, timeframe, code),
+        (source, timeframe, code),
     )
     return rows[0]["id"] if rows else None
+
+
+def latest_legacy_observation(store, code, timeframe="daily"):
+    """只在工程 A 历史快照中定位最近观察。"""
+    return latest_observation(
+        store,
+        code,
+        timeframe=timeframe,
+        source=LEGACY_MARKET_SOURCE,
+    )

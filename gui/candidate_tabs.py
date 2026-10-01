@@ -73,6 +73,7 @@ class CandidateTabs(ttk.Frame):
         self._display_rows = []
         self._selected = None
         self._timeframe = None
+        self._source = "baostock"
         self._eligible_keys = []
         self._strategy_start = 0
         self._sort_next_desc = {key: False for key in _COLUMN_TITLES}
@@ -203,16 +204,28 @@ class CandidateTabs(ttk.Frame):
         if self._strategy_start != old_start and visible and self._selected not in visible:
             self._choose(visible[0])
 
-    def load_from_store(self, store, timeframe="daily", asof_filter=None):
-        from .data import load_candidates
+    def load_from_store(self, store, timeframe="daily", asof_filter=None,
+                        source="baostock"):
+        from .data import LEGACY_MARKET_SOURCE, load_candidates, load_legacy_candidates
         from workbench.strategies import catalog
 
         entries = catalog(store)
-        if self._timeframe != timeframe:
+        if self._timeframe != timeframe or self._source != source:
             self._selected = None
             self._strategy_start = 0
         self._timeframe = timeframe
-        self._rows = load_candidates(store, timeframe=timeframe, asof_filter=asof_filter)
+        self._source = source
+        if source == LEGACY_MARKET_SOURCE:
+            self._rows = load_legacy_candidates(
+                store, timeframe=timeframe, asof_filter=asof_filter
+            )
+        else:
+            self._rows = load_candidates(
+                store,
+                timeframe=timeframe,
+                source=source,
+                asof_filter=asof_filter,
+            )
         eligible = []
         for key, button in self._buttons.items():
             if key in entries and timeframe in entries[key].timeframes:

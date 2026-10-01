@@ -91,9 +91,11 @@ class WatchPanel(ttk.Frame):
             rows = self.store.rows(
                 "SELECT w.code AS code, w.notes AS wnotes, "
                 "o.id AS observation_id, o.strategy AS strategy, o.asof AS asof, "
+                "o.timeframe AS timeframe, d.source AS source, "
                 "p.state AS state "
                 "FROM watchlist w "
                 "LEFT JOIN observations o ON o.id = w.observation_id "
+                "LEFT JOIN datasets d ON d.id = o.dataset_id "
                 "LEFT JOIN plans p ON p.observation_id = o.id "
                 "WHERE w.active=1 ORDER BY w.updated DESC"
             )
@@ -109,6 +111,9 @@ class WatchPanel(ttk.Frame):
                 "code": code,
                 "name": names.get(code, ""),
                 "observation_id": r["observation_id"],
+                "source": r["source"] or "unknown",
+                "strategy": r["strategy"],
+                "timeframe": r["timeframe"],
             }
             self._display_rows.append(item)
             iid = self.tree.insert(
