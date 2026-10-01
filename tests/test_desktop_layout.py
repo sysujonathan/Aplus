@@ -68,8 +68,9 @@ def test_single_chart_toolbar_option_and_compact_sidebars():
     ToolBar._fire_layout(toolbar)
     assert toolbar._on_chart_layout.call_args.args == (1,)
 
-    ToolBar.set_chart_page_status(toolbar, 10, 10, 201)
-    toolbar.chart_page_var.set.assert_called_once_with("10 / 201")
+    toolbar._chart_source_label = "关注"
+    ToolBar.set_chart_page_status(toolbar, 10, 10, 53)
+    toolbar.chart_page_var.set.assert_called_once_with("关注 10 / 53")
 
     narrow = side_panel_widths(1280)
     wide = side_panel_widths(2880)
@@ -88,6 +89,7 @@ def test_watch_selection_switches_chart_paging_to_watchlist():
     AplusMainWindow.on_watch_selected(window, "sz.003006", "legacy-observation")
     window.chart.set_items.assert_called_once_with(window.watch.rows.return_value, selected_index=0)
     assert window._chart_mode == "watch"
+    window.toolbar.set_chart_source.assert_called_once_with("关注")
     window._status_text.set.assert_called_once_with(
         "关注浏览：sz.003006（左右键切换关注列表）"
     )
@@ -104,6 +106,7 @@ def test_candidate_selection_exits_watch_paging():
     AplusMainWindow.on_stock_selected(window, "sh.600026", "selected")
     window.chart.set_items.assert_called_once_with(rows, selected_index=1)
     assert window._chart_mode == "candidates"
+    window.toolbar.set_chart_source.assert_called_once_with("策略")
 
 
 def test_legacy_candidates_remain_visible_without_entering_live_market_source(tmp_path):

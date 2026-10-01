@@ -181,10 +181,11 @@ class ToolBar(ttk.Frame):
         )
         self.btn_chart_prev.pack(side=tk.LEFT, ipady=4)
         self.chart_page_var = tk.StringVar(value="0 / 0")
+        self._chart_source_label = "策略"
         tk.Label(
             filters,
             textvariable=self.chart_page_var,
-            width=9,
+            width=14,
             anchor=tk.CENTER,
             font=("Consolas", 9),
             fg=_LABEL_FG,
@@ -297,12 +298,12 @@ class ToolBar(ttk.Frame):
 
     def set_chart_page_status(self, start, end, total):
         if not total:
-            label = "0 / 0"
+            page = "0 / 0"
         elif start == end:
-            label = f"{start} / {total}"
+            page = f"{start} / {total}"
         else:
-            label = f"{start}–{end} / {total}"
-        self.chart_page_var.set(label)
+            page = f"{start}–{end} / {total}"
+        self.chart_page_var.set(f"{self._chart_source_label} {page}")
         if start <= 1:
             self.btn_chart_prev.configure(state=tk.DISABLED)
         else:
@@ -315,6 +316,9 @@ class ToolBar(ttk.Frame):
     def _fire_chart_page(self, delta):
         if self._on_chart_page:
             self._on_chart_page(delta)
+
+    def set_chart_source(self, label):
+        self._chart_source_label = "关注" if label == "关注" else "策略"
 
     def _fire_layout(self, _event=None):
         label = self.layout_var.get().strip().lower().replace("✖", "×").replace("x", "×")

@@ -322,6 +322,7 @@ class AplusMainWindow(ttk.Window):
     # ---- 候选与多图联动 ----
     def _on_candidate_rows(self, rows):
         self._chart_mode = "candidates"
+        self.toolbar.set_chart_source("策略")
         self.chart.set_items(rows)
 
     def on_stock_selected(self, code, observation_id=None):
@@ -333,6 +334,7 @@ class AplusMainWindow(ttk.Window):
                     0,
                 )
                 self._chart_mode = "candidates"
+                self.toolbar.set_chart_source("策略")
                 self.chart.set_items(rows, selected_index=index)
             else:
                 self.chart.focus_observation(observation_id)
@@ -366,6 +368,7 @@ class AplusMainWindow(ttk.Window):
                 0,
             )
             self._chart_mode = "watch"
+            self.toolbar.set_chart_source("关注")
             self.chart.set_items(rows, selected_index=index)
             self._status_text.set(f"关注浏览：{code}（左右键切换关注列表）")
         else:
