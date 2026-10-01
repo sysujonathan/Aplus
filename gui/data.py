@@ -11,6 +11,7 @@ import pandas as pd
 
 REALTIME_MARKET_SOURCE = "baostock"
 LEGACY_MARKET_SOURCE = "legacy-engine-a"
+LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, LEGACY_MARKET_SOURCE)
 
 
 def code_names(store):
@@ -77,6 +78,44 @@ def load_legacy_candidates(store, timeframe="daily", asof_filter=None):
         source=LEGACY_MARKET_SOURCE,
         asof_filter=asof_filter,
     )
+
+
+def candidate_dates(store, timeframe="daily"):
+    """本地策略结果时间线；只返回日期，不把不同来源的候选混在一起。"""
+    rows = store.rows(
+        "SELECT DISTINCT o.asof FROM observations o "
+        "JOIN datasets d ON d.id=o.dataset_id "
+        "WHERE d.source IN (?,?) AND o.timeframe=? ORDER BY o.asof DESC",
+        (*LOCAL_CANDIDATE_SOURCES, timeframe),
+    )
+    return [row["asof"] for row in rows if row.get("asof")]
+
+
+def latest_candidate_date(store, timeframe="daily"):
+    """返回本地时间线上最新的有效策略结果日期。"""
+    dates = candidate_dates(store, timeframe)
+    return dates[0] if dates else None
+
+
+def candidate_source_for_date(store, timeframe="daily", asof_filter=None):
+    """为一个日期筛选选择单一来源；同日优先当前 Aplus 正式扫描。"""
+    pattern = _build_asof_pattern(asof_filter)
+    sql = (
+        "SELECT d.source, MAX(o.asof) AS latest FROM observations o "
+        "JOIN datasets d ON d.id=o.dataset_id "
+        "WHERE d.source IN (?,?) AND o.timeframe=?"
+    )
+    params = [*LOCAL_CANDIDATE_SOURCES, timeframe]
+    if pattern is not None:
+        sql += " AND o.asof LIKE ?"
+        params.append(pattern)
+    sql += (
+        " GROUP BY d.source ORDER BY latest DESC, "
+        "CASE d.source WHEN ? THEN 0 ELSE 1 END LIMIT 1"
+    )
+    params.append(REALTIME_MARKET_SOURCE)
+    rows = store.rows(sql, params)
+    return rows[0]["source"] if rows else REALTIME_MARKET_SOURCE
 
 
 def _build_asof_pattern(asof_filter):

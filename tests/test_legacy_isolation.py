@@ -3,6 +3,9 @@
 import pandas as pd
 
 from gui.data import (
+    candidate_dates,
+    candidate_source_for_date,
+    latest_candidate_date,
     latest_legacy_observation,
     latest_observation,
     load_candidates,
@@ -57,8 +60,8 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
                     "MTR_MASTER",
                     "live",
                     "daily",
-                    "2026-09-29",
-                    "2026-09-29",
+                    "2026-09-28",
+                    "2026-09-28",
                     live,
                     "{}",
                     created,
@@ -75,3 +78,26 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
     assert history["STRATEGY_GAP_H2"][0]["source"] == "legacy-engine-a"
     assert latest_observation(store, "sz.000001") is None
     assert latest_legacy_observation(store, "sz.000001") == "legacy-observation"
+    assert candidate_dates(store) == ["2026-09-29", "2026-09-28"]
+    assert latest_candidate_date(store) == "2026-09-29"
+    assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "legacy-engine-a"
+    assert candidate_source_for_date(store, asof_filter=("2026", "09", "28")) == "baostock"
+
+    with store.connect() as db:
+        db.execute(
+            "INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "live-same-day",
+                "live-job",
+                "sh.600000",
+                "MTR_MASTER",
+                "live",
+                "daily",
+                "2026-09-29",
+                "2026-09-29",
+                live,
+                "{}",
+                created,
+            ),
+        )
+    assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "baostock"

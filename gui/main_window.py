@@ -324,6 +324,7 @@ class AplusMainWindow(ttk.Window):
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):
         self._cur_date = self.toolbar.selected_date()
+        self._candidate_source = self._source_for_current_date(tf)
         self.chart.set_timeframe(tf)
         self.chart.clear()
         if self.store is not None:
@@ -339,6 +340,7 @@ class AplusMainWindow(ttk.Window):
     # ---- 信号日筛选：重读候选 ----
     def _on_date_change(self, year, month, day):
         self._cur_date = (year, month, day)
+        self._candidate_source = self._source_for_current_date(self._tf_var.get())
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store,
@@ -353,6 +355,7 @@ class AplusMainWindow(ttk.Window):
     # ---- 策略 Tab（动态取真实名称，只读，不碰冻结文件）----
     def _load_strategies(self):
         self._cur_date = self.toolbar.selected_date()
+        self._candidate_source = self._source_for_current_date(self._tf_var.get())
         try:
             from core.strategy_registry import StrategyRegistry as R
 
@@ -516,17 +519,32 @@ class AplusMainWindow(ttk.Window):
         if self.store is None:
             return
         try:
+            self.toolbar._load_date_options()
+            self.toolbar._select_latest_date()
+            self._cur_date = self.toolbar.selected_date()
+            self._candidate_source = self._source_for_current_date(self._tf_var.get())
             self.candidates.load_from_store(
                 self.store, timeframe=self._tf_var.get(),
                 asof_filter=getattr(self, "_cur_date", None),
                 source=self._candidate_source,
             )
             self.watch.reload()
-            self.toolbar._load_date_options()
             self.toolbar._load_market_status()
         except Exception:
             pass
         self._status_text.set(f"{kind}结束（{status}），候选与观察池已刷新")
+
+    def _source_for_current_date(self, timeframe):
+        """每个日期只选一个来源；正式 Aplus 同日结果优先于迁入基线。"""
+        if self.store is None:
+            return REALTIME_MARKET_SOURCE
+        from .data import candidate_source_for_date
+
+        return candidate_source_for_date(
+            self.store,
+            timeframe=timeframe,
+            asof_filter=getattr(self, "_cur_date", None),
+        )
 
     # ---- 左栏候选右键：加入关注（写只走 store.watch）----
     def _candidate_context(self, event, code, observation_id):

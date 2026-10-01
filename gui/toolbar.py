@@ -5,7 +5,6 @@ import tkinter as tk
 import ttkbootstrap as ttk
 
 from .theme import ACCENT, APP_BG, CONTROL_BG, MUTED, TEXT
-from .data import REALTIME_MARKET_SOURCE
 
 _LABEL_FG = MUTED
 _ALL = "全部"
@@ -130,7 +129,7 @@ class ToolBar(ttk.Frame):
                                      bootstyle="round-toggle", command=self._explain_ai)
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
-        # 信号日只读取当前 Aplus 实时候选；启动时自动定位最新信号日。
+        # 信号日来自本地策略结果时间线；启动时自动定位最新有效结果。
         self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
@@ -276,13 +275,9 @@ class ToolBar(ttk.Frame):
     def _select_latest_date(self):
         if not self.store:
             return
-        rows = self.store.rows(
-            "SELECT MAX(o.asof) AS day FROM observations o "
-            "JOIN datasets d ON d.id=o.dataset_id "
-            "WHERE d.source=? AND o.timeframe=?",
-            (REALTIME_MARKET_SOURCE, self._tf_var.get()),
-        )
-        day = rows[0]["day"] if rows else None
+        from .data import latest_candidate_date
+
+        day = latest_candidate_date(self.store, self._tf_var.get())
         if not day:
             for value in (self.year_var, self.month_var, self.day_var):
                 value.set(_ALL)
@@ -348,12 +343,11 @@ class ToolBar(ttk.Frame):
             return
         rows = []
         try:
-            rows = self.store.rows(
-                "SELECT DISTINCT o.asof FROM observations o "
-                "JOIN datasets d ON d.id=o.dataset_id "
-                "WHERE d.source=? AND o.timeframe=? ORDER BY o.asof DESC",
-                (REALTIME_MARKET_SOURCE, self._tf_var.get()),
-            )
+            from .data import candidate_dates
+
+            rows = [{"asof": value} for value in candidate_dates(
+                self.store, self._tf_var.get()
+            )]
         except Exception:
             rows = []
         for r in rows:

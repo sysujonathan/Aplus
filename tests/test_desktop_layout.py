@@ -1,6 +1,6 @@
 import os
 import uuid
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -13,7 +13,6 @@ from gui.candidate_tabs import (
 from gui.toolbar import ToolBar, format_board_scope
 from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
-from gui.data import REALTIME_MARKET_SOURCE
 from gui.main_window import AplusMainWindow, side_panel_widths
 from launch_dashboard import acquire_single_instance, release_single_instance
 
@@ -120,16 +119,14 @@ def test_candidate_selection_exits_watch_paging():
     window.toolbar.set_chart_source.assert_called_once_with("策略")
 
 
-def test_toolbar_starts_from_latest_aplus_signal_date_only():
+def test_toolbar_starts_from_latest_local_signal_date():
     toolbar = Mock()
-    toolbar.store.rows.return_value = [{"day": "2026-09-30"}]
     toolbar._tf_var.get.return_value = "daily"
 
-    ToolBar._select_latest_date(toolbar)
+    with patch("gui.data.latest_candidate_date", return_value="2026-09-30") as latest:
+        ToolBar._select_latest_date(toolbar)
 
-    query, args = toolbar.store.rows.call_args.args
-    assert "d.source=?" in query
-    assert args == (REALTIME_MARKET_SOURCE, "daily")
+    latest.assert_called_once_with(toolbar.store, "daily")
     toolbar.year_var.set.assert_called_once_with("2026")
     toolbar.month_var.set.assert_called_once_with("09")
     toolbar.day_var.set.assert_called_once_with("30")
