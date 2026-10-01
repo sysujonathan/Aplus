@@ -13,6 +13,24 @@ _LABEL_FG = "#a1a1a6"
 _TITLE_FG = "#f5f5f7"
 _PLACEHOLDER_FG = "#8e8e93"
 _ALL = "全部"
+_BOARD_SHORT = {
+    "沪深主板": "主板",
+    "创业板": "创业",
+    "科创板": "科创",
+    "北交所": "北交",
+}
+
+
+def format_board_scope(boards):
+    """给紧凑工具栏使用的板块范围文案。"""
+    from workbench.market import BOARDS
+
+    selected = [board for board in BOARDS if board in boards]
+    if selected == list(BOARDS):
+        return "范围：全市场"
+    if not selected:
+        return "范围：未选择"
+    return "范围：" + "+".join(_BOARD_SHORT[board] for board in selected)
 
 
 def _two_years_ago():
@@ -43,6 +61,19 @@ class ToolBar(ttk.Frame):
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
         self._universe_total = None                           # 市场总量（首次渲染时缓存）
         self.full_history_var = tk.BooleanVar(value=False)    # 完整历史(2016)勾选，默认近2年
+        try:
+            from workbench.scope import selected_boards
+
+            saved_boards = selected_boards(store) if store is not None else []
+        except Exception:
+            saved_boards = []
+        from workbench.market import BOARDS
+
+        if not saved_boards:
+            saved_boards = list(BOARDS[:3])
+        self.board_vars = {
+            board: tk.BooleanVar(value=board in saved_boards) for board in BOARDS
+        }
 
         self.configure(padding=(18, 12))
         self._all_years = []
@@ -84,11 +115,29 @@ class ToolBar(ttk.Frame):
         self.ent_code.bind("<FocusOut>", self._search_blur)
         self.ent_code.bind("<Return>", lambda e: self._open_tv_for_entry())
 
-        # 动作按钮（保留引用：运行中禁用、结束后恢复）
-        self.btn_scan = ttk.Button(actions, text="策略扫描", command=self._on_scan, bootstyle="primary")
-        self.btn_scan.pack(side=tk.LEFT, padx=5)
-        self.btn_sync = ttk.Button(actions, text="下载行情", command=self._on_sync, bootstyle="secondary-outline")
+        # 日常顺序固定为：选择范围 → 更新行情 → 策略扫描。
+        self.scope_button = ttk.Menubutton(
+            actions,
+            text=format_board_scope(self._selected_boards()),
+            bootstyle="secondary-outline",
+        )
+        scope_menu = tk.Menu(self.scope_button, tearoff=0)
+        for board, variable in self.board_vars.items():
+            scope_menu.add_checkbutton(
+                label=board,
+                variable=variable,
+                command=self._on_board_change,
+            )
+        self.scope_button.configure(menu=scope_menu)
+        self.scope_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.btn_sync = ttk.Button(
+            actions, text="更新行情", command=self._on_sync, bootstyle="primary"
+        )
         self.btn_sync.pack(side=tk.LEFT, padx=5)
+        self.btn_scan = ttk.Button(
+            actions, text="策略扫描", command=self._on_scan, bootstyle="secondary-outline"
+        )
+        self.btn_scan.pack(side=tk.LEFT, padx=5)
         self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, bootstyle="danger")
         sync_menu = tk.Menu(self, tearoff=0)
         sync_menu.add_checkbutton(label="完整历史（2016 年起）", variable=self.full_history_var)
@@ -150,6 +199,28 @@ class ToolBar(ttk.Frame):
     def selected_date(self):
         return tuple(v.get() if v.get() != _ALL else None
                      for v in (self.year_var, self.month_var, self.day_var))
+
+    def _selected_boards(self):
+        """按固定市场顺序返回当前勾选范围。"""
+        from workbench.market import BOARDS
+
+        return [board for board in BOARDS if self.board_vars[board].get()]
+
+    def _on_board_change(self):
+        boards = self._selected_boards()
+        self.scope_button.configure(text=format_board_scope(boards))
+        if not boards:
+            self.set_status("请至少选择一个行情板块")
+            return
+        if self.store is not None:
+            try:
+                from workbench.scope import save_boards
+
+                save_boards(self.store, boards)
+            except Exception as exc:
+                self.set_status(f"行情范围保存失败：{exc}")
+                return
+        self.set_status("行情与扫描范围：" + "、".join(boards))
 
     def _select_latest_date(self):
         if not self.store:
@@ -341,28 +412,45 @@ class ToolBar(ttk.Frame):
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _on_sync(self):
         if self.service is None:
-            self.set_status("后端未连接：下载行情需接 service")
+            self.set_status("后端未连接：更新行情需接 service")
+            return
+        boards = self._selected_boards()
+        if not boards:
+            self.set_status("更新未开始：请至少选择一个行情板块")
+            return
+        try:
+            from workbench.scope import save_boards
+
+            save_boards(self.store, boards)
+        except Exception as exc:
+            self.set_status(f"行情范围保存失败：{exc}")
             return
         # 默认近 2 年（轻量首跑）；勾选"完整历史"才拉 2016 起全市场全历史
         start = "2016-01-01" if self.full_history_var.get() else _two_years_ago()
         spec = {
-            "boards": ["沪深主板", "创业板", "科创板"],
+            "boards": boards,
             "start": start,
             "end": None,
             "force": False,
         }
-        self._submit_job("sync", "下载行情", spec)
+        self._submit_job("sync", "更新行情", spec)
 
     def _on_scan(self):
         if self.service is None:
             self.set_status("后端未连接：扫描需接 service")
             return
+        boards = self._selected_boards()
+        if not boards:
+            self.set_status("扫描未开始：请至少选择一个行情板块")
+            return
         try:
-            from workbench.market import latest_datasets, completed_date
+            from workbench.market import completed_date
+            from workbench.scope import save_boards, scan_datasets
 
-            ids = [r["id"] for r in latest_datasets(self.store, "baostock")]
+            save_boards(self.store, boards)
+            ids = [r["id"] for r in scan_datasets(self.store, "baostock")]
             if not ids:
-                self.set_status("没有可用行情快照：先下载行情，再扫描")
+                self.set_status("所选板块没有可用行情：请先更新行情，再扫描")
                 return
             # 全部已启用策略（GUI 无勾选界面，扫描即全量）
             try:
@@ -373,7 +461,7 @@ class ToolBar(ttk.Frame):
                 strategies = ["MTR_MASTER", "STRATEGY_GAP_H2", "STRATEGY_AWIL"]
             spec = {
                 "source": "baostock",
-                "boards": ["沪深主板", "创业板", "科创板"],
+                "boards": boards,
                 "datasets": ids,
                 "strategies": strategies,
                 "timeframes": [self._tf_var.get()],
@@ -395,8 +483,9 @@ class ToolBar(ttk.Frame):
             self.set_status(f"{label}提交失败：{exc}")
             return
         self._job_id, self._job_kind = job, label
-        self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_sync)
-        (self.btn_sync if kind == "sync" else self.btn_scan).state(["disabled"])
+        self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_scan)
+        for button in (self.btn_sync, self.btn_scan, self.scope_button):
+            button.state(["disabled"])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
 
@@ -435,7 +524,7 @@ class ToolBar(ttk.Frame):
         self._job_id = None
         self._job_kind = ""
         self.btn_stop.pack_forget()
-        for btn in (self.btn_sync, self.btn_scan):
+        for btn in (self.btn_sync, self.btn_scan, self.scope_button):
             btn.state(["!disabled"])
         try:
             r = json.loads(result_json) if result_json else {}

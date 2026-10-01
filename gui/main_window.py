@@ -26,17 +26,63 @@ class AplusMainWindow(ttk.Window):
         self._load_strategies()
 
     def _build_ui(self):
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.section_nav = ttk.Frame(self, padding=(10, 14), width=138)
+        self.section_nav.grid(row=0, column=0, sticky=tk.NS)
+        self.section_nav.grid_propagate(False)
+        ttk.Label(
+            self.section_nav,
+            text="A · 工作台",
+            font=("Microsoft YaHei", 13, "bold"),
+            foreground="#f5f5f7",
+        ).pack(anchor=tk.W, padx=4, pady=(0, 18))
+        self._section_buttons = {}
+        self._pages = {}
+        section_names = (
+            ("premarket", "盘前任务"),
+            ("afterhours", "盘后回测"),
+            ("strategy", "策略迭代"),
+            ("other", "其他工具"),
+        )
+        for key, label in section_names:
+            button = ttk.Button(
+                self.section_nav,
+                text=label,
+                bootstyle="secondary",
+                command=lambda k=key: self._switch_section(k),
+            )
+            button.pack(fill=tk.X, pady=(0, 7), ipady=5)
+            self._section_buttons[key] = button
+        ttk.Separator(self.section_nav).pack(fill=tk.X, pady=(14, 12))
+        ttk.Label(
+            self.section_nav,
+            text="盘前：行情 → 扫描\n盘后：回测 → 复盘",
+            font=("Microsoft YaHei", 9),
+            foreground="#8e8e93",
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, padx=4)
+
+        self.page_host = ttk.Frame(self)
+        self.page_host.grid(row=0, column=1, sticky=tk.NSEW)
+        self.page_host.columnconfigure(0, weight=1)
+        self.page_host.rowconfigure(0, weight=1)
+
+        premarket = ttk.Frame(self.page_host)
+        premarket.grid(row=0, column=0, sticky=tk.NSEW)
+        premarket.columnconfigure(0, weight=1)
+        premarket.rowconfigure(1, weight=1)
+        self._pages["premarket"] = premarket
         self.toolbar = ToolBar(
-            self, self.service, self.store, tf_var=self._tf_var,
+            premarket, self.service, self.store, tf_var=self._tf_var,
             on_timeframe_change=self._on_timeframe,
             on_date_change=self._on_date_change,
             on_job_finished=self._on_job_finished,
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
-        self.body = body = ttk.Frame(self, padding=(10, 8))
+        self.body = body = ttk.Frame(premarket, padding=(10, 8))
         body.grid(row=1, column=0, sticky=tk.NSEW)
         body.columnconfigure(0, weight=0)
         body.columnconfigure(1, weight=1)
@@ -45,7 +91,7 @@ class AplusMainWindow(ttk.Window):
             body, self.on_stock_selected, on_context=self._candidate_context
         )
         self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 16))
-        self.candidates.configure(width=420)
+        self.candidates.configure(width=460)
         self.candidates.grid_propagate(False)
 
         right = ttk.Frame(body)
@@ -61,18 +107,70 @@ class AplusMainWindow(ttk.Window):
         self.watch.pack_propagate(False)
         self.chart.tv_button(right).grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(8, 0), ipady=6)
 
-        status_bar = ttk.Frame(self, padding=(18, 8))
+        status_bar = ttk.Frame(premarket, padding=(18, 8))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
         self._status_text = self.toolbar._status
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
                   foreground="#a1a1a6").pack(side=tk.RIGHT)
+
+        self._pages["afterhours"] = self._placeholder_page(
+            "盘后回测",
+            "用当日收盘后的完整行情复盘信号、检验策略表现。",
+            "现有回测能力保持不变；桌面入口将在后续版本接入。",
+        )
+        self._pages["strategy"] = self._placeholder_page(
+            "策略迭代",
+            "注册研究策略、运行验证、比较版本，再由交易员决定是否启用。",
+            "原有正式策略仍处于冻结保护中，本次界面调整不会改动它们。",
+        )
+        self._pages["other"] = self._placeholder_page(
+            "其他工具",
+            "为 AI 辅助、盘中观察和后续 T+0 工具预留独立工作区。",
+            "这些能力尚未接入，不会以占位按钮冒充可用功能。",
+        )
+        self._switch_section("premarket")
         self.bind("<Configure>", self._resize_layout)
+
+    def _placeholder_page(self, title, subtitle, boundary):
+        page = ttk.Frame(self.page_host, padding=(46, 42))
+        page.grid(row=0, column=0, sticky=tk.NSEW)
+        ttk.Label(
+            page,
+            text=title,
+            font=("Microsoft YaHei", 24, "bold"),
+            foreground="#f5f5f7",
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            page,
+            text=subtitle,
+            font=("Microsoft YaHei", 12),
+            foreground="#d1d1d6",
+            wraplength=680,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W, pady=(16, 8))
+        ttk.Label(
+            page,
+            text=boundary,
+            font=("Microsoft YaHei", 10),
+            foreground="#8e8e93",
+            wraplength=680,
+            justify=tk.LEFT,
+        ).pack(anchor=tk.W)
+        return page
+
+    def _switch_section(self, key):
+        for name, page in self._pages.items():
+            if name == key:
+                page.tkraise()
+            self._section_buttons[name].configure(
+                bootstyle="primary" if name == key else "secondary"
+            )
 
     def _resize_layout(self, event):
         if event.widget is not self:
             return
         # Match the reference proportions without letting lists cover the chart.
-        width = self.winfo_width()
+        width = self.page_host.winfo_width()
         self.candidates.configure(width=max(460, min(640, round(width * .225))))
         self.watch.configure(width=max(280, min(360, round(width * .125))))
 
