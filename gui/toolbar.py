@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+import ttkbootstrap as ttk
 
 _LABEL_FG = "#a1a1a6"
 _TITLE_FG = "#f5f5f7"
@@ -51,61 +51,67 @@ class ToolBar(ttk.Frame):
         self._months_by_year = {}
         self._days_by_ym = {}
 
+        self.header = header = ttk.Frame(self)
+        header.grid(row=0, column=0, sticky=tk.W)
+        self.actions = actions = ttk.Frame(self)
+        actions.grid(row=0, column=1, sticky=tk.W)
+        self.columnconfigure(2, weight=1)
         ttk.Label(
-            self,
-            text="Aplus 交易工作台",
+            header,
+            text="Brooks-AI 操盘台",
             font=("Microsoft YaHei", 16, "bold"),
             foreground=_TITLE_FG,
         ).pack(side=tk.LEFT, padx=(4, 20))
 
         # 日线 / 周线（只由用户手动切换）
-        tf_f = ttk.Frame(self)
+        tf_f = ttk.Frame(header)
         tf_f.pack(side=tk.LEFT, padx=(0, 18))
         ttk.Radiobutton(
-            tf_f, text="日线", value="daily", variable=self._tf_var, command=self._fire_tf
+            tf_f, text="日线", value="daily", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
         ttk.Radiobutton(
-            tf_f, text="周线", value="weekly", variable=self._tf_var, command=self._fire_tf
+            tf_f, text="周线", value="weekly", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
 
         # 搜索框（回车 -> TradingView）
-        search_f = ttk.Frame(self)
+        search_f = ttk.Frame(header)
         search_f.pack(side=tk.LEFT, padx=(0, 20))
-        self.ent_code = ttk.Entry(search_f, width=14, font=("Consolas", 12), style="Search.TEntry")
+        self.ent_code = ttk.Entry(search_f, width=14, font=("Consolas", 12))
         self.ent_code.pack(side=tk.LEFT, ipady=3)
         self.ent_code.insert(0, "输入代码送 TV")
-        self.ent_code.config(foreground="#5b6470")
+        self.ent_code.config(foreground="#8e8e93")
         self.ent_code.bind("<FocusIn>", self._search_focus)
         self.ent_code.bind("<FocusOut>", self._search_blur)
         self.ent_code.bind("<Return>", lambda e: self._open_tv_for_entry())
 
         # 动作按钮（保留引用：运行中禁用、结束后恢复）
-        self.btn_sync = ttk.Button(self, text="下载行情", command=self._on_sync)
-        self.btn_sync.pack(side=tk.LEFT, padx=5)
-        self.btn_scan = ttk.Button(self, text="扫描", command=self._on_scan)
+        self.btn_scan = ttk.Button(actions, text="策略扫描", command=self._on_scan, bootstyle="primary")
         self.btn_scan.pack(side=tk.LEFT, padx=5)
-        ttk.Button(self, text="停止", command=self._on_stop).pack(side=tk.LEFT, padx=5)
-        ttk.Checkbutton(self, text="完整历史", variable=self.full_history_var).pack(side=tk.LEFT, padx=5)
-
-        # AI 复核
+        self.btn_sync = ttk.Button(actions, text="下载行情", command=self._on_sync, bootstyle="secondary-outline")
+        self.btn_sync.pack(side=tk.LEFT, padx=5)
+        self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, bootstyle="danger")
+        sync_menu = tk.Menu(self, tearoff=0)
+        sync_menu.add_checkbutton(label="完整历史（2016 年起）", variable=self.full_history_var)
+        self.btn_sync.bind("<Button-3>", lambda e: sync_menu.tk_popup(e.x_root, e.y_root))
         self.ai_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self, text="AI 复核", variable=self.ai_var).pack(side=tk.LEFT, padx=(16, 0))
+        self.chk_ai = ttk.Checkbutton(actions, text="AI 复核", variable=self.ai_var,
+                                     bootstyle="round-toggle", command=self._explain_ai)
+        self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
         # 信号日（年/月/日三联 Combobox，联动筛选；对齐旧 A gui_dashboard.py:210）
-        ttk.Label(self, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG).pack(
-            side=tk.LEFT, padx=(20, 4)
-        )
+        self.date_label = ttk.Label(actions, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
+        self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
         self.day_var = tk.StringVar(value=_ALL)
-        combo_kw = {"state": "readonly", "width": 7, "font": ("Consolas", 11), "style": "Date.TCombobox"}
-        self.year_combo = ttk.Combobox(self, textvariable=self.year_var, **combo_kw)
+        combo_kw = {"state": "readonly", "width": 6, "font": ("Consolas", 11)}
+        self.year_combo = ttk.Combobox(actions, textvariable=self.year_var, **combo_kw)
         self.year_combo.pack(side=tk.LEFT, padx=(0, 2))
-        ttk.Label(self, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
-        self.month_combo = ttk.Combobox(self, textvariable=self.month_var, **combo_kw)
+        ttk.Label(actions, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
+        self.month_combo = ttk.Combobox(actions, textvariable=self.month_var, **combo_kw)
         self.month_combo.pack(side=tk.LEFT, padx=(2, 2))
-        ttk.Label(self, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
-        self.day_combo = ttk.Combobox(self, textvariable=self.day_var, **combo_kw)
+        ttk.Label(actions, text="-", foreground=_LABEL_FG).pack(side=tk.LEFT)
+        self.day_combo = ttk.Combobox(actions, textvariable=self.day_var, **combo_kw)
         self.day_combo.pack(side=tk.LEFT, padx=(2, 0))
         self.year_combo.bind("<<ComboboxSelected>>", self._on_year_change)
         self.month_combo.bind("<<ComboboxSelected>>", self._on_month_change)
@@ -116,19 +122,55 @@ class ToolBar(ttk.Frame):
         # 常驻行情健康状态（只读，不依赖任务）
         self._load_market_status()
 
-        # 行情健康状态（常驻，只读现有表；置于右侧、作业状态左侧）
-        ttk.Label(
-            self, textvariable=self._mkt_var, font=("Consolas", 10),
-            foreground=("#6fcf97" if service is not None else _LABEL_FG),
-        ).pack(side=tk.RIGHT, padx=(6, 2))
-        # 右侧状态（作业进度反馈）
-        self._status = tk.StringVar(value="就绪（后端未连线）" if service is None else "就绪")
-        ttk.Label(
-            self, textvariable=self._status, font=("Consolas", 10), foreground=_LABEL_FG
-        ).pack(side=tk.RIGHT, padx=6)
+        self._status = tk.StringVar(value=self._mkt_var.get())
+        self.status_label = ttk.Label(self, textvariable=self._status, font=("Consolas", 10), foreground=_LABEL_FG)
+        self.status_label.grid(row=0, column=2, sticky=tk.E, padx=6)
+        self.bind("<Configure>", self._responsive)
+        self._select_latest_date()
+
+    def _responsive(self, event):
+        if event.widget is not self:
+            return
+        needed = self.header.winfo_reqwidth() + self.actions.winfo_reqwidth() + 40
+        if event.width < needed:
+            self.actions.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(6, 0))
+            self.status_label.grid_remove()
+        else:
+            self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
+            if event.width > needed + self.status_label.winfo_reqwidth():
+                self.status_label.grid(row=0, column=2, sticky=tk.E)
+            else:
+                self.status_label.grid_remove()
+
+    def _explain_ai(self):
+        from tkinter import messagebox
+        self.ai_var.set(False)
+        messagebox.showinfo("AI 复核", "当前 Aplus 后端尚未接入 AI 复核；本轮仅恢复界面，扫描仍使用原策略。", parent=self)
+
+    def selected_date(self):
+        return tuple(v.get() if v.get() != _ALL else None
+                     for v in (self.year_var, self.month_var, self.day_var))
+
+    def _select_latest_date(self):
+        if not self.store:
+            return
+        rows = self.store.rows("SELECT MAX(asof) AS day FROM observations WHERE timeframe=?", (self._tf_var.get(),))
+        day = rows[0]["day"] if rows else None
+        if not day:
+            for value in (self.year_var, self.month_var, self.day_var):
+                value.set(_ALL)
+        if day:
+            y, m, d = str(day)[:10].split("-")
+            self.year_var.set(y)
+            self._refresh_months()
+            self.month_var.set(m)
+            self._refresh_days()
+            self.day_var.set(d)
 
     # ---- 周期切换 ----
     def _fire_tf(self):
+        self._load_date_options()
+        self._select_latest_date()
         if self._on_tf:
             self._on_tf(self._tf_var.get())
 
@@ -139,12 +181,12 @@ class ToolBar(ttk.Frame):
     def _search_focus(self, _e):
         if self.ent_code.get() == "输入代码送 TV":
             self.ent_code.delete(0, tk.END)
-            self.ent_code.config(foreground="#0e1218")
+            self.ent_code.config(foreground="#f5f5f7")
 
     def _search_blur(self, _e):
         if not self.ent_code.get().strip():
             self.ent_code.insert(0, "输入代码送 TV")
-            self.ent_code.config(foreground="#5b6470")
+            self.ent_code.config(foreground="#8e8e93")
 
     def _open_tv_for_entry(self):
         code = self.ent_code.get().strip()
@@ -292,7 +334,9 @@ class ToolBar(ttk.Frame):
             "SELECT finished FROM jobs WHERE kind='sync' AND status='completed' ORDER BY finished DESC LIMIT 1"
         )
         ls = last_sync[0]["finished"][:19].replace("T", " ") if last_sync else "—"
-        self._mkt_var.set(f"行情 {latest} · 覆盖 {cov}/{total} · BaoStock · 同步 {ls}")
+        rows = self.store.rows("SELECT MAX(end) AS day FROM datasets WHERE source='baostock'")
+        actual = rows[0]["day"] if rows and rows[0]["day"] else "—"
+        self._mkt_var.set(f"就绪 · 数据 {actual} · 覆盖 {cov}/{total}")
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _on_sync(self):
@@ -351,6 +395,7 @@ class ToolBar(ttk.Frame):
             self.set_status(f"{label}提交失败：{exc}")
             return
         self._job_id, self._job_kind = job, label
+        self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_sync)
         (self.btn_sync if kind == "sync" else self.btn_scan).state(["disabled"])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
@@ -389,6 +434,7 @@ class ToolBar(ttk.Frame):
         kind = self._job_kind or "任务"
         self._job_id = None
         self._job_kind = ""
+        self.btn_stop.pack_forget()
         for btn in (self.btn_sync, self.btn_scan):
             btn.state(["!disabled"])
         try:

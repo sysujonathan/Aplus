@@ -1,98 +1,116 @@
-"""左侧策略候选 Tab（第二批：接真实观察数据）。
-
-每个策略一个 Notebook 页（策略键 -> 显示名），页内 Treeview 显示真实候选（代码/名称/信号日）。
-单击（选中即切换，兼容键盘选择）触发回调，把 (代码, 观察id) 交给主窗口。
-load_from_store() 从 store.observations 读取，按 strategy 分组填充。
-"""
+"""工程 A 的竖向策略导航及独立信号清单。"""
 from __future__ import annotations
-
 import tkinter as tk
-from tkinter import ttk
-
-_HDR_FG = "#a1a1a6"
+import ttkbootstrap as ttk
 
 
 class CandidateTabs(ttk.Frame):
     def __init__(self, parent, callback, on_context=None):
         super().__init__(parent)
-        self.callback = callback
-        self.on_context = on_context  # 右键候选回调：(event, code, observation_id)
-        self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-        self._trees = {}   # strategy key -> Treeview
-        self._labels = {}  # strategy key -> 显示名（P1：页签计数用）
-        self._frames = {}  # strategy key -> 页面 frame（P1：改页签文本用）
+        self.callback, self.on_context = callback, on_context
+        self._labels, self._buttons, self._rows = {}, {}, {}
+        self._selected = None
+        self._timeframe = None
+        self._date_title = "今日信号"
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+        side = ttk.Frame(self, width=180)
+        side.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 12))
+        side.pack_propagate(False)
+        ttk.Label(side, text="策略", font=("Microsoft YaHei", 12, "bold"),
+                  foreground="#a1a1a6").pack(anchor=tk.W, pady=(0, 10))
+        self.sidebar = ttk.Frame(side)
+        self.sidebar.pack(fill=tk.BOTH, expand=True)
+        center = ttk.Frame(self)
+        center.grid(row=0, column=1, sticky=tk.NSEW)
+        center.columnconfigure(0, weight=1)
+        center.rowconfigure(1, weight=1)
+        self.list_title = ttk.Label(center, text="今日信号", font=("Microsoft YaHei", 14, "bold"))
+        self.list_title.grid(row=0, column=0, sticky=tk.W, pady=(0, 12))
+        self.tree = ttk.Treeview(center, columns=("number", "code", "name"), show="headings", selectmode="browse")
+        for col, title, width in (("number", "序", 36), ("code", "代码", 130), ("name", "名称", 100)):
+            self.tree.heading(col, text=title)
+            self.tree.column(col, width=width, minwidth=60 if col == "name" else width, stretch=col == "name",
+                             anchor=tk.CENTER if col == "number" else tk.W)
+        self.tree.grid(row=1, column=0, sticky=tk.NSEW)
+        self.tree.bind("<<TreeviewSelect>>", self._select)
+        self.tree.bind("<Button-3>", self._context)
+        self.tree._obs = {}
+        self.tree.tag_configure("hover", background="#4a4a4e")
+        self.tree.bind("<Motion>", self._hover)
+        self.tree.bind("<Leave>", lambda e: self._clear_hover())
 
     def build_tabs(self, strategies):
-        # strategies: list of (key, label)
+        for widget in self.sidebar.winfo_children():
+            widget.destroy()
+        self._labels = dict(strategies)
+        self._buttons = {}
         for key, label in strategies:
-            frame = ttk.Frame(self.notebook)
-            self.notebook.add(frame, text=label)
-            tree = ttk.Treeview(frame, columns=("code", "name", "date"), show="headings")
-            tree.heading("code", text="代码")
-            tree.heading("name", text="名称")
-            tree.heading("date", text="信号日")
-            tree.column("code", width=64, minwidth=58, anchor=tk.W)
-            tree.column("name", width=68, minwidth=48, anchor=tk.W, stretch=True)
-            tree.column("date", width=64, minwidth=56, anchor=tk.W)
-            tree.pack(fill=tk.BOTH, expand=True)
-            # 单击（选中即切换）K 线；<<TreeviewSelect>> 覆盖鼠标与键盘选择
-            tree.bind("<<TreeviewSelect>>", self._select)
-            # 右键候选 -> 主窗口弹出「加入关注」等操作
-            tree.bind("<Button-3>", self._context)
-            tree._obs = {}  # iid -> observation_id
-            self._trees[key] = tree
-            self._labels[key] = label
-            self._frames[key] = frame
+            button = ttk.Button(self.sidebar, text=f"{label}  0", bootstyle="secondary",
+                                command=lambda k=key: self._choose(k))
+            button.pack(fill=tk.X, pady=(0, 5), ipady=3)
+            self._buttons[key] = button
+        self._selected = next(iter(self._labels), None)
+        self._choose(self._selected)
 
-    # ---- 第二批：从 store 读真实候选 ----
     def load_from_store(self, store, timeframe="daily", asof_filter=None):
         from .data import load_candidates
+        from workbench.strategies import catalog
+        entries = catalog(store)
+        if self._timeframe != timeframe:
+            self._selected = None
+        self._timeframe = timeframe
+        self._rows = load_candidates(store, timeframe=timeframe, asof_filter=asof_filter)
+        parts = asof_filter or (None, None, None)
+        self._date_title = ("-".join(parts) + " 信号") if all(parts) else "全部信号"
+        visible = []
+        for button in self._buttons.values():
+            button.pack_forget()
+        for key, button in self._buttons.items():
+            if key in entries and timeframe in entries[key].timeframes:
+                button.pack(fill=tk.X, pady=(0, 5), ipady=3)
+                button.configure(text=f"{self._labels[key]}  {len(self._rows.get(key, []))}")
+                visible.append(key)
+            else:
+                button.pack_forget()
+        if self._selected not in visible:
+            self._selected = visible[0] if visible else None
+        self._choose(self._selected)
 
-        grouped = load_candidates(store, timeframe=timeframe, asof_filter=asof_filter)
-        for key, tree in self._trees.items():
-            rows = grouped.get(key, [])
-            self._fill(tree, rows)
-            # P1：页签标题带上候选数量，如 MTR (6)
-            self._set_count(key, len(rows))
+    def _choose(self, key):
+        self._selected = key
+        for k, button in self._buttons.items():
+            button.configure(bootstyle="primary" if k == key else "secondary")
+        self.list_title.configure(text=f"{self._date_title} · {self._labels.get(key, '')}")
+        self.tree.delete(*self.tree.get_children())
+        self.tree._obs = {}
+        for number, row in enumerate(self._rows.get(key, []), 1):
+            iid = self.tree.insert("", tk.END, values=(number, row["code"], row["name"]))
+            self.tree._obs[iid] = row["observation_id"]
+        children = self.tree.get_children()
+        if children:
+            self.tree.selection_set(children[0])
+        else:
+            self.callback(None, None)
 
-    def _set_count(self, key, count):
-        frame = self._frames.get(key)
-        if frame is None:
-            return
-        label = self._labels.get(key, "")
-        self.notebook.tab(frame, text=f"{label} ({count})")
+    def _clear_hover(self):
+        for iid in self.tree.get_children():
+            self.tree.item(iid, tags=())
 
-    def _fill(self, tree, rows):
-        for child in tree.get_children():
-            tree.delete(child)
-        tree._obs = {}
-        for row in rows:
-            iid = tree.insert(
-                "", tk.END, values=(row["code"], row["name"], row["date"])
-            )
-            tree._obs[iid] = row["observation_id"]
+    def _hover(self, event):
+        self._clear_hover()
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.item(iid, tags=("hover",))
 
     def _select(self, event):
-        tree = event.widget
-        selection = tree.selection()
-        if not selection:
-            return
-        iid = selection[0]
-        obs_id = getattr(tree, "_obs", {}).get(iid)
-        values = tree.item(iid)["values"]
-        code = values[0] if values else None
-        self.callback(code, obs_id)
+        selection = self.tree.selection()
+        if selection:
+            iid = selection[0]
+            self.callback(self.tree.item(iid)["values"][1], self.tree._obs.get(iid))
 
     def _context(self, event):
-        tree = event.widget
-        iid = tree.identify_row(event.y)
-        if not iid:
-            return
-        tree.selection_set(iid)  # 右键同时选中该行，K 线随之联动
-        if self.on_context is None:
-            return
-        obs_id = getattr(tree, "_obs", {}).get(iid)
-        values = tree.item(iid)["values"]
-        code = values[0] if values else None
-        self.on_context(event, code, obs_id)
+        iid = self.tree.identify_row(event.y)
+        if iid and self.on_context:
+            self.tree.selection_set(iid)
+            self.on_context(event, self.tree.item(iid)["values"][1], self.tree._obs.get(iid))
