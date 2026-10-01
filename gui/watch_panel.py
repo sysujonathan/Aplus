@@ -19,13 +19,15 @@ _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", 
 
 class WatchPanel(ttk.Frame):
     def __init__(self, parent, store=None, on_select=None, on_drag_motion=None,
-                 on_drop=None, on_drag_end=None):
+                 on_drop=None, on_drag_end=None, on_page_request=None):
         super().__init__(parent)
         self.store = store
         self.on_select = on_select
         self.on_drag_motion = on_drag_motion
         self.on_drop = on_drop
         self.on_drag_end = on_drag_end
+        self.on_page_request = on_page_request
+        self._display_rows = []
         self._drag_item = None
         self._drag_origin = None
         self._dragging = False
@@ -64,6 +66,10 @@ class WatchPanel(ttk.Frame):
         self.tree.bind("<ButtonPress-1>", self._drag_start, add="+")
         self.tree.bind("<B1-Motion>", self._drag_motion, add="+")
         self.tree.bind("<ButtonRelease-1>", self._drag_release, add="+")
+        self.tree.bind("<Left>", lambda _event: self._request_page(-1))
+        self.tree.bind("<Right>", lambda _event: self._request_page(1))
+        self.tree.bind("<Up>", lambda _event: self._move_selection(-1))
+        self.tree.bind("<Down>", lambda _event: self._move_selection(1))
 
         if self.store is not None:
             self.reload()
@@ -75,6 +81,7 @@ class WatchPanel(ttk.Frame):
             self.tree.delete(child)
         self.tree._obs = {}
         self.tree._codes = {}
+        self._display_rows = []
         if self.store is None:
             return
         try:
@@ -95,12 +102,18 @@ class WatchPanel(ttk.Frame):
         for number, r in enumerate(rows, 1):
             code = r["code"]
             state = r["state"] if r["state"] else "关注中"
+            item = {
+                "code": code,
+                "name": names.get(code, ""),
+                "observation_id": r["observation_id"],
+            }
+            self._display_rows.append(item)
             iid = self.tree.insert(
                 "", tk.END,
                 values=(
                     number,
                     code,
-                    names.get(code, ""),
+                    item["name"],
                     r["strategy"] or "",
                     (r["asof"] or "")[:10],
                     state,
@@ -109,6 +122,44 @@ class WatchPanel(ttk.Frame):
             )
             self.tree._obs[iid] = r["observation_id"]
             self.tree._codes[iid] = code
+
+    def rows(self):
+        """按关注列表当前顺序提供 K 线分页数据。"""
+        return [dict(row) for row in self._display_rows]
+
+    def select_observation(self, observation_id):
+        for iid, value in self.tree._obs.items():
+            if value == observation_id:
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
+                self.tree.focus_set()
+                return True
+        return False
+
+    def _move_selection(self, delta):
+        children = self.tree.get_children()
+        if not children:
+            return "break"
+        selection = self.tree.selection()
+        try:
+            index = children.index(selection[0]) if selection else 0
+        except ValueError:
+            index = 0
+        index = max(0, min(index + int(delta), len(children) - 1))
+        iid = children[index]
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        self.tree.see(iid)
+        self.tree.focus_set()
+        if self.on_select:
+            self.on_select(self.tree._codes.get(iid), self.tree._obs.get(iid))
+        return "break"
+
+    def _request_page(self, delta):
+        if self.on_page_request:
+            self.on_page_request(delta)
+        return "break"
 
     # ---- 选中 -> 主窗口联动 K 线 ----
     def _on_select(self, event):

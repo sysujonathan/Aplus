@@ -296,7 +296,13 @@ class ToolBar(ttk.Frame):
         self._status.set(text)
 
     def set_chart_page_status(self, start, end, total):
-        self.chart_page_var.set(f"{start}–{end} / {total}" if total else "0 / 0")
+        if not total:
+            label = "0 / 0"
+        elif start == end:
+            label = f"{start} / {total}"
+        else:
+            label = f"{start}–{end} / {total}"
+        self.chart_page_var.set(label)
         if start <= 1:
             self.btn_chart_prev.configure(state=tk.DISABLED)
         else:
@@ -311,7 +317,8 @@ class ToolBar(ttk.Frame):
             self._on_chart_page(delta)
 
     def _fire_layout(self, _event=None):
-        count = {"1×1": 1, "2×2": 4, "2×3": 6, "3×3": 9}.get(self.layout_var.get(), 4)
+        label = self.layout_var.get().strip().lower().replace("✖", "×").replace("x", "×")
+        count = {"1×1": 1, "2×2": 4, "2×3": 6, "3×3": 9}.get(label, 4)
         if self._on_chart_layout:
             self._on_chart_layout(count)
 

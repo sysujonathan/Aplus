@@ -34,6 +34,7 @@ class AplusMainWindow(ttk.Window):
         self._tray_icon = None
         self._tray_actions = queue.SimpleQueue()
         self._closing = False
+        self._chart_mode = "candidates"
         self._build_ui()
         self._load_strategies()
         if enable_tray:
@@ -120,6 +121,7 @@ class AplusMainWindow(ttk.Window):
             on_drag_motion=self._on_watch_drag_motion,
             on_drop=self._on_watch_drop,
             on_drag_end=self.chart.clear_drop_highlight,
+            on_page_request=self._on_chart_page,
         )
         self.watch.grid(row=0, column=1, sticky=tk.NSEW)
         self.watch.configure(width=246)
@@ -319,11 +321,21 @@ class AplusMainWindow(ttk.Window):
 
     # ---- 候选与多图联动 ----
     def _on_candidate_rows(self, rows):
+        self._chart_mode = "candidates"
         self.chart.set_items(rows)
 
     def on_stock_selected(self, code, observation_id=None):
         if observation_id and self.store is not None:
-            self.chart.focus_observation(observation_id)
+            if self._chart_mode != "candidates":
+                rows = self.candidates.rows()
+                index = next(
+                    (i for i, row in enumerate(rows) if row.get("observation_id") == observation_id),
+                    0,
+                )
+                self._chart_mode = "candidates"
+                self.chart.set_items(rows, selected_index=index)
+            else:
+                self.chart.focus_observation(observation_id)
             self._status_text.set(f"已加载：{code}")
         elif code and self.store is not None:
             from .data import latest_observation
@@ -346,8 +358,16 @@ class AplusMainWindow(ttk.Window):
             observation_id = latest_observation(
                 self.store, code, timeframe=self._tf_var.get()
             )
-        if observation_id and self.chart.replace_active(code, observation_id):
-            self._status_text.set(f"活动图已切换为关注标的：{code}")
+        if observation_id:
+            rows = self.watch.rows()
+            index = next(
+                (i for i, row in enumerate(rows)
+                 if row.get("observation_id") == observation_id or row.get("code") == code),
+                0,
+            )
+            self._chart_mode = "watch"
+            self.chart.set_items(rows, selected_index=index)
+            self._status_text.set(f"关注浏览：{code}（左右键切换关注列表）")
         else:
             self._status_text.set(f"无 {code} 的可用行情快照")
 
@@ -360,7 +380,10 @@ class AplusMainWindow(ttk.Window):
 
     def _on_chart_item_activated(self, observation_id):
         if observation_id is not None:
-            self.candidates.select_observation(observation_id)
+            if self._chart_mode == "watch":
+                self.watch.select_observation(observation_id)
+            else:
+                self.candidates.select_observation(observation_id)
 
     def _on_watch_drag_motion(self, root_x, root_y):
         self.chart.highlight_drop(root_x, root_y)

@@ -220,6 +220,10 @@ class CandidateTabs(ttk.Frame):
                 return True
         return False
 
+    def rows(self):
+        """提供当前策略筛选后的可见顺序，供关注浏览切回候选。"""
+        return [dict(row) for row in self._display_rows]
+
     def _move_selection(self, delta):
         children = self.tree.get_children()
         if not children:

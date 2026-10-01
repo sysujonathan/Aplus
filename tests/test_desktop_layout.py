@@ -64,6 +64,13 @@ def test_single_chart_toolbar_option_and_compact_sidebars():
     ToolBar._fire_layout(toolbar)
     toolbar._on_chart_layout.assert_called_once_with(1)
 
+    toolbar.layout_var.get.return_value = "1✖1"
+    ToolBar._fire_layout(toolbar)
+    assert toolbar._on_chart_layout.call_args.args == (1,)
+
+    ToolBar.set_chart_page_status(toolbar, 10, 10, 201)
+    toolbar.chart_page_var.set.assert_called_once_with("10 / 201")
+
     narrow = side_panel_widths(1280)
     wide = side_panel_widths(2880)
     assert narrow == (286, 246)
@@ -71,12 +78,32 @@ def test_single_chart_toolbar_option_and_compact_sidebars():
     assert sum(wide) < 600
 
 
-def test_watch_selection_replaces_the_active_chart_slot():
+def test_watch_selection_switches_chart_paging_to_watchlist():
     window = Mock(store=object())
-    window.chart.replace_active.return_value = True
+    window.watch.rows.return_value = [
+        {"code": "sz.003006", "observation_id": "legacy-observation"},
+        {"code": "sz.002912", "observation_id": "next-observation"},
+    ]
+    window._chart_mode = "candidates"
     AplusMainWindow.on_watch_selected(window, "sz.003006", "legacy-observation")
-    window.chart.replace_active.assert_called_once_with("sz.003006", "legacy-observation")
-    window._status_text.set.assert_called_once_with("活动图已切换为关注标的：sz.003006")
+    window.chart.set_items.assert_called_once_with(window.watch.rows.return_value, selected_index=0)
+    assert window._chart_mode == "watch"
+    window._status_text.set.assert_called_once_with(
+        "关注浏览：sz.003006（左右键切换关注列表）"
+    )
+
+
+def test_candidate_selection_exits_watch_paging():
+    window = Mock(store=object())
+    window._chart_mode = "watch"
+    rows = [
+        {"code": "sh.600017", "observation_id": "first"},
+        {"code": "sh.600026", "observation_id": "selected"},
+    ]
+    window.candidates.rows.return_value = rows
+    AplusMainWindow.on_stock_selected(window, "sh.600026", "selected")
+    window.chart.set_items.assert_called_once_with(rows, selected_index=1)
+    assert window._chart_mode == "candidates"
 
 
 def test_legacy_candidates_remain_visible_without_entering_live_market_source(tmp_path):
