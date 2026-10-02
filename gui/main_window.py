@@ -334,7 +334,7 @@ class AplusMainWindow(ttk.Window):
                 asof_filter=getattr(self, "_cur_date", None),
                 source=self._candidate_source,
             )
-        self.toolbar.date_label.configure(text="截至周" if tf == "weekly" else "信号日")
+        self.toolbar.date_label.configure(text="截至周" if tf == "weekly" else "交易日")
         self._status_text.set(f"周期：{tf}")
 
     # ---- 信号日筛选：重读候选 ----
@@ -519,9 +519,11 @@ class AplusMainWindow(ttk.Window):
         if self.store is None:
             return
         try:
+            # 同步后把新行情日加入下拉，但保持交易员当前正在看的扫描日；
+            # 扫描后也由交易员主动切到新日期，不抢走当前复核上下文。
+            selected_date = self.toolbar.selected_date()
             self.toolbar._load_date_options()
-            self.toolbar._select_latest_date()
-            self._cur_date = self.toolbar.selected_date()
+            self._cur_date = selected_date
             self._candidate_source = self._source_for_current_date(self._tf_var.get())
             self.candidates.load_from_store(
                 self.store, timeframe=self._tf_var.get(),
@@ -541,8 +543,8 @@ class AplusMainWindow(ttk.Window):
             return REALTIME_MARKET_SOURCE
         from .data import candidate_source_for_date
 
-        # 主界面没有选择信号日时表示“当前 Aplus”，不能静默回退到
-        # 已废弃工程 A 的历史时间线。
+        # 没有具体日期时按当前 Aplus 查询；启动时通常已自动定位到最近
+        # 一次本地扫描日，因此迁入的历史成果仍能作为默认工作基线。
         current_date = getattr(self, "_cur_date", None)
         if not current_date or not any(current_date):
             return REALTIME_MARKET_SOURCE

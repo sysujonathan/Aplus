@@ -141,6 +141,25 @@ def test_toolbar_starts_from_latest_local_signal_date():
     toolbar.day_var.set.assert_called_once_with("30")
 
 
+def test_job_refresh_keeps_traders_selected_date():
+    window = Mock(store=object())
+    window.toolbar.selected_date.return_value = ("2026", "09", "29")
+    window._tf_var.get.return_value = "daily"
+    window._source_for_current_date.return_value = "legacy-engine-a"
+
+    AplusMainWindow._on_job_finished(window, "更新行情", "completed")
+
+    window.toolbar._load_date_options.assert_called_once_with()
+    window.toolbar._select_latest_date.assert_not_called()
+    assert window._cur_date == ("2026", "09", "29")
+    window.candidates.load_from_store.assert_called_once_with(
+        window.store,
+        timeframe="daily",
+        asof_filter=("2026", "09", "29"),
+        source="legacy-engine-a",
+    )
+
+
 def test_data_chain_status_marks_market_ahead_of_scan():
     assert format_data_chain_status("2026-09-30", "2026-09-29") == (
         "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠ 待扫描"

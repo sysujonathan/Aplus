@@ -10,6 +10,7 @@ from gui.data import (
     latest_market_date,
     latest_legacy_observation,
     latest_observation,
+    latest_scan_date,
     latest_signal_date,
     load_candidates,
     load_legacy_candidates,
@@ -38,6 +39,16 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
         "前复权（工程A只读迁移）",
     )
     live = save_dataset(store, "sh.600000", frame, "baostock", "前复权")
+    latest_frame = pd.concat(
+        [frame, pd.DataFrame([{
+            "date": "2026-09-30", "open": 10.4, "high": 10.8,
+            "low": 10.2, "close": 10.6, "volume": 1300.0,
+        }])],
+        ignore_index=True,
+    )
+    latest_live = save_dataset(
+        store, "sh.600000", latest_frame, "baostock", "前复权"
+    )
     created = now()
     with store.connect() as db:
         db.executemany(
@@ -81,16 +92,18 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
     assert history["STRATEGY_GAP_H2"][0]["source"] == "legacy-engine-a"
     assert latest_observation(store, "sz.000001") is None
     assert latest_legacy_observation(store, "sz.000001") == "legacy-observation"
-    assert candidate_dates(store) == ["2026-09-28"]
+    # 日期栏同时显示新行情日和已有扫描日；启动仍停在最近扫描日。
+    assert candidate_dates(store) == ["2026-09-30", "2026-09-29", "2026-09-28"]
     assert candidate_dates(store, source="legacy-engine-a") == ["2026-09-29"]
-    # 启动默认选择正式 Aplus 信号，工程 A 历史只保留为显式历史入口。
-    assert latest_candidate_date(store) == "2026-09-28"
-    assert latest_market_date(store) == "2026-09-29"
+    assert latest_candidate_date(store) == "2026-09-29"
+    assert latest_scan_date(store) == "2026-09-29"
+    assert latest_market_date(store) == "2026-09-30"
     assert latest_signal_date(store) == "2026-09-28"
-    assert latest_market_dataset(store, "sh.600000")["id"] == live
+    assert latest_market_dataset(store, "sh.600000")["id"] == latest_live
     assert latest_market_dataset(store, "sz.000001") is None
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "legacy-engine-a"
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "28")) == "baostock"
+    assert candidate_source_for_date(store, asof_filter=("2026", "09", "30")) == "baostock"
 
     with store.connect() as db:
         db.execute(

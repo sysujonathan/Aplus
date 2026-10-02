@@ -80,20 +80,37 @@ def load_legacy_candidates(store, timeframe="daily", asof_filter=None):
     )
 
 
-def candidate_dates(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
-    """主界面策略结果时间线；默认只读 Aplus 正式扫描。"""
-    rows = store.rows(
-        "SELECT DISTINCT o.asof FROM observations o "
-        "JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source=? AND o.timeframe=? ORDER BY o.asof DESC",
-        (source, timeframe),
-    )
-    return [row["asof"] for row in rows if row.get("asof")]
+def candidate_dates(store, timeframe="daily", source=None):
+    """返回日期栏时间线：已同步行情日 + 已保存策略扫描日。
+
+    主界面用默认值展示完整本地工作流；显式 source 仍可供隔离测试和
+    历史读取使用，不会把两个来源混入同一次候选查询。
+    """
+    if source is not None:
+        rows = store.rows(
+            "SELECT DISTINCT substr(o.asof,1,10) AS day FROM observations o "
+            "JOIN datasets d ON d.id=o.dataset_id "
+            "WHERE d.source=? AND o.timeframe=? ORDER BY day DESC",
+            (source, timeframe),
+        )
+    else:
+        rows = store.rows(
+            "SELECT day FROM ("
+            "SELECT substr(o.asof,1,10) AS day FROM observations o "
+            "JOIN datasets d ON d.id=o.dataset_id "
+            "WHERE d.source IN (?,?) AND o.timeframe=? "
+            "UNION "
+            "SELECT d.end AS day FROM datasets d "
+            "WHERE d.source=? AND d.timeframe=?"
+            ") WHERE day IS NOT NULL AND day<>'' ORDER BY day DESC",
+            (*LOCAL_CANDIDATE_SOURCES, timeframe, REALTIME_MARKET_SOURCE, timeframe),
+        )
+    return [row["day"] for row in rows if row.get("day")]
 
 
 def latest_candidate_date(store, timeframe="daily"):
-    """返回启动时应选中的 Aplus 正式策略结果日期。"""
-    return latest_signal_date(store, timeframe=timeframe)
+    """返回启动默认页：本地最近一次已有策略结果，而非最新行情日。"""
+    return latest_scan_date(store, timeframe=timeframe)
 
 
 def latest_market_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
@@ -112,6 +129,17 @@ def latest_signal_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
         "JOIN datasets d ON d.id=o.dataset_id "
         "WHERE d.source=? AND o.timeframe=?",
         (source, timeframe),
+    )
+    return rows[0]["day"] if rows and rows[0].get("day") else None
+
+
+def latest_scan_date(store, timeframe="daily"):
+    """返回本地已保存的最近扫描日，包含已迁入 Aplus 的历史成果。"""
+    rows = store.rows(
+        "SELECT MAX(o.asof) AS day FROM observations o "
+        "JOIN datasets d ON d.id=o.dataset_id "
+        "WHERE d.source IN (?,?) AND o.timeframe=?",
+        (*LOCAL_CANDIDATE_SOURCES, timeframe),
     )
     return rows[0]["day"] if rows and rows[0].get("day") else None
 

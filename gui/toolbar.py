@@ -158,8 +158,8 @@ class ToolBar(ttk.Frame):
                                      bootstyle="round-toggle", command=self._explain_ai)
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
-        # 信号日来自本地策略结果时间线；启动时自动定位最新有效结果。
-        self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
+        # 日期栏同时包含行情日和扫描日；启动仍定位最近一次有效扫描结果。
+        self.date_label = ttk.Label(filters, text="交易日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
@@ -485,10 +485,10 @@ class ToolBar(ttk.Frame):
             except Exception:
                 self._universe_total = 0
         total = self._universe_total if self._universe_total else "?"
-        from .data import latest_market_date, latest_signal_date
+        from .data import latest_market_date, latest_scan_date
 
         market = latest_market_date(self.store, self._tf_var.get())
-        signal = latest_signal_date(self.store, self._tf_var.get())
+        signal = latest_scan_date(self.store, self._tf_var.get())
         text = format_data_chain_status(market, signal, cov, total)
         self._mkt_var.set(text)
         return text
@@ -496,11 +496,11 @@ class ToolBar(ttk.Frame):
     def data_chain_summary(self):
         if self.store is None:
             return "行情未连接"
-        from .data import latest_market_date, latest_signal_date
+        from .data import latest_market_date, latest_scan_date
 
         return format_data_chain_status(
             latest_market_date(self.store, self._tf_var.get()),
-            latest_signal_date(self.store, self._tf_var.get()),
+            latest_scan_date(self.store, self._tf_var.get()),
         )
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
