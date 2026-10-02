@@ -64,8 +64,9 @@ def render_chart(frame, payload, title, meta):
     if "ema20" in plot:
         adds.append(mpf.make_addplot(plot.ema20, color=AVERAGE, width=1.35))
     signal_column = meta.get("signal_column")
+    h2 = signal_column == 'signal_gap_h2' and payload.get('plan_kind') == 'gap-h2-next-session'
     has_marks = False
-    if signal_column in plot:
+    if not h2 and signal_column in plot:
         marks = plot.low.where(plot[signal_column].fillna(False).astype(bool)) * .98
         if marks.notna().any():
             adds.append(
@@ -75,7 +76,11 @@ def render_chart(frame, payload, title, meta):
             )
             has_marks = True
     lines, line_colors, styles = [], [], []
-    for key, color, dash in (("stop", STOP, "-."), ("target", TARGET, "--")):
+    levels = (("entry", TARGET, ":"), ("stop", STOP, "-."), ("mm_target", TARGET, "--")) if h2 else (
+        ("stop", STOP, "-."), ("target", TARGET, "--"))
+    for key, color, dash in levels:
+        if h2 and key != 'mm_target' and payload.get('pending_state') != 'PENDING':
+            continue
         if payload.get(key) is not None and float(payload[key]) > 0:
             lines.append(float(payload[key]))
             line_colors.append(color)
@@ -92,6 +97,9 @@ def render_chart(frame, payload, title, meta):
     price_span = max(price_high - price_low, abs(price_high) * .02, .01)
     view_low = price_low - price_span * .06
     view_high = price_high + price_span * .06
+    if h2:
+        view_low = price_low - price_span * .12
+        view_high = price_high + price_span * .18
     for level in lines:
         if price_low - price_span * .18 <= level <= price_high + price_span * .18:
             view_low = min(view_low, level - price_span * .02)
@@ -121,7 +129,10 @@ def render_chart(frame, payload, title, meta):
         for label, key in (("Entry", "entry"), ("SL", "stop"), ("TP1", "target")):
             if payload.get(key) is not None:
                 facts.append(f"{label}: {float(payload[key]):.2f}")
-        if facts:
+        if h2:
+            from .h2_chart import draw_h2
+            draw_h2(ax, plot, payload)
+        if facts and not h2:
             ax.text(
                 .02,
                 .965,
@@ -137,7 +148,9 @@ def render_chart(frame, payload, title, meta):
                     edgecolor=BORDER,
                 ),
             )
-        for key, label, color in (("stop", "SL", STOP), ("target", "TP1", TARGET)):
+        labels = (("stop", "SL1", STOP), ("mm_target", "MM / TP", TARGET)) if h2 else (
+            ("stop", "SL", STOP), ("target", "TP1", TARGET))
+        for key, label, color in labels:
             if payload.get(key) is not None and float(payload[key]) > 0:
                 value = float(payload[key])
                 if value > view_high:
@@ -346,7 +359,7 @@ class ChartPanel(native_ttk.Frame):
             self.show_placeholder()
             return
         cache = getattr(self, "_image_cache", None)
-        cache_key = (observation_id, market_dataset_id or "", mode)
+        cache_key = (observation_id, market_dataset_id or "", mode, market_asof, anchor_asof)
         cached = cache.get(cache_key) if isinstance(cache, dict) else None
         if cached is not None:
             self._image, self._code, self._tf, title = cached
@@ -377,19 +390,32 @@ class ChartPanel(native_ttk.Frame):
             )
             bars = prepare(frame, self._tf, str(cutoff)[:10])
             instance, calculated = calculate(spec, bars)
+            from workbench.h2_plan import display_plan, is_h2, STATE_LABELS
+            h2 = spec.id == 'STRATEGY_GAP_H2' and is_h2(instance.get_metadata())
+            if h2:
+                payload = display_plan(spec, bars, payload, self._code,
+                                       observation.get('setup_date') or observation['asof'], mode)
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
             # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
             self._image = render_chart(calculated, payload, "", instance.get_metadata())
             chart_identity = f"{self._code}  {name}".rstrip()
             if mode == "watch":
-                current_day = str(cutoff)[:10]
+                current_day = str(bars.date.iloc[-1])[:10]
                 signal_day = str(anchor_asof or observation["asof"])[:10]
                 title = (
                     f"{chart_identity}  ·  {spec.name} · {period}"
                     f" · 行情 {current_day} · 信号 {signal_day}"
-                    " · 计划线来自信号日"
                 )
+                if h2:
+                    signal_day = payload.get('h2_setup_date', signal_day)
+                    title = (f"{chart_identity}  ·  {spec.name} · {period}"
+                             f" · 行情 {current_day} · H2信号 {signal_day}")
+                    title += (f" · 明日计划基于{payload['plan_asof']}收盘"
+                              if payload.get('pending_state') == 'PENDING'
+                              else f" · {STATE_LABELS[payload['pending_state']]}")
+                else:
+                    title += " · 计划线来自信号日"
             else:
                 title = f"{chart_identity}  ·  {spec.name} · {period}"
             self._title_var.set(title)

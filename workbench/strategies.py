@@ -191,10 +191,22 @@ def _setup_date(instance, df, meta):
     return str(last.date)
 
 
-def signal_at_end(spec, frame, with_rating=True):
+def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True):
     instance, df = calculate(spec, frame)
     meta = instance.get_metadata()
     row = df.iloc[-1]
+    # The frozen detector stays byte-for-byte intact. Only live GAP H2 reminders
+    # use the explicit next-session plan; historical signal studies keep v1 prices.
+    from .h2_plan import is_h2, plan_at_end
+    if plan_prices and spec.id == 'STRATEGY_GAP_H2' and is_h2(meta):
+        plan = plan_at_end(instance, df, frame.attrs.get('code'))
+        if plan['pending_state'] != 'PENDING':
+            return None
+        entry, stop, target = plan['entry'], plan['stop'], plan['target']
+        warning = '' if 0 < stop < entry < target else '当前计划无有效做多风险收益组合，请人工核对'
+        return dict(plan, asof=str(row.date), setup_date=plan['h2_setup_date'],
+                    score=_number(row.get(meta.get('score_column', ''))), rating=None,
+                    close=float(row.close), warning=warning)
     flag = row[meta.get('active_signal_column') or meta['signal_column']]
     if pd.isna(flag) or not bool(flag):
         return None

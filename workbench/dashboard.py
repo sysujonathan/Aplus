@@ -182,6 +182,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
             return
         o = observation
         payload=json.loads(o['payload'])
+        h2 = o['strategy'] == 'STRATEGY_GAP_H2'
         st.subheader(f"{o['code']} {code_names.get(o['code'],'')}")
         st.caption(f"{entries[o['strategy']].name if o['strategy'] in entries else o['strategy']} · {TF[o['timeframe']]} · 原信号 {o['asof']}")
         a,b=st.columns([2,1])
@@ -201,11 +202,24 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
                 reference_ok=not overlap.empty and np.allclose(overlap.close_old,overlap.close_new,rtol=1e-9,atol=1e-8)
                 frame,record=current,current_record
             st.caption(f"关注视图展示最新本地行情至 {record['end']}；原信号不是今天的新命中。")
-            if not reference_ok:
+            if not reference_ok and not h2:
                 st.warning('新旧快照的复权价格发生变化，隐藏旧信号价格线；请在 TradingView 重新核对。')
-        candles(prepare(frame,o['timeframe'],completed_date() if from_watch else o['asof']),
-                payload.get('entry') if reference_ok else None,
-                payload.get('stop') if reference_ok else None,payload.get('target') if reference_ok else None)
+        bars = prepare(frame,o['timeframe'],completed_date() if from_watch else o['asof'])
+        if h2:
+            from .h2_plan import display_plan, STATE_LABELS
+            from .strategies import calculate
+            from gui.chart_panel import render_chart
+            spec = entries[o['strategy']]
+            payload = display_plan(spec, bars, payload, o['code'], o['setup_date'],
+                                   'watch' if from_watch else 'candidate')
+            instance, calculated = calculate(spec, bars)
+            st.caption(f"H2信号 {payload['h2_setup_date']} · 行情 {bars.date.iloc[-1]} · " +
+                       (f"明日计划基于{payload['plan_asof']}收盘"
+                        if payload['pending_state'] == 'PENDING' else STATE_LABELS[payload['pending_state']]))
+            st.image(render_chart(calculated, payload, '', instance.get_metadata()), width='stretch')
+        else:
+            candles(bars,payload.get('entry') if reference_ok else None,
+                    payload.get('stop') if reference_ok else None,payload.get('target') if reference_ok else None)
         if o['code'] in watch_codes:
             w=next(w for w in watch if w['code']==o['code'])
             with st.expander('关注笔记 / 结束关注',expanded=from_watch):
@@ -220,7 +234,8 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
                     st.rerun()
         with st.expander('制定交易计划'):
             with st.form('desk_plan_'+o['id']):
-                st.caption('只有你主动保存才产生计划；关注本身不会建仓或生成计划。价格来自原信号，请核对当前复权。')
+                st.caption('只有你主动保存才产生计划；关注本身不会建仓或生成计划。' +
+                           ('参考价来自所示收盘的 H2 挂单计划。' if h2 else '价格来自原信号，请核对当前复权。'))
                 a,b,c=st.columns(3)
                 entry=a.number_input('计划入场',min_value=0.,value=float(payload.get('entry') or 0),format='%.3f')
                 stop=b.number_input('计划止损',min_value=0.,value=float(payload.get('stop') or 0),format='%.3f')

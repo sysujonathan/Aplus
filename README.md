@@ -23,6 +23,8 @@
 
 ## 原策略保护
 
+GAP H2 收盘图现按“次日挂单机会”显示每日 Entry、SL1、风险与 MM 收益；候选保持当日计划，关注随最新收盘核验原形态。详见 [GAP H2 挂单计划](docs/GAP%20H2挂单计划.md)。
+
 `core/strategies/` 内的 12 个 Python 文件从原 A 仓库提交 `6bc1b9e1800d1523118fc862f3791edb8e7faa0f` 原样复制。策略注册表、计算器、评分依赖和配置一起冻结。`frozen_manifest.json` 记录逐文件 SHA-256；启动与研究时检查，变动就停止。新版外围代码在 `workbench/`，不是原扫描器的拼接。
 
 ## 验收
