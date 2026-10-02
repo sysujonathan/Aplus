@@ -1,6 +1,7 @@
-"""盘前任务工具栏：周期、范围、行情更新、扫描与信号日。"""
+"""盘前任务工具栏：周期、范围、行情更新、扫描与交易日。"""
 from __future__ import annotations
 
+from datetime import date
 import tkinter as tk
 import ttkbootstrap as ttk
 
@@ -359,7 +360,7 @@ class ToolBar(ttk.Frame):
         if self._on_chart_layout:
             self._on_chart_layout(count)
 
-    # ---- 信号日三联 Combobox 联动 ----
+    # ---- 交易日三联 Combobox 联动 ----
     def _load_date_options(self):
         self._all_years = []
         self._all_months = []
@@ -405,21 +406,23 @@ class ToolBar(ttk.Frame):
         for k in self._days_by_ym:
             self._days_by_ym[k].sort()
         self.year_combo["values"] = [_ALL] + self._all_years
-        self.month_combo["values"] = [_ALL] + self._all_months
-        self.day_combo["values"] = [_ALL] + self._all_days
+        if self.year_var.get() not in self.year_combo["values"]:
+            self.year_var.set(_ALL)
+        # 任务完成后会在保留当前选择的情况下重载日期。这里必须重新按
+        # 当前年月联动，不能把其他月份出现过的日号塞进当前月份。
+        self._refresh_months()
+        self._refresh_days()
 
     @staticmethod
     def _parse_asof(asof):
         if not asof:
             return None
-        date_part = str(asof).split(" ")[0]
-        parts = date_part.split("-")
-        if len(parts) != 3:
-            return None
+        date_part = str(asof).split(" ")[0][:10]
         try:
-            return tuple(f"{int(p):02d}" for p in parts)
+            parsed = date.fromisoformat(date_part)
         except ValueError:
             return None
+        return f"{parsed.year:04d}", f"{parsed.month:02d}", f"{parsed.day:02d}"
 
     def _refresh_months(self):
         y = self.year_var.get()
@@ -434,10 +437,12 @@ class ToolBar(ttk.Frame):
     def _refresh_days(self):
         y = self.year_var.get()
         m = self.month_var.get()
-        if y == _ALL or m == _ALL:
-            days = self._all_days
-        else:
-            days = self._days_by_ym.get((y, m), [])
+        days = sorted({
+            day
+            for (year, month), values in self._days_by_ym.items()
+            if (y == _ALL or year == y) and (m == _ALL or month == m)
+            for day in values
+        })
         self.day_combo["values"] = [_ALL] + days
         if self.day_var.get() not in self.day_combo["values"]:
             self.day_var.set(_ALL)

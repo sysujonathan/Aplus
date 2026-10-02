@@ -26,6 +26,17 @@ from launch_dashboard import acquire_single_instance, release_single_instance
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class _ValueVar:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
 def test_candidate_labels_fit_horizontal_strategy_bar():
     assert short_strategy_label("MTR Master") == "MTR"
     assert short_strategy_label("GAP PINBAR") == "GPb"
@@ -139,6 +150,40 @@ def test_toolbar_starts_from_latest_local_signal_date():
     toolbar.year_var.set.assert_called_once_with("2026")
     toolbar.month_var.set.assert_called_once_with("09")
     toolbar.day_var.set.assert_called_once_with("30")
+
+
+def test_date_options_stay_on_real_dates_for_selected_month():
+    toolbar = object.__new__(ToolBar)
+    toolbar.store = object()
+    toolbar._tf_var = _ValueVar("daily")
+    toolbar.year_var = _ValueVar("2026")
+    toolbar.month_var = _ValueVar("09")
+    toolbar.day_var = _ValueVar("30")
+    toolbar.year_combo = {}
+    toolbar.month_combo = {}
+    toolbar.day_combo = {}
+
+    with patch(
+        "gui.data.candidate_dates",
+        return_value=[
+            "2026-09-30",
+            "2026-09-29",
+            "2026-08-31",
+            "2026-09-31",  # 防御脏数据：九月不存在 31 日。
+            "2026-02-29",  # 2026 不是闰年。
+        ],
+    ):
+        ToolBar._load_date_options(toolbar)
+
+    assert toolbar.day_combo["values"] == ["全部", "29", "30"]
+    assert toolbar.day_var.get() == "30"
+    assert ToolBar._parse_asof("2026-09-31") is None
+
+    # 即使年份选“全部”，月份为九月时也不能混入八月的 31 日。
+    toolbar.year_var.set("全部")
+    toolbar.month_var.set("09")
+    ToolBar._refresh_days(toolbar)
+    assert toolbar.day_combo["values"] == ["全部", "29", "30"]
 
 
 def test_job_refresh_keeps_traders_selected_date():
