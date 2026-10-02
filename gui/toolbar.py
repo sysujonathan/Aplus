@@ -1,6 +1,7 @@
-"""盘前任务工具栏：周期、范围、行情更新、扫描与信号日。"""
+"""盘前任务工具栏：周期、范围、行情更新、扫描与交易日。"""
 from __future__ import annotations
 
+from datetime import date
 import tkinter as tk
 import ttkbootstrap as ttk
 
@@ -26,6 +27,19 @@ def format_board_scope(boards):
     if not selected:
         return "范围：未选择"
     return "范围：" + "+".join(_BOARD_SHORT[board] for board in selected)
+
+
+def format_data_chain_status(market_date, signal_date, coverage=None, total=None):
+    """把行情层和扫描层分开说清楚，避免把信号日误认成行情日。"""
+    market = str(market_date)[:10] if market_date else "无"
+    signal = str(signal_date)[:10] if signal_date else "无"
+    pending = bool(market_date and (not signal_date or market > signal))
+    market_mark = "✓" if market_date else "—"
+    scan_mark = "⚠ 待扫描" if pending else ("✓" if signal_date else "—")
+    text = f"行情最新 {market} {market_mark} · 信号最新 {signal} {scan_mark}"
+    if coverage is not None:
+        text += f" · 覆盖 {coverage}/{total if total else '?'}"
+    return text
 
 
 def _two_years_ago():
@@ -145,8 +159,8 @@ class ToolBar(ttk.Frame):
                                      bootstyle="round-toggle", command=self._explain_ai)
         self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
 
-        # 信号日来自本地策略结果时间线；启动时自动定位最新有效结果。
-        self.date_label = ttk.Label(filters, text="信号日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
+        # 日期栏同时包含行情日和扫描日；启动仍定位最近一次有效扫描结果。
+        self.date_label = ttk.Label(filters, text="交易日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
@@ -229,7 +243,8 @@ class ToolBar(ttk.Frame):
         self._load_market_status()
 
         self._status = tk.StringVar(value=self._mkt_var.get())
-        self.status_label = ttk.Label(self, textvariable=self._status, font=("Consolas", 10), foreground=_LABEL_FG)
+        # 顶部始终表示数据链事实；任务进度和结果另在底部状态栏显示。
+        self.status_label = ttk.Label(self, textvariable=self._mkt_var, font=("Consolas", 10), foreground=_LABEL_FG)
         self.status_label.grid(row=0, column=3, sticky=tk.E, padx=6)
         self.bind("<Configure>", self._responsive)
         self._select_latest_date()
@@ -345,7 +360,7 @@ class ToolBar(ttk.Frame):
         if self._on_chart_layout:
             self._on_chart_layout(count)
 
-    # ---- 信号日三联 Combobox 联动 ----
+    # ---- 交易日三联 Combobox 联动 ----
     def _load_date_options(self):
         self._all_years = []
         self._all_months = []
@@ -391,21 +406,23 @@ class ToolBar(ttk.Frame):
         for k in self._days_by_ym:
             self._days_by_ym[k].sort()
         self.year_combo["values"] = [_ALL] + self._all_years
-        self.month_combo["values"] = [_ALL] + self._all_months
-        self.day_combo["values"] = [_ALL] + self._all_days
+        if self.year_var.get() not in self.year_combo["values"]:
+            self.year_var.set(_ALL)
+        # 任务完成后会在保留当前选择的情况下重载日期。这里必须重新按
+        # 当前年月联动，不能把其他月份出现过的日号塞进当前月份。
+        self._refresh_months()
+        self._refresh_days()
 
     @staticmethod
     def _parse_asof(asof):
         if not asof:
             return None
-        date_part = str(asof).split(" ")[0]
-        parts = date_part.split("-")
-        if len(parts) != 3:
-            return None
+        date_part = str(asof).split(" ")[0][:10]
         try:
-            return tuple(f"{int(p):02d}" for p in parts)
+            parsed = date.fromisoformat(date_part)
         except ValueError:
             return None
+        return f"{parsed.year:04d}", f"{parsed.month:02d}", f"{parsed.day:02d}"
 
     def _refresh_months(self):
         y = self.year_var.get()
@@ -420,10 +437,12 @@ class ToolBar(ttk.Frame):
     def _refresh_days(self):
         y = self.year_var.get()
         m = self.month_var.get()
-        if y == _ALL or m == _ALL:
-            days = self._all_days
-        else:
-            days = self._days_by_ym.get((y, m), [])
+        days = sorted({
+            day
+            for (year, month), values in self._days_by_ym.items()
+            if (y == _ALL or year == y) and (m == _ALL or month == m)
+            for day in values
+        })
         self.day_combo["values"] = [_ALL] + days
         if self.day_var.get() not in self.day_combo["values"]:
             self.day_var.set(_ALL)
@@ -457,13 +476,7 @@ class ToolBar(ttk.Frame):
     def _load_market_status(self):
         if self.store is None:
             self._mkt_var.set("行情：未连接")
-            return
-        try:
-            from workbench.market import completed_date
-
-            latest = completed_date()
-        except Exception:
-            latest = "?"
+            return self._mkt_var.get()
         try:
             cov = self.store.rows("SELECT COUNT(*) c FROM sync_coverage")[0]["c"]
         except Exception:
@@ -477,13 +490,23 @@ class ToolBar(ttk.Frame):
             except Exception:
                 self._universe_total = 0
         total = self._universe_total if self._universe_total else "?"
-        last_sync = self.store.rows(
-            "SELECT finished FROM jobs WHERE kind='sync' AND status='completed' ORDER BY finished DESC LIMIT 1"
+        from .data import latest_market_date, latest_scan_date
+
+        market = latest_market_date(self.store, self._tf_var.get())
+        signal = latest_scan_date(self.store, self._tf_var.get())
+        text = format_data_chain_status(market, signal, cov, total)
+        self._mkt_var.set(text)
+        return text
+
+    def data_chain_summary(self):
+        if self.store is None:
+            return "行情未连接"
+        from .data import latest_market_date, latest_scan_date
+
+        return format_data_chain_status(
+            latest_market_date(self.store, self._tf_var.get()),
+            latest_scan_date(self.store, self._tf_var.get()),
         )
-        ls = last_sync[0]["finished"][:19].replace("T", " ") if last_sync else "—"
-        rows = self.store.rows("SELECT MAX(end) AS day FROM datasets WHERE source='baostock'")
-        actual = rows[0]["day"] if rows and rows[0]["day"] else "—"
-        self._mkt_var.set(f"就绪 · 数据 {actual} · 覆盖 {cov}/{total}")
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _on_sync(self):
@@ -622,8 +645,10 @@ class ToolBar(ttk.Frame):
             text = f"✗ {kind}失败：{message[:64]}"
         else:
             text = f"{kind}结束（{status}）：{message[:56]}"
-        self.set_status(text)
         self._load_market_status()
+        if status == "completed" and kind in {"更新行情", "扫描策略"}:
+            text += "；" + self.data_chain_summary()
+        self.set_status(text)
         if self._on_job_finished:
             try:
                 self._on_job_finished(kind, status)

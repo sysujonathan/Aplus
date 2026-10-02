@@ -102,19 +102,26 @@ class WatchPanel(ttk.Frame):
             )
         except Exception:
             return
-        from .data import code_names
+        from .data import code_names, latest_market_dataset
 
         names = code_names(self.store)
         for number, r in enumerate(rows, 1):
             code = r["code"]
             state = r["state"] if r["state"] else "关注中"
+            timeframe = r["timeframe"] or "daily"
+            # 关注的是股票；旧 observation 只保存当初为什么关注。K 线始终
+            # 指向本项目正式行情源的最新快照，且不会读取工程 A 数据源。
+            market = latest_market_dataset(self.store, code, timeframe=timeframe)
             item = {
                 "code": code,
                 "name": names.get(code, ""),
                 "observation_id": r["observation_id"],
-                "source": r["source"] or "unknown",
+                "source": (market or {}).get("source") or r["source"] or "unknown",
                 "strategy": r["strategy"],
-                "timeframe": r["timeframe"],
+                "timeframe": timeframe,
+                "market_dataset_id": (market or {}).get("id"),
+                "market_asof": (market or {}).get("end"),
+                "anchor_asof": r["asof"],
             }
             self._display_rows.append(item)
             iid = self.tree.insert(
