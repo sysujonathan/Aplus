@@ -24,12 +24,10 @@ from .theme import (
 )
 
 
-def side_panel_widths(window_width):
-    """按窗口宽度收紧两侧清单，优先把水平空间留给 K 线。"""
+def right_list_width(window_width):
+    """右侧双层清单约为旧关注栏的 1.5 倍，同时保护 K 线空间。"""
     width = max(1280, int(window_width or 0))
-    candidates = max(238, min(260, round(width * 0.145)))
-    watch = max(222, min(242, round(width * 0.115)))
-    return candidates, watch
+    return max(330, min(390, round(width * 0.225)))
 
 
 class AplusMainWindow(ttk.Window):
@@ -139,35 +137,38 @@ class AplusMainWindow(ttk.Window):
 
         self.body = body = ttk.Frame(premarket, padding=(8, 6))
         body.grid(row=1, column=0, sticky=tk.NSEW)
-        body.columnconfigure(0, weight=0)
-        body.columnconfigure(1, weight=1)
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=0)
         body.rowconfigure(0, weight=1)
-        self.candidates = CandidateTabs(
-            body,
-            self.on_stock_selected,
-            on_context=self._candidate_context,
-            on_rows_changed=self._on_candidate_rows,
-            on_page_request=self._on_chart_page,
-        )
-        self.candidates.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
-        self.candidates.configure(width=238)
-        self.candidates.grid_propagate(False)
-
-        right = ttk.Frame(body)
-        right.grid(row=0, column=1, sticky=tk.NSEW)
-        right.columnconfigure(0, weight=1)
-        right.columnconfigure(1, weight=0)
-        right.rowconfigure(0, weight=1)
         self.chart = ChartGrid(
-            right,
+            body,
             self.store,
             layout_count=4,
             on_page_state=self.toolbar.set_chart_page_status,
             on_active_item=self._on_chart_item_activated,
         )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
+
+        self.list_pane = ttk.Frame(body)
+        self.list_pane.grid(row=0, column=1, sticky=tk.NSEW)
+        self.list_pane.columnconfigure(0, weight=1)
+        self.list_pane.rowconfigure(0, weight=3)
+        self.list_pane.rowconfigure(2, weight=2)
+        self.list_pane.configure(width=360)
+        self.list_pane.grid_propagate(False)
+        self.candidates = CandidateTabs(
+            self.list_pane,
+            self.on_stock_selected,
+            on_context=self._candidate_context,
+            on_rows_changed=self._on_candidate_rows,
+            on_page_request=self._on_chart_page,
+        )
+        self.candidates.grid(row=0, column=0, sticky=tk.NSEW)
+        ttk.Separator(self.list_pane, orient=tk.HORIZONTAL).grid(
+            row=1, column=0, sticky=tk.EW, pady=8
+        )
         self.watch = WatchPanel(
-            right,
+            self.list_pane,
             self.store,
             on_select=self.on_watch_selected,
             on_drag_motion=self._on_watch_drag_motion,
@@ -175,9 +176,7 @@ class AplusMainWindow(ttk.Window):
             on_drag_end=self.chart.clear_drop_highlight,
             on_page_request=self._on_chart_page,
         )
-        self.watch.grid(row=0, column=1, sticky=tk.NSEW)
-        self.watch.configure(width=222)
-        self.watch.pack_propagate(False)
+        self.watch.grid(row=2, column=0, sticky=tk.NSEW)
 
         status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
@@ -315,11 +314,8 @@ class AplusMainWindow(ttk.Window):
     def _resize_layout(self, event):
         if event.widget is not self:
             return
-        # Lists follow their actual three-column content and yield spare width to charts.
-        width = self.page_host.winfo_width()
-        candidate_width, watch_width = side_panel_widths(width)
-        self.candidates.configure(width=candidate_width)
-        self.watch.configure(width=watch_width)
+        # 两个列表共用右栏，宽度约为旧关注栏的 1.5 倍。
+        self.list_pane.configure(width=right_list_width(event.width))
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):

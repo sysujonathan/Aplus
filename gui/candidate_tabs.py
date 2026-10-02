@@ -6,11 +6,11 @@ import tkinter as tk
 
 import ttkbootstrap as ttk
 
-from .theme import ACCENT, CONTROL_BG, HOVER, MUTED, REPEAT, TEXT
+from .theme import ACCENT, CONTROL_BG, HOVER, REPEAT, TEXT
+from .tree_scroll import attach_vertical_scrollbar
 
 
 _COLUMN_TITLES = {"number": "序", "code": "代码", "name": "名称"}
-_STRATEGY_PAGE_SIZE = 4
 
 
 def short_strategy_label(label):
@@ -32,13 +32,9 @@ def short_strategy_label(label):
     return text[:9]
 
 
-def strategy_window(keys, start=0, page_size=_STRATEGY_PAGE_SIZE):
-    """返回紧凑策略栏的一窗，并让末页尽量保持满四组。"""
-    values = list(keys)
-    size = max(1, int(page_size))
-    last_start = max(0, len(values) - size)
-    start = max(0, min(int(start), last_start))
-    return values[start:start + size], start
+def strategy_window(keys, start=0, page_size=None):
+    """策略栏固定展示全部策略；保留函数名兼容既有桌面测试。"""
+    return list(keys), 0
 
 
 def candidate_repeat_counts(rows):
@@ -75,22 +71,23 @@ class CandidateTabs(ttk.Frame):
         self._timeframe = None
         self._source = "baostock"
         self._eligible_keys = []
-        self._strategy_start = 0
         self._sort_next_desc = {key: False for key in _COLUMN_TITLES}
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
         ttk.Label(
             self,
-            text="策略匹配",
+            text="策略结果",
             font=("Microsoft YaHei", 10, "bold"),
             foreground=TEXT,
         ).grid(row=0, column=0, sticky=tk.W, padx=2, pady=(0, 5))
 
         self.sidebar = ttk.Frame(self)
         self.sidebar.grid(row=1, column=0, sticky=tk.EW, pady=(0, 6))
+        self.tree_host = ttk.Frame(self)
+        self.tree_host.grid(row=2, column=0, sticky=tk.NSEW)
         self.tree = ttk.Treeview(
-            self,
+            self.tree_host,
             columns=("number", "code", "name"),
             show="headings",
             selectmode="browse",
@@ -107,9 +104,9 @@ class CandidateTabs(ttk.Frame):
                 width=width,
                 minwidth=22 if col == "number" else (92 if col == "code" else 72),
                 stretch=col == "name",
-                anchor=tk.CENTER if col == "number" else tk.W,
+                anchor=tk.CENTER,
             )
-        self.tree.grid(row=2, column=0, sticky=tk.NSEW)
+        self.vscroll = attach_vertical_scrollbar(self.tree_host, self.tree)
         self.tree.bind("<<TreeviewSelect>>", self._select)
         self.tree.bind("<Button-3>", self._context)
         self.tree.bind("<Up>", lambda _event: self._move_selection(-1))
@@ -130,17 +127,8 @@ class CandidateTabs(ttk.Frame):
         self._labels = dict(strategies)
         self._buttons = {}
         self._eligible_keys = list(self._labels)
-        self._strategy_start = 0
-        self.sidebar.columnconfigure(0, weight=0)
-        for col in range(1, _STRATEGY_PAGE_SIZE + 1):
+        for col in range(len(strategies)):
             self.sidebar.columnconfigure(col, weight=1, uniform="strategy")
-        self.sidebar.columnconfigure(_STRATEGY_PAGE_SIZE + 1, weight=0)
-        self._prev_strategy = self._strategy_arrow("◀", -1)
-        self._prev_strategy.grid(row=0, column=0, sticky=tk.NS, padx=(0, 2))
-        self._next_strategy = self._strategy_arrow("▶", 1)
-        self._next_strategy.grid(
-            row=0, column=_STRATEGY_PAGE_SIZE + 1, sticky=tk.NS, padx=(2, 0)
-        )
         for key, label in strategies:
             button = tk.Label(
                 self.sidebar,
@@ -162,47 +150,13 @@ class CandidateTabs(ttk.Frame):
         self._refresh_strategy_bar()
         self._choose(self._selected)
 
-    def _strategy_arrow(self, text, delta):
-        return tk.Button(
-            self.sidebar,
-            text=text,
-            width=1,
-            command=lambda: self._shift_strategy_page(delta),
-            bg=CONTROL_BG,
-            fg=MUTED,
-            activebackground=ACCENT,
-            activeforeground=TEXT,
-            disabledforeground="#4B5563",
-            borderwidth=0,
-            padx=1,
-            cursor="hand2",
-        )
-
     def _refresh_strategy_bar(self):
         for button in self._buttons.values():
             button.grid_remove()
-        visible, self._strategy_start = strategy_window(
-            self._eligible_keys, self._strategy_start
-        )
-        for index, key in enumerate(visible, 1):
+        visible, _ = strategy_window(self._eligible_keys)
+        for index, key in enumerate(visible):
             self._buttons[key].grid(row=0, column=index, sticky=tk.NSEW, padx=1)
-        last_start = max(0, len(self._eligible_keys) - _STRATEGY_PAGE_SIZE)
-        self._prev_strategy.configure(
-            state=tk.NORMAL if self._strategy_start > 0 else tk.DISABLED,
-            cursor="hand2" if self._strategy_start > 0 else "",
-        )
-        self._next_strategy.configure(
-            state=tk.NORMAL if self._strategy_start < last_start else tk.DISABLED,
-            cursor="hand2" if self._strategy_start < last_start else "",
-        )
         return visible
-
-    def _shift_strategy_page(self, delta):
-        old_start = self._strategy_start
-        self._strategy_start += int(delta) * _STRATEGY_PAGE_SIZE
-        visible = self._refresh_strategy_bar()
-        if self._strategy_start != old_start and visible and self._selected not in visible:
-            self._choose(visible[0])
 
     def load_from_store(self, store, timeframe="daily", asof_filter=None,
                         source="baostock"):
@@ -212,7 +166,6 @@ class CandidateTabs(ttk.Frame):
         entries = catalog(store)
         if self._timeframe != timeframe or self._source != source:
             self._selected = None
-            self._strategy_start = 0
         self._timeframe = timeframe
         self._source = source
         if source == LEGACY_MARKET_SOURCE:
@@ -237,10 +190,6 @@ class CandidateTabs(ttk.Frame):
         visible = self._refresh_strategy_bar()
         if self._selected not in eligible:
             self._selected = visible[0] if visible else None
-        elif self._selected not in visible:
-            selected_index = eligible.index(self._selected)
-            self._strategy_start = selected_index
-            self._refresh_strategy_bar()
         self._choose(self._selected)
 
     def _choose(self, key):

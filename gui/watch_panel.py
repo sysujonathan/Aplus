@@ -14,6 +14,7 @@ from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 
 from .theme import APP_BG, TEXT
+from .tree_scroll import attach_vertical_scrollbar
 
 # 与 store.save_plan 的合法状态保持一致（勿在此处增删）
 _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", "忽略")
@@ -41,8 +42,10 @@ class WatchPanel(ttk.Frame):
             foreground=TEXT,
         ).pack(anchor=tk.W, padx=2, pady=(0, 6))
 
+        self.tree_host = ttk.Frame(self)
+        self.tree_host.pack(fill=tk.BOTH, expand=True)
         self.tree = ttk.Treeview(
-            self,
+            self.tree_host,
             columns=("number", "code", "name", "strategy", "date", "state", "notes"),
             displaycolumns=("number", "code", "name"),
             show="headings",
@@ -58,8 +61,10 @@ class WatchPanel(ttk.Frame):
         ):
             self.tree.heading(col, text=text)
             minwidth = 22 if col == "number" else (92 if col == "code" else 28)
-            self.tree.column(col, width=width, minwidth=minwidth, anchor=tk.W, stretch=stretch)
-        self.tree.pack(fill=tk.BOTH, expand=True)
+            self.tree.column(
+                col, width=width, minwidth=minwidth, anchor=tk.CENTER, stretch=stretch
+            )
+        self.vscroll = attach_vertical_scrollbar(self.tree_host, self.tree)
         self.tree._obs = {}    # iid -> observation_id
         self.tree._codes = {}  # iid -> code
 
