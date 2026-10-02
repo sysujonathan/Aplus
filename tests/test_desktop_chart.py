@@ -71,7 +71,7 @@ def test_watch_chart_uses_latest_market_but_keeps_anchor_payload(tmp_path):
     fake_store = Mock()
     fake_store.rows.return_value = [{
         "code": "sh.600000", "strategy": strategy, "timeframe": "daily",
-        "asof": anchor_cutoff,
+        "asof": anchor_cutoff, "setup_date": anchor_cutoff,
     }]
     panel = Mock()
     with patch("gui.data.load_observation_candles", return_value=(anchor, {}, payload)), \
@@ -91,7 +91,11 @@ def test_watch_chart_uses_latest_market_but_keeps_anchor_payload(tmp_path):
 
     displayed, rendered_payload = render.call_args.args[:2]
     assert displayed.date.max() == market_cutoff
-    assert rendered_payload == payload
+    assert rendered_payload == {
+        **payload,
+        "asof": anchor_cutoff,
+        "setup_date": anchor_cutoff,
+    }
     title = panel._title_var.set.call_args_list[-1].args[0]
     assert f"行情 {market_cutoff}" in title
     assert f"信号 {anchor_cutoff}" in title

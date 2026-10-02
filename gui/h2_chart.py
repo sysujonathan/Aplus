@@ -10,6 +10,7 @@ def draw_h2(ax, plot, plan):
 
     dates = plot.date.astype(str).str[:10].tolist()
     state = plan.get('pending_state', 'UNAVAILABLE')
+    decimals = plan.get('price_decimals', 2)
 
     def mark(label, day, price, color, offset):
         if day not in dates or price is None:
@@ -38,7 +39,7 @@ def draw_h2(ax, plot, plan):
 
     for label, day_key, price_key, color, offset in (
         ('BO', 'bo_date', 'bo_high', ACCENT, (0, 16)),
-        ('H1', 'h1_date', 'h1_high', ACCENT, (0, 30)),
+        ('H1', 'h1_date', 'h1_high', '#8E24AA', (0, 30)),
         ('H2', 'h2_setup_date', 'h2_high', TARGET, (0, 44)),
         ('MM low', 'mm_low_date', 'mm_low', MUTED, (18, -18)),
         ('Gap Floor', 'gap_floor_date', 'gap_floor', ACCENT, (-12, -28)),
@@ -73,7 +74,7 @@ def draw_h2(ax, plot, plan):
                     + (f'风险  {risk:.2f}%' if risk is not None else '风险  待核对') + '\n'
                     + (f'收益  {reward:.2f}R' if reward is not None else '收益  待核对') + '\n'
                     + (f'趋势  前序开放缺口 {gaps}个' if gaps is not None else '趋势  数据不足'))
-        prices = '   '.join(f'{label} {plan[key]:.2f}' for label, key in (
+        prices = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
             ('Entry', 'entry_plan_price'), ('SL1', 'sl1_plan_price'), ('MM', 'mm_target'))
                             if plan.get(key) is not None)
     else:

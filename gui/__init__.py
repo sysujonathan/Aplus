@@ -5,6 +5,12 @@
 后续批次（第二批接候选、第三批接关注、第四批接 K 线/AI）再逐步接线。
 """
 
-from .main_window import AplusMainWindow
-
 __all__ = ["AplusMainWindow"]
+
+
+def __getattr__(name):
+    # Importing the shared image renderer in Web must not load a Tk window.
+    if name == "AplusMainWindow":
+        from .main_window import AplusMainWindow
+        return AplusMainWindow
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

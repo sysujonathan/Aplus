@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 from workbench.h2_plan import display_plan, plan_at_end, project_plan
-from workbench.prices import offset_tick, tick_size
+from workbench.prices import offset_tick, tick_size, reaches_entry_tick
 from workbench.strategies import calculate, catalog, signal_at_end, verify_frozen
 from workbench.store import Store
 from gui.chart_panel import ChartPanel, render_chart
@@ -22,6 +22,7 @@ def h2_bars():
     for i, (high, low) in enumerate([(12., 10.8), (11.8, 10.6),
                                     (11.9, 10.7), (11.6, 10.5)], 126):
         frame.loc[i, ['open', 'high', 'low', 'close']] = [low + .1, high, low, high - .1]
+    frame.attrs['code'] = 'sh.600000'
     return frame
 
 
@@ -32,10 +33,12 @@ def h2_spec(tmp_path):
 
 def append_bar(frame, high, low):
     day = (pd.Timestamp(frame.date.iloc[-1]) + pd.offsets.BDay()).strftime('%Y-%m-%d')
-    return pd.concat([frame, pd.DataFrame([{
+    result = pd.concat([frame, pd.DataFrame([{
         'date': day, 'open': low + .1, 'high': high, 'low': low,
         'close': high - .1, 'volume': 1000.,
     }])], ignore_index=True)
+    result.attrs = dict(frame.attrs)
+    return result
 
 
 def anchored_plan(spec, bars, day):
@@ -61,12 +64,15 @@ def test_daily_entry_sl1_and_shared_risk_basis(h2_spec, h2_bars):
     assert second['sl1_reference_date'] == second_bars.date.iloc[-1]
     assert second['initial_risk_pct'] == pytest.approx((11.41 - 10.29) / 11.41 * 100)
     assert second['mm_r_multiple'] == pytest.approx((14 - 11.41) / (11.41 - 10.29))
-    assert second['rating'] is None
+    assert second['rating'] == first['rating']
+    assert second['setup_evaluation'] == first['setup_evaluation']
+    assert second['rating']['factors']
 
 
 @pytest.mark.parametrize('high,low,state,reason', [
     (11.61, 10.5, 'TRIGGERED', 'previous_plan_price_reached'),
     (11.60, 10.5, 'PENDING', ''),
+    (11.6099999995, 10.5, 'PENDING', ''),  # Any amount below a full tick must wait.
     (11.60, 10., 'INVALID', 'gap_floor_broken'),
     (14., 10.5, 'INVALID', 'target_already_reached'),
     (12., 9.9, 'INVALID', 'gap_floor_broken'),
@@ -144,6 +150,59 @@ def test_imported_reminder_resolves_setup_at_original_scan_close(h2_spec, h2_bar
     assert watched['pending_state'] == 'TRIGGERED'
 
 
+def test_legacy_scan_date_inside_payload_resolves_only_at_archived_close(h2_spec, h2_bars):
+    reminder = append_bar(h2_bars, 11.4, 10.3)
+    scan_day = reminder.date.iloc[-1]
+    payload = {'legacy_import': True, 'asof': scan_day, 'setup_date': scan_day}
+    original = dict(payload)
+    candidate = display_plan(h2_spec, reminder, payload, 'sh.600000', scan_day)
+    assert candidate['h2_setup_date'] == h2_bars.date.iloc[-1]
+    assert candidate['entry'] == 11.41
+    later = append_bar(reminder, 11.7, 10.4)
+    watch = display_plan(h2_spec, later, payload, 'sh.600000', scan_day, 'watch')
+    assert watch['h2_setup_date'] == candidate['h2_setup_date']
+    assert watch['pending_state'] == 'TRIGGERED'
+    assert payload == original
+
+
+@pytest.mark.parametrize('extra', [
+    {'legacy_import': False},
+    {'h2_setup_date': 'archived_scan'},
+    {'asof': 'original_setup'},
+])
+def test_unambiguous_anchor_is_never_replaced_by_legacy_fallback(h2_spec, h2_bars, extra):
+    reminder = append_bar(h2_bars, 11.4, 10.3)
+    day = reminder.date.iloc[-1]
+    extra = {key: (day if value == 'archived_scan' else h2_bars.date.iloc[-1]
+                   if value == 'original_setup' else value) for key, value in extra.items()}
+    payload = {'legacy_import': True, 'asof': day, 'setup_date': day, **extra}
+    plan = display_plan(h2_spec, reminder, payload, 'sh.600000', day)
+    assert plan['pending_state'] == 'UNAVAILABLE'
+    assert plan['entry'] is None
+
+
+def test_plan_candidate_survives_sub_tick_high_where_frozen_projection_ends(h2_spec, h2_bars):
+    latest = append_bar(h2_bars, 11.605, 10.5)
+    assert signal_at_end(h2_spec, latest, plan_prices=False) is None
+    live = signal_at_end(h2_spec, latest)
+    assert live['pending_state'] == 'PENDING'
+    assert live['entry'] == 11.615
+
+
+def test_setup_evaluation_is_causal_and_rating_can_be_disabled(h2_spec, h2_bars):
+    first = signal_at_end(h2_spec, h2_bars)
+    latest = append_bar(h2_bars, 11.4, 10.3)
+    last = signal_at_end(h2_spec, latest)
+    assert last['setup_evaluation'] == first['setup_evaluation']
+    assert last['setup_evaluation']['asof'] == first['setup_date']
+    assert last['setup_evaluation']['basis'] == 'frozen-original-setup'
+    assert last['rating'] == first['rating']
+    assert last['rating']['factors']
+    no_rating = signal_at_end(h2_spec, latest, with_rating=False)
+    assert no_rating['rating'] is None
+    assert no_rating['setup_evaluation']['signal_quality'] == first['setup_evaluation']['signal_quality']
+
+
 def test_watch_anchor_survives_300_bar_window(h2_spec, h2_bars):
     payload = signal_at_end(h2_spec, h2_bars)
     latest = h2_bars
@@ -202,6 +261,49 @@ def test_unconfigured_instrument_does_not_get_stock_tick():
         tick_size('sh.510300', 4)
 
 
+@pytest.mark.parametrize('code,kind,tick,entry,stop', [
+    ('sh.600000', 'a_share_stock', .01, 4.01, 3.99),
+    ('sh.510300', 'etf', .001, 4.001, 3.999),
+    ('sz.159915', 'etf', .001, 4.001, 3.999),
+    ('sz.161725', 'exchange_fund', .001, 4.001, 3.999),
+])
+def test_price_steps_follow_confirmed_instrument(code, kind, tick, entry, stop):
+    assert tick_size(code, 4, instrument_type=kind) == tick
+    assert offset_tick(code, 4, 1, instrument_type=kind) == entry
+    assert offset_tick(code, 4, -1, instrument_type=kind) == stop
+    assert not reaches_entry_tick(code, 4, 4, instrument_type=kind)
+    assert not reaches_entry_tick(code, 4, 4 + tick / 2, instrument_type=kind)
+    assert reaches_entry_tick(code, 4, entry, instrument_type=kind)
+
+
+@pytest.mark.parametrize('code,kind', [(None, None), ('sh.600000', 'etf'),
+                                     ('sh.510300', 'a_share_stock'), ('sh.510300', 'bond')])
+def test_unknown_or_conflicting_instrument_never_defaults_to_a_tick(code, kind):
+    with pytest.raises(ValueError, match='tick'):
+        tick_size(code, 4, instrument_type=kind)
+
+
+def test_etf_plan_and_card_use_a_mill_tick(h2_spec, h2_bars):
+    from matplotlib.axes import Axes
+    h2_bars.attrs.update(code='sh.510300', instrument_type='etf')
+    plan = signal_at_end(h2_spec, h2_bars)
+    assert plan['entry'] == 11.601 and plan['stop'] == 10.499
+    assert plan['price_tick'] == .001 and plan['price_decimals'] == 3
+    halfway = append_bar(h2_bars, 11.6005, 10.5)
+    assert signal_at_end(h2_spec, halfway)['pending_state'] == 'PENDING'
+    reached = append_bar(h2_bars, 11.601, 10.5)
+    assert signal_at_end(h2_spec, reached) is None
+    instance, calculated = calculate(h2_spec, h2_bars)
+    labels, actual_text = [], Axes.text
+    def capture(ax, x, y, text, *args, **kwargs):
+        labels.append(text)
+        return actual_text(ax, x, y, text, *args, **kwargs)
+    with patch.object(Axes, 'text', capture):
+        render_chart(calculated, plan, '', instance.get_metadata(),
+                     strategy=instance, strategy_type=h2_spec.id)
+    assert any('Entry 11.601' in text and 'SL1 10.499' in text for text in labels)
+
+
 @pytest.mark.parametrize('high,low,state', [(11.4, 10.3, 'PENDING'), (11.7, 10.4, 'TRIGGERED')])
 def test_watch_panel_passes_updated_plan_and_title(h2_spec, h2_bars, high, low, state):
     payload = signal_at_end(h2_spec, h2_bars)
@@ -254,6 +356,35 @@ def test_chart_annotations_point_to_candle_centers(h2_spec, h2_bars):
     assert all(float(x).is_integer() for _, (x, _) in annotations)
     assert image.width > 500
     pd.testing.assert_frame_equal(calculated, before)
+
+
+def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spec, h2_bars):
+    from matplotlib.axes import Axes
+    from matplotlib.colors import to_hex
+    latest = append_bar(h2_bars, 11.4, 10.3)
+    plan = signal_at_end(h2_spec, latest)
+    instance, calculated = calculate(h2_spec, latest)
+    instance.annotate_chart = Mock(side_effect=AssertionError('Old H2 prices must not be drawn'))
+    actual_text, actual_annotate = Axes.text, Axes.annotate
+    labels, colors = [], {}
+
+    def capture_text(ax, x, y, text, *args, **kwargs):
+        labels.append(text)
+        return actual_text(ax, x, y, text, *args, **kwargs)
+
+    def capture_annotate(ax, label, *args, **kwargs):
+        colors[label] = kwargs.get('color')
+        return actual_annotate(ax, label, *args, **kwargs)
+
+    with patch.object(Axes, 'text', capture_text), patch.object(Axes, 'annotate', capture_annotate):
+        render_chart(calculated, plan, '', instance.get_metadata(),
+                     strategy=instance, strategy_type=h2_spec.id)
+    instance.annotate_chart.assert_not_called()
+    assert any('风险' in text and '收益' in text for text in labels)
+    assert any('Entry 11.41' in text and 'SL1 10.29' in text for text in labels)
+    assert not any('Rating' in text or 'Quality' in text or 'PB bars' in text for text in labels)
+    assert to_hex(colors['H1']).upper() == '#8E24AA'
+    assert plan['rating']['factors']  # Still archived for tracing, outside the decision card.
 
 
 def test_scan_archives_new_plan_without_replacing_legacy_or_duplicating_manual_plan(tmp_path, h2_spec, h2_bars):

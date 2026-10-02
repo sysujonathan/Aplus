@@ -208,7 +208,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         if h2:
             from .h2_plan import display_plan, STATE_LABELS
             from .strategies import calculate
-            from gui.chart_panel import render_chart
+            from gui.chart_renderer import render_chart
             spec = entries[o['strategy']]
             payload = display_plan(spec, bars, payload, o['code'], o['setup_date'],
                                    'watch' if from_watch else 'candidate')

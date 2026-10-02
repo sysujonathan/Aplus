@@ -5,10 +5,12 @@ No execution or position state. The supplied frame must end at the selected clos
 from __future__ import annotations
 
 import math
+import logging
+from decimal import Decimal
 
 import numpy as np
 
-from .prices import offset_tick
+from .prices import offset_tick, reaches_entry_tick, tick_size
 from .store import ROOT, digest
 
 
@@ -18,6 +20,7 @@ STATE_LABELS = {
     'INVALID': '结构失效', 'EXPIRED': '超过等待期限',
     'UNAVAILABLE': '原形态无法复核',
 }
+logger = logging.getLogger(__name__)
 
 
 def plan_version():
@@ -121,6 +124,10 @@ def project_plan(frame, structure, code=None, *, lookback=60):
     if bo >= signal_pos or not all(_number(v) is not None for v in (floor, target)):
         return plan
     ref_high = float(frame.iloc[signal_pos].high)
+    code = code or frame.attrs.get('code')
+    instrument_type = frame.attrs.get('instrument_type')
+    tick = tick_size(code, ref_high, instrument_type=instrument_type)
+    plan.update(price_tick=tick, price_decimals=max(0, -Decimal(str(tick)).as_tuple().exponent))
     state, reason, end_pos = 'PENDING', '', len(frame) - 1
     for j in range(signal_pos + 1, len(frame)):
         bar = frame.iloc[j]
@@ -131,7 +138,7 @@ def project_plan(frame, structure, code=None, *, lookback=60):
             state, reason = 'INVALID', 'target_already_reached'
         elif j - signal_pos > TIMEOUT:
             state, reason = 'EXPIRED', 'timeout'
-        elif bar.high >= offset_tick(code, ref_high, 1) - 1e-9:
+        elif reaches_entry_tick(code, ref_high, bar.high, instrument_type=instrument_type):
             state, reason = 'TRIGGERED', 'previous_plan_price_reached'
         if state != 'PENDING':
             end_pos = j
@@ -152,7 +159,8 @@ def project_plan(frame, structure, code=None, *, lookback=60):
     pullback = frame.iloc[bo + 1:]
     low_pos = bo + 1 + int(np.argmin(pullback.low.to_numpy()))
     ref_low = float(frame.iloc[low_pos].low)
-    entry, stop = offset_tick(code, ref_high, 1), offset_tick(code, ref_low, -1)
+    entry = offset_tick(code, ref_high, 1, instrument_type=instrument_type)
+    stop = offset_tick(code, ref_low, -1, instrument_type=instrument_type)
     risk = entry - stop
     plan.update(entry_reference_high=ref_high, entry_reference_date=dates[-1],
                 sl1_reference_low=ref_low, sl1_reference_date=dates[low_pos],
@@ -177,6 +185,29 @@ def plan_at_end(instance, calculated, code=None, setup_date=None):
     return project_plan(calculated, None, code, lookback=lookback)
 
 
+def evaluation_at_setup(spec, bars, setup_date, *, with_rating=True):
+    """Archive original frozen evaluation, separate from SL1 plan risk metrics."""
+    from .strategies import calculate
+    source = bars[bars.date.astype(str).str[:10] <= str(setup_date)[:10]]
+    if len(source) < 65 or _date(source, len(source) - 1) != str(setup_date)[:10]:
+        return None
+    instance, calculated = calculate(spec, source)
+    row = calculated.iloc[-1]
+    if not bool(row.get('signal_gap_h2', False)):
+        return None
+    rating, warning = None, ''
+    if with_rating and hasattr(instance, 'compute_rating'):
+        try:
+            obj = instance.compute_rating(calculated)
+            rating = obj.to_dict() if obj is not None else None
+        except Exception as exc:
+            logger.warning('H2 setup evaluation failed: setup=%s', setup_date, exc_info=True)
+            warning = f'原形态评级失败：{exc}'
+    return {'asof': str(setup_date)[:10], 'basis': 'frozen-original-setup',
+            'signal_quality': _number(row.get('sig_bar_quality_h2')),
+            'rating': rating, 'warning': warning}
+
+
 def display_plan(spec, bars, payload, code, setup_date, mode='candidate'):
     """Archived candidates keep their plan; watches replay their original setup.
 
@@ -193,7 +224,11 @@ def display_plan(spec, bars, payload, code, setup_date, mode='candidate'):
         return dict(project_plan(bars, None, code), h2_setup_date=setup_date)
     instance, anchor = calculate(spec, anchor_bars)
     positions = [i for i in _positions(anchor, 'signal_gap_h2') if _date(anchor, i) == setup_date]
-    if not positions and payload.get('legacy_import') and not payload.get('setup_date'):
+    scan_date = str(payload.get('asof') or setup_date)[:10]
+    ambiguous_legacy_date = (not payload.get('setup_date')
+                             or str(payload['setup_date'])[:10] == scan_date)
+    if (not positions and payload.get('legacy_import')
+            and not payload.get('h2_setup_date') and ambiguous_legacy_date):
         # Imported reminders sometimes saved the scan day as setup_date. Resolve
         # their original setup at THAT archived close, before replaying forward.
         # Never select a new setup from the watch's latest close.
@@ -204,4 +239,8 @@ def display_plan(spec, bars, payload, code, setup_date, mode='candidate'):
     structure = _structure(anchor, positions[-1], instance.LOOKBACK_WINDOW) if positions else None
     plan = project_plan(bars, structure, code, lookback=instance.LOOKBACK_WINDOW)
     plan['h2_setup_date'] = setup_date
+    if structure:
+        evaluation = evaluation_at_setup(spec, bars, setup_date)
+        plan['setup_evaluation'] = evaluation
+        plan['rating'] = evaluation.get('rating') if evaluation else None
     return plan
