@@ -388,6 +388,7 @@ class ChartPanel(native_ttk.Frame):
                 title = (
                     f"{chart_identity}  ·  {spec.name} · {period}"
                     f" · 行情 {current_day} · 信号 {signal_day}"
+                    " · 计划线来自信号日"
                 )
             else:
                 title = f"{chart_identity}  ·  {spec.name} · {period}"

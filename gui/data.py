@@ -122,8 +122,8 @@ def latest_market_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
     return rows[0]["day"] if rows and rows[0].get("day") else None
 
 
-def latest_signal_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
-    """返回指定正式行情源最近一次真正产生观察结果的日期。"""
+def latest_observation_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """返回指定行情来源最近一次保存观察结果的日期。"""
     rows = store.rows(
         "SELECT MAX(o.asof) AS day FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "

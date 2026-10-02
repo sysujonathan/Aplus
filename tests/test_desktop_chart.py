@@ -95,6 +95,7 @@ def test_watch_chart_uses_latest_market_but_keeps_anchor_payload(tmp_path):
     title = panel._title_var.set.call_args_list[-1].args[0]
     assert f"行情 {market_cutoff}" in title
     assert f"信号 {anchor_cutoff}" in title
+    assert "计划线来自信号日" in title
 
 
 def test_each_chart_slot_opens_its_own_tradingview_symbol():

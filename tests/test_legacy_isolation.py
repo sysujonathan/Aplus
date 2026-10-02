@@ -1,5 +1,7 @@
 """工程 A 历史快照必须与新版实时候选保持显式隔离。"""
 
+from unittest.mock import Mock
+
 import pandas as pd
 
 from gui.data import (
@@ -10,11 +12,12 @@ from gui.data import (
     latest_market_date,
     latest_legacy_observation,
     latest_observation,
+    latest_observation_date,
     latest_scan_date,
-    latest_signal_date,
     load_candidates,
     load_legacy_candidates,
 )
+from gui.watch_panel import WatchPanel
 from workbench.market import save_dataset
 from workbench.store import Store, now
 
@@ -98,7 +101,7 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
     assert latest_candidate_date(store) == "2026-09-29"
     assert latest_scan_date(store) == "2026-09-29"
     assert latest_market_date(store) == "2026-09-30"
-    assert latest_signal_date(store) == "2026-09-28"
+    assert latest_observation_date(store) == "2026-09-28"
     assert latest_market_dataset(store, "sh.600000")["id"] == latest_live
     assert latest_market_dataset(store, "sz.000001") is None
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "legacy-engine-a"
@@ -123,4 +126,51 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
             ),
         )
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "baostock"
-    assert latest_signal_date(store) == "2026-09-29"
+    assert latest_observation_date(store) == "2026-09-29"
+
+
+def test_watch_with_legacy_anchor_uses_latest_baostock_market(tmp_path):
+    store = Store(tmp_path)
+    legacy_frame = pd.DataFrame({
+        "date": ["2026-09-28", "2026-09-29"],
+        "open": [10.0, 10.1], "high": [10.3, 10.4],
+        "low": [9.8, 9.9], "close": [10.1, 10.2],
+        "volume": [1000.0, 1100.0],
+    })
+    current_frame = pd.concat([
+        legacy_frame,
+        pd.DataFrame([{
+            "date": "2026-09-30", "open": 10.2, "high": 10.6,
+            "low": 10.0, "close": 10.5, "volume": 1300.0,
+        }]),
+    ], ignore_index=True)
+    legacy_id = save_dataset(
+        store, "sz.000001", legacy_frame, "legacy-engine-a", "工程A历史"
+    )
+    official_id = save_dataset(
+        store, "sz.000001", current_frame, "baostock", "前复权"
+    )
+    with store.connect() as db:
+        db.execute(
+            "INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-watch-anchor", "legacy-job", "sz.000001",
+                "STRATEGY_GAP_H2", "legacy", "daily", "2026-09-29",
+                "2026-09-29", legacy_id, "{}", now(),
+            ),
+        )
+    store.watch("legacy-watch-anchor")
+
+    tree = Mock()
+    tree.get_children.return_value = []
+    tree.insert.return_value = "watch-row"
+    panel = Mock(store=store, tree=tree, _display_rows=[])
+    WatchPanel.reload(panel)
+
+    assert len(panel._display_rows) == 1
+    item = panel._display_rows[0]
+    assert item["observation_id"] == "legacy-watch-anchor"
+    assert item["anchor_asof"] == "2026-09-29"
+    assert item["source"] == "baostock"
+    assert item["market_dataset_id"] == official_id
+    assert item["market_asof"] == "2026-09-30"
