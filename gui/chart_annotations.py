@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 import pandas as pd
 
 from .theme import BORDER, CONTROL_BG, TARGET
+
+
+logger = logging.getLogger(__name__)
 
 
 GAP_STRATEGIES = frozenset({
@@ -92,6 +96,10 @@ def signal_context(strategy, frame, payload):
         info = strategy.get_signal_info(source)
         return info if isinstance(info, dict) else {}
     except Exception:
+        logger.warning(
+            "signal_context failed: strategy=%s anchor=%s",
+            type(strategy).__name__, anchor, exc_info=True,
+        )
         return {}
 
 

@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 import os
+import logging
 import sys
-import traceback
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
@@ -68,14 +68,18 @@ def main():
     if mutex is None:
         return
     try:
+        # pythonw 双击启动没有可见控制台，标注诊断也应保留到桌面日志。
+        logging.basicConfig(
+            filename=LOG_PATH, encoding="utf-8", level=logging.WARNING,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
         from gui.main_window import AplusMainWindow
 
         service, store = build_backend()
         app = AplusMainWindow(service=service, store=store, enable_tray=True)
         app.mainloop()
     except Exception:
-        with open(LOG_PATH, "w", encoding="utf-8") as log_file:
-            traceback.print_exc(file=log_file)
+        logging.getLogger(__name__).exception("桌面工作台启动或运行失败")
         sys.exit(1)
     finally:
         release_single_instance(mutex)
