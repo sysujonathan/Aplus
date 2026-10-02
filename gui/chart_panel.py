@@ -6,6 +6,16 @@ from tkinter import ttk as native_ttk
 import ttkbootstrap as ttk
 from PIL import Image, ImageTk
 
+from .chart_annotations import (
+    annotation_frame,
+    annotation_kwargs,
+    info_panel_lines,
+    marker_specs,
+    owns_risk_lines,
+    restyle_strategy_annotations,
+    signal_context,
+    trend_specs,
+)
 from .chart_items import ChartItem
 from .theme import (
     ACCENT,
@@ -25,8 +35,8 @@ from .theme import (
 )
 
 
-def render_chart(frame, payload, title, meta):
-    """Render only supplied, as-of-filtered strategy output; never reads old A."""
+def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""):
+    """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -34,7 +44,9 @@ def render_chart(frame, payload, title, meta):
     import mplfinance as mpf
     import pandas as pd
 
-    plot = frame.tail(120).copy()
+    visible = frame.tail(120).copy()
+    strategy_plot = annotation_frame(frame)
+    plot = visible.copy()
     plot.index = pd.to_datetime(plot["date"])
     colors = mpf.make_marketcolors(
         up=UP,
@@ -61,25 +73,58 @@ def render_chart(frame, payload, title, meta):
         },
     )
     adds = []
+    legend_handles = []
     if "ema20" in plot:
         adds.append(mpf.make_addplot(plot.ema20, color=AVERAGE, width=1.35))
-    signal_column = meta.get("signal_column")
-    has_marks = False
-    if signal_column in plot:
-        marks = plot.low.where(plot[signal_column].fillna(False).astype(bool)) * .98
+    for trend in trend_specs(strategy_type):
+        if trend.column in plot and plot[trend.column].notna().any():
+            adds.append(
+                mpf.make_addplot(
+                    plot[trend.column], color=trend.color,
+                    linestyle=trend.linestyle, width=trend.width,
+                )
+            )
+            legend_handles.append(
+                Line2D([0], [0], color=trend.color, linestyle=trend.linestyle,
+                       linewidth=trend.width, label=trend.label)
+            )
+    for marker in marker_specs(strategy_type, meta):
+        if marker.column not in plot or marker.price_column not in plot:
+            continue
+        marks = (
+            plot[marker.price_column]
+            .where(plot[marker.column].fillna(False).astype(bool))
+            * marker.multiplier
+        )
         if marks.notna().any():
             adds.append(
                 mpf.make_addplot(
-                    marks, type="scatter", marker="*", markersize=95, color=TARGET
+                    marks,
+                    type="scatter",
+                    marker=marker.marker,
+                    markersize=marker.size,
+                    color=marker.color,
                 )
             )
-            has_marks = True
+            legend_handles.append(
+                Line2D(
+                    [0], [0], marker=marker.marker, color=CHART_BG,
+                    label=marker.label, markerfacecolor=marker.color,
+                    markersize=max(6, marker.size ** .5),
+                )
+            )
+    strategy_info = signal_context(strategy, frame, payload)
+    owns_levels = owns_risk_lines(strategy_type)
+    risk_levels = []
     lines, line_colors, styles = [], [], []
     for key, color, dash in (("stop", STOP, "-."), ("target", TARGET, "--")):
         if payload.get(key) is not None and float(payload[key]) > 0:
-            lines.append(float(payload[key]))
-            line_colors.append(color)
-            styles.append(dash)
+            value = float(payload[key])
+            risk_levels.append(value)
+            if not owns_levels:
+                lines.append(value)
+                line_colors.append(color)
+                styles.append(dash)
     kwargs = {}
     if adds:
         kwargs["addplot"] = adds
@@ -92,7 +137,7 @@ def render_chart(frame, payload, title, meta):
     price_span = max(price_high - price_low, abs(price_high) * .02, .01)
     view_low = price_low - price_span * .06
     view_high = price_high + price_span * .06
-    for level in lines:
+    for level in risk_levels:
         if price_low - price_span * .18 <= level <= price_high + price_span * .18:
             view_low = min(view_low, level - price_span * .02)
             view_high = max(view_high, level + price_span * .02)
@@ -117,10 +162,21 @@ def render_chart(frame, payload, title, meta):
             axis.tick_params(colors=MUTED, labelsize=8)
             for spine in axis.spines.values():
                 spine.set_color(BORDER)
-        facts = []
-        for label, key in (("Entry", "entry"), ("SL", "stop"), ("TP1", "target")):
-            if payload.get(key) is not None:
-                facts.append(f"{label}: {float(payload[key]):.2f}")
+        open_gap_count = 0
+        annotate = getattr(strategy, "annotate_chart", None)
+        if callable(annotate):
+            result = annotate(
+                ax,
+                strategy_plot,
+                strategy_type,
+                **annotation_kwargs(payload, strategy_info),
+            )
+            if isinstance(result, int):
+                open_gap_count = result
+            restyle_strategy_annotations(ax, strategy_type)
+        facts = info_panel_lines(
+            payload, strategy_info, frame, open_gap_count=open_gap_count
+        )
         if facts:
             ax.text(
                 .02,
@@ -138,6 +194,8 @@ def render_chart(frame, payload, title, meta):
                 ),
             )
         for key, label, color in (("stop", "SL", STOP), ("target", "TP1", TARGET)):
+            if owns_levels:
+                continue
             if payload.get(key) is not None and float(payload[key]) > 0:
                 value = float(payload[key])
                 if value > view_high:
@@ -156,19 +214,9 @@ def render_chart(frame, payload, title, meta):
                         transform=ax.get_yaxis_transform(), ha="right", va="bottom",
                         color=color, fontsize=8,
                     )
-        if has_marks:
+        if legend_handles:
             legend = ax.legend(
-                handles=[
-                    Line2D(
-                        [0],
-                        [0],
-                        marker="*",
-                        color=CHART_BG,
-                        label="Entry",
-                        markerfacecolor=TARGET,
-                        markersize=9,
-                    )
-                ],
+                handles=legend_handles,
                 loc="lower left",
                 framealpha=.9,
                 fontsize=8,
@@ -362,6 +410,13 @@ class ChartPanel(native_ttk.Frame):
             if frame is None:
                 raise ValueError("该观察无可用行情快照")
             observation = store.rows("SELECT * FROM observations WHERE id=?", (observation_id,))[0]
+            # 早期迁入 Aplus 的观察记录可能只在 observations 表保存日期，
+            # payload 内没有 asof/setup_date。绘图层补齐只读上下文，保证
+            # 专属标注仍锚定这笔历史信号，而不是误取窗口内另一笔信号。
+            payload = dict(payload or {})
+            for key in ("asof", "setup_date"):
+                if observation.get(key):
+                    payload.setdefault(key, observation[key])
             self._code = observation["code"]
             self._tf = observation["timeframe"]
             if mode == "watch" and market_dataset_id:
@@ -380,7 +435,14 @@ class ChartPanel(native_ttk.Frame):
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
             # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
-            self._image = render_chart(calculated, payload, "", instance.get_metadata())
+            self._image = render_chart(
+                calculated,
+                payload,
+                "",
+                instance.get_metadata(),
+                strategy=instance,
+                strategy_type=observation["strategy"],
+            )
             chart_identity = f"{self._code}  {name}".rstrip()
             if mode == "watch":
                 current_day = str(cutoff)[:10]
