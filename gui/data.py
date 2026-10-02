@@ -80,21 +80,50 @@ def load_legacy_candidates(store, timeframe="daily", asof_filter=None):
     )
 
 
-def candidate_dates(store, timeframe="daily"):
-    """本地策略结果时间线；只返回日期，不把不同来源的候选混在一起。"""
+def candidate_dates(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """主界面策略结果时间线；默认只读 Aplus 正式扫描。"""
     rows = store.rows(
         "SELECT DISTINCT o.asof FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source IN (?,?) AND o.timeframe=? ORDER BY o.asof DESC",
-        (*LOCAL_CANDIDATE_SOURCES, timeframe),
+        "WHERE d.source=? AND o.timeframe=? ORDER BY o.asof DESC",
+        (source, timeframe),
     )
     return [row["asof"] for row in rows if row.get("asof")]
 
 
 def latest_candidate_date(store, timeframe="daily"):
-    """返回本地时间线上最新的有效策略结果日期。"""
-    dates = candidate_dates(store, timeframe)
-    return dates[0] if dates else None
+    """返回启动时应选中的 Aplus 正式策略结果日期。"""
+    return latest_signal_date(store, timeframe=timeframe)
+
+
+def latest_market_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """返回指定正式行情源的最新 K 线日期。"""
+    rows = store.rows(
+        "SELECT MAX(end) AS day FROM datasets WHERE source=? AND timeframe=?",
+        (source, timeframe),
+    )
+    return rows[0]["day"] if rows and rows[0].get("day") else None
+
+
+def latest_signal_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """返回指定正式行情源最近一次真正产生观察结果的日期。"""
+    rows = store.rows(
+        "SELECT MAX(o.asof) AS day FROM observations o "
+        "JOIN datasets d ON d.id=o.dataset_id "
+        "WHERE d.source=? AND o.timeframe=?",
+        (source, timeframe),
+    )
+    return rows[0]["day"] if rows and rows[0].get("day") else None
+
+
+def latest_market_dataset(store, code, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+    """按股票读取最新正式行情快照；不会回退到工程 A 历史源。"""
+    rows = store.rows(
+        "SELECT * FROM datasets WHERE source=? AND timeframe=? AND code=? "
+        "ORDER BY end DESC, created DESC, rowid DESC LIMIT 1",
+        (source, timeframe, code),
+    )
+    return rows[0] if rows else None
 
 
 def candidate_source_for_date(store, timeframe="daily", asof_filter=None):

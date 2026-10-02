@@ -11,7 +11,12 @@ from gui.candidate_tabs import (
     short_strategy_label,
     strategy_window,
 )
-from gui.toolbar import ToolBar, format_board_scope, sync_start_date
+from gui.toolbar import (
+    ToolBar,
+    format_board_scope,
+    format_data_chain_status,
+    sync_start_date,
+)
 from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
 from gui.main_window import AplusMainWindow, side_panel_widths
@@ -136,6 +141,16 @@ def test_toolbar_starts_from_latest_local_signal_date():
     toolbar.day_var.set.assert_called_once_with("30")
 
 
+def test_data_chain_status_marks_market_ahead_of_scan():
+    assert format_data_chain_status("2026-09-30", "2026-09-29") == (
+        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠ 待扫描"
+    )
+    assert format_data_chain_status("2026-09-30", "2026-09-30", 5211, 5222) == (
+        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-30 ✓ · 覆盖 5211/5222"
+    )
+    assert format_data_chain_status(None, None) == "行情最新 无 — · 信号最新 无 —"
+
+
 def test_first_market_update_builds_full_history_then_uses_incremental_window():
     empty = Mock()
     empty.rows.return_value = [{"count": 0, "latest_start": None}]
@@ -174,6 +189,26 @@ def test_chart_items_keep_mode_and_source_explicit():
             timeframe="daily",
         )
     ]
+
+
+def test_watch_chart_item_carries_latest_market_and_original_signal_dates():
+    item = chart_items(
+        [{
+            "code": "sz.003006",
+            "name": "百亚股份",
+            "observation_id": "anchor-observation",
+            "source": "baostock",
+            "strategy": "MTR_MASTER",
+            "timeframe": "daily",
+            "market_dataset_id": "latest-market",
+            "market_asof": "2026-09-30",
+            "anchor_asof": "2026-09-26",
+        }],
+        "watch",
+    )[0]
+    assert item.market_dataset_id == "latest-market"
+    assert item.market_asof == "2026-09-30"
+    assert item.anchor_asof == "2026-09-26"
 
 
 def test_windows_launchers_forward_persisted_runtime_home():

@@ -532,7 +532,8 @@ class AplusMainWindow(ttk.Window):
             self.toolbar._load_market_status()
         except Exception:
             pass
-        self._status_text.set(f"{kind}结束（{status}），候选与观察池已刷新")
+        # ToolBar 已保留任务结果，并在行情更新后明确提示“行情最新/信号最新/待扫描”。
+        # 此处只刷新视图，不再用泛化文案覆盖那条关键结果。
 
     def _source_for_current_date(self, timeframe):
         """每个日期只选一个来源；正式 Aplus 同日结果优先于迁入基线。"""
@@ -540,10 +541,16 @@ class AplusMainWindow(ttk.Window):
             return REALTIME_MARKET_SOURCE
         from .data import candidate_source_for_date
 
+        # 主界面没有选择信号日时表示“当前 Aplus”，不能静默回退到
+        # 已废弃工程 A 的历史时间线。
+        current_date = getattr(self, "_cur_date", None)
+        if not current_date or not any(current_date):
+            return REALTIME_MARKET_SOURCE
+
         return candidate_source_for_date(
             self.store,
             timeframe=timeframe,
-            asof_filter=getattr(self, "_cur_date", None),
+            asof_filter=current_date,
         )
 
     # ---- 左栏候选右键：加入关注（写只走 store.watch）----

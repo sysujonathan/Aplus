@@ -324,7 +324,16 @@ class ChartPanel(native_ttk.Frame):
         self.chart_label.configure(image="", text="拖入关注标的或切换候选页")
         self._tv_btn.configure(state=tk.DISABLED)
 
-    def show_observation(self, store, observation_id):
+    def show_observation(
+        self,
+        store,
+        observation_id,
+        *,
+        market_dataset_id=None,
+        mode="candidate",
+        market_asof=None,
+        anchor_asof=None,
+    ):
         self.store = store
         self._code = None
         self._observation_id = observation_id
@@ -337,7 +346,8 @@ class ChartPanel(native_ttk.Frame):
             self.show_placeholder()
             return
         cache = getattr(self, "_image_cache", None)
-        cached = cache.get(observation_id) if isinstance(cache, dict) else None
+        cache_key = (observation_id, market_dataset_id or "", mode)
+        cached = cache.get(cache_key) if isinstance(cache, dict) else None
         if cached is not None:
             self._image, self._code, self._tf, title = cached
             self._title_var.set(title)
@@ -345,6 +355,7 @@ class ChartPanel(native_ttk.Frame):
             self._fit_image()
             return
         from .data import load_observation_candles, code_names
+        from workbench.market import load_dataset
         from workbench.strategies import catalog, prepare, calculate
         try:
             frame, record, payload = load_observation_candles(store, observation_id)
@@ -353,18 +364,36 @@ class ChartPanel(native_ttk.Frame):
             observation = store.rows("SELECT * FROM observations WHERE id=?", (observation_id,))[0]
             self._code = observation["code"]
             self._tf = observation["timeframe"]
+            if mode == "watch" and market_dataset_id:
+                # observation 仍是关注原因和参数来源；只把绘图行情推进到
+                # 该股票在 Aplus 正式行情源中的最新不可变快照。
+                frame, record = load_dataset(store, market_dataset_id)
             spec = catalog(store)[observation["strategy"]]
-            # Historical selection and weekly views must not draw later/daily bars.
-            bars = prepare(frame, self._tf, str(observation["asof"])[:10])
+            # 候选严格停在信号日；关注标的随正式行情向前推进。
+            cutoff = (
+                (market_asof or (record or {}).get("end"))
+                if mode == "watch" and market_dataset_id
+                else observation["asof"]
+            )
+            bars = prepare(frame, self._tf, str(cutoff)[:10])
             instance, calculated = calculate(spec, bars)
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
             # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
             self._image = render_chart(calculated, payload, "", instance.get_metadata())
             chart_identity = f"{self._code}  {name}".rstrip()
-            self._title_var.set(f"{chart_identity}  ·  {spec.name} · {period}")
+            if mode == "watch":
+                current_day = str(cutoff)[:10]
+                signal_day = str(anchor_asof or observation["asof"])[:10]
+                title = (
+                    f"{chart_identity}  ·  {spec.name} · {period}"
+                    f" · 行情 {current_day} · 信号 {signal_day}"
+                )
+            else:
+                title = f"{chart_identity}  ·  {spec.name} · {period}"
+            self._title_var.set(title)
             if isinstance(cache, dict):
-                cache[observation_id] = (
+                cache[cache_key] = (
                     self._image,
                     self._code,
                     self._tf,
@@ -483,9 +512,7 @@ class ChartGrid(ttk.Frame):
                     if not displayed or displayed.observation_id != observation_id:
                         base_item = self._items[index]
                         self._display_items[self._active_slot] = base_item
-                        self._slots[self._active_slot].show_observation(
-                            self.store, observation_id
-                        )
+                        self._show_item(self._slots[self._active_slot], base_item)
                     self._refresh_active_styles()
                     self._notify_page_state()
                 return True
@@ -504,7 +531,7 @@ class ChartGrid(ttk.Frame):
             self._display_items.append(None)
         self._display_items[slot_index] = item
         self._active_slot = slot_index
-        self._slots[slot_index].show_observation(self.store, item.observation_id)
+        self._show_item(self._slots[slot_index], item)
         self._refresh_active_styles()
         return True
 
@@ -589,7 +616,17 @@ class ChartGrid(ttk.Frame):
             return
         if index >= len(self._display_items) or self._display_items[index] is not item:
             return
-        self._slots[index].show_observation(self.store, item.observation_id)
+        self._show_item(self._slots[index], item)
+
+    def _show_item(self, slot, item):
+        slot.show_observation(
+            self.store,
+            item.observation_id,
+            market_dataset_id=item.market_dataset_id,
+            mode=item.mode,
+            market_asof=item.market_asof,
+            anchor_asof=item.anchor_asof,
+        )
 
     def _activate_slot(self, index):
         self._active_slot = index

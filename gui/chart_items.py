@@ -19,6 +19,9 @@ class ChartItem:
     mode: ChartMode
     strategy: str | None = None
     timeframe: str | None = None
+    market_dataset_id: str | None = None
+    market_asof: str | None = None
+    anchor_asof: str | None = None
 
 
 def chart_items(rows, mode: ChartMode):
@@ -38,6 +41,9 @@ def chart_items(rows, mode: ChartMode):
                 mode=mode,
                 strategy=value.get("strategy"),
                 timeframe=value.get("timeframe"),
+                market_dataset_id=value.get("market_dataset_id"),
+                market_asof=value.get("market_asof"),
+                anchor_asof=value.get("anchor_asof"),
             )
         )
     return result

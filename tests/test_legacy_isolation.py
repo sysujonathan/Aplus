@@ -6,8 +6,11 @@ from gui.data import (
     candidate_dates,
     candidate_source_for_date,
     latest_candidate_date,
+    latest_market_dataset,
+    latest_market_date,
     latest_legacy_observation,
     latest_observation,
+    latest_signal_date,
     load_candidates,
     load_legacy_candidates,
 )
@@ -78,8 +81,14 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
     assert history["STRATEGY_GAP_H2"][0]["source"] == "legacy-engine-a"
     assert latest_observation(store, "sz.000001") is None
     assert latest_legacy_observation(store, "sz.000001") == "legacy-observation"
-    assert candidate_dates(store) == ["2026-09-29", "2026-09-28"]
-    assert latest_candidate_date(store) == "2026-09-29"
+    assert candidate_dates(store) == ["2026-09-28"]
+    assert candidate_dates(store, source="legacy-engine-a") == ["2026-09-29"]
+    # 启动默认选择正式 Aplus 信号，工程 A 历史只保留为显式历史入口。
+    assert latest_candidate_date(store) == "2026-09-28"
+    assert latest_market_date(store) == "2026-09-29"
+    assert latest_signal_date(store) == "2026-09-28"
+    assert latest_market_dataset(store, "sh.600000")["id"] == live
+    assert latest_market_dataset(store, "sz.000001") is None
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "legacy-engine-a"
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "28")) == "baostock"
 
@@ -101,3 +110,4 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
             ),
         )
     assert candidate_source_for_date(store, asof_filter=("2026", "09", "29")) == "baostock"
+    assert latest_signal_date(store) == "2026-09-29"
