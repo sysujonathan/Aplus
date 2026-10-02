@@ -20,7 +20,7 @@ from gui.toolbar import (
 from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
 from gui.main_window import AplusMainWindow, right_list_width
-from gui.tree_scroll import wheel_scroll_units
+from gui.tree_scroll import identity_column_widths, wheel_scroll_units
 from launch_dashboard import acquire_single_instance, release_single_instance
 
 
@@ -108,6 +108,13 @@ def test_list_mousewheel_scrolls_only_the_hovered_tree():
     assert wheel_scroll_units(Mock(delta=-120, num=None)) == 3
     assert wheel_scroll_units(Mock(delta=0, num=4)) == -3
     assert wheel_scroll_units(Mock(delta=0, num=5)) == 3
+
+
+def test_identity_columns_fill_available_width_without_clipping_keys():
+    assert identity_column_widths(314) == (44, 112, 158)
+    assert identity_column_widths(344) == (45, 117, 182)
+    assert sum(identity_column_widths(374)) == 374
+    assert identity_column_widths(374)[2] > identity_column_widths(314)[2]
 
 
 def test_watch_selection_switches_chart_paging_to_watchlist():

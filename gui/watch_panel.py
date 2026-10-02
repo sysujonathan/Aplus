@@ -13,8 +13,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 
-from .theme import APP_BG, TEXT
-from .tree_scroll import attach_vertical_scrollbar
+from .theme import APP_BG, PANEL_BG, TEXT
+from .tree_scroll import attach_vertical_scrollbar, bind_identity_column_autofit
 
 # 与 store.save_plan 的合法状态保持一致（勿在此处增删）
 _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", "忽略")
@@ -51,20 +51,23 @@ class WatchPanel(ttk.Frame):
             show="headings",
         )
         for col, text, width, stretch in (
-            ("number", "序", 24, False),
-            ("code", "代码", 96, False),
-            ("name", "名称", 78, True),
+            ("number", "序", 44, False),
+            ("code", "代码", 112, False),
+            ("name", "名称", 144, False),
             ("strategy", "策略", 52, False),
             ("date", "信号日", 56, False),
             ("state", "状态", 52, False),
             ("notes", "备注", 40, True),
         ):
             self.tree.heading(col, text=text)
-            minwidth = 22 if col == "number" else (92 if col == "code" else 28)
+            minwidth = 44 if col == "number" else (112 if col == "code" else 90)
             self.tree.column(
                 col, width=width, minwidth=minwidth, anchor=tk.CENTER, stretch=stretch
             )
         self.vscroll = attach_vertical_scrollbar(self.tree_host, self.tree)
+        bind_identity_column_autofit(self.tree)
+        self.tree.tag_configure("row_even", background=PANEL_BG)
+        self.tree.tag_configure("row_odd", background=APP_BG)
         self.tree._obs = {}    # iid -> observation_id
         self.tree._codes = {}  # iid -> code
 
@@ -140,6 +143,7 @@ class WatchPanel(ttk.Frame):
                     state,
                     r["wnotes"] or "",
                 ),
+                tags=("row_even" if number % 2 == 0 else "row_odd",),
             )
             self.tree._obs[iid] = r["observation_id"]
             self.tree._codes[iid] = code

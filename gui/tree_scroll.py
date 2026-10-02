@@ -5,6 +5,26 @@ import tkinter as tk
 import ttkbootstrap as ttk
 
 
+def identity_column_widths(total_width):
+    """按列表真实可用宽度分配序号、代码、名称三列。"""
+    available = max(246, int(total_width or 0))
+    number = max(44, min(54, round(available * 0.13)))
+    code = max(112, min(132, round(available * 0.34)))
+    name = max(90, available - number - code)
+    return number, code, name
+
+
+def bind_identity_column_autofit(tree):
+    """窗口或滚动条改变宽度时，让三列重新填满列表且保持居中。"""
+
+    def resize(event):
+        widths = identity_column_widths(event.width)
+        for column, width in zip(("number", "code", "name"), widths):
+            tree.column(column, width=width, anchor=tk.CENTER, stretch=False)
+
+    tree.bind("<Configure>", resize, add="+")
+
+
 class AutoHideScrollbar(ttk.Scrollbar):
     """内容未溢出时隐藏，列表变长时自动出现。"""
 

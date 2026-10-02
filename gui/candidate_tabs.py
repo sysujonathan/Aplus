@@ -6,8 +6,8 @@ import tkinter as tk
 
 import ttkbootstrap as ttk
 
-from .theme import ACCENT, CONTROL_BG, HOVER, REPEAT, TEXT
-from .tree_scroll import attach_vertical_scrollbar
+from .theme import ACCENT, APP_BG, CONTROL_BG, HOVER, PANEL_BG, REPEAT, TEXT
+from .tree_scroll import attach_vertical_scrollbar, bind_identity_column_autofit
 
 
 _COLUMN_TITLES = {"number": "序", "code": "代码", "name": "名称"}
@@ -92,7 +92,7 @@ class CandidateTabs(ttk.Frame):
             show="headings",
             selectmode="browse",
         )
-        for col, width in (("number", 24), ("code", 96), ("name", 90)):
+        for col, width in (("number", 44), ("code", 112), ("name", 144)):
             self.tree.heading(
                 col,
                 text=_COLUMN_TITLES[col],
@@ -102,11 +102,12 @@ class CandidateTabs(ttk.Frame):
             self.tree.column(
                 col,
                 width=width,
-                minwidth=22 if col == "number" else (92 if col == "code" else 72),
-                stretch=col == "name",
+                minwidth=44 if col == "number" else (112 if col == "code" else 90),
+                stretch=False,
                 anchor=tk.CENTER,
             )
         self.vscroll = attach_vertical_scrollbar(self.tree_host, self.tree)
+        bind_identity_column_autofit(self.tree)
         self.tree.bind("<<TreeviewSelect>>", self._select)
         self.tree.bind("<Button-3>", self._context)
         self.tree.bind("<Up>", lambda _event: self._move_selection(-1))
@@ -116,6 +117,8 @@ class CandidateTabs(ttk.Frame):
         self.tree._obs = {}
         self.tree._codes = {}
         self.tree._base_tags = {}
+        self.tree.tag_configure("row_even", background=PANEL_BG)
+        self.tree.tag_configure("row_odd", background=APP_BG)
         self.tree.tag_configure("repeat", foreground=REPEAT)
         self.tree.tag_configure("hover", background=HOVER)
         self.tree.bind("<Motion>", self._hover)
@@ -133,7 +136,8 @@ class CandidateTabs(ttk.Frame):
             button = tk.Label(
                 self.sidebar,
                 text=f"{short_strategy_label(label)}\n0",
-                font=("Microsoft YaHei", 8),
+                font=("Microsoft YaHei UI", 8, "bold"),
+                width=1,
                 foreground=TEXT,
                 background=CONTROL_BG,
                 justify=tk.CENTER,
@@ -210,7 +214,8 @@ class CandidateTabs(ttk.Frame):
             name = row["name"] or ""
             if count > 1:
                 name = f"{name} ×{count}" if name else f"×{count}"
-            tags = ("repeat",) if count > 1 else ()
+            stripe = "row_even" if number % 2 == 0 else "row_odd"
+            tags = (stripe, "repeat") if count > 1 else (stripe,)
             iid = self.tree.insert("", tk.END, values=(number, row["code"], name), tags=tags)
             self.tree._obs[iid] = row["observation_id"]
             self.tree._codes[iid] = row["code"]
