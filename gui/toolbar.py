@@ -5,7 +5,7 @@ from datetime import date
 import tkinter as tk
 import ttkbootstrap as ttk
 
-from .theme import ACCENT, APP_BG, CONTROL_BG, MUTED, TEXT
+from .theme import MUTED
 
 _LABEL_FG = MUTED
 _ALL = "全部"
@@ -199,43 +199,26 @@ class ToolBar(ttk.Frame):
         )
         self.layout_combo.pack(side=tk.LEFT, padx=(0, 5))
         self.layout_combo.bind("<<ComboboxSelected>>", self._fire_layout)
-        self.btn_chart_prev = tk.Button(
+        self.btn_chart_prev = ttk.Button(
             filters,
             text="‹",
             width=2,
             command=lambda: self._fire_chart_page(-1),
-            bg=CONTROL_BG,
-            fg=TEXT,
-            activebackground=ACCENT,
-            activeforeground=TEXT,
-            borderwidth=0,
+            bootstyle="primary",
+            padding=(2, 0),
             cursor="hand2",
         )
-        self.btn_chart_prev.pack(side=tk.LEFT, ipady=4)
-        self.chart_page_var = tk.StringVar(value="0 / 0")
-        self._chart_source_label = "策略"
-        tk.Label(
-            filters,
-            textvariable=self.chart_page_var,
-            width=14,
-            anchor=tk.CENTER,
-            font=("Consolas", 9),
-            fg=_LABEL_FG,
-            bg=APP_BG,
-        ).pack(side=tk.LEFT, padx=3)
-        self.btn_chart_next = tk.Button(
+        self.btn_chart_prev.pack(side=tk.LEFT, padx=(0, 2), pady=3)
+        self.btn_chart_next = ttk.Button(
             filters,
             text="›",
             width=2,
             command=lambda: self._fire_chart_page(1),
-            bg=CONTROL_BG,
-            fg=TEXT,
-            activebackground=ACCENT,
-            activeforeground=TEXT,
-            borderwidth=0,
+            bootstyle="primary",
+            padding=(2, 0),
             cursor="hand2",
         )
-        self.btn_chart_next.pack(side=tk.LEFT, ipady=4)
+        self.btn_chart_next.pack(side=tk.LEFT, padx=(0, 2), pady=3)
 
         # 依赖 store 的真实信号日填充下拉
         self._load_date_options()
@@ -331,13 +314,6 @@ class ToolBar(ttk.Frame):
         self._status.set(text)
 
     def set_chart_page_status(self, start, end, total):
-        if not total:
-            page = "0 / 0"
-        elif start == end:
-            page = f"{start} / {total}"
-        else:
-            page = f"{start}–{end} / {total}"
-        self.chart_page_var.set(f"{self._chart_source_label} {page}")
         if start <= 1:
             self.btn_chart_prev.configure(state=tk.DISABLED)
         else:
@@ -352,7 +328,8 @@ class ToolBar(ttk.Frame):
             self._on_chart_page(delta)
 
     def set_chart_source(self, label):
-        self._chart_source_label = "关注" if label == "关注" else "策略"
+        # 来源由右侧对应列表的选中状态表达，顶部不再重复占位显示。
+        return None
 
     def _fire_layout(self, _event=None):
         label = self.layout_var.get().strip().lower().replace("✖", "×").replace("x", "×")

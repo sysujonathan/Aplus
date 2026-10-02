@@ -19,7 +19,8 @@ from gui.toolbar import (
 )
 from gui.chart_panel import layout_shape, page_start_for
 from gui.chart_items import ChartItem, chart_items
-from gui.main_window import AplusMainWindow, side_panel_widths
+from gui.main_window import AplusMainWindow, right_list_width
+from gui.tree_scroll import identity_column_widths, numeric_stock_code, wheel_scroll_units
 from launch_dashboard import acquire_single_instance, release_single_instance
 
 
@@ -44,11 +45,10 @@ def test_candidate_labels_fit_horizontal_strategy_bar():
     assert short_strategy_label("STRATEGY_GAP_H2") == "GH2"
 
 
-def test_strategy_bar_shows_four_groups_and_keeps_last_window_full():
+def test_strategy_bar_shows_all_six_groups_without_paging():
     keys = ["MTR", "3K", "GH1", "GPb", "GH2", "AIL"]
-    assert strategy_window(keys, 0) == (["MTR", "3K", "GH1", "GPb"], 0)
-    assert strategy_window(keys, 4) == (["GH1", "GPb", "GH2", "AIL"], 2)
-    assert strategy_window(keys, -4) == (["MTR", "3K", "GH1", "GPb"], 0)
+    assert strategy_window(keys, 0) == (keys, 0)
+    assert strategy_window(keys, 4) == (keys, 0)
 
 
 def test_repeated_candidates_are_counted_within_current_filter():
@@ -84,7 +84,7 @@ def test_multichart_layouts_and_candidate_pages_are_stable():
     assert page_start_for(17, 1) == 17
 
 
-def test_single_chart_toolbar_option_and_compact_sidebars():
+def test_single_chart_toolbar_option_and_wider_right_list_pane():
     toolbar = Mock()
     toolbar.layout_var.get.return_value = "1×1"
     ToolBar._fire_layout(toolbar)
@@ -94,15 +94,34 @@ def test_single_chart_toolbar_option_and_compact_sidebars():
     ToolBar._fire_layout(toolbar)
     assert toolbar._on_chart_layout.call_args.args == (1,)
 
-    toolbar._chart_source_label = "关注"
     ToolBar.set_chart_page_status(toolbar, 10, 10, 53)
-    toolbar.chart_page_var.set.assert_called_once_with("关注 10 / 53")
+    toolbar.chart_page_var.set.assert_not_called()
 
-    narrow = side_panel_widths(1280)
-    wide = side_panel_widths(2880)
-    assert narrow == (238, 222)
-    assert wide == (260, 242)
-    assert sum(wide) < 520
+    assert right_list_width(1280) == 330
+    assert right_list_width(1600) == 360
+    assert right_list_width(2880) == 390
+
+
+def test_list_mousewheel_scrolls_only_the_hovered_tree():
+    assert wheel_scroll_units(Mock(delta=120, num=None)) == -3
+    assert wheel_scroll_units(Mock(delta=-120, num=None)) == 3
+    assert wheel_scroll_units(Mock(delta=0, num=4)) == -3
+    assert wheel_scroll_units(Mock(delta=0, num=5)) == 3
+
+
+def test_identity_columns_fill_available_width_without_clipping_keys():
+    assert identity_column_widths(314) == (44, 96, 174)
+    assert identity_column_widths(344) == (45, 103, 196)
+    assert sum(identity_column_widths(374)) == 374
+    assert identity_column_widths(374)[2] > identity_column_widths(314)[2]
+
+
+def test_list_codes_hide_exchange_prefix_without_changing_unknown_values():
+    assert numeric_stock_code("sh.600000") == "600000"
+    assert numeric_stock_code("sz.300001") == "300001"
+    assert numeric_stock_code("bj.920001") == "920001"
+    assert numeric_stock_code("600000") == "600000"
+    assert numeric_stock_code("custom.code") == "custom.code"
 
 
 def test_watch_selection_switches_chart_paging_to_watchlist():
