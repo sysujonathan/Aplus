@@ -7,7 +7,11 @@ import tkinter as tk
 import ttkbootstrap as ttk
 
 from .theme import ACCENT, APP_BG, CONTROL_BG, HOVER, PANEL_BG, REPEAT, TEXT
-from .tree_scroll import attach_vertical_scrollbar, bind_identity_column_autofit
+from .tree_scroll import (
+    attach_vertical_scrollbar,
+    bind_identity_column_autofit,
+    numeric_stock_code,
+)
 
 
 _COLUMN_TITLES = {"number": "序", "code": "代码", "name": "名称"}
@@ -92,7 +96,7 @@ class CandidateTabs(ttk.Frame):
             show="headings",
             selectmode="browse",
         )
-        for col, width in (("number", 44), ("code", 112), ("name", 144)):
+        for col, width in (("number", 44), ("code", 100), ("name", 156)):
             self.tree.heading(
                 col,
                 text=_COLUMN_TITLES[col],
@@ -102,7 +106,7 @@ class CandidateTabs(ttk.Frame):
             self.tree.column(
                 col,
                 width=width,
-                minwidth=44 if col == "number" else (112 if col == "code" else 90),
+                minwidth=44 if col == "number" else (96 if col == "code" else 90),
                 stretch=False,
                 anchor=tk.CENTER,
             )
@@ -216,7 +220,11 @@ class CandidateTabs(ttk.Frame):
                 name = f"{name} ×{count}" if name else f"×{count}"
             stripe = "row_even" if number % 2 == 0 else "row_odd"
             tags = (stripe, "repeat") if count > 1 else (stripe,)
-            iid = self.tree.insert("", tk.END, values=(number, row["code"], name), tags=tags)
+            iid = self.tree.insert(
+                "", tk.END,
+                values=(number, numeric_stock_code(row["code"]), name),
+                tags=tags,
+            )
             self.tree._obs[iid] = row["observation_id"]
             self.tree._codes[iid] = row["code"]
             self.tree._base_tags[iid] = tags

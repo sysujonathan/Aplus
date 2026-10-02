@@ -9,9 +9,18 @@ def identity_column_widths(total_width):
     """按列表真实可用宽度分配序号、代码、名称三列。"""
     available = max(246, int(total_width or 0))
     number = max(44, min(54, round(available * 0.13)))
-    code = max(112, min(132, round(available * 0.34)))
+    code = max(96, min(112, round(available * 0.30)))
     name = max(90, available - number - code)
     return number, code, name
+
+
+def numeric_stock_code(code):
+    """列表只显示六位数字；内部数据仍保留交易所前缀。"""
+    text = str(code or "").strip()
+    prefix, separator, digits = text.partition(".")
+    if separator and prefix.lower() in {"sh", "sz", "bj"} and digits.isdigit():
+        return digits
+    return text
 
 
 def bind_identity_column_autofit(tree):
