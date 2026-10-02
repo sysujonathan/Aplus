@@ -141,9 +141,11 @@ def test_board_sync_checks_dates_and_repeat_reuses_all_bars(store, frame, monkey
 
 def test_two_connections_are_bounded_and_reused(store, frame):
     import threading
-    import time
     from workbench.sync_batch import sync_results
     lock = threading.Lock()
+    # Explicitly overlap each pair of fake requests. A fixed sleep can finish
+    # before the second worker reaches fetch on a busy Windows CI runner.
+    rendezvous = threading.Barrier(2, timeout=30)
     instances, current, maximum = [], [0], [0]
     class Provider:
         def __enter__(self):
@@ -154,8 +156,10 @@ def test_two_connections_are_bounded_and_reused(store, frame):
             with lock:
                 current[0] += 1
                 maximum[0] = max(maximum[0],current[0])
-            time.sleep(.1)
-            with lock: current[0] -= 1
+            try:
+                rendezvous.wait()
+            finally:
+                with lock: current[0] -= 1
             return frame
     codes = [f'sh.{600000+i}' for i in range(6)]
     results = list(sync_results(store,Provider,codes,frame.date.iloc[0],frame.date.iloc[-1],None,False,

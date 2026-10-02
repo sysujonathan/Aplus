@@ -239,7 +239,7 @@ class Service:
         done = 0
         asof = min(spec['asof'],completed_date())
         engine = digest(b''.join((ROOT/'workbench'/name).read_bytes() for name in
-                                ['strategies.py','market.py','service.py']) + verify_frozen().encode())
+                                ['strategies.py','market.py','service.py','h2_plan.py','prices.py']) + verify_frozen().encode())
         report.update(engine_version=engine,asof=asof,total=total)
         self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(merge_scan_reports(previous,report)),job))
         for did in spec['datasets']:
@@ -247,6 +247,7 @@ class Service:
             try:
                 data,record = load_dataset(self.store,did,job)
                 data = prepare(data,timeframe,asof)
+                data.attrs['code'] = record['code']
                 data_error = None
             except Exception as exc:
                 data_error = str(exc)
@@ -271,6 +272,10 @@ class Service:
                         report['calculated'] += 1
                     if signal:
                         identity = digest(f"{did}|{strategy.id}|{strategy.version}|{timeframe}|{signal['asof']}".encode())
+                        if signal.get('plan_version'):
+                            # Keep earlier archived observations intact on a plan-layer
+                            # upgrade; Store still keys manual plans by original setup.
+                            identity = digest((identity + signal['plan_version']).encode())
                         self.store.execute('INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                             (identity,job,record['code'],strategy.id,strategy.version,timeframe,signal['asof'],
                              signal['setup_date'],did,dumps(signal),now()))

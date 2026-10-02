@@ -106,7 +106,7 @@ def run_study(spec, frame, start, end, assumptions, progress=lambda *a:None, can
         # Deliberately recalculate indicators AND strategy on the visible prefix.
         # Frozen strategies can repaint prior rows; reading a full-history signal
         # column would leak future knowledge. Only today's output can be used.
-        signal = signal_at_end(spec,frame.iloc[:i+1],with_rating=False)
+        signal = signal_at_end(spec,frame.iloc[:i+1],with_rating=False,plan_prices=False)
         if signal:
             identity = signal['setup_date']
             if identity not in seen:

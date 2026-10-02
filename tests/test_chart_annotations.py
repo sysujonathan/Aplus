@@ -225,7 +225,7 @@ def test_watch_signal_context_never_receives_future_bars(anchor_key):
 
 
 def test_watch_render_keeps_original_plan_and_quality_with_new_market(monkeypatch):
-    import gui.chart_panel as panel
+    import gui.chart_renderer as panel
     frame = _bars()
     anchor = frame.iloc[-2].date
     frame["sig_bar_quality"] = .75

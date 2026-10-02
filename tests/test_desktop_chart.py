@@ -65,7 +65,7 @@ def test_watch_chart_uses_latest_market_but_keeps_anchor_payload(tmp_path):
     anchor_cutoff = latest.date.iloc[850]
     market_cutoff = latest.date.iloc[-1]
     anchor = latest.iloc[:851].copy()
-    strategy = "STRATEGY_GAP_H2"
+    strategy = "STRATEGY_3K"
     spec = catalog(store)[strategy]
     payload = {"entry": 18.5, "stop": 17.2, "target": 21.0}
     fake_store = Mock()

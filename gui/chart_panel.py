@@ -1,244 +1,22 @@
 """工程 A K 线与量能的石墨主题呈现；仅读取新工程快照。"""
 from __future__ import annotations
-import io
 import tkinter as tk
 from tkinter import ttk as native_ttk
 import ttkbootstrap as ttk
 from PIL import Image, ImageTk
 
-from .chart_annotations import (
-    annotation_frame,
-    annotation_kwargs,
-    info_panel_lines,
-    marker_specs,
-    owns_risk_lines,
-    restyle_strategy_annotations,
-    signal_context,
-    trend_specs,
-)
+from .chart_renderer import render_chart
 from .chart_items import ChartItem
 from .theme import (
     ACCENT,
     APP_BG,
-    AVERAGE,
     BORDER,
     CHART_BG,
     CONTROL_BG,
-    DOWN,
     DROP_TARGET,
-    GRID,
     MUTED,
-    STOP,
-    TARGET,
     TEXT,
-    UP,
 )
-
-
-def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""):
-    """绘制通用底图、冻结策略专属标注和通用信息层。"""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.lines import Line2D
-    import mplfinance as mpf
-    import pandas as pd
-
-    visible = frame.tail(120).copy()
-    strategy_plot = annotation_frame(frame)
-    plot = visible.copy()
-    plot.index = pd.to_datetime(plot["date"])
-    colors = mpf.make_marketcolors(
-        up=UP,
-        down=DOWN,
-        edge="inherit",
-        wick="inherit",
-        volume="in",
-    )
-    style = mpf.make_mpf_style(
-        marketcolors=colors,
-        facecolor=CHART_BG,
-        figcolor=CHART_BG,
-        gridcolor=GRID,
-        gridstyle="-",
-        y_on_right=True,
-        rc={
-            "font.family": ["Microsoft YaHei", "DejaVu Sans"],
-            "axes.unicode_minus": False,
-            "axes.edgecolor": BORDER,
-            "axes.labelcolor": MUTED,
-            "text.color": TEXT,
-            "xtick.color": MUTED,
-            "ytick.color": MUTED,
-        },
-    )
-    adds = []
-    legend_handles = []
-    if "ema20" in plot:
-        adds.append(mpf.make_addplot(plot.ema20, color=AVERAGE, width=1.35))
-    for trend in trend_specs(strategy_type):
-        if trend.column in plot and plot[trend.column].notna().any():
-            adds.append(
-                mpf.make_addplot(
-                    plot[trend.column], color=trend.color,
-                    linestyle=trend.linestyle, width=trend.width,
-                )
-            )
-            legend_handles.append(
-                Line2D([0], [0], color=trend.color, linestyle=trend.linestyle,
-                       linewidth=trend.width, label=trend.label)
-            )
-    for marker in marker_specs(strategy_type, meta):
-        if marker.column not in plot or marker.price_column not in plot:
-            continue
-        marks = (
-            plot[marker.price_column]
-            .where(plot[marker.column].fillna(False).astype(bool))
-            * marker.multiplier
-        )
-        if marks.notna().any():
-            adds.append(
-                mpf.make_addplot(
-                    marks,
-                    type="scatter",
-                    marker=marker.marker,
-                    markersize=marker.size,
-                    color=marker.color,
-                )
-            )
-            legend_handles.append(
-                Line2D(
-                    [0], [0], marker=marker.marker, color=CHART_BG,
-                    label=marker.label, markerfacecolor=marker.color,
-                    markersize=max(6, marker.size ** .5),
-                )
-            )
-    strategy_info = signal_context(strategy, frame, payload)
-    owns_levels = owns_risk_lines(strategy_type)
-    risk_levels = []
-    lines, line_colors, styles = [], [], []
-    for key, color, dash in (("stop", STOP, "-."), ("target", TARGET, "--")):
-        if payload.get(key) is not None and float(payload[key]) > 0:
-            value = float(payload[key])
-            risk_levels.append(value)
-            if not owns_levels:
-                lines.append(value)
-                line_colors.append(color)
-                styles.append(dash)
-    kwargs = {}
-    if adds:
-        kwargs["addplot"] = adds
-    if lines:
-        kwargs["hlines"] = dict(hlines=lines, colors=line_colors, linestyle=styles, linewidths=1)
-    # 远离当前价格区间的止损/目标仍显示在参数框中，但不再把整段 K 线
-    # 压缩到图角。接近当前行情的价位线会纳入可视范围。
-    price_low = float(plot["low"].min())
-    price_high = float(plot["high"].max())
-    price_span = max(price_high - price_low, abs(price_high) * .02, .01)
-    view_low = price_low - price_span * .06
-    view_high = price_high + price_span * .06
-    for level in risk_levels:
-        if price_low - price_span * .18 <= level <= price_high + price_span * .18:
-            view_low = min(view_low, level - price_span * .02)
-            view_high = max(view_high, level + price_span * .02)
-    kwargs["ylim"] = (view_low, view_high)
-    fig = None
-    try:
-        fig, axes = mpf.plot(
-            plot,
-            type="candle",
-            style=style,
-            volume=True,
-            title=title,
-            ylabel="",
-            figsize=(12.2, 7.5),
-            tight_layout=True,
-            returnfig=True,
-            **kwargs,
-        )
-        ax = axes[0]
-        for axis in axes:
-            axis.set_facecolor(CHART_BG)
-            axis.tick_params(colors=MUTED, labelsize=8)
-            for spine in axis.spines.values():
-                spine.set_color(BORDER)
-        open_gap_count = 0
-        annotate = getattr(strategy, "annotate_chart", None)
-        if callable(annotate):
-            result = annotate(
-                ax,
-                strategy_plot,
-                strategy_type,
-                **annotation_kwargs(payload, strategy_info),
-            )
-            if isinstance(result, int):
-                open_gap_count = result
-            restyle_strategy_annotations(ax, strategy_type)
-        facts = info_panel_lines(
-            payload, strategy_info, frame, open_gap_count=open_gap_count
-        )
-        if facts:
-            ax.text(
-                .02,
-                .965,
-                "\n".join(facts),
-                transform=ax.transAxes,
-                fontsize=8,
-                color=TEXT,
-                va="top",
-                bbox=dict(
-                    boxstyle="round,pad=.28",
-                    facecolor=CONTROL_BG,
-                    alpha=.94,
-                    edgecolor=BORDER,
-                ),
-            )
-        for key, label, color in (("stop", "SL", STOP), ("target", "TP1", TARGET)):
-            if owns_levels:
-                continue
-            if payload.get(key) is not None and float(payload[key]) > 0:
-                value = float(payload[key])
-                if value > view_high:
-                    ax.text(
-                        .99, .985, f"{label}↑ {value:.2f}", transform=ax.transAxes,
-                        ha="right", va="top", color=color, fontsize=8,
-                    )
-                elif value < view_low:
-                    ax.text(
-                        .99, .015, f"{label}↓ {value:.2f}", transform=ax.transAxes,
-                        ha="right", va="bottom", color=color, fontsize=8,
-                    )
-                else:
-                    ax.text(
-                        .99, value, f"{label}: {value:.2f}",
-                        transform=ax.get_yaxis_transform(), ha="right", va="bottom",
-                        color=color, fontsize=8,
-                    )
-        if legend_handles:
-            legend = ax.legend(
-                handles=legend_handles,
-                loc="lower left",
-                framealpha=.9,
-                fontsize=8,
-            )
-            legend.get_frame().set_facecolor(CONTROL_BG)
-            legend.get_frame().set_edgecolor(BORDER)
-            for label in legend.get_texts():
-                label.set_color(TEXT)
-        buf = io.BytesIO()
-        fig.savefig(
-            buf,
-            format="png",
-            dpi=110,
-            bbox_inches="tight",
-            pad_inches=.02,
-            facecolor=CHART_BG,
-        )
-        buf.seek(0)
-        return Image.open(buf).copy()
-    finally:
-        if fig is not None:
-            plt.close(fig)
 
 
 _LAYOUT_SHAPES = {1: (1, 1), 4: (2, 2), 6: (2, 3), 9: (3, 3)}
@@ -394,7 +172,7 @@ class ChartPanel(native_ttk.Frame):
             self.show_placeholder()
             return
         cache = getattr(self, "_image_cache", None)
-        cache_key = (observation_id, market_dataset_id or "", mode)
+        cache_key = (observation_id, market_dataset_id or "", mode, market_asof, anchor_asof)
         cached = cache.get(cache_key) if isinstance(cache, dict) else None
         if cached is not None:
             self._image, self._code, self._tf, title = cached
@@ -432,6 +210,11 @@ class ChartPanel(native_ttk.Frame):
             )
             bars = prepare(frame, self._tf, str(cutoff)[:10])
             instance, calculated = calculate(spec, bars)
+            from workbench.h2_plan import display_plan, is_h2, STATE_LABELS
+            h2 = spec.id == 'STRATEGY_GAP_H2' and is_h2(instance.get_metadata())
+            if h2:
+                payload = display_plan(spec, bars, payload, self._code,
+                                       observation.get('setup_date') or observation['asof'], mode)
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
             # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
@@ -445,13 +228,21 @@ class ChartPanel(native_ttk.Frame):
             )
             chart_identity = f"{self._code}  {name}".rstrip()
             if mode == "watch":
-                current_day = str(cutoff)[:10]
+                current_day = str(bars.date.iloc[-1])[:10]
                 signal_day = str(anchor_asof or observation["asof"])[:10]
                 title = (
                     f"{chart_identity}  ·  {spec.name} · {period}"
                     f" · 行情 {current_day} · 信号 {signal_day}"
-                    " · 计划线来自信号日"
                 )
+                if h2:
+                    signal_day = payload.get('h2_setup_date', signal_day)
+                    title = (f"{chart_identity}  ·  {spec.name} · {period}"
+                             f" · 行情 {current_day} · H2信号 {signal_day}")
+                    title += (f" · 明日计划基于{payload['plan_asof']}收盘"
+                              if payload.get('pending_state') == 'PENDING'
+                              else f" · {STATE_LABELS[payload['pending_state']]}")
+                else:
+                    title += " · 计划线来自信号日"
             else:
                 title = f"{chart_identity}  ·  {spec.name} · {period}"
             self._title_var.set(title)
