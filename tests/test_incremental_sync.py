@@ -105,7 +105,7 @@ def test_upgrade_reuses_v1_success_even_cancelled_job(store, frame):
                   ('old','sync','cancelled',now(),dumps({'start':'2013-01-01','end':frame.date.iloc[-1]})))
     did = save_dataset(store,'sh.600000',frame,'baostock','前复权','old')
     upgraded = Store(store.root)
-    assert upgraded.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='4'
+    assert upgraded.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='6'
     def offline():
         raise AssertionError('Upgrade must reuse successfully saved history')
     assert sync_stock(upgraded,offline,'sh.600000','2013-01-01',frame.date.iloc[-1])==(did,'skipped')
