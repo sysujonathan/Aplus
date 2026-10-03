@@ -125,6 +125,9 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert '"盈亏(元)"' not in page
     assert 'rowheight=68' in page
     assert 'text="批量填表", bootstyle="primary"' in page
+    assert 'text="＋ 增加五行"' in page
+    assert 'command=lambda: self._add_rows(5)' in page
+    assert 'text="＋ 增加一行"' not in page
     assert "0 笔 · 默认按最近清仓日期排列" not in page
     assert page.count('state="readonly"') >= 3
     assert 'ttk.Label(header, text="交易管理"' not in page

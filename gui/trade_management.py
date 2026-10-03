@@ -1083,23 +1083,30 @@ class _ClosedBatchDialog(_BaseDialog):
         self._next_grid_row = 2
         self.dates = trading_dates(store)
         ttk.Label(self.form, text="每行一笔；代码或名称填写一项即可自动关联。",
-                  foreground=MUTED).grid(row=0, column=0, columnspan=7, sticky=tk.W, pady=(0, 8))
+                  foreground=MUTED).grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
+        ttk.Button(
+            self.form,
+            text="＋ 增加五行",
+            bootstyle="secondary-outline",
+            command=lambda: self._add_rows(5),
+        ).grid(row=0, column=5, columnspan=2, sticky=tk.E, padx=2, pady=(0, 8))
         for column, (label, _width) in enumerate(self.COLUMNS):
             ttk.Label(self.form, text=label, anchor=tk.CENTER,
                       font=("Microsoft YaHei UI", 9, "bold")).grid(
                           row=1, column=column, sticky=tk.EW, padx=2, pady=2)
         ttk.Label(self.form, text="操作", anchor=tk.CENTER,
                   font=("Microsoft YaHei UI", 9, "bold")).grid(row=1, column=6, padx=2)
-        for _index in range(5):
-            self._add_row()
+        self._add_rows(5)
         self.controls = ttk.Frame(self.form)
         self.controls.grid(row=self._next_grid_row, column=0, columnspan=7, sticky=tk.E, pady=(12, 0))
-        ttk.Button(self.controls, text="＋ 增加一行", bootstyle="secondary-outline",
-                   command=self._add_row).pack(side=tk.LEFT, padx=4)
         ttk.Button(self.controls, text="确认导入", bootstyle="primary",
                    command=self._ok).pack(side=tk.LEFT, padx=4)
         ttk.Button(self.controls, text="取消", bootstyle="secondary",
                    command=self.top.destroy).pack(side=tk.LEFT, padx=4)
+
+    def _add_rows(self, count=5):
+        for _index in range(max(1, int(count))):
+            self._add_row()
 
     def _add_row(self):
         grid_row = self._next_grid_row
