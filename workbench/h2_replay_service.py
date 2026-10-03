@@ -2,13 +2,15 @@
 from dataclasses import asdict
 from datetime import date
 import json
+import time
 
 import pandas as pd
 
 from .backtest import Assumptions
 from .h2_replay import H2Settings, MODEL, run_replay, summarize_replay
+from .h2_replay_cache import cache_key, engine_version, read_cache, write_cache
 from .market import completed_date, load_dataset
-from .store import ROOT, digest, dumps
+from .store import digest, dumps
 from .strategies import catalog, prepare
 
 
@@ -41,6 +43,10 @@ def execute_replay(service, job, spec):
     costs = Assumptions(**spec.get('assumptions', {}))
     costs.validate()
     strategy = catalog(service.store)[spec['strategy']]
+    engine = engine_version()
+    started = time.perf_counter()
+    reused, calculated = 0, 0
+    use_cache = spec.get('use_cache', True)
     records, errors, snapshots, warnings = [], [], [], []
     seen_codes = set()
     end = min(spec['end'], completed_date())
@@ -52,6 +58,14 @@ def execute_replay(service, job, spec):
         # last trading day must not be mistaken for a verified complete range.
         coverage_end = end
     stopped = False
+    last_progress = 0.0
+    def show_progress(done, message):
+        nonlocal last_progress
+        current = time.perf_counter()
+        if current - last_progress >= .35 or done == len(ids) * 100:
+            service.progress(job, done, len(ids) * 100, message)
+            last_progress = current
+    show_progress(0, f'准备回放 {len(ids)} 个已存标的')
     for n, did in enumerate(ids):
         try:
             service.check_stop(job)
@@ -76,10 +90,18 @@ def execute_replay(service, job, spec):
             if snapshot['end'] < coverage_end:
                 warnings.append({'code': snapshot['code'], 'reason': f'行情快照仅到 {snapshot["end"]}，结束区间覆盖请核对停牌／交易日'})
             def progress(i, total):
-                service.progress(job, n * 100 + int(100 * i / max(total, 1)), len(ids) * 100,
-                                 f'逐日回放 {snapshot["code"]}：{i}/{total} 个收盘日')
-            trades = run_replay(strategy, frame, spec['start'], end, settings, costs,
-                                progress, service.cancel_flags[job].is_set)
+                show_progress(n * 100 + int(100 * i / max(total, 1)),
+                              f'已完成 {n}/{len(ids)} · 回放 {snapshot["code"]}：{i}/{total} 日 · 复用 {reused}')
+            key = cache_key(snapshot, strategy, spec['start'], end, settings, costs, engine)
+            trades = read_cache(service.store, key, job) if use_cache else None
+            if trades is None:
+                trades = run_replay(strategy, frame, spec['start'], end, settings, costs,
+                                    progress, service.cancel_flags[job].is_set)
+                calculated += 1
+                if use_cache:
+                    write_cache(service.store, key, trades, job)
+            else:
+                reused += 1
             for trade in trades:
                 trade['dataset_id'] = did
                 trade['study_end'] = end
@@ -91,8 +113,8 @@ def execute_replay(service, job, spec):
             break
         except Exception as exc:
             errors.append({'dataset': did, 'error': str(exc)})
-        service.progress(job, (n + 1) * 100, len(ids) * 100,
-                         f'完成 {n + 1}/{len(ids)} 个行情快照；失败 {len(errors)}')
+        show_progress((n + 1) * 100,
+                      f'完成 {n + 1}/{len(ids)} · 新回放 {calculated} · 复用 {reused} · 失败 {len(errors)}')
     report = summarize_replay(records)
     rel = f'research/{job}'
     report.update(execution_model=MODEL, errors=errors, coverage_warnings=warnings,
@@ -106,9 +128,9 @@ def execute_replay(service, job, spec):
                       if k in ('holding_bars', 'commission_bps', 'sell_tax_bps', 'slippage_bps')}, timeframe='daily',
                   start=spec['start'], end=end, coverage_end=coverage_end, scope=spec.get('scope', 'specified'),
                   research_version=digest((strategy.version + dumps(asdict(settings))).encode()),
-                  engine_version=digest(b''.join((ROOT / 'workbench' / file).read_bytes() for file in
-                                                ['h2_replay.py', 'h2_replay_service.py', 'h2_plan.py',
-                                                 'prices.py', 'strategies.py', 'backtest.py'])),
+                  engine_version=engine,
+                  performance=dict(elapsed_seconds=time.perf_counter() - started,
+                                   calculated=calculated, reused=reused, cache_enabled=bool(use_cache)),
                   limitations=['独立机会允许重叠；不模拟组合资金、仓位或复利',
                                '日线无法确认盘中先后、涨跌停排队及实际流动性；单一价格不成交',
                                '入场与结构失效／MM 同日发生时保守不成交',
