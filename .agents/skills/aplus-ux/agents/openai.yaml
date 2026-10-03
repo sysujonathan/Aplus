@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aplus 交易工作台 UX"
+  short_description: "统一交易员流程、图表、表格、状态与桌面操作的项目设计规范"
+  default_prompt: "使用 $aplus-ux，按 Aplus 统一 UX 规范设计或检查当前页面，并说明交易员体验与验收结果。"
