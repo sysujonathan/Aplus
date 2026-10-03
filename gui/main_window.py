@@ -7,6 +7,7 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
+from .afterhours import AfterhoursPage
 from .chart_items import ChartItem, chart_items
 from .chart_panel import ChartGrid
 from .data import REALTIME_MARKET_SOURCE
@@ -184,11 +185,9 @@ class AplusMainWindow(ttk.Window):
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
                   foreground=MUTED).pack(side=tk.RIGHT)
 
-        self._pages["afterhours"] = self._placeholder_page(
-            "盘后回测",
-            "用当日收盘后的完整行情复盘信号、检验策略表现。",
-            "现有回测能力保持不变；桌面入口将在后续版本接入。",
-        )
+        self.afterhours = AfterhoursPage(self.page_host, self.service, self.store)
+        self.afterhours.grid(row=0, column=0, sticky=tk.NSEW)
+        self._pages["afterhours"] = self.afterhours
         self._pages["strategy"] = self._placeholder_page(
             "策略迭代",
             "注册研究策略、运行验证、比较版本，再由交易员决定是否启用。",
@@ -230,6 +229,8 @@ class AplusMainWindow(ttk.Window):
         return page
 
     def _switch_section(self, key):
+        if key == 'afterhours':
+            self.afterhours.refresh()
         for name, page in self._pages.items():
             if name == key:
                 page.tkraise()

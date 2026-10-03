@@ -105,7 +105,7 @@ def _open_gaps(frame, bo_date, floor, lookback):
     return gaps
 
 
-def project_plan(frame, structure, code=None, *, lookback=60):
+def project_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT):
     """Follow one original setup; a newer setup must not replace a watched one."""
     plan = dict(structure or {})
     plan.update(plan_kind='gap-h2-next-session', plan_version=plan_version(),
@@ -136,7 +136,7 @@ def project_plan(frame, structure, code=None, *, lookback=60):
             state, reason = 'INVALID', 'gap_floor_broken'
         elif bar.high >= target:
             state, reason = 'INVALID', 'target_already_reached'
-        elif j - signal_pos > TIMEOUT:
+        elif j - signal_pos > wait_bars:
             state, reason = 'EXPIRED', 'timeout'
         elif reaches_entry_tick(code, ref_high, bar.high, instrument_type=instrument_type):
             state, reason = 'TRIGGERED', 'previous_plan_price_reached'

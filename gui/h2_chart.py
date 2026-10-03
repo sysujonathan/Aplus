@@ -70,7 +70,7 @@ def draw_h2(ax, plot, plan):
     reward = plan.get('mm_r_multiple')
     gaps = plan.get('prior_open_gap_count')
     if state == 'PENDING':
-        headline = ('明日挂单计划\n'
+        headline = (plan.get('replay_caption', '明日挂单计划') + '\n'
                     + (f'风险  {risk:.2f}%' if risk is not None else '风险  待核对') + '\n'
                     + (f'收益  {reward:.2f}R' if reward is not None else '收益  待核对') + '\n'
                     + (f'趋势  前序开放缺口 {gaps}个' if gaps is not None else '趋势  数据不足'))
@@ -81,7 +81,7 @@ def draw_h2(ax, plot, plan):
         label = STATE_LABELS.get(state, state)
         if plan.get('state_reason') == 'target_already_reached':
             label = 'MM 已先达到'
-        headline = f'待挂机会结束\n{label}' if state != 'UNAVAILABLE' else label
+        headline = plan.get('replay_caption') or (f'待挂机会结束\n{label}' if state != 'UNAVAILABLE' else label)
         prices = '当前无待挂计划'
     card = ax.text(.02, .97, headline, transform=ax.transAxes, fontsize=10, fontweight='bold',
             color=TEXT, va='top', linespacing=1.5,
