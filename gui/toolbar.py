@@ -171,6 +171,7 @@ class ToolBar(ttk.Frame):
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
         self._job_started_at = None
         self._auto_scan_after_sync = False  # 一键盘前：行情成功后自动衔接扫描
+        self._auto_chain_cancelled = False  # 用户终止后禁止已完成行情继续衔接扫描
         self._auto_started_at = None
         self._auto_sync_elapsed = None
         self._sync_elapsed = None
@@ -691,6 +692,7 @@ class ToolBar(ttk.Frame):
         if not self._selected_strategies():
             self.set_status("一键盘前未开始：请至少选择一个扫描策略")
             return
+        self._auto_chain_cancelled = False
         self._auto_scan_after_sync = True
         self._auto_started_at = time.monotonic()
         self._auto_sync_elapsed = None
@@ -842,6 +844,7 @@ class ToolBar(ttk.Frame):
             self._scan_elapsed = elapsed
         chain_scan = (
             self._auto_scan_after_sync
+            and not self._auto_chain_cancelled
             and kind == "更新行情"
             and status == "completed"
         )
@@ -913,6 +916,12 @@ class ToolBar(ttk.Frame):
 
     def _start_auto_scan(self):
         """在行情任务完成并刷新界面后，衔接一键盘前的扫描阶段。"""
+        if self._auto_chain_cancelled:
+            self._auto_scan_after_sync = False
+            self._auto_started_at = None
+            self._auto_sync_elapsed = None
+            self.set_status("⏹ 一键盘前已终止，未继续策略扫描")
+            return
         self._auto_scan_after_sync = False
         self.set_status("✓ 行情更新完成，正在自动准备策略扫描…")
         self._on_scan()
@@ -921,6 +930,10 @@ class ToolBar(ttk.Frame):
             self._auto_sync_elapsed = None
 
     def _on_stop(self):
+        # 先切断一键盘前的后续动作，再请求停止当前任务。即使行情已经
+        # 完成、扫描正等待 after_idle 衔接，也不能越过用户的终止指令。
+        self._auto_chain_cancelled = True
+        self._auto_scan_after_sync = False
         if self.service is None:
             self.set_status("后端未连接")
             return

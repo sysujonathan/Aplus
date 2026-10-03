@@ -6,9 +6,14 @@ from pathlib import Path
 import pytest
 
 from gui.data import StockNameLookup
-from gui.trade_management import TradeManagementFrame
+from gui.trade_management import TradeManagementFrame, _AccountDialog
 from workbench.store import Store, dumps, now
-from workbench.trading import account_report, management_report, proposed_quantity
+from workbench.trading import (
+    account_report,
+    history_reconciliation,
+    management_report,
+    proposed_quantity,
+)
 
 
 def make_plan(store, state="计划交易", pending_state="PENDING"):
@@ -148,6 +153,21 @@ def test_trade_management_frame_builds_with_python312_tk_font_api():
         assert frame.tk.call(
             "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
         ) == "center"
+        dialog = _AccountDialog(
+            root,
+            account={
+                "name": "历史账户",
+                "accounting_mode": "history",
+                "initial_equity": 50000,
+                "current_total_assets": 42261.94,
+            },
+            summary={"closed_pnl": -7000, "floating_pnl": -738.06},
+        )
+        root.update_idletasks()
+        assert dialog.system_total.get() == "42261.94"
+        assert dialog.reverse_initial.get() == "50000.00"
+        assert "对账一致" in dialog.reconciliation.get()
+        dialog.top.destroy()
     finally:
         root.destroy()
 
@@ -215,13 +235,45 @@ def test_history_mode_manual_close_reconciliation_edit_and_delete(tmp_path):
     report = management_report(store, account_id, {})
     assert report["summary"]["historical_equity"] == pytest.approx(100500)
     assert report["summary"]["reconciliation"] == pytest.approx(50)
+    assert report["summary"]["implied_initial_equity"] == pytest.approx(100050)
     store.save_closed_trade(
         account_id, "sz.000001", "平安银行", "2026-09-30", 21, 550, 5.5,
         closed_id=closed_id,
     )
-    assert management_report(store, account_id, {})["summary"]["closed_pnl"] == 550
+    edited = management_report(store, account_id, {})
+    assert edited["summary"]["closed_pnl"] == 550
+    assert edited["summary"]["historical_equity"] == pytest.approx(100550)
+    assert edited["summary"]["implied_initial_equity"] == pytest.approx(100000)
+    assert edited["summary"]["reconciliation"] == pytest.approx(0)
     store.delete_closed_trade(closed_id)
     assert management_report(store, account_id, {})["closed"] == []
+
+
+def test_history_reconciliation_keeps_manual_initial_and_reverse_value_independent():
+    result = history_reconciliation(
+        50000,
+        broker_total_assets=42261.94,
+        closed_pnl=-7000,
+        floating_pnl=-738.06,
+    )
+
+    assert result["system_total_assets"] == pytest.approx(42261.94)
+    assert result["implied_initial_equity"] == pytest.approx(50000)
+    assert result["reconciliation"] == pytest.approx(0)
+
+
+def test_history_account_ui_explains_two_way_reconciliation():
+    source = (Path(__file__).resolve().parents[1] / "gui" / "trade_management.py").read_text(
+        encoding="utf-8"
+    )
+    for text in (
+        "系统账面总资产",
+        "券商资产快照",
+        "反推开户资金",
+        "采用反推值",
+        "不会自动覆盖初始资金",
+    ):
+        assert text in source
 
 
 def test_batch_closed_trade_import_is_atomic_and_keeps_recent_first(tmp_path):

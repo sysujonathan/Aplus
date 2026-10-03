@@ -101,6 +101,7 @@ def test_completed_auto_market_update_chains_strategy_scan_once():
     toolbar._job_id = "job-sync"
     toolbar._job_kind = "更新行情"
     toolbar._auto_scan_after_sync = True
+    toolbar._auto_chain_cancelled = False
     toolbar._on_job_finished = None
     toolbar.data_chain_summary.return_value = "行情最新 2026-10-03 ✓"
 
@@ -116,12 +117,48 @@ def test_incomplete_market_update_never_chains_strategy_scan():
         toolbar._job_id = "job-sync"
         toolbar._job_kind = "更新行情"
         toolbar._auto_scan_after_sync = True
+        toolbar._auto_chain_cancelled = False
         toolbar._on_job_finished = None
 
         ToolBar._finish_job(toolbar, status, message="未完整完成", result_json="{}")
 
         toolbar.after_idle.assert_not_called()
         assert toolbar._auto_scan_after_sync is False
+
+
+def test_stop_cancels_auto_scan_handoff_even_when_market_job_just_completed():
+    toolbar = Mock()
+    toolbar._job_id = "job-sync"
+    toolbar._job_kind = "更新行情"
+    toolbar._auto_scan_after_sync = True
+    toolbar._auto_chain_cancelled = False
+    toolbar._on_job_finished = None
+    toolbar.data_chain_summary.return_value = "行情最新 2026-10-03 ✓"
+
+    ToolBar._on_stop(toolbar)
+
+    toolbar.service.cancel.assert_called_once_with("job-sync")
+    assert toolbar._auto_chain_cancelled is True
+    assert toolbar._auto_scan_after_sync is False
+
+    ToolBar._finish_job(toolbar, "completed", result_json="{}")
+    toolbar.after_idle.assert_not_called()
+
+
+def test_queued_auto_scan_handoff_rechecks_stop_request():
+    toolbar = Mock()
+    toolbar._auto_chain_cancelled = True
+    toolbar._auto_scan_after_sync = True
+    toolbar._auto_started_at = 100.0
+    toolbar._auto_sync_elapsed = 3.0
+
+    ToolBar._start_auto_scan(toolbar)
+
+    toolbar._on_scan.assert_not_called()
+    assert toolbar._auto_scan_after_sync is False
+    assert toolbar._auto_started_at is None
+    assert toolbar._auto_sync_elapsed is None
+    assert "未继续策略扫描" in toolbar.set_status.call_args.args[0]
 
 
 def test_right_sidebar_reserves_twice_the_height_for_watchlist():
