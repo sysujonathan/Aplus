@@ -105,7 +105,7 @@ class TradeManagementFrame(ttk.Frame):
                             show="headings", style=style_name)
         tree._column_specs = columns
         tree._measure_font = tkfont.Font(
-            master=tree, family="Microsoft YaHei UI",
+            root=tree, family="Microsoft YaHei UI",
             size=11 if key == "positions" else 10,
         )
         minimums = {}

@@ -1,9 +1,12 @@
 import json
+import os
+import tkinter as tk
 from pathlib import Path
 
 import pytest
 
 from gui.data import StockNameLookup
+from gui.trade_management import TradeManagementFrame
 from workbench.store import Store, dumps, now
 from workbench.trading import account_report, management_report, proposed_quantity
 
@@ -126,6 +129,19 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert 'text="＋ 新增账户"' in page
     assert 'for column, widget in enumerate(widgets):' in page
     assert "tree._measure_font.measure(str(tree.set(iid, column)))" in page
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要 Windows Tk 桌面环境")
+def test_trade_management_frame_builds_with_python312_tk_font_api():
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        frame = TradeManagementFrame(root, store=None)
+        frame.pack(fill=tk.BOTH, expand=True)
+        root.update_idletasks()
+        assert frame.position_tree._measure_font.measure("仓位%") > 0
+    finally:
+        root.destroy()
 
 
 def test_stock_name_lookup_resolves_code_chinese_and_pinyin_initials():
