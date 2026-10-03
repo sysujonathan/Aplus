@@ -16,8 +16,10 @@ from gui.toolbar import (
     format_board_scope,
     format_data_chain_status,
     format_elapsed,
+    format_header_data_status,
     format_scope_readiness,
     format_strategy_scope,
+    format_task_timings,
     sync_start_date,
 )
 from gui.chart_panel import layout_shape, page_start_for
@@ -308,6 +310,42 @@ def test_elapsed_time_is_compact_and_readable(seconds, label):
     assert format_elapsed(seconds) == label
 
 
+def test_header_keeps_versions_and_compact_scope_visible():
+    assert format_header_data_status(
+        "2026-09-30",
+        "2026-09-29",
+        ["沪深主板"],
+        {"expected": 3197, "ready": 3188},
+    ) == "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠待扫描 · 主板 3188/3197"
+
+
+def test_task_timings_keep_sync_and_scan_separate_after_completion():
+    assert format_task_timings(65, 38) == "行情用时 1分05秒 · 扫描用时 38秒"
+    assert format_task_timings(65, None, "扫描策略", 7) == (
+        "行情用时 1分05秒 · 扫描用时 进行中 7秒"
+    )
+
+
+def test_toolbar_status_panel_is_not_hidden_by_responsive_layout():
+    toolbar = object.__new__(ToolBar)
+    toolbar.header = Mock()
+    toolbar.actions = Mock()
+    toolbar.filters = Mock()
+    toolbar.status_panel = Mock()
+    toolbar.header.winfo_reqwidth.return_value = 100
+    toolbar.actions.winfo_reqwidth.return_value = 700
+    toolbar.filters.winfo_reqwidth.return_value = 400
+    toolbar.status_panel.winfo_reqwidth.return_value = 500
+
+    for width in (1600, 1280):
+        ToolBar._responsive(
+            toolbar, type("Event", (), {"widget": toolbar, "width": width})()
+        )
+
+    assert toolbar.status_panel.grid.call_count == 2
+    toolbar.status_panel.grid_remove.assert_not_called()
+
+
 def test_finished_job_writes_elapsed_time_to_bottom_status():
     toolbar = Mock()
     toolbar._job_id = "job-scan"
@@ -322,6 +360,8 @@ def test_finished_job_writes_elapsed_time_to_bottom_status():
         ToolBar._finish_job(toolbar, "completed", result_json='{"signals": 2, "success": 6, "reused": 0}')
 
     assert "用时 1分05秒" in toolbar.set_status.call_args.args[0]
+    assert toolbar._scan_elapsed == 65.0
+    toolbar._refresh_timing_status.assert_called_once_with()
 
 
 def test_first_market_update_builds_full_history_then_uses_incremental_window():

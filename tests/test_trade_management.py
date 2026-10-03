@@ -118,7 +118,9 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     for title in ("持仓管理", "作战卡", "已清仓", "绩效分析"):
         assert title in page
     assert "拟建仓速算" in page
-    assert 'text="卖出", bootstyle="primary-outline"' in page
+    assert 'style="PositionSell.primary.Outline.TButton"' in page
+    assert 'anchor=tk.CENTER' in page
+    assert 'padding=(4, 0, 4, 2)' in page
     assert '"市值(元)"' not in page
     assert '"盈亏(元)"' not in page
     assert 'rowheight=68' in page
@@ -140,6 +142,9 @@ def test_trade_management_frame_builds_with_python312_tk_font_api():
         frame.pack(fill=tk.BOTH, expand=True)
         root.update_idletasks()
         assert frame.position_tree._measure_font.measure("仓位%") > 0
+        assert frame.tk.call(
+            "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
+        ) == "center"
     finally:
         root.destroy()
 

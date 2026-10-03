@@ -101,6 +101,14 @@ class TradeManagementFrame(ttk.Frame):
             style_name, rowheight=68 if key == "positions" else 34,
             font=("Microsoft YaHei UI", 11 if key == "positions" else 10),
         )
+        if key == "positions":
+            # 继承 primary-outline 配色，仅校正雅黑中文字形的视觉基线。
+            ttk.Style().configure(
+                "PositionSell.primary.Outline.TButton",
+                anchor=tk.CENTER,
+                font=("Microsoft YaHei UI", 9),
+                padding=(4, 0, 4, 2),
+            )
         tree = ttk.Treeview(host, columns=tuple(item[0] for item in columns),
                             show="headings", style=style_name)
         tree._column_specs = columns
@@ -357,7 +365,10 @@ class TradeManagementFrame(ttk.Frame):
             ), tags=(tag,) if tag else ())
             self._position_ids[iid] = row["id"]
             self._sell_buttons[iid] = ttk.Button(
-                self.position_tree, text="卖出", bootstyle="primary-outline",
+                self.position_tree,
+                text="卖出",
+                style="PositionSell.primary.Outline.TButton",
+                padding=(4, 0, 4, 2),
                 command=lambda pid=row["id"]: self._sell_position_by_id(pid),
             )
         if len(self._report["positions"]) > 1:
@@ -383,7 +394,7 @@ class TradeManagementFrame(ttk.Frame):
                 button.place_forget()
                 continue
             x, y, width, height = box
-            button_height = min(40, max(height - 12, 24))
+            button_height = min(36, max(height - 18, 28))
             button.place(x=x + 5, y=y + (height - button_height) // 2,
                          width=max(width - 10, 46), height=button_height)
         summary_box = self.position_tree.bbox("__summary__") if self.position_tree.exists("__summary__") else ()

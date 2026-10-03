@@ -69,6 +69,21 @@ def format_elapsed(seconds):
     return f"{seconds}秒"
 
 
+def format_task_timings(sync_elapsed=None, scan_elapsed=None, running_kind="", running_elapsed=None):
+    """分别保留最近一次行情与扫描用时，运行时只更新对应一项。"""
+    def item(label, value, running):
+        if running:
+            return f"{label}用时 进行中 {format_elapsed(running_elapsed)}"
+        if isinstance(value, (int, float)):
+            return f"{label}用时 {format_elapsed(value)}"
+        return f"{label}用时 —"
+
+    return " · ".join((
+        item("行情", sync_elapsed, running_kind == "更新行情"),
+        item("扫描", scan_elapsed, running_kind == "扫描策略"),
+    ))
+
+
 def format_scope_readiness(boards, audit):
     """说明当前所选板块有多少只真正可进入策略扫描。"""
     scope = format_board_scope(boards).removeprefix("范围：")
@@ -81,6 +96,20 @@ def format_scope_readiness(boards, audit):
     suspended = int(audit.get("suspended") or 0)
     gaps = len(audit.get("gaps") or [])
     return f"{scope}：可扫描 {ready}/应有 {expected} · 停牌 {suspended} · 缺口 {gaps}"
+
+
+def format_header_data_status(market_date, signal_date, boards, audit):
+    """右上角常驻摘要；详细覆盖仍保留在任务结果和状态信息中。"""
+    market = str(market_date)[:10] if market_date else "无"
+    signal = str(signal_date)[:10] if signal_date else "无"
+    pending = bool(market_date and (not signal_date or market > signal))
+    market_mark = "✓" if market_date else "—"
+    scan_mark = "⚠待扫描" if pending else ("✓" if signal_date else "—")
+    scope = format_board_scope(boards).removeprefix("范围：")
+    expected = int((audit or {}).get("expected") or 0)
+    ready = int((audit or {}).get("ready") or 0)
+    coverage = f"{scope} {ready}/{expected}" if expected > 0 else f"{scope} 待核验"
+    return f"行情最新 {market} {market_mark} · 信号最新 {signal} {scan_mark} · {coverage}"
 
 
 def format_data_chain_status(market_date, signal_date, readiness=None):
@@ -144,7 +173,11 @@ class ToolBar(ttk.Frame):
         self._auto_scan_after_sync = False  # 一键盘前：行情成功后自动衔接扫描
         self._auto_started_at = None
         self._auto_sync_elapsed = None
+        self._sync_elapsed = None
+        self._scan_elapsed = None
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
+        self._header_data_var = tk.StringVar(value="行情最新 连接中… · 信号最新 连接中…")
+        self._timing_var = tk.StringVar(value=format_task_timings())
         self.full_history_var = tk.BooleanVar(value=False)    # 首次自动完整历史；也可手动要求重新核对
         try:
             from workbench.scope import selected_boards
@@ -337,9 +370,25 @@ class ToolBar(ttk.Frame):
         self._load_market_status()
 
         self._status = tk.StringVar(value=self._mkt_var.get())
-        # 顶部始终表示数据链事实；任务进度和结果另在底部状态栏显示。
-        self.status_label = ttk.Label(self, textvariable=self._mkt_var, font=("Consolas", 10), foreground=_LABEL_FG)
-        self.status_label.grid(row=0, column=3, sticky=tk.E, padx=6)
+        # 右上角始终保留数据版本和分项用时；底部只承担当前进度、结果和临时提示。
+        self.status_panel = ttk.Frame(self)
+        self.status_panel.grid(row=0, column=3, sticky=tk.E, padx=(12, 6))
+        self.status_label = ttk.Label(
+            self.status_panel,
+            textvariable=self._header_data_var,
+            font=("Microsoft YaHei UI", 9),
+            foreground=_LABEL_FG,
+            anchor=tk.E,
+        )
+        self.status_label.pack(anchor=tk.E)
+        self.timing_label = ttk.Label(
+            self.status_panel,
+            textvariable=self._timing_var,
+            font=("Consolas", 9),
+            foreground=_LABEL_FG,
+            anchor=tk.E,
+        )
+        self.timing_label.pack(anchor=tk.E)
         self.bind("<Configure>", self._responsive)
         self._select_latest_date()
 
@@ -350,21 +399,23 @@ class ToolBar(ttk.Frame):
         actions_width = self.actions.winfo_reqwidth()
         filters_width = self.filters.winfo_reqwidth()
         needed = header_width + actions_width + filters_width + 40
-        if event.width >= needed:
+        status_width = self.status_panel.winfo_reqwidth()
+        if event.width >= needed + status_width:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
             self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
-            if event.width > needed + self.status_label.winfo_reqwidth():
-                self.status_label.grid(row=0, column=3, sticky=tk.E)
-            else:
-                self.status_label.grid_remove()
+            self.status_panel.grid(row=0, column=3, columnspan=1, sticky=tk.E, pady=0)
+        elif event.width >= needed:
+            self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
+            self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
+            self.status_panel.grid(row=1, column=0, columnspan=4, sticky=tk.E, pady=(4, 0))
         elif event.width >= actions_width + filters_width + 40:
             self.actions.grid(row=1, column=0, columnspan=1, sticky=tk.W, pady=(6, 0))
             self.filters.grid(row=1, column=1, columnspan=3, sticky=tk.W, pady=(6, 0))
-            self.status_label.grid_remove()
+            self.status_panel.grid(row=0, column=1, columnspan=3, sticky=tk.E, pady=0)
         else:
             self.actions.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(6, 0))
             self.filters.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
-            self.status_label.grid_remove()
+            self.status_panel.grid(row=0, column=1, columnspan=3, sticky=tk.E, pady=0)
 
     def _explain_ai(self):
         from tkinter import messagebox
@@ -587,24 +638,39 @@ class ToolBar(ttk.Frame):
     def _load_market_status(self):
         if self.store is None:
             self._mkt_var.set("行情：未连接")
+            self._header_data_var.set("行情最新 无 — · 信号最新 无 — · 范围待核验")
             return self._mkt_var.get()
         from .data import latest_market_date, latest_scan_date
 
         market = latest_market_date(self.store, self._tf_var.get())
         signal = latest_scan_date(self.store, self._tf_var.get())
         boards = self._selected_boards()
+        audit = {}
         try:
             from workbench.market import completed_date
             from workbench.readiness import audit_scope
 
-            readiness = format_scope_readiness(
-                boards, audit_scope(self.store, boards, completed_date())
-            )
+            audit = audit_scope(self.store, boards, completed_date())
+            readiness = format_scope_readiness(boards, audit)
         except Exception:
             readiness = format_scope_readiness(boards, {})
         text = format_data_chain_status(market, signal, readiness)
         self._mkt_var.set(text)
+        self._header_data_var.set(
+            format_header_data_status(market, signal, boards, audit)
+        )
         return text
+
+    def _refresh_timing_status(self, running_elapsed=None):
+        """刷新右上角计时，不让底部临时消息覆盖已经完成的分项用时。"""
+        sync_elapsed = getattr(self, "_sync_elapsed", None)
+        scan_elapsed = getattr(self, "_scan_elapsed", None)
+        self._timing_var.set(format_task_timings(
+            sync_elapsed if isinstance(sync_elapsed, (int, float)) else None,
+            scan_elapsed if isinstance(scan_elapsed, (int, float)) else None,
+            getattr(self, "_job_kind", ""),
+            running_elapsed,
+        ))
 
     def data_chain_summary(self):
         if self.store is None:
@@ -628,6 +694,9 @@ class ToolBar(ttk.Frame):
         self._auto_scan_after_sync = True
         self._auto_started_at = time.monotonic()
         self._auto_sync_elapsed = None
+        self._sync_elapsed = None
+        self._scan_elapsed = None
+        self._refresh_timing_status()
         self._on_sync(chained=True)
         if self._job_id is None:
             self._auto_scan_after_sync = False
@@ -707,6 +776,11 @@ class ToolBar(ttk.Frame):
             return
         self._job_id, self._job_kind = job, label
         self._job_started_at = time.monotonic()
+        if label == "更新行情":
+            self._sync_elapsed = None
+        elif label == "扫描策略":
+            self._scan_elapsed = None
+        self._refresh_timing_status(running_elapsed=0)
         self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_scan)
         for button in (
             self.btn_auto,
@@ -739,8 +813,13 @@ class ToolBar(ttk.Frame):
             prog, total = j["progress"] or 0, j["total"] or 0
             msg = (j["message"] or "").strip()
             started = getattr(self, "_job_started_at", None)
-            elapsed = (f" · 已用时 {format_elapsed(time.monotonic() - started)}"
-                       if isinstance(started, (int, float)) else "")
+            elapsed_seconds = (
+                max(0, time.monotonic() - started)
+                if isinstance(started, (int, float)) else None
+            )
+            self._refresh_timing_status(running_elapsed=elapsed_seconds)
+            elapsed = (f" · 已用时 {format_elapsed(elapsed_seconds)}"
+                       if elapsed_seconds is not None else "")
             if total:
                 self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:56]}{elapsed}")
             else:
@@ -757,6 +836,10 @@ class ToolBar(ttk.Frame):
         finished_at = time.monotonic()
         started = getattr(self, "_job_started_at", None)
         elapsed = max(0, finished_at - started) if isinstance(started, (int, float)) else None
+        if kind == "更新行情":
+            self._sync_elapsed = elapsed
+        elif kind == "扫描策略":
+            self._scan_elapsed = elapsed
         chain_scan = (
             self._auto_scan_after_sync
             and kind == "更新行情"
@@ -815,6 +898,7 @@ class ToolBar(ttk.Frame):
         if kind == "更新行情" and status != "completed":
             self._auto_started_at = None
             self._auto_sync_elapsed = None
+        self._refresh_timing_status()
         self._load_market_status()
         if status == "completed" and kind in {"更新行情", "扫描策略"}:
             text += "；" + self.data_chain_summary()
