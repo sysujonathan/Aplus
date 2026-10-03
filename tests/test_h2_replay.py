@@ -156,6 +156,7 @@ def test_causal_prefilter_matches_daily_frozen_detector(h2_spec, h2_bars):
 
 def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
     store = Store(tmp_path / 'replay')
+    schema_before = store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']
     bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 14.1, 11)
     did = save_dataset(store, 'sh.600000', bars, 'csv', '测试合成行情，非真实验收')
     demo = save_dataset(store, 'sz.000001', bars, 'demo', '合成')
@@ -171,11 +172,12 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
         assert report['datasets'][0]['sha256'] and report['engine_version']
         assert not report['real_data']  # Synthetic test CSV is never real-data acceptance.
         assert records[0]['events']
-        for table in ('observations', 'plans', 'plan_history', 'watchlist'):
+        for table in ('observations', 'plans', 'plan_history', 'watchlist', 'accounts',
+                      'executions', 'positions', 'position_fills', 'closed_trades'):
             assert store.rows(f'SELECT COUNT(*) AS n FROM {table}')[0]['n'] == 0
         image = render_replay(store, records[0], len(records[0]['events']) - 1)
         assert image.width > 800 and image.height > 300
-        assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == '4'
+        assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == schema_before
     finally:
         service.pool.shutdown()
 

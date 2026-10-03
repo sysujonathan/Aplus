@@ -33,8 +33,8 @@ def main():
     with sqlite3.connect((source / 'workbench.sqlite3').as_uri() + '?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
         version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if not version or version[0] != '4':
-            raise ValueError('源目录必须是新 Aplus 的版本 4 数据仓')
+        if not version or version[0] not in ('4', '5', '6'):
+            raise ValueError('源目录必须是新 Aplus 的兼容数据仓（版本 4、5、6）')
         snapshots = []
         for code in args.codes:
             row = db.execute("SELECT * FROM datasets WHERE code=? AND timeframe='daily' AND source='baostock' "
@@ -67,7 +67,8 @@ def main():
             time.sleep(.2)
         _, report, records = load_receipt(store, job)
         untouched = {table: store.rows(f'SELECT COUNT(*) AS n FROM {table}')[0]['n']
-                     for table in ('observations', 'plans', 'plan_history', 'watchlist')}
+                     for table in ('observations', 'plans', 'plan_history', 'watchlist',
+                                   'accounts', 'executions', 'positions', 'position_fills', 'closed_trades')}
         assert all(value == 0 for value in untouched.values())
         evidence = dict(job=job, status=row['status'], real_data=report['real_data'],
                         snapshots=len(snapshots), opportunities=report['opportunities'],
