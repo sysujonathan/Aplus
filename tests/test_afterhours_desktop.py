@@ -19,6 +19,11 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
     store = Store(tmp_path / 'gui')
     window = AplusMainWindow(store=store)
     try:
+        trade = window.trade_management
+        assert trade.position_tree._measure_font.measure("仓位%") > 0
+        assert trade.tk.call(
+            "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
+        ) == "center"
         window._switch_section('afterhours')
         page = window.afterhours
         for size in ('1600x1000', '1280x760'):

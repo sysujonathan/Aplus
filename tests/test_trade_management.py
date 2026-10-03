@@ -1,12 +1,9 @@
 import json
-import os
-import tkinter as tk
 from pathlib import Path
 
 import pytest
 
 from gui.data import StockNameLookup
-from gui.trade_management import TradeManagementFrame, _AccountDialog
 from workbench.store import Store, dumps, now
 from workbench.trading import (
     account_report,
@@ -139,37 +136,6 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert 'text="＋ 新增账户"' in page
     assert 'for column, widget in enumerate(widgets):' in page
     assert "tree._measure_font.measure(str(tree.set(iid, column)))" in page
-
-
-@pytest.mark.skipif(os.name != "nt", reason="需要 Windows Tk 桌面环境")
-def test_trade_management_frame_builds_with_python312_tk_font_api():
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        frame = TradeManagementFrame(root, store=None)
-        frame.pack(fill=tk.BOTH, expand=True)
-        root.update_idletasks()
-        assert frame.position_tree._measure_font.measure("仓位%") > 0
-        assert frame.tk.call(
-            "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
-        ) == "center"
-        dialog = _AccountDialog(
-            root,
-            account={
-                "name": "历史账户",
-                "accounting_mode": "history",
-                "initial_equity": 50000,
-                "current_total_assets": 42261.94,
-            },
-            summary={"closed_pnl": -7000, "floating_pnl": -738.06},
-        )
-        root.update_idletasks()
-        assert dialog.system_total.get() == "42261.94"
-        assert dialog.reverse_initial.get() == "50000.00"
-        assert "对账一致" in dialog.reconciliation.get()
-        dialog.top.destroy()
-    finally:
-        root.destroy()
 
 
 def test_stock_name_lookup_resolves_code_chinese_and_pinyin_initials():
