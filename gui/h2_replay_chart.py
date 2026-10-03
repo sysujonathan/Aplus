@@ -30,7 +30,7 @@ def replay_view(frame, record, event_index, posthoc=False):
     return visible, payload, marks
 
 
-def render_replay(store, record, event_index, posthoc=False):
+def render_replay(store, record, event_index, posthoc=False, *, pixel_size=None):
     frame, _ = load_dataset(store, record['dataset_id'])
     # A replay can never expose snapshot bars after the requested study end.
     if record.get('study_end'):
@@ -43,4 +43,4 @@ def render_replay(store, record, event_index, posthoc=False):
     caption = '完整走势（事后查看）' if posthoc else '仅显示当时已完成行情'
     return render_chart(frame, payload, f'{record["code"]} · {events[-1]["date"]} · {caption}',
                         {'signal_column': 'signal_gap_h2'}, replay_events=events,
-                        view_bars=max(120, span))
+                        view_bars=max(120, span), pixel_size=pixel_size)
