@@ -14,7 +14,7 @@ from .theme import (
 
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
-                 replay_events=(), view_bars=120):
+                 replay_events=(), view_bars=120, pixel_size=None):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -140,11 +140,20 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             volume=True,
             title=title,
             ylabel="",
-            figsize=(12.2, 7.5),
+            figsize=(pixel_size[0] / 110, pixel_size[1] / 110) if pixel_size else (12.2, 7.5),
             tight_layout=True,
             returnfig=True,
             **kwargs,
         )
+        if pixel_size:
+            # Redraw at the viewport's native resolution; keep every annotation.
+            for i, axis in enumerate(axes):
+                axis.set_position((.025, .285, .91, .655) if i < 2 else (.025, .09, .91, .16))
+            if fig._suptitle:
+                fig._suptitle.set_position((.025, .985))
+                fig._suptitle.set_horizontalalignment('left')
+                fig._suptitle.set_verticalalignment('top')
+                fig._suptitle.set_fontsize(10)
         ax = axes[0]
         for axis in axes:
             axis.set_facecolor(CHART_BG)
@@ -234,11 +243,16 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
                             arrowprops=dict(arrowstyle='-', color=TEXT, shrinkB=0))
         buf = io.BytesIO()
+        if pixel_size:
+            from matplotlib.text import Text
+            font_scale = min(1.6, max(1., pixel_size[0] / 1250))
+            for text in fig.findobj(Text):
+                text.set_fontsize(text.get_fontsize() * font_scale)
         fig.savefig(
             buf,
             format="png",
             dpi=110,
-            bbox_inches="tight",
+            bbox_inches=None if pixel_size else "tight",
             pad_inches=.02,
             facecolor=CHART_BG,
         )
