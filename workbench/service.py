@@ -69,7 +69,7 @@ class Service:
         self.store.event(job, '开始任务', kind=kind, settings=spec)
         try:
             report = getattr(self,'_'+kind)(job,spec)
-            state = 'partial' if report.get('errors') else 'completed'
+            state = 'partial' if report.get('errors') or report.get('complete') is False else 'completed'
             if self.cancel_flags[job].is_set():
                 state = 'cancelled'
             self.store.execute('UPDATE jobs SET status=?,finished=?,result=?,message=? WHERE id=?',
@@ -336,6 +336,9 @@ class Service:
         return report
 
     def _backtest(self, job,spec):
+        if spec.get('execution_model') == 'gap-h2-daily-execution-v1':
+            from .h2_replay_service import execute_replay
+            return execute_replay(self, job, spec)
         strategy = catalog(self.store)[spec['strategy']]
         tf = spec['timeframe']
         if tf not in strategy.timeframes:

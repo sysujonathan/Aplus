@@ -13,7 +13,8 @@ from .theme import (
 )
 
 
-def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""):
+def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
+                 replay_events=(), view_bars=120):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -22,7 +23,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     import mplfinance as mpf
     import pandas as pd
 
-    visible = frame.tail(120).copy()
+    visible = frame.tail(view_bars).copy()
     strategy_plot = annotation_frame(frame)
     plot = visible.copy()
     plot.index = pd.to_datetime(plot["date"])
@@ -218,6 +219,20 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             legend.get_frame().set_edgecolor(BORDER)
             for label in legend.get_texts():
                 label.set_color(TEXT)
+        dates = visible.date.astype(str).str[:10].tolist()
+        for event in replay_events:
+            if event['date'] not in dates or event.get('price') is None:
+                continue
+            x = dates.index(event['date'])
+            label = {'trigger': 'Trigger', 'fill': 'Fill', 'exit': 'Exit'}.get(event['kind'])
+            if label:
+                dx, dy = {'trigger': (-26, -34), 'fill': (20, -58), 'exit': (-12, -38)}[event['kind']]
+                if x >= len(dates) - 4:
+                    dx = min(dx, -18)
+                ax.annotate(label, xy=(x, event['price']), xytext=(dx, dy),
+                            textcoords='offset points', ha='center', color=TEXT, fontsize=8,
+                            bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
+                            arrowprops=dict(arrowstyle='-', color=TEXT, shrinkB=0))
         buf = io.BytesIO()
         fig.savefig(
             buf,
