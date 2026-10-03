@@ -15,6 +15,11 @@ from gui.toolbar import (
     ToolBar,
     format_board_scope,
     format_data_chain_status,
+    format_elapsed,
+    format_header_data_status,
+    format_scope_readiness,
+    format_strategy_scope,
+    format_task_timings,
     sync_start_date,
 )
 from gui.chart_panel import layout_shape, page_start_for
@@ -70,6 +75,96 @@ def test_board_scope_label_is_compact_but_unambiguous():
     assert format_board_scope(["沪深主板", "创业板"]) == "范围：主板+创业"
     assert format_board_scope(["沪深主板", "创业板", "科创板", "北交所"]) == "范围：全市场"
     assert format_board_scope([]) == "范围：未选择"
+
+
+def test_strategy_scope_label_distinguishes_all_custom_and_empty():
+    available = ["MTR_MASTER", "STRATEGY_3K", "STRATEGY_GAP_H2"]
+    assert format_strategy_scope(available, available) == "策略：全部"
+    assert format_strategy_scope(available[:2], available) == "策略：2/3"
+    assert format_strategy_scope([], available) == "策略：未选择"
+
+
+def test_selected_strategies_follow_registry_order():
+    toolbar = object.__new__(ToolBar)
+    toolbar._available_strategies = ["MTR_MASTER", "STRATEGY_3K", "STRATEGY_GAP_H2"]
+    toolbar.strategy_vars = {
+        "MTR_MASTER": _ValueVar(True),
+        "STRATEGY_3K": _ValueVar(False),
+        "STRATEGY_GAP_H2": _ValueVar(True),
+    }
+
+    assert ToolBar._selected_strategies(toolbar) == ["MTR_MASTER", "STRATEGY_GAP_H2"]
+
+
+def test_completed_auto_market_update_chains_strategy_scan_once():
+    toolbar = Mock()
+    toolbar._job_id = "job-sync"
+    toolbar._job_kind = "更新行情"
+    toolbar._auto_scan_after_sync = True
+    toolbar._auto_chain_cancelled = False
+    toolbar._on_job_finished = None
+    toolbar.data_chain_summary.return_value = "行情最新 2026-10-03 ✓"
+
+    ToolBar._finish_job(toolbar, "completed", result_json="{}")
+
+    toolbar.after_idle.assert_called_once_with(toolbar._start_auto_scan)
+    assert toolbar._job_id is None
+
+
+def test_incomplete_market_update_never_chains_strategy_scan():
+    for status in ("partial", "failed", "cancelled"):
+        toolbar = Mock()
+        toolbar._job_id = "job-sync"
+        toolbar._job_kind = "更新行情"
+        toolbar._auto_scan_after_sync = True
+        toolbar._auto_chain_cancelled = False
+        toolbar._on_job_finished = None
+
+        ToolBar._finish_job(toolbar, status, message="未完整完成", result_json="{}")
+
+        toolbar.after_idle.assert_not_called()
+        assert toolbar._auto_scan_after_sync is False
+
+
+def test_stop_cancels_auto_scan_handoff_even_when_market_job_just_completed():
+    toolbar = Mock()
+    toolbar._job_id = "job-sync"
+    toolbar._job_kind = "更新行情"
+    toolbar._auto_scan_after_sync = True
+    toolbar._auto_chain_cancelled = False
+    toolbar._on_job_finished = None
+    toolbar.data_chain_summary.return_value = "行情最新 2026-10-03 ✓"
+
+    ToolBar._on_stop(toolbar)
+
+    toolbar.service.cancel.assert_called_once_with("job-sync")
+    assert toolbar._auto_chain_cancelled is True
+    assert toolbar._auto_scan_after_sync is False
+
+    ToolBar._finish_job(toolbar, "completed", result_json="{}")
+    toolbar.after_idle.assert_not_called()
+
+
+def test_queued_auto_scan_handoff_rechecks_stop_request():
+    toolbar = Mock()
+    toolbar._auto_chain_cancelled = True
+    toolbar._auto_scan_after_sync = True
+    toolbar._auto_started_at = 100.0
+    toolbar._auto_sync_elapsed = 3.0
+
+    ToolBar._start_auto_scan(toolbar)
+
+    toolbar._on_scan.assert_not_called()
+    assert toolbar._auto_scan_after_sync is False
+    assert toolbar._auto_started_at is None
+    assert toolbar._auto_sync_elapsed is None
+    assert "未继续策略扫描" in toolbar.set_status.call_args.args[0]
+
+
+def test_right_sidebar_reserves_twice_the_height_for_watchlist():
+    source = (ROOT / "gui" / "main_window.py").read_text(encoding="utf-8")
+    assert "self.list_pane.rowconfigure(0, weight=1)" in source
+    assert "self.list_pane.rowconfigure(2, weight=2)" in source
 
 
 def test_multichart_layouts_and_candidate_pages_are_stable():
@@ -228,10 +323,82 @@ def test_data_chain_status_marks_market_ahead_of_scan():
     assert format_data_chain_status("2026-09-30", "2026-09-29") == (
         "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠ 待扫描"
     )
-    assert format_data_chain_status("2026-09-30", "2026-09-30", 5211, 5222) == (
-        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-30 ✓ · 覆盖 5211/5222"
+    readiness = "主板：可扫描 3188/应有 3197 · 停牌 9 · 缺口 0"
+    assert format_data_chain_status("2026-09-30", "2026-09-30", readiness) == (
+        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-30 ✓ · " + readiness
     )
     assert format_data_chain_status(None, None) == "行情最新 无 — · 信号最新 无 —"
+
+
+def test_scope_readiness_explains_selected_range_in_trader_terms():
+    audit = {"expected": 3197, "ready": 3188, "suspended": 9, "gaps": []}
+    assert format_scope_readiness(["沪深主板"], audit) == (
+        "主板：可扫描 3188/应有 3197 · 停牌 9 · 缺口 0"
+    )
+    assert format_scope_readiness(["沪深主板", "创业板"], {}) == "主板+创业：范围待核验"
+
+
+@pytest.mark.parametrize("seconds,label", [
+    (8.4, "8秒"),
+    (65, "1分05秒"),
+    (3723, "1小时02分03秒"),
+])
+def test_elapsed_time_is_compact_and_readable(seconds, label):
+    assert format_elapsed(seconds) == label
+
+
+def test_header_keeps_versions_and_compact_scope_visible():
+    assert format_header_data_status(
+        "2026-09-30",
+        "2026-09-29",
+        ["沪深主板"],
+        {"expected": 3197, "ready": 3188},
+    ) == "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠待扫描 · 主板 3188/3197"
+
+
+def test_task_timings_keep_sync_and_scan_separate_after_completion():
+    assert format_task_timings(65, 38) == "行情用时 1分05秒 · 扫描用时 38秒"
+    assert format_task_timings(65, None, "扫描策略", 7) == (
+        "行情用时 1分05秒 · 扫描用时 进行中 7秒"
+    )
+
+
+def test_toolbar_status_panel_is_not_hidden_by_responsive_layout():
+    toolbar = object.__new__(ToolBar)
+    toolbar.header = Mock()
+    toolbar.actions = Mock()
+    toolbar.filters = Mock()
+    toolbar.status_panel = Mock()
+    toolbar.header.winfo_reqwidth.return_value = 100
+    toolbar.actions.winfo_reqwidth.return_value = 700
+    toolbar.filters.winfo_reqwidth.return_value = 400
+    toolbar.status_panel.winfo_reqwidth.return_value = 500
+
+    for width in (1600, 1280):
+        ToolBar._responsive(
+            toolbar, type("Event", (), {"widget": toolbar, "width": width})()
+        )
+
+    assert toolbar.status_panel.grid.call_count == 2
+    toolbar.status_panel.grid_remove.assert_not_called()
+
+
+def test_finished_job_writes_elapsed_time_to_bottom_status():
+    toolbar = Mock()
+    toolbar._job_id = "job-scan"
+    toolbar._job_kind = "扫描策略"
+    toolbar._job_started_at = 100.0
+    toolbar._auto_started_at = None
+    toolbar._auto_scan_after_sync = False
+    toolbar._on_job_finished = None
+    toolbar.data_chain_summary.return_value = "行情最新 2026-10-03 ✓"
+
+    with patch("gui.toolbar.time.monotonic", return_value=165.0):
+        ToolBar._finish_job(toolbar, "completed", result_json='{"signals": 2, "success": 6, "reused": 0}')
+
+    assert "用时 1分05秒" in toolbar.set_status.call_args.args[0]
+    assert toolbar._scan_elapsed == 65.0
+    toolbar._refresh_timing_status.assert_called_once_with()
 
 
 def test_first_market_update_builds_full_history_then_uses_incremental_window():

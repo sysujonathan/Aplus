@@ -5,12 +5,13 @@ import json
 import numpy as np
 import pandas as pd
 
-from .market import FIELDS, load_dataset, save_dataset, validate_bars
+from .market import FIELDS, load_dataset, save_dataset, validate_bars, verify_dataset
 from .readiness import check_response_dates
 
 
-def local_history(store, code, job):
-    coverage = store.rows('SELECT * FROM sync_coverage WHERE code=?', (code,))
+def local_history(store, code, job, coverage=None):
+    coverage = coverage if coverage is not None else store.rows(
+        'SELECT * FROM sync_coverage WHERE code=?', (code,))
     if coverage:
         state = coverage[0]
         frame, _ = load_dataset(store, state['dataset_id'], job)
@@ -39,8 +40,24 @@ def local_history(store, code, job):
 
 def sync_stock(store, provider, code, start, end, job=None, force=False):
     """provider is lazy: a fully cached request makes no network connection."""
-    old, state = local_history(store, code, job)
+    coverage = store.rows(
+        'SELECT c.*,d.path,d.sha256 FROM sync_coverage c '
+        'LEFT JOIN datasets d ON d.id=c.dataset_id WHERE c.code=?', (code,))
+    state = coverage[0] if coverage else None
     if state and not force and state['start'] <= start and end <= state['end']:
+        # Preserve the tamper gate while avoiding pandas CSV parsing and the
+        # full OHLCV validation pass for every unchanged stock.
+        verify_dataset(store, state['dataset_id'], job, state)
+        store.event(job, '跳过已有行情', code=code, start=start, end=end,
+                    dataset=state['dataset_id'], integrity='sha256')
+        return state['dataset_id'], 'skipped'
+    old, state = local_history(store, code, job, coverage)
+    # A v1 runtime has no sync_coverage row.  Its last successful immutable
+    # snapshot is recovered above once, then future runs use the fast path.
+    if state and not force and state['start'] <= start and end <= state['end']:
+        store.execute('INSERT INTO sync_coverage VALUES(?,?,?,?) ON CONFLICT(code) DO UPDATE SET '
+                      'dataset_id=excluded.dataset_id,start=excluded.start,end=excluded.end',
+                      (code, state['dataset_id'], state['start'], state['end']))
         store.event(job, '跳过已有行情', code=code, start=start, end=end, dataset=state['dataset_id'])
         return state['dataset_id'], 'skipped'
     left = min(start, state['start']) if state else start

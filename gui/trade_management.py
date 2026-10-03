@@ -9,7 +9,12 @@ from tkinter import font as tkfont, messagebox
 import ttkbootstrap as ttk
 
 from workbench.market import code_of
-from workbench.trading import management_report, proposed_quantity, trading_dates
+from workbench.trading import (
+    history_reconciliation,
+    management_report,
+    proposed_quantity,
+    trading_dates,
+)
 
 from .data import StockNameLookup, code_names
 from .theme import APP_BG, DOWN, MUTED, PANEL_BG, REPEAT, TEXT, UP
@@ -101,6 +106,14 @@ class TradeManagementFrame(ttk.Frame):
             style_name, rowheight=68 if key == "positions" else 34,
             font=("Microsoft YaHei UI", 11 if key == "positions" else 10),
         )
+        if key == "positions":
+            # 继承 primary-outline 配色，仅校正雅黑中文字形的视觉基线。
+            ttk.Style().configure(
+                "PositionSell.primary.Outline.TButton",
+                anchor=tk.CENTER,
+                font=("Microsoft YaHei UI", 9),
+                padding=(4, 0, 4, 2),
+            )
         tree = ttk.Treeview(host, columns=tuple(item[0] for item in columns),
                             show="headings", style=style_name)
         tree._column_specs = columns
@@ -357,7 +370,10 @@ class TradeManagementFrame(ttk.Frame):
             ), tags=(tag,) if tag else ())
             self._position_ids[iid] = row["id"]
             self._sell_buttons[iid] = ttk.Button(
-                self.position_tree, text="卖出", bootstyle="primary-outline",
+                self.position_tree,
+                text="卖出",
+                style="PositionSell.primary.Outline.TButton",
+                padding=(4, 0, 4, 2),
                 command=lambda pid=row["id"]: self._sell_position_by_id(pid),
             )
         if len(self._report["positions"]) > 1:
@@ -383,7 +399,7 @@ class TradeManagementFrame(ttk.Frame):
                 button.place_forget()
                 continue
             x, y, width, height = box
-            button_height = min(40, max(height - 12, 24))
+            button_height = min(36, max(height - 18, 28))
             button.place(x=x + 5, y=y + (height - button_height) // 2,
                          width=max(width - 10, 46), height=button_height)
         summary_box = self.position_tree.bbox("__summary__") if self.position_tree.exists("__summary__") else ()
@@ -443,8 +459,11 @@ class TradeManagementFrame(ttk.Frame):
     def _fill_performance(self):
         s = self._report["summary"]
         account = self._report["account"]
+        total_label = (
+            "系统账面总资产" if account.get("accounting_mode") == "history" else "总资产"
+        )
         lines = [
-            f"总资产        {_money(s['total_assets'])} 元",
+            f"{total_label:<8}  {_money(s['total_assets'])} 元",
             f"持仓市值      {_money(s['market_value'])} 元",
             f"可用资金      {_money(s['available_cash'])} 元",
             f"证券仓位      {s['position_pct']:.2f}%",
@@ -455,11 +474,23 @@ class TradeManagementFrame(ttk.Frame):
             f"清仓胜率      {s['win_rate']:.1f}%（{s['wins']} 盈 / {s['losses']} 亏）",
         ]
         if account.get("accounting_mode") == "history":
-            lines.extend(["", f"初始资金＋清仓盈亏＋持仓浮盈亏 = {_money(s['historical_equity'])} 元"])
-            if s["reconciliation"] is not None:
-                lines.append(f"与券商当前总资产校验差额：{_money(s['reconciliation'])} 元")
-                if abs(s["reconciliation"]) > 1:
-                    lines.append("差额通常来自转入转出、分红税费或漏记记录，请核对。")
+            lines.extend([
+                "",
+                f"开户初始资金  {_money(account['initial_equity'])} 元",
+                f"系统账面资产  {_money(s['historical_equity'])} 元",
+            ])
+            if s["broker_total_assets"] is not None:
+                lines.extend([
+                    f"券商资产快照  {_money(s['broker_total_assets'])} 元",
+                    f"反推开户资金  {_money(s['implied_initial_equity'])} 元",
+                    f"对账差额      {_money(s['reconciliation'])} 元（券商－系统）",
+                ])
+                if abs(s["reconciliation"]) <= 1:
+                    lines.append("✓ 对账一致")
+                else:
+                    lines.append("⚠ 差额通常来自漏记、转入转出或分红税费，请核对。")
+            else:
+                lines.append("未填写券商资产快照，暂不执行独立对账。")
         self._set_performance("\n".join(lines))
 
     def _set_performance(self, text):
@@ -475,7 +506,10 @@ class TradeManagementFrame(ttk.Frame):
             rows = self.store.rows("SELECT * FROM accounts WHERE id=?", (aid,))
             account = rows[0] if rows else None
         market_value = self._report["summary"]["market_value"] if self._report else 0.0
-        dialog = _AccountDialog(self, account, market_value=market_value)
+        summary = self._report["summary"] if self._report else {}
+        dialog = _AccountDialog(
+            self, account, market_value=market_value, summary=summary
+        )
         self.wait_window(dialog.top)
         if not dialog.confirmed:
             return
@@ -671,11 +705,15 @@ class _BaseDialog:
 
 
 class _AccountDialog(_BaseDialog):
-    def __init__(self, parent, account=None, market_value=0.0):
+    def __init__(self, parent, account=None, market_value=0.0, summary=None):
         super().__init__(parent, "账户设置")
         account = account or {}
+        summary = summary or {}
         self.create_new = False
         self.market_value = float(market_value or 0)
+        self.closed_pnl = float(summary.get("closed_pnl") or 0)
+        self.floating_pnl = float(summary.get("floating_pnl") or 0)
+        self._implied_initial = None
         self.mode = tk.StringVar(value=account.get("accounting_mode", "snapshot"))
         ttk.Label(self.form, text="建账方式").grid(row=0, column=0, sticky=tk.W, pady=4)
         ttk.Radiobutton(self.form, text="当前资产快照", variable=self.mode,
@@ -700,27 +738,59 @@ class _AccountDialog(_BaseDialog):
         self.available_entry.grid(row=2, column=3, sticky=tk.EW, padx=(0, 12))
         self.available_entry.bind("<FocusOut>", self._apply_available)
         self.available_entry.bind("<Return>", self._apply_available)
-        self.total_label = ttk.Label(self.form, text="当前总资产")
+        self.system_label = ttk.Label(self.form, text="系统账面总资产")
+        self.system_label.grid(row=2, column=2, sticky=tk.W, padx=(0, 8), pady=4)
+        self.system_total = tk.StringVar()
+        self.system_entry = ttk.Entry(
+            self.form, textvariable=self.system_total, width=22, state="readonly"
+        )
+        self.system_entry.grid(row=2, column=3, sticky=tk.EW, padx=(0, 12))
+        self.total_label = ttk.Label(self.form, text="券商资产快照")
         self.total_label.grid(row=3, column=0, sticky=tk.W, padx=(0, 8), pady=4)
         self.total = tk.StringVar(value=account.get("current_total_assets") or "")
         self.total_entry = ttk.Entry(self.form, textvariable=self.total, width=22)
         self.total_entry.grid(row=3, column=1, sticky=tk.EW, padx=(0, 12))
-        self.risk_limit = self.entry(4, "总风险上限 %", account.get("risk_limit_pct", 3))
-        self.trade_risk = self.entry(4, "单笔风险 %", account.get("per_trade_risk_pct", 1), column=1)
-        self.max_position = self.entry(5, "单票仓位上限 %", account.get("max_position_pct", 30))
-        self.cash_reserve = self.entry(5, "最低现金 %", account.get("cash_reserve_pct", 10), column=1)
+        self.reverse_label = ttk.Label(self.form, text="反推开户资金")
+        self.reverse_label.grid(row=3, column=2, sticky=tk.W, padx=(0, 8), pady=4)
+        self.reverse_initial = tk.StringVar(value="—")
+        self.reverse_entry = ttk.Entry(
+            self.form, textvariable=self.reverse_initial, width=22, state="readonly"
+        )
+        self.reverse_entry.grid(row=3, column=3, sticky=tk.EW, padx=(0, 12))
+        self.reconciliation = tk.StringVar()
+        self.reconciliation_label = ttk.Label(
+            self.form, textvariable=self.reconciliation, foreground=MUTED
+        )
+        self.reconciliation_label.grid(
+            row=4, column=0, columnspan=3, sticky=tk.W, pady=(4, 0)
+        )
+        self.use_reverse_button = ttk.Button(
+            self.form,
+            text="采用反推值",
+            bootstyle="secondary-outline",
+            command=self._use_implied_initial,
+        )
+        self.use_reverse_button.grid(row=4, column=3, sticky=tk.E, padx=(0, 12), pady=(4, 0))
+        self.risk_limit = self.entry(5, "总风险上限 %", account.get("risk_limit_pct", 3))
+        self.trade_risk = self.entry(5, "单笔风险 %", account.get("per_trade_risk_pct", 1), column=1)
+        self.max_position = self.entry(6, "单票仓位上限 %", account.get("max_position_pct", 30))
+        self.cash_reserve = self.entry(6, "最低现金 %", account.get("cash_reserve_pct", 10), column=1)
         self.hint = tk.StringVar()
         ttk.Label(self.form, textvariable=self.hint, foreground=MUTED, wraplength=600).grid(
-            row=6, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
+            row=7, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
         )
-        self.buttons(7, self._ok)
-        self.initial.trace_add("write", lambda *_args: self._update_available())
+        self.buttons(8, self._ok)
+        self.initial.trace_add("write", lambda *_args: self._recalculate_account())
+        self.total.trace_add("write", lambda *_args: self._recalculate_account())
         self._mode_changed()
 
     def _new_account(self):
         self.create_new = True
         self.top.title("新增账户")
         self.market_value = 0.0
+        self.closed_pnl = 0.0
+        self.floating_pnl = 0.0
+        self._implied_initial = None
         self.mode.set("snapshot")
         self.name.set("")
         self.initial.set("100000")
@@ -739,6 +809,63 @@ class _AccountDialog(_BaseDialog):
         except ValueError:
             self.available.set("")
 
+    def _recalculate_account(self):
+        if self.mode.get() == "snapshot":
+            self._update_available()
+            return
+        try:
+            initial = float(self.initial.get())
+        except ValueError:
+            self.system_total.set("")
+            self.reverse_initial.set("—")
+            self._implied_initial = None
+            self.reconciliation.set("请填写有效的开户初始资金")
+            self.reconciliation_label.configure(foreground=DOWN)
+            self.use_reverse_button.state(["disabled"])
+            return
+        system = history_reconciliation(
+            initial, None, self.closed_pnl, self.floating_pnl
+        )
+        self.system_total.set(f"{system['system_total_assets']:.2f}")
+        try:
+            broker = float(self.total.get()) if self.total.get().strip() else None
+        except ValueError:
+            self.reverse_initial.set("—")
+            self._implied_initial = None
+            self.reconciliation.set("券商资产快照需填写有效数字")
+            self.reconciliation_label.configure(foreground=DOWN)
+            self.use_reverse_button.state(["disabled"])
+            return
+        result = history_reconciliation(
+            initial, broker, self.closed_pnl, self.floating_pnl
+        )
+        self._implied_initial = result["implied_initial_equity"]
+        if self._implied_initial is None:
+            self.reverse_initial.set("—")
+            self.reconciliation.set(
+                f"已清仓 {self.closed_pnl:+,.2f} 元 · 持仓浮盈亏 {self.floating_pnl:+,.2f} 元 · 未填写券商资产快照"
+            )
+            self.reconciliation_label.configure(foreground=MUTED)
+            self.use_reverse_button.state(["disabled"])
+            return
+        self.reverse_initial.set(f"{self._implied_initial:.2f}")
+        difference = result["reconciliation"]
+        if abs(difference) <= 1:
+            self.reconciliation.set(
+                f"✓ 对账一致 · 差额 {difference:+,.2f} 元（券商－系统）"
+            )
+            self.reconciliation_label.configure(foreground=UP)
+        else:
+            self.reconciliation.set(
+                f"⚠ 对账差额 {difference:+,.2f} 元（券商－系统），请核对漏记或资金变动"
+            )
+            self.reconciliation_label.configure(foreground=DOWN)
+        self.use_reverse_button.state(["!disabled"])
+
+    def _use_implied_initial(self):
+        if isinstance(self._implied_initial, (int, float)) and self._implied_initial > 0:
+            self.initial.set(f"{self._implied_initial:.2f}")
+
     def _apply_available(self, _event=None):
         if self.mode.get() != "snapshot":
             return
@@ -752,18 +879,34 @@ class _AccountDialog(_BaseDialog):
             self.initial_label.configure(text="当前总资产")
             self.available_label.grid()
             self.available_entry.grid()
+            self.system_label.grid_remove()
+            self.system_entry.grid_remove()
             self.total_label.grid_remove()
             self.total_entry.grid_remove()
+            self.reverse_label.grid_remove()
+            self.reverse_entry.grid_remove()
+            self.reconciliation_label.grid_remove()
+            self.use_reverse_button.grid_remove()
             self._update_available()
             self.hint.set("直接填写证券 App 当前总资产；增加持仓后自动计算持仓市值、可用资金和仓位。")
         else:
             self.initial_label.configure(text="开户初始资金")
             self.available_label.grid_remove()
             self.available_entry.grid_remove()
-            self.total_label.configure(text="券商当前总资产（可选校验）")
+            self.system_label.grid()
+            self.system_entry.grid()
+            self.total_label.configure(text="券商资产快照")
             self.total_label.grid()
             self.total_entry.grid()
-            self.hint.set("补录关键清仓记录即可；系统用初始资金＋清仓盈亏＋当前持仓浮盈亏与券商总资产校验。")
+            self.reverse_label.grid()
+            self.reverse_entry.grid()
+            self.reconciliation_label.grid()
+            self.use_reverse_button.grid()
+            self._recalculate_account()
+            self.hint.set(
+                "开户初始资金是固定基准；系统账面总资产 = 初始资金＋已清仓净盈亏＋当前持仓浮盈亏。"
+                "券商资产快照只用于独立对账，不会自动覆盖初始资金；转入转出、分红税费需另行核对。"
+            )
 
     def _ok(self):
         try:
@@ -1072,23 +1215,30 @@ class _ClosedBatchDialog(_BaseDialog):
         self._next_grid_row = 2
         self.dates = trading_dates(store)
         ttk.Label(self.form, text="每行一笔；代码或名称填写一项即可自动关联。",
-                  foreground=MUTED).grid(row=0, column=0, columnspan=7, sticky=tk.W, pady=(0, 8))
+                  foreground=MUTED).grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
+        ttk.Button(
+            self.form,
+            text="＋ 增加五行",
+            bootstyle="secondary-outline",
+            command=lambda: self._add_rows(5),
+        ).grid(row=0, column=5, columnspan=2, sticky=tk.E, padx=2, pady=(0, 8))
         for column, (label, _width) in enumerate(self.COLUMNS):
             ttk.Label(self.form, text=label, anchor=tk.CENTER,
                       font=("Microsoft YaHei UI", 9, "bold")).grid(
                           row=1, column=column, sticky=tk.EW, padx=2, pady=2)
         ttk.Label(self.form, text="操作", anchor=tk.CENTER,
                   font=("Microsoft YaHei UI", 9, "bold")).grid(row=1, column=6, padx=2)
-        for _index in range(5):
-            self._add_row()
+        self._add_rows(5)
         self.controls = ttk.Frame(self.form)
         self.controls.grid(row=self._next_grid_row, column=0, columnspan=7, sticky=tk.E, pady=(12, 0))
-        ttk.Button(self.controls, text="＋ 增加一行", bootstyle="secondary-outline",
-                   command=self._add_row).pack(side=tk.LEFT, padx=4)
         ttk.Button(self.controls, text="确认导入", bootstyle="primary",
                    command=self._ok).pack(side=tk.LEFT, padx=4)
         ttk.Button(self.controls, text="取消", bootstyle="secondary",
                    command=self.top.destroy).pack(side=tk.LEFT, padx=4)
+
+    def _add_rows(self, count=5):
+        for _index in range(max(1, int(count))):
+            self._add_row()
 
     def _add_row(self):
         grid_row = self._next_grid_row

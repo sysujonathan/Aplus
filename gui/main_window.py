@@ -154,7 +154,8 @@ class AplusMainWindow(ttk.Window):
         self.list_pane = ttk.Frame(body)
         self.list_pane.grid(row=0, column=1, sticky=tk.NSEW)
         self.list_pane.columnconfigure(0, weight=1)
-        self.list_pane.rowconfigure(0, weight=3)
+        # 高频关注列表通常比当日策略结果更长：上方 1/3、下方 2/3。
+        self.list_pane.rowconfigure(0, weight=1)
         self.list_pane.rowconfigure(2, weight=2)
         self.list_pane.configure(width=360)
         self.list_pane.grid_propagate(False)

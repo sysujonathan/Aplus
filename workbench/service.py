@@ -15,7 +15,8 @@ import pandas as pd
 from .backtest import Assumptions, run_study, summarize
 from .market import BaoStock, completed_date, load_dataset, save_dataset, validate_bars, select_board_codes
 from .store import ROOT, digest, dumps, now
-from .strategies import calculate, catalog, prepare, signal_at_end, verify_frozen
+from .strategies import (calculate, catalog, prepare, prepare_indicators, scan_engine_version,
+                         signal_at_end, verify_frozen)
 from .sync import sync_stock
 from .readiness import audit_scope, expected_day, save_calendar, save_directory
 from .sync_batch import sync_results
@@ -238,12 +239,19 @@ class Service:
         total = len(spec['datasets'])*len(strategies)
         done = 0
         asof = min(spec['asof'],completed_date())
-        engine = digest(b''.join((ROOT/'workbench'/name).read_bytes() for name in
-                                ['strategies.py','market.py','service.py','h2_plan.py','prices.py']) + verify_frozen().encode())
+        # Only calculation semantics belong in the cache fingerprint.  Progress
+        # wording and orchestration changes in this service must not invalidate
+        # every strategy result on the next daily run.
+        engine = scan_engine_version()
         report.update(engine_version=engine,asof=asof,total=total)
         self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(merge_scan_reports(previous,report)),job))
         for did in spec['datasets']:
             self.check_stop(job)
+            event_rows, cache_rows, observation_rows = [], [], []
+
+            def queue_event(action, path='', **detail):
+                event_rows.append((now(), job, action, str(path), dumps(detail)))
+
             try:
                 data,record = load_dataset(self.store,did,job)
                 data = prepare(data,timeframe,asof)
@@ -252,23 +260,44 @@ class Service:
             except Exception as exc:
                 data_error = str(exc)
                 record = {'code':did}
+            self.progress(job,previous.get('total',0)+done,overall_total or total,
+                          f"{timeframe} · {record['code']} · {len(strategies)} 个策略")
+
+            keys = {strategy.id: digest(dumps(
+                [did,strategy.id,strategy.version,timeframe,asof,engine]).encode())
+                for strategy in strategies}
+            cached_signals = {}
+            eligible = not data_error and len(data) >= 125
+            if eligible:
+                placeholders = ','.join('?' for _ in keys)
+                rows = self.store.rows(
+                    f'SELECT key,signal FROM scan_cache WHERE key IN ({placeholders})', tuple(keys.values()))
+                cached_signals = {row['key']: row['signal'] for row in rows}
+            prepared = None
+            prepare_error = None
+            if eligible and any(keys[strategy.id] not in cached_signals for strategy in strategies):
+                # TSP's most useful pattern for Aplus: one stock is enriched
+                # once, then each unchanged detector receives its own copy.
+                try:
+                    prepared = prepare_indicators(data)
+                except Exception as exc:
+                    prepare_error = str(exc)
             for strategy in strategies:
-                self.check_stop(job)
-                self.progress(job,previous.get('total',0)+done,overall_total or total,f"{timeframe} · {record['code']} · {strategy.name}")
                 try:
                     if data_error:
                         raise ValueError(data_error)
                     if len(data)<125:
                         raise ValueError(f'已完成 K 线仅 {len(data)} 根，至少需要 125 根')
-                    key = digest(dumps([did,strategy.id,strategy.version,timeframe,asof,engine]).encode())
-                    cached = self.store.rows('SELECT signal FROM scan_cache WHERE key=?',(key,))
-                    if cached:
-                        signal = json.loads(cached[0]['signal'])
+                    key = keys[strategy.id]
+                    if key in cached_signals:
+                        signal = json.loads(cached_signals[key])
                         report['reused'] += 1
-                        self.store.event(job,'复用已完成策略判断',strategy.file,code=record['code'],key=key)
+                        queue_event('复用已完成策略判断',strategy.file,code=record['code'],key=key)
                     else:
-                        self.store.event(job,'调用策略',strategy.file,strategy=strategy.id,code=record['code'],dataset=did)
-                        signal = signal_at_end(strategy,data)
+                        if prepare_error:
+                            raise ValueError(prepare_error)
+                        queue_event('调用策略',strategy.file,strategy=strategy.id,code=record['code'],dataset=did)
+                        signal = signal_at_end(strategy,data,prepared=prepared)
                         report['calculated'] += 1
                     if signal:
                         identity = digest(f"{did}|{strategy.id}|{strategy.version}|{timeframe}|{signal['asof']}".encode())
@@ -276,21 +305,32 @@ class Service:
                             # Keep earlier archived observations intact on a plan-layer
                             # upgrade; Store still keys manual plans by original setup.
                             identity = digest((identity + signal['plan_version']).encode())
-                        self.store.execute('INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                        observation_rows.append(
                             (identity,job,record['code'],strategy.id,strategy.version,timeframe,signal['asof'],
                              signal['setup_date'],did,dumps(signal),now()))
                         report['signals'] += 1
                         report['observation_ids'].append(identity)
-                        self.store.event(job,'记录策略命中',self.store.path,observation=identity,code=record['code'])
+                        queue_event('记录策略命中',self.store.path,observation=identity,code=record['code'])
                     else:
                         report['no_signal'] += 1
-                    self.store.execute('INSERT OR IGNORE INTO scan_cache VALUES(?,?,?)',(key,dumps(signal),now()))
+                    cache_rows.append((key,dumps(signal),now()))
                     report['success'] += 1
                 except Exception as exc:
                     report['errors'].append({'code':record['code'],'strategy':strategy.id,'timeframe':timeframe,'error':str(exc)})
-                    self.store.event(job,'策略计算失败',strategy.file,code=record['code'],error=str(exc))
-                done += 1
-                self.store.execute('UPDATE jobs SET progress=?,total=?,result=?,message=? WHERE id=?',
+                    queue_event('策略计算失败',strategy.file,code=record['code'],strategy=strategy.id,error=str(exc))
+            done += len(strategies)
+            # One durable checkpoint per stock replaces dozens of tiny SQLite
+            # connections/commits while preserving the same cache, observation
+            # and audit records.
+            with self.store.connect() as db:
+                if observation_rows:
+                    db.executemany('INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                                   observation_rows)
+                if cache_rows:
+                    db.executemany('INSERT OR IGNORE INTO scan_cache VALUES(?,?,?)', cache_rows)
+                if event_rows:
+                    db.executemany('INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)', event_rows)
+                db.execute('UPDATE jobs SET progress=?,total=?,result=?,message=? WHERE id=?',
                     (previous.get('total',0)+done,overall_total or total,dumps(merge_scan_reports(previous,report)),
                      f"{timeframe} 已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
         return report

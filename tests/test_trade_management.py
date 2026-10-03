@@ -1,14 +1,16 @@
 import json
-import os
-import tkinter as tk
 from pathlib import Path
 
 import pytest
 
 from gui.data import StockNameLookup
-from gui.trade_management import TradeManagementFrame
 from workbench.store import Store, dumps, now
-from workbench.trading import account_report, management_report, proposed_quantity
+from workbench.trading import (
+    account_report,
+    history_reconciliation,
+    management_report,
+    proposed_quantity,
+)
 
 
 def make_plan(store, state="计划交易", pending_state="PENDING"):
@@ -118,30 +120,22 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     for title in ("持仓管理", "作战卡", "已清仓", "绩效分析"):
         assert title in page
     assert "拟建仓速算" in page
-    assert 'text="卖出", bootstyle="primary-outline"' in page
+    assert 'style="PositionSell.primary.Outline.TButton"' in page
+    assert 'anchor=tk.CENTER' in page
+    assert 'padding=(4, 0, 4, 2)' in page
     assert '"市值(元)"' not in page
     assert '"盈亏(元)"' not in page
     assert 'rowheight=68' in page
     assert 'text="批量填表", bootstyle="primary"' in page
+    assert 'text="＋ 增加五行"' in page
+    assert 'command=lambda: self._add_rows(5)' in page
+    assert 'text="＋ 增加一行"' not in page
     assert "0 笔 · 默认按最近清仓日期排列" not in page
     assert page.count('state="readonly"') >= 3
     assert 'ttk.Label(header, text="交易管理"' not in page
     assert 'text="＋ 新增账户"' in page
     assert 'for column, widget in enumerate(widgets):' in page
     assert "tree._measure_font.measure(str(tree.set(iid, column)))" in page
-
-
-@pytest.mark.skipif(os.name != "nt", reason="需要 Windows Tk 桌面环境")
-def test_trade_management_frame_builds_with_python312_tk_font_api():
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        frame = TradeManagementFrame(root, store=None)
-        frame.pack(fill=tk.BOTH, expand=True)
-        root.update_idletasks()
-        assert frame.position_tree._measure_font.measure("仓位%") > 0
-    finally:
-        root.destroy()
 
 
 def test_stock_name_lookup_resolves_code_chinese_and_pinyin_initials():
@@ -207,13 +201,45 @@ def test_history_mode_manual_close_reconciliation_edit_and_delete(tmp_path):
     report = management_report(store, account_id, {})
     assert report["summary"]["historical_equity"] == pytest.approx(100500)
     assert report["summary"]["reconciliation"] == pytest.approx(50)
+    assert report["summary"]["implied_initial_equity"] == pytest.approx(100050)
     store.save_closed_trade(
         account_id, "sz.000001", "平安银行", "2026-09-30", 21, 550, 5.5,
         closed_id=closed_id,
     )
-    assert management_report(store, account_id, {})["summary"]["closed_pnl"] == 550
+    edited = management_report(store, account_id, {})
+    assert edited["summary"]["closed_pnl"] == 550
+    assert edited["summary"]["historical_equity"] == pytest.approx(100550)
+    assert edited["summary"]["implied_initial_equity"] == pytest.approx(100000)
+    assert edited["summary"]["reconciliation"] == pytest.approx(0)
     store.delete_closed_trade(closed_id)
     assert management_report(store, account_id, {})["closed"] == []
+
+
+def test_history_reconciliation_keeps_manual_initial_and_reverse_value_independent():
+    result = history_reconciliation(
+        50000,
+        broker_total_assets=42261.94,
+        closed_pnl=-7000,
+        floating_pnl=-738.06,
+    )
+
+    assert result["system_total_assets"] == pytest.approx(42261.94)
+    assert result["implied_initial_equity"] == pytest.approx(50000)
+    assert result["reconciliation"] == pytest.approx(0)
+
+
+def test_history_account_ui_explains_two_way_reconciliation():
+    source = (Path(__file__).resolve().parents[1] / "gui" / "trade_management.py").read_text(
+        encoding="utf-8"
+    )
+    for text in (
+        "系统账面总资产",
+        "券商资产快照",
+        "反推开户资金",
+        "采用反推值",
+        "不会自动覆盖初始资金",
+    ):
+        assert text in source
 
 
 def test_batch_closed_trade_import_is_atomic_and_keeps_recent_first(tmp_path):

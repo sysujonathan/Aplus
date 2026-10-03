@@ -185,6 +185,26 @@ def proposed_quantity(account, entry, stop, existing_risk=0.0):
     return max(min(by_risk, by_value) // 100 * 100, 0)
 
 
+def history_reconciliation(initial_equity, broker_total_assets=None,
+                           closed_pnl=0.0, floating_pnl=0.0):
+    """双向计算历史建账资产；券商快照只校验，不覆盖用户确认的初始资金。"""
+    initial = _number(initial_equity)
+    closed = _number(closed_pnl)
+    floating = _number(floating_pnl)
+    system_total = initial + closed + floating
+    broker = None
+    if broker_total_assets not in (None, ""):
+        broker = _number(broker_total_assets)
+    return {
+        "system_total_assets": system_total,
+        "broker_total_assets": broker,
+        "implied_initial_equity": (
+            broker - closed - floating if broker is not None else None
+        ),
+        "reconciliation": broker - system_total if broker is not None else None,
+    }
+
+
 def management_report(store, account_id, price_map=None):
     """Build the broker-style current-position and closed-trade dashboard."""
     accounts = store.rows("SELECT * FROM accounts WHERE id=?", (account_id,))
@@ -255,16 +275,23 @@ def management_report(store, account_id, price_map=None):
         (account_id,),
     )
     closed_pnl = sum(_number(row["pnl"]) for row in closed)
-    historical_equity = _number(account["initial_equity"]) + closed_pnl + floating_total
     snapshot = _number(account.get("current_total_assets"), 0.0)
+    history = history_reconciliation(
+        account["initial_equity"],
+        snapshot if snapshot > 0 else None,
+        closed_pnl,
+        floating_total,
+    )
+    historical_equity = history["system_total_assets"]
     if account.get("accounting_mode") == "snapshot":
         total_assets = snapshot or historical_equity
     else:
         total_assets = historical_equity
     available_cash = total_assets - market_value
-    reconciliation = None
-    if snapshot > 0 and account.get("accounting_mode") == "history":
-        reconciliation = snapshot - historical_equity
+    reconciliation = (
+        history["reconciliation"]
+        if account.get("accounting_mode") == "history" else None
+    )
     for row in open_rows:
         row["allocation_pct"] = row["market_value"] / total_assets * 100 if total_assets else 0.0
         row["account_risk_pct"] = row["risk_amount"] / total_assets * 100 if total_assets else 0.0
@@ -286,6 +313,7 @@ def management_report(store, account_id, price_map=None):
             "quote_date": max(quote_dates) if quote_dates else "",
             "historical_equity": historical_equity,
             "broker_total_assets": snapshot or None,
+            "implied_initial_equity": history["implied_initial_equity"],
             "reconciliation": reconciliation,
             "wins": len(wins),
             "losses": len(losses),

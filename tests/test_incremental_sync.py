@@ -65,6 +65,23 @@ def test_repeat_and_narrow_do_not_connect(store, frame):
     assert len(p.calls)==1
 
 
+def test_repeat_sync_verifies_bytes_without_reparsing_csv(store, frame, monkeypatch):
+    p = Provider(frame)
+    did, _ = sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[0], frame.date.iloc[-1])
+    monkeypatch.setattr('workbench.market.pd.read_csv',
+                        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('unchanged CSV was reparsed')))
+    assert sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[0], frame.date.iloc[-1]) == (did,'skipped')
+
+
+def test_repeat_sync_still_rejects_tampered_cached_snapshot(store, frame):
+    p = Provider(frame)
+    did, _ = sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[0], frame.date.iloc[-1])
+    record = store.rows('SELECT path FROM datasets WHERE id=?', (did,))[0]
+    (store.root / record['path']).write_bytes(b'tampered')
+    with pytest.raises(ValueError, match='校验'):
+        sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[0], frame.date.iloc[-1])
+
+
 def test_extend_both_ends_and_preserve_snapshot(store, frame):
     p = Provider(frame)
     first, _ = sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[30], frame.date.iloc[80])
