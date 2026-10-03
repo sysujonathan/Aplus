@@ -26,13 +26,21 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         ) == "center"
         window._switch_section('afterhours')
         page = window.afterhours
-        for size in ('1600x1000', '1280x760'):
+        for size in ('2560x1440', '1600x1000', '1280x760'):
             window.geometry(size)
             window.update()
             assert page.run_button.winfo_rootx() + page.run_button.winfo_width() <= window.winfo_rootx() + window.winfo_width()
+            assert page.run_button.winfo_width() >= page.run_button.winfo_reqwidth()
             assert page.tree.winfo_width() > 600
             assert page.boundary_trees['profit'].winfo_width() > 200
             assert page.tree.winfo_width() / (page.tree.winfo_width() + page.boundary_trees['profit'].winfo_width()) == pytest.approx(.76, abs=.04)
+            for column in page.tree['columns']:
+                assert page.tree.heading(column, 'anchor') == page.tree.column(column, 'anchor')
+            assert not page.tree.column('entry', 'stretch')
+            assert page.tree.column('name', 'stretch')
+            assert int(page.status_label.cget('wraplength')) == page.status_label.winfo_width()
+            assert int(page.completeness_label.cget('wraplength')) == page.completeness_label.winfo_width()
+            assert page.histogram.winfo_height() >= 90
         bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 14.1, 11)
         records = run_replay(h2_spec, bars, bars.date.iloc[124], bars.date.iloc[-1], costs=Assumptions())
         report = summarize_replay(records)

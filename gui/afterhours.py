@@ -16,7 +16,7 @@ from workbench.h2_replay_service import available_snapshots, load_receipt
 from workbench.market import completed_date
 from .data import code_names
 from .h2_replay_chart import render_replay
-from .theme import CHART_BG, DOWN, MUTED, TEXT, UP
+from .theme import ACCENT, BORDER, CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP
 
 
 def number(value, suffix='', percent=False):
@@ -62,10 +62,31 @@ class AfterhoursPage(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)
         self._build()
+        self._normalize_fonts(self)
         self._poll_id = self.after(350, self._poll)
         self.bind('<Destroy>', self._destroyed, add='+')
 
+    def _normalize_fonts(self, widget):
+        """Scope pixel fonts to this page; avoid point sizes multiplied by DPI."""
+        if 'font' in widget.keys():
+            font = self.tk.splitlist(str(widget.cget('font')))
+            size = 28 if len(font) > 1 and font[1] == '18' else 15 if len(font) > 1 and font[1] == '11' else 13
+            bold = 'bold' if 'bold' in font else 'normal'
+            widget.configure(font=('Microsoft YaHei UI', -size, bold))
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Button):
+                child.configure(style='Afterhours.Primary.TButton' if child is self.run_button else 'Afterhours.TButton')
+            self._normalize_fonts(child)
+
     def _build(self):
+        style = ttk.Style()
+        style.configure('Afterhours.Treeview', rowheight=28, font=('Microsoft YaHei UI', -13))
+        style.configure('Afterhours.Treeview.Heading', font=('Microsoft YaHei UI', -13, 'bold'))
+        for name in ('Afterhours.TButton', 'Afterhours.Primary.TButton'):
+            background = ACCENT if name == 'Afterhours.Primary.TButton' else CONTROL_BG
+            style.configure(name, font=('Microsoft YaHei UI', -13), padding=(8, 5),
+                            background=background, bordercolor=BORDER, foreground=TEXT)
+            style.map(name, background=[('active', SELECTION)], foreground=[('disabled', MUTED)])
         bar = ttk.Frame(self)
         bar.grid(row=0, column=0, sticky=tk.EW)
         for label, var, width, values in (
@@ -89,7 +110,9 @@ class AfterhoursPage(ttk.Frame):
         receipt = ttk.Frame(self)
         receipt.grid(row=1, column=0, sticky=tk.EW, pady=(8, 6))
         receipt.columnconfigure(0, weight=1)
-        ttk.Label(receipt, textvariable=self.status, foreground=MUTED, wraplength=760).grid(row=0, column=0, sticky=tk.EW)
+        self.status_label = ttk.Label(receipt, textvariable=self.status, foreground=MUTED, justify=tk.LEFT)
+        self.status_label.grid(row=0, column=0, sticky=tk.EW)
+        self.status_label.bind('<Configure>', lambda e: self.status_label.configure(wraplength=max(1, e.width)))
         ttk.Button(receipt, text='成交假设／回执', command=self._receipt_dialog, bootstyle='secondary').grid(row=0, column=2)
         self.history_box = ttk.Combobox(receipt, textvariable=self.history, state='readonly', width=31)
         self.history_box.grid(row=0, column=1, padx=10)
@@ -111,7 +134,7 @@ class AfterhoursPage(ttk.Frame):
         self.stats = []
         for i, label in enumerate(['机会数', '触发率', '胜率 · 已结束', '平均 R · 已结束', '初始风险中位数 · 已成交']):
             stats.columnconfigure(i, weight=1, uniform='metric')
-            card = ttk.Frame(stats, padding=(8, 4))
+            card = ttk.Frame(stats, padding=(0, 4))
             card.grid(row=0, column=i, sticky=tk.EW)
             ttk.Label(card, text=label, foreground=MUTED).pack(anchor=tk.W)
             var = tk.StringVar(value='—')
@@ -128,7 +151,9 @@ class AfterhoursPage(ttk.Frame):
         main.columnconfigure(0, weight=1)
         main.rowconfigure(2, weight=1)
         self.completeness = tk.StringVar(value='尚未运行；不展示演示交易。')
-        ttk.Label(main, textvariable=self.completeness, foreground=MUTED, wraplength=800).grid(row=0, column=0, sticky=tk.EW, pady=5)
+        self.completeness_label = ttk.Label(main, textvariable=self.completeness, foreground=MUTED, justify=tk.LEFT)
+        self.completeness_label.grid(row=0, column=0, sticky=tk.EW, pady=5)
+        self.completeness_label.bind('<Configure>', lambda e: self.completeness_label.configure(wraplength=max(1, e.width)))
         filterbar = ttk.Frame(main)
         filterbar.grid(row=1, column=0, sticky=tk.EW, pady=6)
         ttk.Label(filterbar, text='机会结局').pack(side=tk.LEFT)
@@ -142,11 +167,13 @@ class AfterhoursPage(ttk.Frame):
         table.grid(row=2, column=0, sticky=tk.NSEW)
         table.rowconfigure(0, weight=1)
         table.columnconfigure(0, weight=1)
-        self.tree = ttk.Treeview(table, columns=cols, show='headings', selectmode='browse')
+        self.tree = ttk.Treeview(table, columns=cols, show='headings', selectmode='browse', style='Afterhours.Treeview')
         for col, title, width in zip(cols, ['H2 日期', '代码', '名称', '成交／待挂价', 'SL1', '初始风险', '结局', '净 R'],
                                      [98, 88, 102, 110, 82, 88, 130, 65]):
-            self.tree.heading(col, text=title)
-            self.tree.column(col, width=width, minwidth=width, anchor=tk.W if col in ('date', 'code', 'name', 'result') else tk.E)
+            anchor = tk.W if col in ('date', 'code', 'name', 'result') else tk.E
+            self.tree.heading(col, text=title, anchor=anchor)
+            self.tree.column(col, width=width, minwidth=width, anchor=anchor,
+                             stretch=col in ('name', 'result'))
         self.tree.grid(row=0, column=0, sticky=tk.NSEW)
         ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.tree.yview).grid(row=0, column=1, sticky=tk.NS)
         self.tree.configure(yscrollcommand=lambda a, b: table.winfo_children()[1].set(a, b))
@@ -161,26 +188,34 @@ class AfterhoursPage(ttk.Frame):
 
         side = ttk.Frame(body)
         side.grid(row=0, column=1, sticky=tk.NSEW)
+        side.columnconfigure(0, weight=1)
+        side.rowconfigure(5, weight=1)
+        side.rowconfigure(5, minsize=90)
         self.boundary_trees = {}
-        for group, label, color in [('profit', 'Top 盈利 · 净 R', UP), ('loss', 'Top 亏损 · 净 R', DOWN)]:
-            ttk.Label(side, text=label, foreground=color, font=('Microsoft YaHei UI', 11, 'bold')).pack(anchor=tk.W, pady=(6, 4))
-            tree = ttk.Treeview(side, columns=('code', 'r'), show='headings', height=5, selectmode='browse')
-            tree.heading('code', text='代码 / H2 日期')
-            tree.heading('r', text='净 R')
+        for index, (group, label, color) in enumerate([('profit', 'Top 盈利 · 净 R', UP), ('loss', 'Top 亏损 · 净 R', DOWN)]):
+            ttk.Label(side, text=label, foreground=color, font=('Microsoft YaHei UI', 11, 'bold')).grid(
+                row=index * 2, column=0, sticky=tk.W, pady=(6, 4))
+            tree = ttk.Treeview(side, columns=('code', 'r'), show='headings', height=5, selectmode='browse', style='Afterhours.Treeview')
+            tree.heading('code', text='代码 / H2 日期', anchor=tk.W)
+            tree.heading('r', text='净 R', anchor=tk.E)
             tree.column('code', width=160, minwidth=100)
-            tree.column('r', width=65, minwidth=55, anchor=tk.E)
-            tree.pack(fill=tk.X)
+            tree.column('r', width=65, minwidth=55, anchor=tk.E, stretch=False)
+            tree.grid(row=index * 2 + 1, column=0, sticky=tk.EW)
             tree.bind('<Double-1>', lambda e, g=group: self._open_boundary(g))
             tree.bind('<Return>', lambda e, g=group: self._open_boundary(g))
             self.boundary_trees[group] = tree
-        ttk.Label(side, text='已结束交易 R 分布', font=('Microsoft YaHei UI', 11, 'bold')).pack(anchor=tk.W, pady=(15, 6))
+        side.bind('<Configure>', lambda e: [tree.configure(height=3 if e.height < 600 else 5)
+                                            for tree in self.boundary_trees.values()])
+        ttk.Label(side, text='已结束交易 R 分布', font=('Microsoft YaHei UI', 11, 'bold')).grid(
+            row=4, column=0, sticky=tk.W, pady=(15, 6))
         self.distribution = tk.StringVar(value='没有已结束交易')
         self.histogram = tk.Canvas(side, bg=CHART_BG, height=115, highlightthickness=0)
-        self.histogram.pack(fill=tk.X)
+        self.histogram.grid(row=5, column=0, sticky=tk.NSEW)
         self.histogram.bind('<Configure>', lambda e: self._histogram())
-        ttk.Label(side, textvariable=self.distribution, foreground=MUTED, justify=tk.LEFT).pack(anchor=tk.W)
-        ttk.Label(side, text='盈利取 R > 0，亏损取 R < 0；各最多 5 笔。\n并列按 H2 日期、代码排列。', foreground=MUTED,
-                  wraplength=275, justify=tk.LEFT).pack(anchor=tk.W, pady=12)
+        side_note = ttk.Label(side, text='Top 各最多 5 笔，按净 R 排序；并列按 H2 日期、代码。', foreground=MUTED,
+                             justify=tk.LEFT)
+        side_note.grid(row=6, column=0, sticky=tk.EW, pady=8)
+        side_note.bind('<Configure>', lambda e: side_note.configure(wraplength=max(1, e.width)))
 
         self.detail = ttk.Frame(self.host)
         self.detail.grid(row=0, column=0, sticky=tk.NSEW)
@@ -212,10 +247,10 @@ class AfterhoursPage(ttk.Frame):
         timeline_host.rowconfigure(1, weight=1)
         timeline_host.columnconfigure(0, weight=1)
         ttk.Label(timeline_host, text='逐日事件 · ← → 切换').grid(row=0, column=0, sticky=tk.W)
-        self.timeline = ttk.Treeview(timeline_host, columns=('date', 'kind'), show='headings', selectmode='browse')
-        self.timeline.heading('date', text='日期')
-        self.timeline.heading('kind', text='事件')
-        self.timeline.column('date', width=96, minwidth=88)
+        self.timeline = ttk.Treeview(timeline_host, columns=('date', 'kind'), show='headings', selectmode='browse', style='Afterhours.Treeview')
+        self.timeline.heading('date', text='日期', anchor=tk.W)
+        self.timeline.heading('kind', text='事件', anchor=tk.W)
+        self.timeline.column('date', width=96, minwidth=88, stretch=False)
         self.timeline.column('kind', width=140, minwidth=80)
         self.timeline.grid(row=1, column=0, sticky=tk.NSEW, pady=6)
         scroll = ttk.Scrollbar(timeline_host, command=self.timeline.yview)
@@ -223,8 +258,9 @@ class AfterhoursPage(ttk.Frame):
         self.timeline.configure(yscrollcommand=scroll.set)
         self.timeline.bind('<<TreeviewSelect>>', self._event_selected)
         self.event_text = tk.StringVar()
-        ttk.Label(timeline_host, textvariable=self.event_text, wraplength=270, justify=tk.LEFT,
-                  foreground=MUTED).grid(row=2, column=0, sticky=tk.EW, pady=10)
+        event_label = ttk.Label(timeline_host, textvariable=self.event_text, justify=tk.LEFT, foreground=MUTED)
+        event_label.grid(row=2, column=0, sticky=tk.EW, pady=10)
+        event_label.bind('<Configure>', lambda e: event_label.configure(wraplength=max(1, e.width)))
         self.detail.bind('<Up>', lambda e: self._step_trade(-1))
         self.detail.bind('<Down>', lambda e: self._step_trade(1))
         self.detail.bind('<Left>', lambda e: self._step_event(-1))
@@ -377,15 +413,16 @@ class AfterhoursPage(ttk.Frame):
         if not values or not sum(values):
             self.histogram.create_text(10, 45, text='没有已结束交易', fill=MUTED, anchor=tk.W)
             return
-        width, height = max(180, self.histogram.winfo_width()), 115
+        width, height = max(180, self.histogram.winfo_width()), max(60, self.histogram.winfo_height())
         maximum = max(values)
         step = width / len(values)
         for i, value in enumerate(values):
             left, right = i * step + 5, (i + 1) * step - 5
-            top = 88 - 64 * value / maximum
-            self.histogram.create_rectangle(left, top, right, 88, fill=DOWN if i < 3 else UP, outline='')
+            baseline = height - 27
+            top = baseline - (height - 51) * value / maximum
+            self.histogram.create_rectangle(left, top, right, baseline, fill=DOWN if i < 3 else UP, outline='')
             self.histogram.create_text((left + right) / 2, top - 8, text=str(value), fill=TEXT)
-            self.histogram.create_text((left + right) / 2, 103, text=['<-2', '-2~-1', '-1~0', '0~1', '1~2', '≥2'][i],
+            self.histogram.create_text((left + right) / 2, height - 12, text=['<-2', '-2~-1', '-1~0', '0~1', '1~2', '≥2'][i],
                                        fill=MUTED, font=('Consolas', 8))
 
     def _fill_rows(self):
