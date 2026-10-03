@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pandas as pd
 
@@ -12,6 +13,101 @@ import pandas as pd
 REALTIME_MARKET_SOURCE = "baostock"
 LEGACY_MARKET_SOURCE = "legacy-engine-a"
 LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, LEGACY_MARKET_SOURCE)
+
+_pinyin = None
+_pinyin_style = None
+_pinyin_checked = False
+
+
+def _name_initials(name):
+    """Lazy pinyin initials, following BPA Scanner's fast lookup design."""
+    global _pinyin, _pinyin_style, _pinyin_checked
+    if not _pinyin_checked:
+        _pinyin_checked = True
+        try:
+            from pypinyin import Style, pinyin
+            _pinyin, _pinyin_style = pinyin, Style
+        except ImportError:
+            _pinyin = _pinyin_style = None
+    if _pinyin is None:
+        return ""
+    try:
+        return "".join(
+            syllable[0][0].lower()
+            for syllable in _pinyin(name, style=_pinyin_style.FIRST_LETTER, errors="ignore")
+            if syllable and syllable[0]
+        )
+    except Exception:
+        return ""
+
+
+class StockNameLookup:
+    """Resolve A-share code/name queries, including lazy pinyin-initial matching."""
+
+    def __init__(self, names):
+        self.names = dict(names or {})
+        self.by_name = {}
+        for code, name in self.names.items():
+            if name:
+                self.by_name.setdefault(name, code)
+        self._initials = None
+
+    def _ensure_initials(self):
+        if self._initials is not None:
+            return
+        self._initials = {}
+        for code, name in self.names.items():
+            initials = _name_initials(name)
+            if initials:
+                self._initials.setdefault(initials, []).append(code)
+
+    def suggest(self, query, limit=8):
+        text = str(query or "").strip()
+        if not text:
+            return []
+        folded = text.casefold()
+        found = []
+        seen = set()
+
+        def add(code):
+            if code not in seen and code in self.names:
+                seen.add(code)
+                found.append((code, self.names[code]))
+
+        digits = re.sub(r"\D", "", text)
+        if digits and (text.isdigit() or folded.startswith(("sh", "sz", "bj"))):
+            for code in sorted(self.names):
+                if code.split(".")[-1].startswith(digits):
+                    add(code)
+                    if len(found) >= limit:
+                        return found
+        for name, code in self.by_name.items():
+            if name.casefold() == folded:
+                add(code)
+        for name, code in self.by_name.items():
+            if name.casefold().startswith(folded):
+                add(code)
+        for name, code in self.by_name.items():
+            if folded in name.casefold():
+                add(code)
+            if len(found) >= limit:
+                return found
+        self._ensure_initials()
+        for mode in ("exact", "prefix", "contains"):
+            for initials, codes in self._initials.items():
+                matched = (initials == folded if mode == "exact" else
+                           initials.startswith(folded) if mode == "prefix" else
+                           folded in initials)
+                if matched:
+                    for code in codes:
+                        add(code)
+                        if len(found) >= limit:
+                            return found
+        return found
+
+    def resolve(self, query):
+        matches = self.suggest(query, limit=1)
+        return matches[0] if matches else (None, None)
 
 
 def code_names(store):
