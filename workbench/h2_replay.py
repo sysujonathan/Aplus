@@ -191,7 +191,7 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
 
 
 def run_replay(spec, frame, start, end, settings=None, costs=None,
-               progress=lambda *a: None, cancelled=lambda: False):
+               progress=lambda *a: None, cancelled=lambda: False, *, prefilter=True):
     settings, costs = settings or H2Settings(), costs or Assumptions()
     settings.validate()
     costs.validate()
@@ -203,8 +203,11 @@ def run_replay(spec, frame, start, end, settings=None, costs=None,
     source.attrs.update(frame.attrs)
     adapted = ResearchSpec(spec, settings)
     adapted.instance()  # Reject other strategies even with no eligible bars.
+    from .h2_prefilter import candidate_days
+    dates = source.date.astype(str).str[:10].tolist()
+    candidates, breakouts = candidate_days(source, settings) if prefilter else (None, None)
     indices = [i for i in range(max(124, settings.lookback + 4), len(source))
-               if _day(source, i) >= start]
+               if dates[i] >= start]
     records, seen = [], set()
     for n, i in enumerate(indices):
         if cancelled():
@@ -212,8 +215,11 @@ def run_replay(spec, frame, start, end, settings=None, costs=None,
         # The frozen H2's raw signal requires this day's LHLL. This causal
         # necessary condition avoids recalculating indicators on impossible days;
         # it never reads a future row or changes the qualifying detector.
-        today, yesterday = source.iloc[i], source.iloc[i - 1]
-        if not (today.high < yesterday.high and today.low < yesterday.low):
+        skip = (not candidates[i] or dates[int(breakouts[i])] in seen) if prefilter else False
+        if not prefilter:
+            today, yesterday = source.iloc[i], source.iloc[i - 1]
+            skip = not (today.high < yesterday.high and today.low < yesterday.low)
+        if skip:
             if n % 10 == 0 or n + 1 == len(indices):
                 progress(n + 1, len(indices))
             continue

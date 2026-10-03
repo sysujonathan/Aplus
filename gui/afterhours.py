@@ -346,6 +346,10 @@ class AfterhoursPage(ttk.Frame):
                         f'已回放 {report["processed_datasets"]}/{report["requested_datasets"]} 个标的 · '
                         f'覆盖提示 {len(report["coverage_warnings"])} · 失败 {len(report["errors"])}'
                         + (' · 导入研究，来源未认证' if not report['real_data'] else ''))
+        performance = report.get('performance')
+        if performance:
+            self.status.set(self.status.get() + f' · 耗时 {performance["elapsed_seconds"]:.1f} 秒'
+                            + f' · 复用 {performance["reused"]} 个标的')
         values = [str(report['opportunities']), number(report['trigger_rate'], '%', True),
                   number(report['win_rate'], '%', True), number(report['mean_r'], 'R'),
                   number(report['median_risk_pct'], '%')]
