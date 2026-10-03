@@ -13,6 +13,7 @@ from .chart_panel import ChartGrid
 from .data import REALTIME_MARKET_SOURCE
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
+from .trade_management import TradeManagementFrame
 from .theme import (
     ACCENT,
     ACCENT_HOVER,
@@ -104,7 +105,7 @@ class AplusMainWindow(ttk.Window):
             ("premarket", "盘前任务"),
             ("afterhours", "盘后回测"),
             ("strategy", "策略迭代"),
-            ("other", "其他工具"),
+            ("other", "交易管理"),
         )
         for key, label in section_names:
             button = ttk.Button(
@@ -193,11 +194,9 @@ class AplusMainWindow(ttk.Window):
             "注册研究策略、运行验证、比较版本，再由交易员决定是否启用。",
             "原有正式策略仍处于冻结保护中，本次界面调整不会改动它们。",
         )
-        self._pages["other"] = self._placeholder_page(
-            "其他工具",
-            "为 AI 辅助、盘中观察和后续 T+0 工具预留独立工作区。",
-            "这些能力尚未接入，不会以占位按钮冒充可用功能。",
-        )
+        self.trade_management = TradeManagementFrame(self.page_host, self.store)
+        self.trade_management.grid(row=0, column=0, sticky=tk.NSEW)
+        self._pages["other"] = self.trade_management
         self._switch_section("premarket")
         self.bind("<Configure>", self._resize_layout)
 
@@ -237,6 +236,8 @@ class AplusMainWindow(ttk.Window):
             self._section_buttons[name].configure(
                 bootstyle="primary" if name == key else "secondary"
             )
+        if key == "other" and hasattr(self, "trade_management"):
+            self.trade_management.reload()
 
     def _setup_tray(self):
         """关闭窗口时驻留系统托盘；托盘回调不直接跨线程操作 Tk。"""

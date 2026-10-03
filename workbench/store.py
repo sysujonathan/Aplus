@@ -98,14 +98,61 @@ class Store:
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id,seq);
             """)
             version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-            if version not in {'1', '2', '3', '4'}:
+            if version not in {'1', '2', '3', '4', '5', '6'}:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             db.execute("CREATE TABLE IF NOT EXISTS sync_coverage(code TEXT PRIMARY KEY, "
                        "dataset_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS scan_cache(key TEXT PRIMARY KEY, signal TEXT NOT NULL, created TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS watchlist(code TEXT PRIMARY KEY, observation_id TEXT NOT NULL, "
                        "notes TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL)")
-            db.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
+            # v5 adds a manual execution ledger.  A market signal, including an
+            # H2 TRIGGERED state, never writes here: only explicit trader input
+            # may create an execution and therefore a real position.
+            db.execute("CREATE TABLE IF NOT EXISTS accounts("
+                       "id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, "
+                       "initial_equity REAL NOT NULL, risk_limit_pct REAL NOT NULL DEFAULT 3, "
+                       "per_trade_risk_pct REAL NOT NULL DEFAULT 1, "
+                       "max_position_pct REAL NOT NULL DEFAULT 30, "
+                       "cash_reserve_pct REAL NOT NULL DEFAULT 10, "
+                       "active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL, "
+                       "accounting_mode TEXT NOT NULL DEFAULT 'snapshot', current_total_assets REAL)")
+            db.execute("CREATE TABLE IF NOT EXISTS executions("
+                       "id TEXT PRIMARY KEY, account_id TEXT NOT NULL, plan_id TEXT, "
+                       "observation_id TEXT, code TEXT NOT NULL, side TEXT NOT NULL, "
+                       "trade_time TEXT NOT NULL, price REAL NOT NULL, quantity INTEGER NOT NULL, "
+                       "fee REAL NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '', "
+                       "notes TEXT NOT NULL DEFAULT '', plan_snapshot TEXT NOT NULL DEFAULT '{}', "
+                       "created TEXT NOT NULL)")
+            db.execute("CREATE INDEX IF NOT EXISTS executions_account_time "
+                       "ON executions(account_id,trade_time,created)")
+            db.execute("CREATE INDEX IF NOT EXISTS executions_account_code "
+                       "ON executions(account_id,code,trade_time)")
+            account_columns = {row[1] for row in db.execute("PRAGMA table_info(accounts)")}
+            if "accounting_mode" not in account_columns:
+                db.execute("ALTER TABLE accounts ADD COLUMN accounting_mode TEXT NOT NULL DEFAULT 'snapshot'")
+            if "current_total_assets" not in account_columns:
+                db.execute("ALTER TABLE accounts ADD COLUMN current_total_assets REAL")
+            db.execute("CREATE TABLE IF NOT EXISTS positions("
+                       "id TEXT PRIMARY KEY, account_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, "
+                       "plan_id TEXT, observation_id TEXT, entry REAL NOT NULL, stop REAL NOT NULL, "
+                       "tp1 REAL NOT NULL, tp2 REAL, tp3 REAL, status TEXT NOT NULL DEFAULT 'OPEN', "
+                       "created TEXT NOT NULL, updated TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS position_fills("
+                       "id TEXT PRIMARY KEY, position_id TEXT NOT NULL, side TEXT NOT NULL, "
+                       "trade_date TEXT NOT NULL, price REAL NOT NULL, quantity INTEGER NOT NULL, "
+                       "fees REAL NOT NULL DEFAULT 0, created TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS closed_trades("
+                       "id TEXT PRIMARY KEY, account_id TEXT NOT NULL, position_id TEXT, "
+                       "code TEXT NOT NULL, name TEXT NOT NULL, close_date TEXT NOT NULL, "
+                       "holding_days INTEGER NOT NULL, pnl REAL NOT NULL, return_pct REAL NOT NULL, "
+                       "notes TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL)")
+            db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_open_position_per_account_code "
+                       "ON positions(account_id,code) WHERE status='OPEN'")
+            db.execute("CREATE INDEX IF NOT EXISTS position_fills_position_date "
+                       "ON position_fills(position_id,trade_date,created)")
+            db.execute("CREATE INDEX IF NOT EXISTS closed_trades_account_date "
+                       "ON closed_trades(account_id,close_date)")
+            db.execute("UPDATE meta SET value='6' WHERE key='schema_version'")
 
     @contextlib.contextmanager
     def connect(self):
@@ -205,3 +252,391 @@ class Store:
         if not changed:
             raise ValueError('关注记录不存在')
         self.event(None, '更新关注' if active else '结束关注', code=code, notes=notes)
+
+    def list_accounts(self, active_only=True):
+        sql = "SELECT * FROM accounts"
+        if active_only:
+            sql += " WHERE active=1"
+        return self.rows(sql + " ORDER BY created,id")
+
+    def save_account(self, name, initial_equity, risk_limit_pct=3.0,
+                     per_trade_risk_pct=1.0, max_position_pct=30.0,
+                     cash_reserve_pct=10.0, account_id=None, active=True,
+                     accounting_mode="snapshot", current_total_assets=None):
+        """Create or update a local manual-trading account profile."""
+        name = str(name or "").strip()
+        values = (initial_equity, risk_limit_pct, per_trade_risk_pct,
+                  max_position_pct, cash_reserve_pct)
+        if not name:
+            raise ValueError("账户名称不能为空")
+        if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
+            raise ValueError("账户资金和风险参数必须是有限数字")
+        accounting_mode = str(accounting_mode or "snapshot").strip().lower()
+        if accounting_mode not in {"snapshot", "history"}:
+            raise ValueError("建账方式只能是当前资产快照或历史清仓")
+        if initial_equity <= 0:
+            raise ValueError("账户资金必须大于 0")
+        if current_total_assets not in (None, ""):
+            if not isinstance(current_total_assets, (int, float)) or not math.isfinite(current_total_assets) or current_total_assets <= 0:
+                raise ValueError("当前总资产必须是大于 0 的有限数字")
+            current_total_assets = float(current_total_assets)
+        elif accounting_mode == "snapshot":
+            current_total_assets = float(initial_equity)
+        if not (0 < risk_limit_pct <= 100 and 0 < per_trade_risk_pct <= 100):
+            raise ValueError("风险比例必须在 0% 到 100% 之间")
+        if not (0 < max_position_pct <= 100 and 0 <= cash_reserve_pct < 100):
+            raise ValueError("单票上限需在 0% 到 100% 之间，现金保留需在 0% 到 100% 以内")
+        if per_trade_risk_pct > risk_limit_pct:
+            raise ValueError("单笔风险不能高于总持仓风险上限")
+        stamp = now()
+        account_id = account_id or uuid.uuid4().hex[:16]
+        with self.connect() as db:
+            existing = db.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+            if existing:
+                db.execute(
+                    "UPDATE accounts SET name=?,initial_equity=?,risk_limit_pct=?,"
+                    "per_trade_risk_pct=?,max_position_pct=?,cash_reserve_pct=?,active=?,updated=?,"
+                    "accounting_mode=?,current_total_assets=? WHERE id=?",
+                    (name, *values, int(bool(active)), stamp, accounting_mode,
+                     current_total_assets, account_id),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO accounts(id,name,initial_equity,risk_limit_pct,per_trade_risk_pct,"
+                    "max_position_pct,cash_reserve_pct,active,created,updated,accounting_mode,current_total_assets) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (account_id, name, *values, int(bool(active)), stamp, stamp,
+                     accounting_mode, current_total_assets),
+                )
+        self.event(None, "保存交易账户", self.path, account_id=account_id, name=name)
+        return account_id
+
+    def list_executions(self, account_id=None, code=None):
+        sql = "SELECT * FROM executions WHERE 1=1"
+        args = []
+        if account_id:
+            sql += " AND account_id=?"
+            args.append(account_id)
+        if code:
+            sql += " AND code=?"
+            args.append(code)
+        return self.rows(sql + " ORDER BY trade_time,created,id", tuple(args))
+
+    def _execution_plan_snapshot(self, db, plan_id):
+        if not plan_id:
+            return None, None, {}
+        plan = db.execute("SELECT * FROM plans WHERE id=?", (plan_id,)).fetchone()
+        if not plan:
+            raise ValueError("关联的作战计划不存在")
+        plan = dict(plan)
+        obs = db.execute("SELECT * FROM observations WHERE id=?", (plan["observation_id"],)).fetchone()
+        observation = dict(obs) if obs else {}
+        try:
+            signal_payload = json.loads(observation.get("payload") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            signal_payload = {}
+        snapshot = {
+            "plan_id": plan["id"],
+            "observation_id": plan["observation_id"],
+            "code": plan["code"],
+            "strategy": plan["strategy"],
+            "timeframe": plan["timeframe"],
+            "setup_date": plan["setup_date"],
+            "plan_state": plan["state"],
+            "entry": plan["entry"],
+            "stop": plan["stop"],
+            "target": plan["target"],
+            "planned_quantity": plan["quantity"],
+            "plan_updated": plan["updated"],
+            "strategy_version": observation.get("version"),
+            "signal_asof": observation.get("asof"),
+            "signal_payload": signal_payload,
+        }
+        return plan, observation, snapshot
+
+    def record_execution(self, account_id, code, side, trade_time, price,
+                         quantity, fee=0.0, reason="", notes="", plan_id=None):
+        """Append a user-confirmed fill; signals can never call this implicitly."""
+        code = str(code or "").strip().lower()
+        side = str(side or "").strip().upper()
+        trade_time = str(trade_time or "").strip()
+        if side not in {"BUY", "SELL"}:
+            raise ValueError("成交方向只能是买入或卖出")
+        if not code or not trade_time:
+            raise ValueError("股票代码和成交时间不能为空")
+        numeric = (price, fee)
+        if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in numeric):
+            raise ValueError("成交价格和费用必须是有限数字")
+        if price <= 0 or fee < 0 or not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+            raise ValueError("成交价和股数必须大于 0，费用不能为负数")
+        execution_id = uuid.uuid4().hex
+        stamp = now()
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM accounts WHERE id=? AND active=1", (account_id,)).fetchone():
+                raise ValueError("交易账户不存在或已停用")
+            plan, observation, snapshot = self._execution_plan_snapshot(db, plan_id)
+            if plan and plan["code"].lower() != code:
+                raise ValueError("成交股票与关联作战计划不一致")
+            bought = db.execute(
+                "SELECT COALESCE(SUM(CASE WHEN side='BUY' THEN quantity ELSE -quantity END),0) "
+                "FROM executions WHERE account_id=? AND code=?",
+                (account_id, code),
+            ).fetchone()[0]
+            if side == "SELL" and quantity > bought:
+                raise ValueError(f"卖出 {quantity} 股超过当前实际持仓 {bought} 股")
+            db.execute(
+                "INSERT INTO executions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (execution_id, account_id, plan_id,
+                 observation.get("id") if observation else None, code, side,
+                 trade_time, float(price), quantity, float(fee), str(reason or "").strip(),
+                 str(notes or "").strip(), dumps(snapshot), stamp),
+            )
+            if plan:
+                remaining = bought + (quantity if side == "BUY" else -quantity)
+                new_state = "已手工入场" if side == "BUY" else ("已手工退出" if remaining == 0 else plan["state"])
+                if new_state != plan["state"]:
+                    db.execute("UPDATE plans SET state=?,updated=? WHERE id=?", (new_state, stamp, plan_id))
+                    db.execute(
+                        "INSERT INTO plan_history(plan_id,time,payload) VALUES(?,?,?)",
+                        (plan_id, stamp, dumps({"source": "manual_execution", "execution_id": execution_id,
+                                               "state": new_state})),
+                    )
+        self.event(None, "记录人工成交", self.path, execution_id=execution_id,
+                   account_id=account_id, code=code, side=side, quantity=quantity)
+        return execution_id
+
+    @staticmethod
+    def _validate_batches(batches, label):
+        if not isinstance(batches, list) or not batches:
+            raise ValueError(f"请至少填写一批{label}记录")
+        cleaned = []
+        for batch in batches:
+            date = str(batch.get("date") or "").strip()
+            price = batch.get("price")
+            hands = batch.get("hands")
+            if not date or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
+                raise ValueError(f"{label}日期和价格不能为空，价格必须大于 0")
+            if not isinstance(hands, int) or isinstance(hands, bool) or hands <= 0:
+                raise ValueError(f"{label}手数必须是大于 0 的整数")
+            cleaned.append({"date": date, "price": float(price), "hands": hands,
+                            "quantity": hands * 100})
+        return cleaned
+
+    def save_position(self, account_id, code, name, entry, stop, tp1,
+                      buy_batches, tp2=None, tp3=None, plan_id=None,
+                      observation_id=None, position_id=None):
+        """Create or edit one current holding and its buy batches."""
+        code = str(code or "").strip().lower()
+        name = str(name or "").strip()
+        prices = (entry, stop, tp1)
+        if not code or not name:
+            raise ValueError("代码和名称不能为空")
+        if not all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in prices):
+            raise ValueError("买点、止损和 TP1 必须填写大于 0 的价格")
+        for label, value in (("TP2", tp2), ("TP3", tp3)):
+            if value not in (None, "") and (not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
+                raise ValueError(f"{label} 必须是大于 0 的价格")
+        batches = self._validate_batches(buy_batches, "买入")
+        stamp = now()
+        position_id = position_id or uuid.uuid4().hex
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM accounts WHERE id=? AND active=1", (account_id,)).fetchone():
+                raise ValueError("交易账户不存在或已停用")
+            existing = db.execute("SELECT * FROM positions WHERE id=?", (position_id,)).fetchone()
+            duplicate = db.execute(
+                "SELECT id FROM positions WHERE account_id=? AND code=? AND status='OPEN' AND id<>?",
+                (account_id, code, position_id),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("该账户已经存在这只股票的持仓，请编辑原持仓")
+            sold = 0
+            if existing:
+                sold = db.execute(
+                    "SELECT COALESCE(SUM(quantity),0) FROM position_fills WHERE position_id=? AND side='SELL'",
+                    (position_id,),
+                ).fetchone()[0]
+            bought = sum(batch["quantity"] for batch in batches)
+            if bought < sold:
+                raise ValueError(f"修改后的买入股数不能少于已经卖出的 {sold} 股")
+            values = (account_id, code, name, plan_id, observation_id, float(entry), float(stop),
+                      float(tp1), float(tp2) if tp2 not in (None, "") else None,
+                      float(tp3) if tp3 not in (None, "") else None, stamp)
+            if existing:
+                if existing["status"] != "OPEN":
+                    raise ValueError("已清仓记录不能改回持仓")
+                db.execute(
+                    "UPDATE positions SET account_id=?,code=?,name=?,plan_id=?,observation_id=?,"
+                    "entry=?,stop=?,tp1=?,tp2=?,tp3=?,updated=? WHERE id=?",
+                    (*values, position_id),
+                )
+                db.execute("DELETE FROM position_fills WHERE position_id=? AND side='BUY'", (position_id,))
+            else:
+                db.execute(
+                    "INSERT INTO positions(id,account_id,code,name,plan_id,observation_id,entry,stop,tp1,tp2,tp3,status,created,updated) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?)",
+                    (position_id, account_id, code, name, plan_id, observation_id,
+                     float(entry), float(stop), float(tp1),
+                     float(tp2) if tp2 not in (None, "") else None,
+                     float(tp3) if tp3 not in (None, "") else None, stamp, stamp),
+                )
+            for batch in batches:
+                db.execute(
+                    "INSERT INTO position_fills VALUES(?,?,?,?,?,?,?,?)",
+                    (uuid.uuid4().hex, position_id, "BUY", batch["date"], batch["price"],
+                     batch["quantity"], 0.0, stamp),
+                )
+            if plan_id:
+                plan = db.execute("SELECT state FROM plans WHERE id=?", (plan_id,)).fetchone()
+                if plan and plan["state"] != "已手工入场":
+                    db.execute("UPDATE plans SET state='已手工入场',updated=? WHERE id=?", (stamp, plan_id))
+                    db.execute(
+                        "INSERT INTO plan_history(plan_id,time,payload) VALUES(?,?,?)",
+                        (plan_id, stamp, dumps({"source": "position", "position_id": position_id,
+                                               "state": "已手工入场"})),
+                    )
+        self.event(None, "保存持仓", self.path, position_id=position_id, code=code)
+        return position_id
+
+    def delete_position(self, position_id):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM positions WHERE id=?", (position_id,)).fetchone()
+            if not row or row["status"] != "OPEN":
+                raise ValueError("当前持仓不存在")
+            db.execute("DELETE FROM position_fills WHERE position_id=?", (position_id,))
+            db.execute("DELETE FROM positions WHERE id=?", (position_id,))
+            if row["plan_id"]:
+                db.execute("UPDATE plans SET state='计划交易',updated=? WHERE id=?", (now(), row["plan_id"]))
+        self.event(None, "删除误录持仓", self.path, position_id=position_id)
+
+    def sell_position(self, position_id, sell_batches, fees_total):
+        batches = self._validate_batches(sell_batches, "卖出")
+        if not isinstance(fees_total, (int, float)) or not math.isfinite(fees_total) or fees_total < 0:
+            raise ValueError("税费合计必须是非负数")
+        stamp = now()
+        with self.connect() as db:
+            position = db.execute("SELECT * FROM positions WHERE id=?", (position_id,)).fetchone()
+            if not position or position["status"] != "OPEN":
+                raise ValueError("当前持仓不存在或已经清仓")
+            fills = list(db.execute("SELECT * FROM position_fills WHERE position_id=?", (position_id,)))
+            bought = sum(row["quantity"] for row in fills if row["side"] == "BUY")
+            already_sold = sum(row["quantity"] for row in fills if row["side"] == "SELL")
+            to_sell = sum(batch["quantity"] for batch in batches)
+            remaining = bought - already_sold
+            if to_sell > remaining:
+                raise ValueError(f"卖出 {to_sell} 股超过当前持仓 {remaining} 股")
+            total_value = sum(batch["price"] * batch["quantity"] for batch in batches)
+            for batch in batches:
+                weight = batch["price"] * batch["quantity"] / total_value if total_value else 0
+                db.execute(
+                    "INSERT INTO position_fills VALUES(?,?,?,?,?,?,?,?)",
+                    (uuid.uuid4().hex, position_id, "SELL", batch["date"], batch["price"],
+                     batch["quantity"], float(fees_total) * weight, stamp),
+                )
+            if to_sell == remaining:
+                all_fills = list(db.execute(
+                    "SELECT * FROM position_fills WHERE position_id=? ORDER BY trade_date,created", (position_id,)
+                ))
+                buys = [row for row in all_fills if row["side"] == "BUY"]
+                sells = [row for row in all_fills if row["side"] == "SELL"]
+                buy_cost = sum(row["price"] * row["quantity"] + row["fees"] for row in buys)
+                sell_value = sum(row["price"] * row["quantity"] - row["fees"] for row in sells)
+                pnl = sell_value - buy_cost
+                return_pct = pnl / buy_cost * 100 if buy_cost else 0.0
+                first = min(row["trade_date"] for row in buys)
+                close_date = max(row["trade_date"] for row in sells)
+                try:
+                    holding_days = max((datetime.fromisoformat(close_date[:10]) - datetime.fromisoformat(first[:10])).days, 0)
+                except ValueError:
+                    holding_days = 0
+                closed_id = uuid.uuid4().hex
+                db.execute("UPDATE positions SET status='CLOSED',updated=? WHERE id=?", (stamp, position_id))
+                db.execute(
+                    "INSERT INTO closed_trades VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (closed_id, position["account_id"], position_id, position["code"], position["name"],
+                     close_date, holding_days, pnl, return_pct, "分批成交自动归档", stamp, stamp),
+                )
+                if position["plan_id"]:
+                    db.execute("UPDATE plans SET state='已手工退出',updated=? WHERE id=?",
+                               (stamp, position["plan_id"]))
+                    db.execute(
+                        "INSERT INTO plan_history(plan_id,time,payload) VALUES(?,?,?)",
+                        (position["plan_id"], stamp,
+                         dumps({"source": "position", "position_id": position_id,
+                                "state": "已手工退出"})),
+                    )
+        self.event(None, "记录持仓卖出", self.path, position_id=position_id,
+                   quantity=sum(batch["quantity"] for batch in batches))
+
+    def save_closed_trade(self, account_id, code, name, close_date, holding_days,
+                          pnl, return_pct, notes="", closed_id=None):
+        code = str(code or "").strip().lower()
+        name = str(name or "").strip()
+        close_date = str(close_date or "").strip()
+        if not code or not name or not close_date:
+            raise ValueError("代码、名称和清仓日期不能为空")
+        if not isinstance(holding_days, int) or isinstance(holding_days, bool) or holding_days < 0:
+            raise ValueError("持仓天数必须是非负整数")
+        if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (pnl, return_pct)):
+            raise ValueError("盈亏和收益率必须是有限数字")
+        stamp = now()
+        closed_id = closed_id or uuid.uuid4().hex
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+                raise ValueError("交易账户不存在")
+            existing = db.execute("SELECT 1 FROM closed_trades WHERE id=?", (closed_id,)).fetchone()
+            if existing:
+                db.execute(
+                    "UPDATE closed_trades SET code=?,name=?,close_date=?,holding_days=?,pnl=?,"
+                    "return_pct=?,notes=?,updated=? WHERE id=? AND account_id=?",
+                    (code, name, close_date, holding_days, float(pnl), float(return_pct),
+                     str(notes or ""), stamp, closed_id, account_id),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO closed_trades VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (closed_id, account_id, None, code, name, close_date, holding_days,
+                     float(pnl), float(return_pct), str(notes or ""), stamp, stamp),
+                )
+        self.event(None, "保存历史清仓", self.path, closed_id=closed_id, code=code)
+        return closed_id
+
+    def save_closed_trades_batch(self, account_id, records):
+        """Atomically import a compact set of historical closed trades."""
+        prepared = []
+        for number, record in enumerate(records, 1):
+            code = str(record.get("code") or "").strip().lower()
+            name = str(record.get("name") or "").strip()
+            close_date = str(record.get("close_date") or "").strip()
+            try:
+                holding_days = int(record.get("holding_days"))
+                pnl = float(record.get("pnl"))
+                return_pct = float(record.get("return_pct"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"第 {number} 行的持仓天数、盈亏和收益率必须填写数字") from exc
+            if not code or not name or not close_date:
+                raise ValueError(f"第 {number} 行的代码、名称和清仓日期不能为空")
+            if holding_days < 0:
+                raise ValueError(f"第 {number} 行的持仓天数必须是非负整数")
+            if not all(math.isfinite(value) for value in (pnl, return_pct)):
+                raise ValueError(f"第 {number} 行的盈亏和收益率必须是有限数字")
+            prepared.append((uuid.uuid4().hex, account_id, None, code, name, close_date,
+                             holding_days, pnl, return_pct,
+                             str(record.get("notes") or ""), now(), now()))
+        if not prepared:
+            raise ValueError("请至少填写一行历史清仓记录")
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+                raise ValueError("交易账户不存在")
+            db.executemany("INSERT INTO closed_trades VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", prepared)
+        self.event(None, "批量保存历史清仓", self.path, count=len(prepared))
+        return [row[0] for row in prepared]
+
+    def delete_closed_trade(self, closed_id):
+        with self.connect() as db:
+            row = db.execute("SELECT position_id FROM closed_trades WHERE id=?", (closed_id,)).fetchone()
+            if not row:
+                raise ValueError("清仓记录不存在")
+            if row["position_id"]:
+                raise ValueError("由完整卖出自动生成的清仓记录不能单独删除，请保留成交链路")
+            db.execute("DELETE FROM closed_trades WHERE id=?", (closed_id,))
+        self.event(None, "删除误录清仓", self.path, closed_id=closed_id)
