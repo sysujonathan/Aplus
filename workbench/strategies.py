@@ -142,14 +142,18 @@ def prepare(frame, timeframe='daily', asof=None):
     return df.reset_index(drop=True)
 
 
-def calculate(spec, frame):
+def prepare_indicators(frame):
     # Match the old daily scanner's 300-bar input window; no future bars in indicators.
     raw = frame.tail(300).reset_index(drop=True).copy()
     raw['trade_date'] = raw['date']
-    enriched = add_indicators(raw)
+    return add_indicators(raw)
+
+
+def calculate_prepared(spec, enriched):
+    """Run one frozen detector on a shared, already enriched input frame."""
     instance = spec.instance()
     result = instance.calculate_signals(enriched.copy())
-    if not isinstance(result, pd.DataFrame) or len(result) != len(raw):
+    if not isinstance(result, pd.DataFrame) or len(result) != len(enriched):
         raise ValueError('策略必须返回等长 DataFrame，不能删减行情行')
     if not result['date'].equals(enriched['date']):
         raise ValueError('策略改变了行情日期或顺序')
@@ -162,6 +166,10 @@ def calculate(spec, frame):
     if not flags.isin([True,False,0,1]).all():
         raise ValueError('信号列必须为 True/False，不能用文本代替')
     return instance, result
+
+
+def calculate(spec, frame):
+    return calculate_prepared(spec, prepare_indicators(frame))
 
 
 def _number(value):
@@ -191,8 +199,9 @@ def _setup_date(instance, df, meta):
     return str(last.date)
 
 
-def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True):
-    instance, df = calculate(spec, frame)
+def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=None):
+    instance, df = (calculate_prepared(spec, prepared) if prepared is not None
+                    else calculate(spec, frame))
     meta = instance.get_metadata()
     row = df.iloc[-1]
     # The frozen detector stays byte-for-byte intact. Only live GAP H2 reminders
@@ -234,3 +243,14 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True):
     return {'asof':str(row.date), 'setup_date':_setup_date(instance,df,meta),
             'entry':entry,'stop':stop,'target':target,'score':score,'rating':rating,
             'close':float(row.close), 'warning':warning}
+
+
+def scan_engine_version():
+    """Fingerprint only code that can change a scan result."""
+    from .market import weekly_bars
+    functions = [prepare, prepare_indicators, calculate_prepared, calculate, signal_at_end,
+                 _number, _setup_date, weekly_bars]
+    semantic = '\n'.join(inspect.getsource(func) for func in functions).encode()
+    semantic += b''.join((ROOT/'workbench'/name).read_bytes()
+                         for name in ['h2_plan.py','prices.py'])
+    return digest(semantic + verify_frozen().encode())

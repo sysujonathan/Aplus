@@ -120,6 +120,30 @@ def load_dataset(store, dataset_id, job=None):
     return validate_bars(pd.read_csv(io.BytesIO(content))), record
 
 
+def verify_dataset(store, dataset_id, job=None, record=None):
+    """Verify an immutable snapshot without paying CSV parsing/validation cost.
+
+    A snapshot was fully validated before it was registered.  For a covered
+    no-op sync, matching the registered SHA-256 proves those exact bytes are
+    still present, so reparsing thousands of unchanged CSV files adds no
+    integrity evidence.
+    """
+    if record is None:
+        rows = store.rows('SELECT * FROM datasets WHERE id=?', (dataset_id,))
+        if not rows:
+            raise ValueError('行情快照不存在')
+        record = rows[0]
+    if not record.get('path') or not record.get('sha256'):
+        raise ValueError('行情快照不存在')
+    path = (store.root / record['path']).resolve()
+    if not path.is_relative_to(store.root) or not path.is_file():
+        raise ValueError('行情快照文件不存在或越过运行目录')
+    content = path.read_bytes()
+    if digest(content) != record['sha256']:
+        raise ValueError('行情文件被外部修改，校验不一致。请重新同步，不使用此快照')
+    return record
+
+
 def latest_datasets(store, source='baostock'):
     return store.rows("SELECT * FROM (SELECT *, ROW_NUMBER() OVER(PARTITION BY code,timeframe "
                       "ORDER BY end DESC,created DESC,rowid DESC) AS rank FROM datasets WHERE source=?) WHERE rank=1", (source,))

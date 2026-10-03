@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import time
 import tkinter as tk
 import ttkbootstrap as ttk
 
@@ -14,6 +15,22 @@ _BOARD_SHORT = {
     "创业板": "创业",
     "科创板": "科创",
     "北交所": "北交",
+}
+_STRATEGY_FALLBACK = (
+    "MTR_MASTER",
+    "STRATEGY_3K",
+    "STRATEGY_STRUCTURAL_GAP",
+    "STRATEGY_GAP_PINBAR",
+    "STRATEGY_GAP_H2",
+    "STRATEGY_AWIL",
+)
+_STRATEGY_SHORT = {
+    "MTR_MASTER": "MTR",
+    "STRATEGY_3K": "3K",
+    "STRATEGY_STRUCTURAL_GAP": "GH1",
+    "STRATEGY_GAP_PINBAR": "GPb",
+    "STRATEGY_GAP_H2": "GH2",
+    "STRATEGY_AWIL": "AWIL",
 }
 
 
@@ -29,7 +46,44 @@ def format_board_scope(boards):
     return "范围：" + "+".join(_BOARD_SHORT[board] for board in selected)
 
 
-def format_data_chain_status(market_date, signal_date, coverage=None, total=None):
+def format_strategy_scope(strategies, available):
+    """给扫描前置选择器使用的紧凑策略范围文案。"""
+    available = list(available)
+    selected = [key for key in available if key in strategies]
+    if selected == available and available:
+        return "策略：全部"
+    if not selected:
+        return "策略：未选择"
+    return f"策略：{len(selected)}/{len(available)}"
+
+
+def format_elapsed(seconds):
+    """把运行秒数转换成适合状态栏的紧凑中文。"""
+    seconds = max(0, int(round(float(seconds or 0))))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}小时{minutes:02d}分{seconds:02d}秒"
+    if minutes:
+        return f"{minutes}分{seconds:02d}秒"
+    return f"{seconds}秒"
+
+
+def format_scope_readiness(boards, audit):
+    """说明当前所选板块有多少只真正可进入策略扫描。"""
+    scope = format_board_scope(boards).removeprefix("范围：")
+    if not boards:
+        return "范围未选择"
+    expected = int(audit.get("expected") or 0)
+    if expected <= 0:
+        return f"{scope}：范围待核验"
+    ready = int(audit.get("ready") or 0)
+    suspended = int(audit.get("suspended") or 0)
+    gaps = len(audit.get("gaps") or [])
+    return f"{scope}：可扫描 {ready}/应有 {expected} · 停牌 {suspended} · 缺口 {gaps}"
+
+
+def format_data_chain_status(market_date, signal_date, readiness=None):
     """把行情层和扫描层分开说清楚，避免把信号日误认成行情日。"""
     market = str(market_date)[:10] if market_date else "无"
     signal = str(signal_date)[:10] if signal_date else "无"
@@ -37,8 +91,8 @@ def format_data_chain_status(market_date, signal_date, coverage=None, total=None
     market_mark = "✓" if market_date else "—"
     scan_mark = "⚠ 待扫描" if pending else ("✓" if signal_date else "—")
     text = f"行情最新 {market} {market_mark} · 信号最新 {signal} {scan_mark}"
-    if coverage is not None:
-        text += f" · 覆盖 {coverage}/{total if total else '?'}"
+    if readiness:
+        text += " · " + readiness
     return text
 
 
@@ -86,8 +140,11 @@ class ToolBar(ttk.Frame):
         self._on_chart_layout = on_chart_layout
         self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
+        self._job_started_at = None
+        self._auto_scan_after_sync = False  # 一键盘前：行情成功后自动衔接扫描
+        self._auto_started_at = None
+        self._auto_sync_elapsed = None
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
-        self._universe_total = None                           # 市场总量（首次渲染时缓存）
         self.full_history_var = tk.BooleanVar(value=False)    # 首次自动完整历史；也可手动要求重新核对
         try:
             from workbench.scope import selected_boards
@@ -101,6 +158,16 @@ class ToolBar(ttk.Frame):
             saved_boards = list(BOARDS[:3])
         self.board_vars = {
             board: tk.BooleanVar(value=board in saved_boards) for board in BOARDS
+        }
+        try:
+            from core.strategy_registry import StrategyRegistry
+
+            available_strategies = list(StrategyRegistry.list_strategies())
+        except Exception:
+            available_strategies = list(_STRATEGY_FALLBACK)
+        self._available_strategies = available_strategies
+        self.strategy_vars = {
+            key: tk.BooleanVar(value=True) for key in self._available_strategies
         }
 
         self.configure(padding=(10, 8))
@@ -127,7 +194,21 @@ class ToolBar(ttk.Frame):
             tf_f, text="周线", value="weekly", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
 
-        # 日常顺序固定为：选择范围 → 更新行情 → 策略扫描。
+        # 高频默认路径是一键盘前；两个分步任务继续保留，便于核验和迭代。
+        self.btn_auto = ttk.Button(
+            actions,
+            text="一键盘前",
+            command=self._on_auto,
+            bootstyle="success",
+            cursor="hand2",
+        )
+        self.btn_auto.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Separator(actions, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(0, 8), pady=3
+        )
+        ttk.Label(
+            actions, text="① 行情", font=("Microsoft YaHei", 9, "bold"), foreground=_LABEL_FG
+        ).pack(side=tk.LEFT, padx=(0, 4))
         self.scope_button = ttk.Menubutton(
             actions,
             text=format_board_scope(self._selected_boards()),
@@ -143,11 +224,41 @@ class ToolBar(ttk.Frame):
         self.scope_button.configure(menu=scope_menu)
         self.scope_button.pack(side=tk.LEFT, padx=(0, 5))
         self.btn_sync = ttk.Button(
-            actions, text="更新行情", command=self._on_sync, bootstyle="primary"
+            actions, text="更新行情", command=self._on_sync, bootstyle="primary", cursor="hand2"
         )
         self.btn_sync.pack(side=tk.LEFT, padx=5)
+        ttk.Separator(actions, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=(8, 8), pady=3
+        )
+        ttk.Label(
+            actions, text="② 扫描", font=("Microsoft YaHei", 9, "bold"), foreground=_LABEL_FG
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self.strategy_scope_button = ttk.Menubutton(
+            actions,
+            text=format_strategy_scope(
+                self._selected_strategies(), self._available_strategies
+            ),
+            bootstyle="secondary-outline",
+        )
+        strategy_menu = tk.Menu(self.strategy_scope_button, tearoff=0)
+        strategy_menu.add_command(
+            label="全部策略", command=lambda: self._set_all_strategies(True)
+        )
+        strategy_menu.add_command(
+            label="清空选择", command=lambda: self._set_all_strategies(False)
+        )
+        strategy_menu.add_separator()
+        for key, variable in self.strategy_vars.items():
+            short = _STRATEGY_SHORT.get(key, key)
+            strategy_menu.add_checkbutton(
+                label=f"{short}  ·  {key}",
+                variable=variable,
+                command=self._on_strategy_change,
+            )
+        self.strategy_scope_button.configure(menu=strategy_menu)
+        self.strategy_scope_button.pack(side=tk.LEFT, padx=(0, 5))
         self.btn_scan = ttk.Button(
-            actions, text="策略扫描", command=self._on_scan, bootstyle="secondary-outline"
+            actions, text="策略扫描", command=self._on_scan, bootstyle="primary", cursor="hand2"
         )
         self.btn_scan.pack(side=tk.LEFT, padx=5)
         self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, bootstyle="danger")
@@ -157,7 +268,7 @@ class ToolBar(ttk.Frame):
         self.ai_var = tk.BooleanVar(value=False)
         self.chk_ai = ttk.Checkbutton(actions, text="AI 复核", variable=self.ai_var,
                                      bootstyle="round-toggle", command=self._explain_ai)
-        self.chk_ai.pack(side=tk.LEFT, padx=(16, 0))
+        self.chk_ai.pack(side=tk.LEFT, padx=(12, 0))
 
         # 日期栏同时包含行情日和扫描日；启动仍定位最近一次有效扫描结果。
         self.date_label = ttk.Label(filters, text="交易日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
@@ -270,6 +381,28 @@ class ToolBar(ttk.Frame):
 
         return [board for board in BOARDS if self.board_vars[board].get()]
 
+    def _selected_strategies(self):
+        """按注册顺序返回本轮启用策略。"""
+        return [
+            key for key in self._available_strategies
+            if self.strategy_vars[key].get()
+        ]
+
+    def _set_all_strategies(self, selected):
+        for variable in self.strategy_vars.values():
+            variable.set(bool(selected))
+        self._on_strategy_change()
+
+    def _on_strategy_change(self):
+        strategies = self._selected_strategies()
+        self.strategy_scope_button.configure(
+            text=format_strategy_scope(strategies, self._available_strategies)
+        )
+        if strategies:
+            self.set_status(f"本轮扫描 {len(strategies)} 个策略")
+        else:
+            self.set_status("请至少选择一个扫描策略")
+
     def _on_board_change(self):
         boards = self._selected_boards()
         self.scope_button.configure(text=format_board_scope(boards))
@@ -284,6 +417,7 @@ class ToolBar(ttk.Frame):
             except Exception as exc:
                 self.set_status(f"行情范围保存失败：{exc}")
                 return
+        self._load_market_status()
         self.set_status("行情与扫描范围：" + "、".join(boards))
 
     def _select_latest_date(self):
@@ -454,24 +588,21 @@ class ToolBar(ttk.Frame):
         if self.store is None:
             self._mkt_var.set("行情：未连接")
             return self._mkt_var.get()
-        try:
-            cov = self.store.rows("SELECT COUNT(*) c FROM sync_coverage")[0]["c"]
-        except Exception:
-            cov = 0
-        if self._universe_total is None:
-            try:
-                p = self.store.root / "universe.csv"
-                if p.exists():
-                    with open(p, "r", encoding="utf-8") as fh:
-                        self._universe_total = max(0, sum(1 for _ in fh) - 1)
-            except Exception:
-                self._universe_total = 0
-        total = self._universe_total if self._universe_total else "?"
         from .data import latest_market_date, latest_scan_date
 
         market = latest_market_date(self.store, self._tf_var.get())
         signal = latest_scan_date(self.store, self._tf_var.get())
-        text = format_data_chain_status(market, signal, cov, total)
+        boards = self._selected_boards()
+        try:
+            from workbench.market import completed_date
+            from workbench.readiness import audit_scope
+
+            readiness = format_scope_readiness(
+                boards, audit_scope(self.store, boards, completed_date())
+            )
+        except Exception:
+            readiness = format_scope_readiness(boards, {})
+        text = format_data_chain_status(market, signal, readiness)
         self._mkt_var.set(text)
         return text
 
@@ -486,7 +617,25 @@ class ToolBar(ttk.Frame):
         )
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
-    def _on_sync(self):
+    def _on_auto(self):
+        """先更新行情，成功后自动用同一范围执行策略扫描。"""
+        if self._job_id:
+            self.set_status(f"已有{self._job_kind}运行中，请等待或终止后再试")
+            return
+        if not self._selected_strategies():
+            self.set_status("一键盘前未开始：请至少选择一个扫描策略")
+            return
+        self._auto_scan_after_sync = True
+        self._auto_started_at = time.monotonic()
+        self._auto_sync_elapsed = None
+        self._on_sync(chained=True)
+        if self._job_id is None:
+            self._auto_scan_after_sync = False
+            self._auto_started_at = None
+
+    def _on_sync(self, chained=False):
+        if not chained:
+            self._auto_scan_after_sync = False
         if self.service is None:
             self.set_status("后端未连接：更新行情需接 service")
             return
@@ -512,6 +661,7 @@ class ToolBar(ttk.Frame):
         self._submit_job("sync", "更新行情", spec)
 
     def _on_scan(self):
+        self._auto_scan_after_sync = False
         if self.service is None:
             self.set_status("后端未连接：扫描需接 service")
             return
@@ -528,13 +678,10 @@ class ToolBar(ttk.Frame):
             if not ids:
                 self.set_status("所选板块没有可用行情：请先更新行情，再扫描")
                 return
-            # 全部已启用策略（GUI 无勾选界面，扫描即全量）
-            try:
-                from core.strategy_registry import StrategyRegistry
-
-                strategies = list(StrategyRegistry.list_strategies())
-            except Exception:
-                strategies = ["MTR_MASTER", "STRATEGY_GAP_H2", "STRATEGY_AWIL"]
+            strategies = self._selected_strategies()
+            if not strategies:
+                self.set_status("扫描未开始：请至少选择一个策略")
+                return
             spec = {
                 "source": "baostock",
                 "boards": boards,
@@ -559,8 +706,15 @@ class ToolBar(ttk.Frame):
             self.set_status(f"{label}提交失败：{exc}")
             return
         self._job_id, self._job_kind = job, label
+        self._job_started_at = time.monotonic()
         self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_scan)
-        for button in (self.btn_sync, self.btn_scan, self.scope_button):
+        for button in (
+            self.btn_auto,
+            self.btn_sync,
+            self.btn_scan,
+            self.scope_button,
+            self.strategy_scope_button,
+        ):
             button.state(["disabled"])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
@@ -584,10 +738,13 @@ class ToolBar(ttk.Frame):
         if status in ("queued", "running"):
             prog, total = j["progress"] or 0, j["total"] or 0
             msg = (j["message"] or "").strip()
+            started = getattr(self, "_job_started_at", None)
+            elapsed = (f" · 已用时 {format_elapsed(time.monotonic() - started)}"
+                       if isinstance(started, (int, float)) else "")
             if total:
-                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:56]}")
+                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:56]}{elapsed}")
             else:
-                self.set_status(f"⏳ {self._job_kind}：{msg[:64] or '排队中…'}")
+                self.set_status(f"⏳ {self._job_kind}：{msg[:64] or '排队中…'}{elapsed}")
             self.after(800, self._poll_job)
             return
         self._finish_job(status, j["message"] or "", j["result"] or "")
@@ -597,10 +754,27 @@ class ToolBar(ttk.Frame):
         import json
 
         kind = self._job_kind or "任务"
+        finished_at = time.monotonic()
+        started = getattr(self, "_job_started_at", None)
+        elapsed = max(0, finished_at - started) if isinstance(started, (int, float)) else None
+        chain_scan = (
+            self._auto_scan_after_sync
+            and kind == "更新行情"
+            and status == "completed"
+        )
+        if kind == "更新行情" and status != "completed":
+            self._auto_scan_after_sync = False
         self._job_id = None
         self._job_kind = ""
+        self._job_started_at = None
         self.btn_stop.pack_forget()
-        for btn in (self.btn_sync, self.btn_scan, self.scope_button):
+        for btn in (
+            self.btn_auto,
+            self.btn_sync,
+            self.btn_scan,
+            self.scope_button,
+            self.strategy_scope_button,
+        ):
             btn.state(["!disabled"])
         try:
             r = json.loads(result_json) if result_json else {}
@@ -610,7 +784,8 @@ class ToolBar(ttk.Frame):
             text = (f"✓ 扫描完成：命中 {r.get('signals', 0)} 个信号 · "
                     f"检查 {r.get('success', 0)} 项 · 复用 {r.get('reused', 0)}")
         elif status == "completed":
-            text = (f"✓ 行情更新完成：补齐 {r.get('updated', 0)} · 复用已存 {r.get('refreshed', 0)} · "
+            text = (f"✓ 行情更新完成：新增 {r.get('downloaded', 0)} · 补齐 {r.get('updated', 0)} · "
+                    f"复用 {r.get('skipped', 0)} · 重刷 {r.get('refreshed', 0)} · "
                     f"停牌 {r.get('suspended', 0)} · 失败 {len(r.get('errors', []))}")
         elif status == "partial":
             head = (f"命中 {r.get('signals', 0)} 个信号" if kind == "扫描策略"
@@ -622,6 +797,24 @@ class ToolBar(ttk.Frame):
             text = f"✗ {kind}失败：{message[:64]}"
         else:
             text = f"{kind}结束（{status}）：{message[:56]}"
+        auto_started = getattr(self, "_auto_started_at", None)
+        if kind == "更新行情" and chain_scan:
+            self._auto_sync_elapsed = elapsed
+        elif kind == "扫描策略" and isinstance(auto_started, (int, float)):
+            total_elapsed = max(0, finished_at - auto_started)
+            sync_elapsed = getattr(self, "_auto_sync_elapsed", None)
+            if isinstance(sync_elapsed, (int, float)) and elapsed is not None:
+                text += (f" · 行情 {format_elapsed(sync_elapsed)} · 扫描 {format_elapsed(elapsed)}"
+                         f" · 总计 {format_elapsed(total_elapsed)}")
+            elif elapsed is not None:
+                text += f" · 用时 {format_elapsed(elapsed)}"
+            self._auto_started_at = None
+            self._auto_sync_elapsed = None
+        elif elapsed is not None:
+            text += f" · 用时 {format_elapsed(elapsed)}"
+        if kind == "更新行情" and status != "completed":
+            self._auto_started_at = None
+            self._auto_sync_elapsed = None
         self._load_market_status()
         if status == "completed" and kind in {"更新行情", "扫描策略"}:
             text += "；" + self.data_chain_summary()
@@ -631,6 +824,17 @@ class ToolBar(ttk.Frame):
                 self._on_job_finished(kind, status)
             except Exception:
                 pass
+        if chain_scan:
+            self.after_idle(self._start_auto_scan)
+
+    def _start_auto_scan(self):
+        """在行情任务完成并刷新界面后，衔接一键盘前的扫描阶段。"""
+        self._auto_scan_after_sync = False
+        self.set_status("✓ 行情更新完成，正在自动准备策略扫描…")
+        self._on_scan()
+        if self._job_id is None:
+            self._auto_started_at = None
+            self._auto_sync_elapsed = None
 
     def _on_stop(self):
         if self.service is None:

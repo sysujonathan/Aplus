@@ -72,7 +72,7 @@ def test_dual_timeframe_resume_keeps_daily_when_interrupted_before_weekly(store,
     service=Service(store)
     spec={'datasets':[did],'strategies':['STRATEGY_GAP_H2'],'timeframes':['daily','weekly'],'asof':frame.date.iloc[-1]}
     stop_once=[True]
-    def signal(strategy,data):
+    def signal(strategy,data,**kwargs):
         if stop_once[0]:
             stop_once[0]=False
             next(iter(service.cancel_flags.values())).set()

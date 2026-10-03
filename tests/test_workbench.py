@@ -12,7 +12,8 @@ from workbench.backtest import Assumptions, run_study, simulate, summarize
 from workbench.market import code_of, load_dataset, save_dataset, validate_bars, weekly_bars
 from workbench.service import Service, demo_data, import_csv
 from workbench.store import ROOT, Store, dumps, now, resolve_runtime_root
-from workbench.strategies import calculate, catalog, register, set_active, signal_at_end, verify_frozen
+from workbench.strategies import (calculate, calculate_prepared, catalog, prepare_indicators,
+                                  register, set_active, signal_at_end, verify_frozen)
 
 
 @pytest.fixture
@@ -82,6 +83,16 @@ def test_original_strategies_run_unchanged(store,frame,key):
     original_input['trade_date'] = original_input.date
     expected = spec.cls().calculate_signals(add_indicators(original_input))
     pd.testing.assert_frame_equal(result,expected)
+
+
+@pytest.mark.parametrize('key', ['MTR_MASTER','STRATEGY_3K','STRATEGY_STRUCTURAL_GAP',
+                                  'STRATEGY_GAP_PINBAR','STRATEGY_GAP_H2','STRATEGY_AWIL'])
+def test_shared_indicators_preserve_each_daily_strategy_result(store,frame,key):
+    spec = catalog(store)[key]
+    enriched = prepare_indicators(frame)
+    _, shared = calculate_prepared(spec,enriched)
+    _, standalone = calculate(spec,frame)
+    pd.testing.assert_frame_equal(shared,standalone)
 
 
 @pytest.mark.parametrize('value,expected',[('600000','sh.600000'),('000001','sz.000001'),('300750','sz.300750'),('sh.600000','sh.600000')])
