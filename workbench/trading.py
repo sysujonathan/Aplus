@@ -36,6 +36,9 @@ def latest_prices(store, codes):
             if not frame.empty:
                 result[code] = {
                     "price": _number(frame.iloc[-1]["close"]),
+                    "previous_close": (
+                        _number(frame.iloc[-2]["close"]) if len(frame) > 1 else None
+                    ),
                     "date": str(frame.iloc[-1]["date"]),
                     "dataset_id": record["id"],
                 }
@@ -186,12 +189,14 @@ def proposed_quantity(account, entry, stop, existing_risk=0.0):
 
 
 def history_reconciliation(initial_equity, broker_total_assets=None,
-                           closed_pnl=0.0, floating_pnl=0.0):
+                           closed_pnl=0.0, floating_pnl=0.0,
+                           cash_adjustments=0.0):
     """双向计算历史建账资产；券商快照只校验，不覆盖用户确认的初始资金。"""
     initial = _number(initial_equity)
     closed = _number(closed_pnl)
     floating = _number(floating_pnl)
-    system_total = initial + closed + floating
+    cash = _number(cash_adjustments)
+    system_total = initial + closed + floating + cash
     broker = None
     if broker_total_assets not in (None, ""):
         broker = _number(broker_total_assets)
@@ -199,9 +204,10 @@ def history_reconciliation(initial_equity, broker_total_assets=None,
         "system_total_assets": system_total,
         "broker_total_assets": broker,
         "implied_initial_equity": (
-            broker - closed - floating if broker is not None else None
+            broker - closed - floating - cash if broker is not None else None
         ),
         "reconciliation": broker - system_total if broker is not None else None,
+        "cash_adjustments": cash,
     }
 
 
@@ -226,7 +232,8 @@ def management_report(store, account_id, price_map=None):
     codes = [row["code"] for row in positions]
     price_map = latest_prices(store, codes) if price_map is None else price_map
     open_rows = []
-    market_value = floating_total = risk_total = 0.0
+    market_value = floating_total = risk_total = daily_pnl_total = 0.0
+    daily_quote_count = 0
     quote_dates = []
     for position in positions:
         tx = by_position.get(position["id"], [])
@@ -243,6 +250,12 @@ def management_report(store, account_id, price_map=None):
         diluted_cost = net_invested / quantity
         quote = price_map.get(position["code"], {})
         current = _number(quote.get("price"), diluted_cost)
+        previous_close = quote.get("previous_close")
+        daily_pnl = None
+        if previous_close not in (None, ""):
+            daily_pnl = (current - _number(previous_close)) * quantity
+            daily_pnl_total += daily_pnl
+            daily_quote_count += 1
         value = current * quantity
         floating = value - net_invested
         stop = _number(position["stop"])
@@ -256,7 +269,7 @@ def management_report(store, account_id, price_map=None):
             **position,
             "buy_batches": [
                 {"date": row["trade_date"], "price": row["price"],
-                 "hands": int(row["quantity"]) // 100}
+                 "hands": int(row["quantity"]) // 100, "fees": _number(row["fees"])}
                 for row in buys
             ],
             "quantity": quantity,
@@ -265,6 +278,7 @@ def management_report(store, account_id, price_map=None):
             "has_quote": bool(quote),
             "market_value": value,
             "floating_pnl": floating,
+            "daily_pnl": daily_pnl,
             "distance_stop_pct": (current - stop) / current * 100 if current else 0.0,
             "trade_risk_pct": max(diluted_cost - stop, 0.0) / diluted_cost * 100 if diluted_cost > 0 else 0.0,
             "risk_amount": risk_amount,
@@ -275,12 +289,15 @@ def management_report(store, account_id, price_map=None):
         (account_id,),
     )
     closed_pnl = sum(_number(row["pnl"]) for row in closed)
+    cash_flows = store.list_cash_flows(account_id)
+    cash_adjustments = sum(_number(row["amount"]) for row in cash_flows)
     snapshot = _number(account.get("current_total_assets"), 0.0)
     history = history_reconciliation(
         account["initial_equity"],
         snapshot if snapshot > 0 else None,
         closed_pnl,
         floating_total,
+        cash_adjustments,
     )
     historical_equity = history["system_total_assets"]
     if account.get("accounting_mode") == "snapshot":
@@ -301,13 +318,18 @@ def management_report(store, account_id, price_map=None):
         "account": account,
         "positions": open_rows,
         "closed": closed,
+        "cash_flows": cash_flows,
         "summary": {
             "total_assets": total_assets,
             "market_value": market_value,
             "available_cash": available_cash,
+            "withdrawable_cash": available_cash,
             "position_pct": market_value / total_assets * 100 if total_assets else 0.0,
             "floating_pnl": floating_total,
+            "daily_pnl": daily_pnl_total if daily_quote_count else None,
+            "asset_pnl": closed_pnl + floating_total,
             "closed_pnl": closed_pnl,
+            "cash_adjustments": cash_adjustments,
             "risk_amount": risk_total,
             "risk_pct": risk_total / total_assets * 100 if total_assets else 0.0,
             "quote_date": max(quote_dates) if quote_dates else "",

@@ -120,6 +120,6 @@ def test_v3_upgrade_preserves_existing_records(store,frame):
     store.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
     store.execute('DROP TABLE watchlist')
     reopened=Store(store.root)
-    assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='6'
+    assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='8'
     assert reopened.rows('SELECT id FROM observations')[0]['id']==oid
     reopened.watch(oid)
