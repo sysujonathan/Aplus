@@ -179,6 +179,11 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
         assert image.width > 800 and image.height > 300
         native = render_replay(store, records[0], 0, size=(900, 550))
         assert native.size == (900, 550)
+        zoomed = render_replay(store, records[0], 0, size=(900, 550), viewport=(30, 20, .5))
+        assert zoomed.info['replay_view']['bars'] == 30
+        assert zoomed.info['replay_view']['offset'] == 20
+        assert zoomed.info['replay_view']['total'] == int((bars.date <= records[0]['events'][0]['date']).sum())
+        assert native.tobytes() != zoomed.tobytes()
         assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == schema_before
     finally:
         service.pool.shutdown()

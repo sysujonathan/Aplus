@@ -14,7 +14,7 @@ from .theme import (
 
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
-                 replay_events=(), view_bars=120, size=None):
+                 replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -23,7 +23,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     import mplfinance as mpf
     import pandas as pd
 
-    visible = frame.tail(view_bars).copy()
+    end = max(1, len(frame) - min(max(0, view_offset), max(0, len(frame)-view_bars)))
+    visible = frame.iloc[max(0, end-view_bars):end].copy()
     strategy_plot = annotation_frame(frame)
     plot = visible.copy()
     plot.index = pd.to_datetime(plot["date"])
@@ -130,6 +131,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         if price_low - price_span * .18 <= level <= price_high + price_span * .18:
             view_low = min(view_low, level - price_span * .02)
             view_high = max(view_high, level + price_span * .02)
+    center, half = (view_low+view_high)/2, (view_high-view_low)/2 * price_scale
+    view_low, view_high = center-half, center+half
     kwargs["ylim"] = (view_low, view_high)
     fig = None
     try:
@@ -246,7 +249,12 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             facecolor=CHART_BG,
         )
         buf.seek(0)
-        return Image.open(buf).copy()
+        image = Image.open(buf).copy()
+        if size:
+            position = ax.get_position()
+            image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
+                                            price_x=(position.x0*size[0], position.x1*size[0]))
+        return image
     finally:
         if fig is not None:
             plt.close(fig)

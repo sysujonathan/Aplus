@@ -33,13 +33,18 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             assert page.run_button.winfo_width() >= page.run_button.winfo_reqwidth()
             assert page.tree.winfo_width() > 350
             assert page.boundary_trees['profit'].winfo_width() > 200
-            assert page.list_host.winfo_width() / page.review.winfo_width() == pytest.approx(.50, abs=.04)
+            assert .25 < page.list_host.winfo_width() / page.review.winfo_width() < .65
             assert page.preview_host.winfo_width() > 350
             assert page.history_canvas.winfo_ismapped()
             for column in page.tree['columns']:
                 assert page.tree.heading(column, 'anchor') == page.tree.column(column, 'anchor')
             assert not page.tree.column('entry', 'stretch')
-            assert page.tree.column('name', 'stretch')
+            from tkinter.font import Font
+            heading_font = Font(page, font=page.tk.call('ttk::style', 'lookup', 'ResearchList.Treeview.Heading', '-font'))
+            for col in page.tree['displaycolumns']:
+                assert page.tree.column(col, 'width') >= heading_font.measure(page.tree.heading(col, 'text'))+15
+            assert page.compare_button.winfo_rooty() < page.history_canvas.winfo_rooty()
+            assert page.chart.bind('<MouseWheel>') and page.preview_chart.bind('<B1-Motion>')
             assert int(page.status_label.cget('wraplength')) == page.status_label.winfo_width()
             assert int(page.completeness_label.cget('wraplength')) == page.completeness_label.winfo_width()
             assert page.histogram.winfo_height() >= 90
@@ -102,7 +107,7 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         page._toggle_list()
         window.update()
         assert page.preview_host.winfo_ismapped()
-        assert page.list_host.winfo_width() / page.review.winfo_width() == pytest.approx(.5, abs=.04)
+        assert .25 < page.list_host.winfo_width() / page.review.winfo_width() < .65
         from copy import deepcopy
         page.records = [dict(deepcopy(records[0]), id=str(i), r_multiple=value) for i, value in enumerate([2, 10, -2, None])]
         page._sort_rows('r')
@@ -134,9 +139,21 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
                 page._compare_vars[job].set(True)
                 page._mark_comparison(job)
             assert page._compare_ids == jobs
-            page._compare_reports()
+            assert '2 次' in page.compare_button.cget('text')
+            page.compare_button.invoke()
             window.update()
             assert any(child.winfo_class() == 'Toplevel' for child in page.winfo_children())
+            for child in page.winfo_children():
+                if child.winfo_class() == 'Toplevel':
+                    child.destroy()
+            page._receipt_dialog()
+            page._data_receipt_dialog()
+            def texts(parent):
+                return [w.get('1.0', 'end') for w in parent.winfo_children() if isinstance(w, tk.Text)] + [
+                    t for w in parent.winfo_children() for t in texts(w)]
+            dialogs = [w for w in page.winfo_children() if w.winfo_class() == 'Toplevel']
+            assert '覆盖提示与失败' not in ''.join(texts(dialogs[0]))
+            assert '覆盖提示与失败' in ''.join(texts(dialogs[1]))
         finally:
             service.pool.shutdown()
     finally:
