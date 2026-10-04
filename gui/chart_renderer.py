@@ -14,7 +14,7 @@ from .theme import (
 
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
-                 replay_events=(), view_bars=120):
+                 replay_events=(), view_bars=120, size=None):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -138,15 +138,18 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             type="candle",
             style=style,
             volume=True,
-            title=title,
+            title=dict(title=title, fontsize=9 if size[0]<1000 else 12) if size else title,
             ylabel="",
-            figsize=(12.2, 7.5),
+            figsize=(max(100, size[0])/110, max(100, size[1])/110) if size else (12.2, 7.5),
             tight_layout=True,
             returnfig=True,
             **kwargs,
         )
         ax = axes[0]
         for axis in axes:
+            if size:
+                position = axis.get_position()
+                axis.set_position([.07, position.y0, .82, position.height])
             axis.set_facecolor(CHART_BG)
             axis.tick_params(colors=MUTED, labelsize=8)
             for spine in axis.spines.values():
@@ -238,7 +241,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             buf,
             format="png",
             dpi=110,
-            bbox_inches="tight",
+            bbox_inches=None if size else "tight",
             pad_inches=.02,
             facecolor=CHART_BG,
         )

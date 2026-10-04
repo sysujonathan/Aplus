@@ -9,20 +9,24 @@ import pandas as pd
 from .backtest import Assumptions
 from .h2_replay import H2Settings, MODEL, run_replay, summarize_replay
 from .h2_replay_cache import cache_key, engine_version, read_cache, write_cache
-from .market import completed_date, load_dataset
+from .market import BOARDS, board_of, completed_date, load_dataset
 from .store import digest, dumps
 from .strategies import catalog, prepare
 
 
-def available_snapshots(store, scope='market'):
+def available_snapshots(store, scope='market', boards=None):
     """One immutable daily snapshot per code; synthetic demo is never eligible."""
     if scope not in ('market', 'watch'):
         raise ValueError('行情范围无效')
+    if scope == 'market' and boards is not None and (not boards or any(b not in BOARDS for b in boards)):
+        raise ValueError('请至少选择一个有效市场板块')
     watch = {r['code'] for r in store.rows('SELECT code FROM watchlist WHERE active=1')}
     rows = store.rows("SELECT * FROM datasets WHERE timeframe='daily' AND source!='demo' "
                       "ORDER BY end DESC,created DESC,rowid DESC")
     selected = {}
     for row in rows:
+        if scope == 'market' and boards is not None and board_of(row['code']) not in boards:
+            continue
         if (scope == 'market' or row['code'] in watch) and row['code'] not in selected:
             selected[row['code']] = row
     return list(selected.values()), sorted(watch - set(selected)) if scope == 'watch' else []
@@ -32,6 +36,9 @@ def execute_replay(service, job, spec):
     if spec.get('timeframe') != 'daily' or spec.get('strategy') != 'STRATEGY_GAP_H2':
         raise ValueError('当前执行回放仅支持原 GAP H2 日线')
     ids = spec.get('datasets', [])
+    boards = spec.get('boards') if spec.get('scope') == 'market' else None
+    if boards is not None and (not boards or any(b not in BOARDS for b in boards)):
+        raise ValueError('请至少选择一个有效市场板块')
     date.fromisoformat(spec['start'])
     date.fromisoformat(spec['end'])
     if spec['start'] > spec['end']:
@@ -70,6 +77,8 @@ def execute_replay(service, job, spec):
         try:
             service.check_stop(job)
             frame, snapshot = load_dataset(service.store, did, job)
+            if boards is not None and board_of(snapshot['code']) not in boards:
+                raise ValueError('行情快照不属于本次所选市场板块')
             if snapshot['code'] in seen_codes:
                 raise ValueError('同一次回放不能把同一股票的多个快照重复统计')
             if snapshot['source'] == 'demo':
@@ -80,7 +89,6 @@ def execute_replay(service, job, spec):
             frame.attrs['code'] = snapshot['code']
             # ETF settlement and tick require explicit instrument metadata. CSV
             # schema has none, so this entry point currently accepts stocks only.
-            from .market import board_of
             if board_of(snapshot['code']) is None:
                 raise ValueError('此入口暂仅支持已确认 tick 与 T+1 的 A 股股票')
             if len(frame) < 125:
@@ -143,6 +151,8 @@ def execute_replay(service, job, spec):
                                '额外风险／MM 筛选在 H2 成立时执行，不是原策略识别条件'],
                   records_path=rel + '/replay.json', report_path=rel + '/report.json',
                   trades_path=rel + '/trades.csv')
+    if boards is not None:
+        report['boards'] = [b for b in BOARDS if b in boards]
     service.store.write_artifact(report['records_path'], dumps(records).encode('utf-8'), job)
     flat = [{k: v for k, v in r.items() if k not in ('events', 'structure', 'latest_plan', 'trigger_plan')}
             for r in records]
