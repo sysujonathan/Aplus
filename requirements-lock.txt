@@ -54,3 +54,11 @@ kiwisolver==1.5.1
 pyparsing==3.3.3
 pystray==0.19.5
 pypinyin==0.55.0
+flatbuffers==25.12.19
+onnxruntime==1.30.0
+opencv-python==5.0.0.93
+pyclipper==1.4.0
+PyYAML==6.0.3
+rapidocr-onnxruntime==1.4.4
+shapely==2.1.2
+tqdm==4.70.1

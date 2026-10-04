@@ -98,7 +98,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id,seq);
             """)
             version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-            if version not in {'1', '2', '3', '4', '5', '6'}:
+            if version not in {'1', '2', '3', '4', '5', '6', '7', '8'}:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             db.execute("CREATE TABLE IF NOT EXISTS sync_coverage(code TEXT PRIMARY KEY, "
                        "dataset_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL)")
@@ -115,7 +115,8 @@ class Store:
                        "max_position_pct REAL NOT NULL DEFAULT 30, "
                        "cash_reserve_pct REAL NOT NULL DEFAULT 10, "
                        "active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL, updated TEXT NOT NULL, "
-                       "accounting_mode TEXT NOT NULL DEFAULT 'snapshot', current_total_assets REAL)")
+                       "accounting_mode TEXT NOT NULL DEFAULT 'snapshot', current_total_assets REAL, "
+                       "broker_account_no TEXT NOT NULL DEFAULT '')")
             db.execute("CREATE TABLE IF NOT EXISTS executions("
                        "id TEXT PRIMARY KEY, account_id TEXT NOT NULL, plan_id TEXT, "
                        "observation_id TEXT, code TEXT NOT NULL, side TEXT NOT NULL, "
@@ -132,6 +133,8 @@ class Store:
                 db.execute("ALTER TABLE accounts ADD COLUMN accounting_mode TEXT NOT NULL DEFAULT 'snapshot'")
             if "current_total_assets" not in account_columns:
                 db.execute("ALTER TABLE accounts ADD COLUMN current_total_assets REAL")
+            if "broker_account_no" not in account_columns:
+                db.execute("ALTER TABLE accounts ADD COLUMN broker_account_no TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE TABLE IF NOT EXISTS positions("
                        "id TEXT PRIMARY KEY, account_id TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, "
                        "plan_id TEXT, observation_id TEXT, entry REAL NOT NULL, stop REAL NOT NULL, "
@@ -146,13 +149,19 @@ class Store:
                        "code TEXT NOT NULL, name TEXT NOT NULL, close_date TEXT NOT NULL, "
                        "holding_days INTEGER NOT NULL, pnl REAL NOT NULL, return_pct REAL NOT NULL, "
                        "notes TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, updated TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS cash_flows("
+                       "id TEXT PRIMARY KEY, account_id TEXT NOT NULL, flow_date TEXT NOT NULL, "
+                       "category TEXT NOT NULL, amount REAL NOT NULL, notes TEXT NOT NULL DEFAULT '', "
+                       "created TEXT NOT NULL, updated TEXT NOT NULL)")
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_open_position_per_account_code "
                        "ON positions(account_id,code) WHERE status='OPEN'")
             db.execute("CREATE INDEX IF NOT EXISTS position_fills_position_date "
                        "ON position_fills(position_id,trade_date,created)")
             db.execute("CREATE INDEX IF NOT EXISTS closed_trades_account_date "
                        "ON closed_trades(account_id,close_date)")
-            db.execute("UPDATE meta SET value='6' WHERE key='schema_version'")
+            db.execute("CREATE INDEX IF NOT EXISTS cash_flows_account_date "
+                       "ON cash_flows(account_id,flow_date)")
+            db.execute("UPDATE meta SET value='8' WHERE key='schema_version'")
 
     @contextlib.contextmanager
     def connect(self):
@@ -262,7 +271,8 @@ class Store:
     def save_account(self, name, initial_equity, risk_limit_pct=3.0,
                      per_trade_risk_pct=1.0, max_position_pct=30.0,
                      cash_reserve_pct=10.0, account_id=None, active=True,
-                     accounting_mode="snapshot", current_total_assets=None):
+                     accounting_mode="snapshot", current_total_assets=None,
+                     broker_account_no=""):
         """Create or update a local manual-trading account profile."""
         name = str(name or "").strip()
         values = (initial_equity, risk_limit_pct, per_trade_risk_pct,
@@ -272,6 +282,7 @@ class Store:
         if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
             raise ValueError("账户资金和风险参数必须是有限数字")
         accounting_mode = str(accounting_mode or "snapshot").strip().lower()
+        broker_account_no = str(broker_account_no or "").strip()
         if accounting_mode not in {"snapshot", "history"}:
             raise ValueError("建账方式只能是当前资产快照或历史清仓")
         if initial_equity <= 0:
@@ -296,17 +307,17 @@ class Store:
                 db.execute(
                     "UPDATE accounts SET name=?,initial_equity=?,risk_limit_pct=?,"
                     "per_trade_risk_pct=?,max_position_pct=?,cash_reserve_pct=?,active=?,updated=?,"
-                    "accounting_mode=?,current_total_assets=? WHERE id=?",
+                    "accounting_mode=?,current_total_assets=?,broker_account_no=? WHERE id=?",
                     (name, *values, int(bool(active)), stamp, accounting_mode,
-                     current_total_assets, account_id),
+                     current_total_assets, broker_account_no, account_id),
                 )
             else:
                 db.execute(
                     "INSERT INTO accounts(id,name,initial_equity,risk_limit_pct,per_trade_risk_pct,"
-                    "max_position_pct,cash_reserve_pct,active,created,updated,accounting_mode,current_total_assets) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "max_position_pct,cash_reserve_pct,active,created,updated,accounting_mode,current_total_assets,"
+                    "broker_account_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (account_id, name, *values, int(bool(active)), stamp, stamp,
-                     accounting_mode, current_total_assets),
+                     accounting_mode, current_total_assets, broker_account_no),
                 )
         self.event(None, "保存交易账户", self.path, account_id=account_id, name=name)
         return account_id
@@ -414,12 +425,15 @@ class Store:
             date = str(batch.get("date") or "").strip()
             price = batch.get("price")
             hands = batch.get("hands")
+            fees = batch.get("fees", 0)
             if not date or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
                 raise ValueError(f"{label}日期和价格不能为空，价格必须大于 0")
             if not isinstance(hands, int) or isinstance(hands, bool) or hands <= 0:
                 raise ValueError(f"{label}手数必须是大于 0 的整数")
+            if not isinstance(fees, (int, float)) or not math.isfinite(fees) or fees < 0:
+                raise ValueError(f"{label}费用必须是非负数")
             cleaned.append({"date": date, "price": float(price), "hands": hands,
-                            "quantity": hands * 100})
+                            "quantity": hands * 100, "fees": float(fees)})
         return cleaned
 
     def save_position(self, account_id, code, name, entry, stop, tp1,
@@ -483,7 +497,7 @@ class Store:
                 db.execute(
                     "INSERT INTO position_fills VALUES(?,?,?,?,?,?,?,?)",
                     (uuid.uuid4().hex, position_id, "BUY", batch["date"], batch["price"],
-                     batch["quantity"], 0.0, stamp),
+                     batch["quantity"], batch["fees"], stamp),
                 )
             if plan_id:
                 plan = db.execute("SELECT state FROM plans WHERE id=?", (plan_id,)).fetchone()
@@ -627,6 +641,20 @@ class Store:
         with self.connect() as db:
             if not db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
                 raise ValueError("交易账户不存在")
+            existing = {
+                (row[0], row[1], row[2], int(row[3]), round(float(row[4]), 2), round(float(row[5]), 2))
+                for row in db.execute(
+                    "SELECT code,name,close_date,holding_days,pnl,return_pct "
+                    "FROM closed_trades WHERE account_id=?", (account_id,)
+                )
+            }
+            incoming = set()
+            for number, row in enumerate(prepared, 1):
+                fingerprint = (row[3], row[4], row[5], int(row[6]),
+                               round(float(row[7]), 2), round(float(row[8]), 2))
+                if fingerprint in existing or fingerprint in incoming:
+                    raise ValueError(f"第 {number} 行与已有记录或本批其他记录重复")
+                incoming.add(fingerprint)
             db.executemany("INSERT INTO closed_trades VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", prepared)
         self.event(None, "批量保存历史清仓", self.path, count=len(prepared))
         return [row[0] for row in prepared]
@@ -640,3 +668,53 @@ class Store:
                 raise ValueError("由完整卖出自动生成的清仓记录不能单独删除，请保留成交链路")
             db.execute("DELETE FROM closed_trades WHERE id=?", (closed_id,))
         self.event(None, "删除误录清仓", self.path, closed_id=closed_id)
+
+    def list_cash_flows(self, account_id):
+        return self.rows(
+            "SELECT * FROM cash_flows WHERE account_id=? "
+            "ORDER BY flow_date DESC,created DESC,id DESC", (account_id,)
+        )
+
+    def save_cash_flow(self, account_id, flow_date, category, amount, notes="", flow_id=None):
+        """Create or edit a non-trade account cash adjustment."""
+        flow_date = str(flow_date or "").strip()
+        category = str(category or "").strip()
+        notes = str(notes or "").strip()
+        if not flow_date:
+            raise ValueError("资金日期不能为空")
+        try:
+            datetime.fromisoformat(flow_date[:10])
+        except ValueError as exc:
+            raise ValueError("资金日期格式应为 YYYY-MM-DD") from exc
+        if not category:
+            raise ValueError("资金类别不能为空")
+        if not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount == 0:
+            raise ValueError("金额必须是非零有限数字")
+        if category in {"转出", "其他支出"} and amount > 0:
+            amount = -amount
+        if category in {"利息归本", "现金分红", "转入", "其他收入"} and amount < 0:
+            raise ValueError(f"{category}金额应为正数")
+        stamp = now()
+        flow_id = flow_id or uuid.uuid4().hex
+        with self.connect() as db:
+            if not db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+                raise ValueError("交易账户不存在")
+            if db.execute("SELECT 1 FROM cash_flows WHERE id=?", (flow_id,)).fetchone():
+                db.execute(
+                    "UPDATE cash_flows SET flow_date=?,category=?,amount=?,notes=?,updated=? "
+                    "WHERE id=? AND account_id=?",
+                    (flow_date, category, float(amount), notes, stamp, flow_id, account_id),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO cash_flows VALUES(?,?,?,?,?,?,?,?)",
+                    (flow_id, account_id, flow_date, category, float(amount), notes, stamp, stamp),
+                )
+        self.event(None, "保存资金流水", self.path, flow_id=flow_id, category=category,
+                   amount=float(amount))
+        return flow_id
+
+    def delete_cash_flow(self, flow_id):
+        if not self.execute("DELETE FROM cash_flows WHERE id=?", (flow_id,)):
+            raise ValueError("资金流水不存在")
+        self.event(None, "删除资金流水", self.path, flow_id=flow_id)

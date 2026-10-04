@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from gui.data import StockNameLookup
+from workbench.closed_import import OcrToken, parse_broker_tokens
 from workbench.store import Store, dumps, now
 from workbench.trading import (
     account_report,
@@ -36,12 +37,13 @@ def test_v4_upgrade_preserves_plans_and_adds_manual_ledger(tmp_path):
     plan_id = make_plan(store)
     store.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
     reopened = Store(tmp_path)
-    assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "6"
+    assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "8"
     assert reopened.rows("SELECT id FROM plans")[0]["id"] == plan_id
     assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='accounts'")
     assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='executions'")
     assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='positions'")
     assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='closed_trades'")
+    assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='cash_flows'")
 
 
 def test_signal_trigger_does_not_create_position_or_execution(tmp_path):
@@ -115,9 +117,9 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert '("other", "交易管理")' in source
     assert 'TradeManagementFrame(self.page_host, self.store)' in source
     assert '其他工具' not in source
-    assert 'self.rowconfigure(1, weight=3)' in page
-    assert 'self.rowconfigure(2, weight=2)' in page
-    for title in ("持仓管理", "作战卡", "已清仓", "绩效分析"):
+    assert 'self.rowconfigure(1, weight=1, minsize=210)' in page
+    assert 'self.rowconfigure(2, weight=3, minsize=630)' in page
+    for title in ("持仓管理", "资金账户", "已清仓", "收益日历"):
         assert title in page
     assert "拟建仓速算" in page
     assert 'style="PositionSell.primary.Outline.TButton"' in page
@@ -126,14 +128,24 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert '"市值(元)"' not in page
     assert '"盈亏(元)"' not in page
     assert 'rowheight=68' in page
-    assert 'text="批量填表", bootstyle="primary"' in page
+    assert 'label="粘贴截图（最多 6 张）"' in page
     assert 'text="＋ 增加五行"' in page
     assert 'command=lambda: self._add_rows(5)' in page
     assert 'text="＋ 增加一行"' not in page
     assert "0 笔 · 默认按最近清仓日期排列" not in page
     assert page.count('state="readonly"') >= 3
     assert 'ttk.Label(header, text="交易管理"' not in page
-    assert 'text="＋ 新增账户"' in page
+    assert 'label="新增账户"' in page
+    assert '"资金账号"' in page
+    assert 'text="👁 隐藏"' in page
+    assert 'command=self.reload_data' in page
+    assert '初始资金（推算）' in page
+    assert 'self.funds_reconciliation.set("初始资金（推算） —")' in page
+    assert 'f"持仓 {summary[\'floating_pnl\']:+,.2f}＋资金调整' not in page
+    assert 'text="税费合计"' in page
+    assert 'value="上月"' in page and 'value="下月"' in page
+    assert '"上年" if yearly else "上月"' in page
+    assert 'while len(weeks) < 6' in page
     assert 'for column, widget in enumerate(widgets):' in page
     assert "tree._measure_font.measure(str(tree.set(iid, column)))" in page
 
@@ -155,8 +167,8 @@ def test_snapshot_account_batches_partial_sale_and_auto_close(tmp_path):
     )
     position_id = store.save_position(
         account_id, "sh.600000", "浦发银行", 11, 9, 14,
-        [{"date": "2026-09-28", "price": 10.0, "hands": 1},
-         {"date": "2026-09-29", "price": 12.0, "hands": 1}],
+        [{"date": "2026-09-28", "price": 10.0, "hands": 1, "fees": 3.0},
+         {"date": "2026-09-29", "price": 12.0, "hands": 1, "fees": 2.0}],
         tp2=15, tp3=16,
     )
     report = management_report(
@@ -164,9 +176,9 @@ def test_snapshot_account_batches_partial_sale_and_auto_close(tmp_path):
     )
     holding = report["positions"][0]
     assert holding["quantity"] == 200
-    assert holding["diluted_cost"] == pytest.approx(11)
+    assert holding["diluted_cost"] == pytest.approx(11.025)
     assert holding["market_value"] == pytest.approx(2600)
-    assert holding["floating_pnl"] == pytest.approx(400)
+    assert holding["floating_pnl"] == pytest.approx(395)
     assert report["summary"]["available_cash"] == pytest.approx(97400)
 
     store.sell_position(
@@ -176,8 +188,8 @@ def test_snapshot_account_batches_partial_sale_and_auto_close(tmp_path):
         store, account_id, {"sh.600000": {"price": 13.0, "date": "2026-09-30"}}
     )["positions"][0]
     assert partial["quantity"] == 100
-    assert partial["diluted_cost"] == pytest.approx(8.05)
-    assert partial["floating_pnl"] == pytest.approx(495)
+    assert partial["diluted_cost"] == pytest.approx(8.10)
+    assert partial["floating_pnl"] == pytest.approx(490)
     assert partial["risk_amount"] == 0
 
     with pytest.raises(ValueError, match="超过当前持仓"):
@@ -186,7 +198,7 @@ def test_snapshot_account_batches_partial_sale_and_auto_close(tmp_path):
     final = management_report(store, account_id, {})
     assert final["positions"] == []
     assert len(final["closed"]) == 1
-    assert final["closed"][0]["pnl"] == pytest.approx(495)
+    assert final["closed"][0]["pnl"] == pytest.approx(490)
     assert final["closed"][0]["close_date"] == "2026-10-01"
 
 
@@ -226,6 +238,66 @@ def test_history_reconciliation_keeps_manual_initial_and_reverse_value_independe
     assert result["system_total_assets"] == pytest.approx(42261.94)
     assert result["implied_initial_equity"] == pytest.approx(50000)
     assert result["reconciliation"] == pytest.approx(0)
+
+
+def test_cash_adjustments_are_part_of_reconciliation_and_can_be_managed(tmp_path):
+    store = Store(tmp_path)
+    account_id = store.save_account(
+        "历史账户", 50000, accounting_mode="history", current_total_assets=50001.53
+    )
+    flow_id = store.save_cash_flow(account_id, "2026-09-21", "利息归本", 1.53, "季度结息")
+    report = management_report(store, account_id, {})
+    assert report["summary"]["cash_adjustments"] == pytest.approx(1.53)
+    assert report["summary"]["historical_equity"] == pytest.approx(50001.53)
+    assert report["summary"]["reconciliation"] == pytest.approx(0)
+    store.save_cash_flow(account_id, "2026-09-21", "其他支出", 0.53, flow_id=flow_id)
+    assert management_report(store, account_id, {})["summary"]["cash_adjustments"] == pytest.approx(-0.53)
+    store.delete_cash_flow(flow_id)
+    assert store.list_cash_flows(account_id) == []
+
+
+def test_account_number_custom_adjustment_and_daily_pnl(tmp_path):
+    store = Store(tmp_path)
+    account_id = store.save_account(
+        "主账户", 50000, accounting_mode="history", broker_account_no="309812342552"
+    )
+    assert store.list_accounts()[0]["broker_account_no"] == "309812342552"
+    store.save_cash_flow(account_id, "2026-10-01", "手续费返还", 2.18, "自定义类别")
+    position_id = store.save_position(
+        account_id, "sz.000001", "平安银行", 10, 9, 12,
+        [{"date": "2026-10-01", "price": 10, "hands": 1, "fees": 0}],
+    )
+    report = management_report(
+        store, account_id,
+        {"sz.000001": {"price": 10.5, "previous_close": 10.2, "date": "2026-10-02"}},
+    )
+    assert report["summary"]["daily_pnl"] == pytest.approx(30)
+    assert report["summary"]["cash_adjustments"] == pytest.approx(2.18)
+    assert report["positions"][0]["id"] == position_id
+
+
+def test_broker_screenshot_tokens_parse_and_overlap_deduplicate():
+    tokens = [
+        OcrToken("华阳股份", 50, 100),
+        OcrToken("20260929清仓", 50, 145),
+        OcrToken("9", 460, 102),
+        OcrToken("-752.11", 680, 102),
+        OcrToken("-4.61%", 890, 102),
+        OcrToken("华阳股份", 50, 300),
+        OcrToken("20260929清仓", 50, 345),
+        OcrToken("9", 460, 302),
+        OcrToken("-752.11", 680, 302),
+        OcrToken("-4.61%", 890, 302),
+        OcrToken("202609清仓次数10，清仓盈利-5,224.85", 50, 40),
+    ]
+    records, summaries, warnings = parse_broker_tokens(tokens)
+    assert warnings == []
+    assert records == [{
+        "code": "", "name": "华阳股份", "close_date": "2026-09-29",
+        "holding_days": 9, "pnl": -752.11, "return_pct": -4.61,
+        "notes": "截图识别导入",
+    }]
+    assert summaries == [{"month": "202609", "count": 10, "pnl": -5224.85}]
 
 
 def test_history_account_ui_explains_two_way_reconciliation():

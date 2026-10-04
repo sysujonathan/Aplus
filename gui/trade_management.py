@@ -1,7 +1,10 @@
-"""交易管理：当前持仓、作战卡、已清仓与绩效单页。"""
+"""交易管理：持仓、资金账户、已清仓与收益日历。"""
 from __future__ import annotations
 
+import calendar
 import json
+import queue
+import threading
 import tkinter as tk
 from datetime import date, datetime, timedelta
 from tkinter import font as tkfont, messagebox
@@ -9,6 +12,7 @@ from tkinter import font as tkfont, messagebox
 import ttkbootstrap as ttk
 
 from workbench.market import code_of
+from workbench.closed_import import MAX_SCREENSHOTS, recognize_screenshots
 from workbench.trading import (
     history_reconciliation,
     management_report,
@@ -52,10 +56,12 @@ class TradeManagementFrame(ttk.Frame):
         self._closed_ids = {}
         self._sell_buttons = {}
         self._sort_reverse = {}
+        self._accounts = []
+        self._show_fund_values = True
         self.columnconfigure(0, weight=3)
         self.columnconfigure(1, weight=2)
-        self.rowconfigure(1, weight=3)
-        self.rowconfigure(2, weight=2)
+        self.rowconfigure(1, weight=1, minsize=210)
+        self.rowconfigure(2, weight=3, minsize=630)
         self._build_header()
         self._build_panels()
         self.bind_all("<Button-1>", self._clear_position_selection, add="+")
@@ -63,19 +69,21 @@ class TradeManagementFrame(ttk.Frame):
 
     def _build_header(self):
         header = ttk.Frame(self)
-        header.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 8))
-        ttk.Label(header, text="账户", foreground=MUTED).pack(side=tk.LEFT, padx=(2, 6))
+        header.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 2))
         self.account_var = tk.StringVar()
-        self.account_box = ttk.Combobox(header, textvariable=self.account_var,
-                                        state="readonly", width=22)
-        self.account_box.pack(side=tk.LEFT, padx=(0, 6))
-        self.account_box.bind("<<ComboboxSelected>>", lambda _e: self.reload_data())
-        ttk.Button(header, text="账户设置", bootstyle="secondary",
-                   command=self._edit_account).pack(side=tk.LEFT, padx=3)
-        ttk.Button(header, text="刷新", bootstyle="secondary",
-                   command=self.reload_data).pack(side=tk.LEFT, padx=3)
         self.asof_var = tk.StringVar(value="尚无持仓行情")
-        ttk.Label(header, textvariable=self.asof_var, foreground=MUTED).pack(side=tk.RIGHT)
+        ttk.Button(
+            header, text="刷新", width=7, bootstyle="secondary-outline",
+            command=self.reload_data,
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+        self.eye_button = ttk.Button(
+            header, text="👁 隐藏", width=9, bootstyle="primary",
+            command=self._toggle_fund_values,
+        )
+        self.eye_button.pack(side=tk.RIGHT)
+        ttk.Label(header, textvariable=self.asof_var, foreground=MUTED).pack(
+            side=tk.RIGHT, padx=(0, 12)
+        )
 
     def _panel(self, row, column, title, add_command=None):
         outer = ttk.Frame(self, padding=1, style="secondary.TFrame")
@@ -232,17 +240,62 @@ class TradeManagementFrame(ttk.Frame):
         self.position_tree.bind("<Double-1>", lambda _e: self._edit_position())
         self._summary_separator = ttk.Separator(self.position_tree, orient=tk.HORIZONTAL)
 
-        cards = self._panel(1, 1, "作战卡")
-        self.card_summary = tk.StringVar(value="")
-        ttk.Label(cards, textvariable=self.card_summary, foreground=MUTED).grid(
-            row=0, column=0, sticky=tk.W, pady=(0, 5)
+        funds = self._panel(1, 1, "资金账户")
+        funds.rowconfigure(2, weight=1)
+        account_bar = ttk.Frame(funds)
+        account_bar.grid(row=0, column=0, sticky=tk.EW, pady=(0, 5))
+        ttk.Label(account_bar, text="资金账号：", foreground=MUTED).pack(side=tk.LEFT)
+        self.account_box = ttk.Combobox(
+            account_bar, textvariable=self.account_var, state="readonly", width=26
         )
-        self.card_tree = self._tree(cards, (
-            ("code", "代码", 70), ("strategy", "策略", 86), ("entry", "Entry", 65),
-            ("stop", "SL1", 65), ("tp1", "TP1", 65), ("state", "状态", 104),
-        ), "cards")
+        self.account_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.account_box.bind("<<ComboboxSelected>>", lambda _e: self.reload_data())
+        ttk.Button(
+            account_bar, text="•••", width=4, bootstyle="secondary-link",
+            command=self._show_fund_menu,
+        ).pack(side=tk.LEFT)
 
-        closed = self._panel(2, 0, "已清仓", self._add_closed)
+        overview = ttk.Frame(funds)
+        overview.grid(row=1, column=0, sticky=tk.EW)
+        overview.columnconfigure(0, weight=1)
+        self.fund_total = tk.StringVar(value="—")
+        total_box = ttk.Frame(overview)
+        total_box.grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(total_box, text="总资产", foreground=MUTED).pack(side=tk.LEFT)
+        self.fund_position = tk.StringVar(value="证券仓位：—")
+        ttk.Label(total_box, textvariable=self.fund_position, foreground=TEXT,
+                  bootstyle="secondary-inverse", padding=(8, 2)).pack(side=tk.LEFT, padx=10)
+        ttk.Label(overview, textvariable=self.fund_total,
+                  font=("Microsoft YaHei UI", 21, "bold"), foreground=TEXT).grid(
+                      row=1, column=0, sticky=tk.W, pady=(0, 5))
+
+        metrics = ttk.Frame(funds)
+        metrics.grid(row=2, column=0, sticky=tk.NSEW)
+        for column in range(3):
+            metrics.columnconfigure(column, weight=1)
+        for row in range(2):
+            metrics.rowconfigure(row, weight=1)
+        self.fund_metrics = {}
+        for index, (key, label) in enumerate((
+            ("market_value", "证券市值"), ("floating_pnl", "持仓盈亏"),
+            ("daily_pnl", "当日盈亏"), ("withdrawable_cash", "可取"),
+            ("available_cash", "可用"), ("asset_pnl", "资产盈亏"),
+        )):
+            cell = ttk.Frame(metrics)
+            cell.grid(row=index // 3, column=index % 3, sticky=tk.NSEW, padx=(0, 8), pady=2)
+            ttk.Label(cell, text=label, foreground=MUTED).pack(anchor=tk.W)
+            variable = tk.StringVar(value="—")
+            value_label = ttk.Label(cell, textvariable=variable,
+                                    font=("Microsoft YaHei UI", 11, "bold"), foreground=TEXT)
+            value_label.pack(anchor=tk.W)
+            self.fund_metrics[key] = (variable, value_label)
+        self.funds_reconciliation = tk.StringVar(value="")
+        ttk.Label(funds, textvariable=self.funds_reconciliation, foreground=MUTED,
+                  font=("Microsoft YaHei UI", 9), anchor=tk.W).grid(
+                      row=3, column=0, sticky=tk.EW, pady=(4, 0)
+                  )
+
+        closed = self._panel(2, 0, "已清仓", self._show_closed_add_menu)
         closed.rowconfigure(0, weight=1)
         closed.rowconfigure(1, weight=0)
         self.closed_tree = self._tree(closed, (
@@ -253,13 +306,8 @@ class TradeManagementFrame(ttk.Frame):
         self.closed_tree.bind("<Button-3>", self._closed_menu)
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
 
-        performance = self._panel(2, 1, "绩效分析")
-        self.performance_text = tk.Text(
-            performance, height=8, bg=PANEL_BG, fg=TEXT, relief=tk.FLAT,
-            highlightthickness=0, font=("Microsoft YaHei UI", 10), wrap=tk.WORD,
-        )
-        self.performance_text.grid(row=0, column=0, rowspan=2, sticky=tk.NSEW)
-        self.performance_text.configure(state=tk.DISABLED)
+        calendar_body = self._panel(2, 1, "收益日历")
+        self.return_calendar = _ReturnCalendar(calendar_body)
 
     def _build_quick_calculator(self, body):
         quick = ttk.Labelframe(body, text="拟建仓速算", padding=(8, 5))
@@ -318,7 +366,8 @@ class TradeManagementFrame(ttk.Frame):
             self.quick_result_label.configure(foreground=DOWN)
             return
         current_id = self.current_account_id()
-        self._account_by_label = {row["name"]: row["id"] for row in accounts}
+        self._accounts = accounts
+        self._account_by_label = {self._account_label(row): row["id"] for row in accounts}
         labels = list(self._account_by_label)
         self.account_box.configure(values=labels)
         selected = next((label for label, aid in self._account_by_label.items() if aid == current_id), None)
@@ -329,11 +378,45 @@ class TradeManagementFrame(ttk.Frame):
     def current_account_id(self):
         return self._account_by_label.get(self.account_var.get())
 
+    def _account_label(self, account):
+        number = str(account.get("broker_account_no") or "").strip()
+        if not number:
+            return account["name"]
+        if self._show_fund_values:
+            visible = f"{number[:4]}****{number[-4:]}" if len(number) > 8 else number
+        else:
+            visible = "••••••••"
+        return f"{account['name']} · {visible}"
+
+    def _toggle_fund_values(self):
+        account_id = self.current_account_id()
+        self._show_fund_values = not self._show_fund_values
+        self.eye_button.configure(text="👁 隐藏" if self._show_fund_values else "👁 显示")
+        self._account_by_label = {self._account_label(row): row["id"] for row in self._accounts}
+        labels = list(self._account_by_label)
+        self.account_box.configure(values=labels)
+        selected = next((label for label, aid in self._account_by_label.items()
+                         if aid == account_id), labels[0] if labels else "尚未设置账户")
+        self.account_var.set(selected)
+        if self._report:
+            self._fill_funds()
+
+    def _show_fund_menu(self):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="账户设置", command=self._edit_account)
+        menu.add_command(label="新增账户", command=lambda: self._edit_account(create_new=True))
+        menu.add_separator()
+        menu.add_command(label="新增资金调整", command=self._add_cash_flow)
+        menu.add_command(label="管理资金调整", command=self._manage_cash_flows)
+        menu.add_separator()
+        menu.add_command(label="刷新", command=self.reload_data)
+        menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
     def reload_data(self):
         for button in self._sell_buttons.values():
             button.destroy()
         self._sell_buttons = {}
-        for tree in (self.position_tree, self.card_tree, self.closed_tree):
+        for tree in (self.position_tree, self.closed_tree):
             tree.delete(*tree.get_children())
         self._position_ids = {}
         self._closed_ids = {}
@@ -341,17 +424,22 @@ class TradeManagementFrame(ttk.Frame):
         if not account_id:
             self.quick_result.set("请先点“账户设置”，再使用持仓管理与拟建仓速算")
             self.quick_result_label.configure(foreground=MUTED)
-            self.card_summary.set("")
+            self.fund_total.set("—")
+            self.fund_position.set("证券仓位：—")
+            for variable, label in self.fund_metrics.values():
+                variable.set("—")
+                label.configure(foreground=TEXT)
+            self.funds_reconciliation.set("请通过右上角“•••”新增或设置资金账户。")
             self.asof_var.set("尚无持仓行情")
-            self._set_performance("两种建账方式均不要求逐笔补录全部历史成交。")
+            self.return_calendar.set_rows([])
             return
         try:
             self._names = code_names(self.store)
             self._report = management_report(self.store, account_id)
             self._fill_positions()
-            self._fill_cards()
+            self._fill_funds()
             self._fill_closed()
-            self._fill_performance()
+            self.return_calendar.set_rows(self._report["closed"])
         except Exception as exc:
             self.quick_result.set(f"读取交易账本失败：{exc}")
             self.quick_result_label.configure(foreground=DOWN)
@@ -425,27 +513,6 @@ class TradeManagementFrame(ttk.Frame):
                 break
         self.position_tree.selection_remove(self.position_tree.selection())
 
-    def _fill_cards(self):
-        rows = self.store.rows(
-            "SELECT p.code,p.strategy,p.entry,p.stop,p.target,p.state,o.payload "
-            "FROM plans p JOIN observations o ON o.id=p.observation_id "
-            "WHERE p.state IN ('观察','计划交易','已手工入场') ORDER BY p.updated DESC"
-        )
-        for row in rows:
-            try:
-                payload = json.loads(row["payload"] or "{}")
-            except (TypeError, json.JSONDecodeError):
-                payload = {}
-            state = payload.get("pending_state") or row["state"]
-            label = {"PENDING": "待挂", "TRIGGERED": "核对成交", "INVALID": "失效",
-                     "EXPIRED": "过期"}.get(state, state)
-            self.card_tree.insert("", tk.END, values=(
-                numeric_stock_code(row["code"]), row["strategy"], _price(row["entry"]),
-                _price(row["stop"]), _price(row["target"]), label,
-            ), tags=("warn",) if state == "TRIGGERED" else ())
-        self.card_summary.set(f"{len(rows)} 张人工计划")
-        self.after_idle(self._refit_tree, self.card_tree)
-
     def _fill_closed(self):
         for number, row in enumerate(self._report["closed"], 1):
             tag = "profit" if row["pnl"] > 0 else ("loss" if row["pnl"] < 0 else "")
@@ -456,65 +523,63 @@ class TradeManagementFrame(ttk.Frame):
             self._closed_ids[iid] = row["id"]
         self.after_idle(self._refit_tree, self.closed_tree)
 
-    def _fill_performance(self):
-        s = self._report["summary"]
+    def _fill_funds(self):
+        summary = self._report["summary"]
         account = self._report["account"]
-        total_label = (
-            "系统账面总资产" if account.get("accounting_mode") == "history" else "总资产"
-        )
-        lines = [
-            f"{total_label:<8}  {_money(s['total_assets'])} 元",
-            f"持仓市值      {_money(s['market_value'])} 元",
-            f"可用资金      {_money(s['available_cash'])} 元",
-            f"证券仓位      {s['position_pct']:.2f}%",
-            "",
-            f"持仓浮盈亏    {_money(s['floating_pnl'])} 元",
-            f"历史清仓盈亏  {_money(s['closed_pnl'])} 元",
-            f"组合风险      {s['risk_pct']:.2f}%",
-            f"清仓胜率      {s['win_rate']:.1f}%（{s['wins']} 盈 / {s['losses']} 亏）",
-        ]
-        if account.get("accounting_mode") == "history":
-            lines.extend([
-                "",
-                f"开户初始资金  {_money(account['initial_equity'])} 元",
-                f"系统账面资产  {_money(s['historical_equity'])} 元",
-            ])
-            if s["broker_total_assets"] is not None:
-                lines.extend([
-                    f"券商资产快照  {_money(s['broker_total_assets'])} 元",
-                    f"反推开户资金  {_money(s['implied_initial_equity'])} 元",
-                    f"对账差额      {_money(s['reconciliation'])} 元（券商－系统）",
-                ])
-                if abs(s["reconciliation"]) <= 1:
-                    lines.append("✓ 对账一致")
-                else:
-                    lines.append("⚠ 差额通常来自漏记、转入转出或分红税费，请核对。")
+        hidden = not self._show_fund_values
+
+        def amount(value, signed=False):
+            if hidden:
+                return "••••••"
+            if value is None:
+                return "—"
+            return f"{float(value):+,.2f}" if signed else f"{float(value):,.2f}"
+
+        self.fund_total.set(amount(summary["total_assets"]))
+        self.fund_position.set(f"证券仓位：{summary['position_pct']:.2f}%")
+        values = {
+            "market_value": (summary["market_value"], False),
+            "floating_pnl": (summary["floating_pnl"], True),
+            "daily_pnl": (summary["daily_pnl"], True),
+            "withdrawable_cash": (summary["withdrawable_cash"], False),
+            "available_cash": (summary["available_cash"], False),
+            "asset_pnl": (summary["asset_pnl"], True),
+        }
+        for key, (value, signed) in values.items():
+            variable, label = self.fund_metrics[key]
+            variable.set(amount(value, signed=signed))
+            if signed and value not in (None, 0):
+                label.configure(foreground=UP if value > 0 else DOWN)
             else:
-                lines.append("未填写券商资产快照，暂不执行独立对账。")
-        self._set_performance("\n".join(lines))
+                label.configure(foreground=TEXT)
+        if hidden:
+            self.funds_reconciliation.set("初始资金（推算） •••••• 元")
+        elif account.get("accounting_mode") == "history":
+            if summary["broker_total_assets"] is not None:
+                text = f"初始资金（推算） {summary['implied_initial_equity']:,.2f} 元"
+            else:
+                text = "初始资金（推算） —"
+            self.funds_reconciliation.set(text)
+        else:
+            self.funds_reconciliation.set("初始资金（推算） —")
 
-    def _set_performance(self, text):
-        self.performance_text.configure(state=tk.NORMAL)
-        self.performance_text.delete("1.0", tk.END)
-        self.performance_text.insert("1.0", text)
-        self.performance_text.configure(state=tk.DISABLED)
-
-    def _edit_account(self):
+    def _edit_account(self, create_new=False):
         account = None
-        aid = self.current_account_id()
+        aid = None if create_new else self.current_account_id()
         if aid:
             rows = self.store.rows("SELECT * FROM accounts WHERE id=?", (aid,))
             account = rows[0] if rows else None
-        market_value = self._report["summary"]["market_value"] if self._report else 0.0
-        summary = self._report["summary"] if self._report else {}
-        dialog = _AccountDialog(
-            self, account, market_value=market_value, summary=summary
+        market_value = 0.0 if create_new else (
+            self._report["summary"]["market_value"] if self._report else 0.0
         )
+        summary = {} if create_new else (self._report["summary"] if self._report else {})
+        dialog = _AccountDialog(self, account, market_value=market_value,
+                                summary=summary, create_new=create_new)
         self.wait_window(dialog.top)
         if not dialog.confirmed:
             return
         try:
-            account_id = None if dialog.create_new else (account or {}).get("id")
+            account_id = None if create_new else (account or {}).get("id")
             saved = self.store.save_account(**dialog.values, account_id=account_id)
         except Exception as exc:
             messagebox.showerror("账户保存失败", str(exc), parent=self)
@@ -631,8 +696,59 @@ class TradeManagementFrame(ttk.Frame):
         menu.add_command(label="删除误录记录", command=self._delete_closed)
         menu.tk_popup(event.x_root, event.y_root)
 
+    def _show_closed_add_menu(self):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="粘贴截图（最多 6 张）", command=self._paste_closed_screenshots)
+        menu.add_command(label="手工新增", command=self._add_closed)
+        menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
+    def _paste_closed_screenshots(self):
+        if not self.current_account_id():
+            messagebox.showinfo("请先设置账户", "先设置账户，再导入历史清仓。", parent=self)
+            return
+        dialog = _ScreenshotPasteDialog(self, self.store, self._names or code_names(self.store))
+        self.wait_window(dialog.top)
+        if not dialog.confirmed:
+            return
+        try:
+            self.store.save_closed_trades_batch(self.current_account_id(), dialog.values)
+        except Exception as exc:
+            messagebox.showerror("截图导入失败", str(exc), parent=self)
+            return
+        self.reload_data()
+
     def _add_closed(self):
         self._open_closed_dialog(None)
+
+    def _add_cash_flow(self):
+        self._open_cash_flow_dialog(None)
+
+    def _manage_cash_flows(self):
+        account_id = self.current_account_id()
+        if not account_id:
+            messagebox.showinfo("请先设置账户", "先设置账户，再管理资金调整。", parent=self)
+            return
+        dialog = _CashFlowManagerDialog(self, self.store, account_id)
+        self.wait_window(dialog.top)
+        self.reload_data()
+
+    def _open_cash_flow_dialog(self, row):
+        if not self.current_account_id():
+            messagebox.showinfo("请先设置账户", "先设置账户，再记录资金流水。", parent=self)
+            return
+        dialog = _CashFlowDialog(self, row)
+        self.wait_window(dialog.top)
+        if not dialog.confirmed:
+            return
+        try:
+            self.store.save_cash_flow(
+                self.current_account_id(), **dialog.values,
+                flow_id=(row or {}).get("id"),
+            )
+        except Exception as exc:
+            messagebox.showerror("资金流水保存失败", str(exc), parent=self)
+            return
+        self.reload_data()
 
     def _edit_closed(self):
         row = self._selected_closed()
@@ -677,6 +793,130 @@ class TradeManagementFrame(ttk.Frame):
         self.reload_data()
 
 
+class _ReturnCalendar:
+    """Compact realised-P&L calendar; account-return snapshots can extend it later."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.rows = []
+        self.anchor = date.today().replace(day=1)
+        self._initialized = False
+        controls = ttk.Frame(parent)
+        controls.grid(row=0, column=0, sticky=tk.EW, pady=(0, 6))
+        self.scale = tk.StringVar(value="月")
+        ttk.Combobox(controls, textvariable=self.scale, values=("月", "年"),
+                     width=5, state="readonly").pack(side=tk.LEFT)
+        self.scale.trace_add("write", lambda *_args: self._scale_changed())
+        self.previous_text = tk.StringVar(value="上月")
+        self.next_text = tk.StringVar(value="下月")
+        ttk.Button(controls, textvariable=self.previous_text, width=5, bootstyle="secondary-outline",
+                   command=lambda: self.shift(-1)).pack(side=tk.LEFT, padx=(8, 2))
+        self.title = tk.StringVar()
+        ttk.Label(controls, textvariable=self.title, font=("Microsoft YaHei UI", 10, "bold"))\
+            .pack(side=tk.LEFT, padx=6)
+        ttk.Button(controls, textvariable=self.next_text, width=5, bootstyle="secondary-outline",
+                   command=lambda: self.shift(1)).pack(side=tk.LEFT, padx=2)
+        ttk.Label(controls, text="按清仓日统计已实现盈亏", foreground=MUTED).pack(side=tk.RIGHT)
+        self.grid = ttk.Frame(parent)
+        self.grid.grid(row=1, column=0, sticky=tk.NSEW)
+        parent.rowconfigure(1, weight=1)
+
+    def set_rows(self, rows):
+        self.rows = list(rows or [])
+        valid = []
+        for row in self.rows:
+            try:
+                valid.append(datetime.fromisoformat(row["close_date"][:10]).date())
+            except (KeyError, TypeError, ValueError):
+                pass
+        if valid and not self._initialized:
+            latest = max(valid)
+            self.anchor = latest.replace(day=1)
+        self._initialized = True
+        self.render()
+
+    def _scale_changed(self):
+        yearly = self.scale.get() == "年"
+        self.previous_text.set("上年" if yearly else "上月")
+        self.next_text.set("下年" if yearly else "下月")
+        self.render()
+
+    def shift(self, delta):
+        if self.scale.get() == "年":
+            self.anchor = self.anchor.replace(year=self.anchor.year + delta)
+        else:
+            index = self.anchor.year * 12 + self.anchor.month - 1 + delta
+            self.anchor = date(index // 12, index % 12 + 1, 1)
+        self.render()
+
+    def render(self):
+        for child in self.grid.winfo_children():
+            child.destroy()
+        if self.scale.get() == "年":
+            self._render_year()
+        else:
+            self._render_month()
+
+    def _render_month(self):
+        year, month = self.anchor.year, self.anchor.month
+        self.title.set(f"{year} 年 {month:02d} 月")
+        daily = {}
+        for row in self.rows:
+            try:
+                day = datetime.fromisoformat(row["close_date"][:10]).date()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (day.year, day.month) == (year, month):
+                bucket = daily.setdefault(day.day, [0.0, 0])
+                bucket[0] += float(row["pnl"])
+                bucket[1] += 1
+        for column, label in enumerate(("一", "二", "三", "四", "五", "六", "日")):
+            self.grid.columnconfigure(column, weight=1)
+            ttk.Label(self.grid, text=label, anchor=tk.CENTER, foreground=MUTED).grid(
+                row=0, column=column, sticky=tk.EW, pady=2)
+        weeks = calendar.Calendar().monthdayscalendar(year, month)
+        while len(weeks) < 6:
+            weeks.append([0] * 7)
+        for week_index, week in enumerate(weeks[:6], 1):
+            for column, day in enumerate(week):
+                if not day:
+                    text, color = "", MUTED
+                elif day in daily:
+                    pnl, count = daily[day]
+                    text = f"{day}\n{pnl:+,.0f}\n{count}笔"
+                    color = UP if pnl > 0 else (DOWN if pnl < 0 else TEXT)
+                else:
+                    text, color = str(day), MUTED
+                ttk.Label(self.grid, text=text, anchor=tk.CENTER, justify=tk.CENTER,
+                          foreground=color).grid(row=week_index, column=column,
+                                                 sticky=tk.NSEW, padx=2, pady=2)
+                self.grid.rowconfigure(week_index, weight=1, minsize=40)
+
+    def _render_year(self):
+        year = self.anchor.year
+        self.title.set(f"{year} 年")
+        monthly = {month: [0.0, 0] for month in range(1, 13)}
+        for row in self.rows:
+            try:
+                day = datetime.fromisoformat(row["close_date"][:10]).date()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if day.year == year:
+                monthly[day.month][0] += float(row["pnl"])
+                monthly[day.month][1] += 1
+        for month in range(1, 13):
+            pnl, count = monthly[month]
+            color = UP if pnl > 0 else (DOWN if pnl < 0 else MUTED)
+            ttk.Label(self.grid, text=f"{month} 月\n{pnl:+,.0f} 元\n{count} 笔",
+                      anchor=tk.CENTER, justify=tk.CENTER, foreground=color).grid(
+                          row=(month - 1) // 4, column=(month - 1) % 4,
+                          sticky=tk.NSEW, padx=5, pady=5)
+        for index in range(4):
+            self.grid.columnconfigure(index, weight=1)
+        for index in range(3):
+            self.grid.rowconfigure(index, weight=1)
+
+
 class _BaseDialog:
     def __init__(self, parent, title):
         self.confirmed = False
@@ -704,15 +944,142 @@ class _BaseDialog:
         ttk.Button(box, text="取消", bootstyle="secondary", command=self.top.destroy).pack(side=tk.LEFT, padx=4)
 
 
+class _CashFlowDialog(_BaseDialog):
+    CATEGORIES = ("利息归本", "现金分红", "红利税调整", "转入", "转出", "其他收入", "其他支出")
+
+    def __init__(self, parent, row=None):
+        super().__init__(parent, "编辑资金流水" if row else "新增资金流水")
+        row = row or {}
+        ttk.Label(self.form, text="日期").grid(row=0, column=0, sticky=tk.W, padx=(0, 8), pady=4)
+        self.flow_date = tk.StringVar(value=row.get("flow_date") or date.today().isoformat())
+        ttk.Entry(self.form, textvariable=self.flow_date, width=18).grid(
+            row=0, column=1, sticky=tk.EW, padx=(0, 12), pady=4)
+        ttk.Label(self.form, text="类别").grid(row=0, column=2, sticky=tk.W, padx=(0, 8), pady=4)
+        self.category = tk.StringVar(value=row.get("category") or self.CATEGORIES[0])
+        ttk.Combobox(self.form, textvariable=self.category, values=self.CATEGORIES,
+                     state="normal", width=16).grid(row=0, column=3, sticky=tk.EW, pady=4)
+        self.amount = self.entry(1, "金额（元）", row.get("amount", ""))
+        self.notes = self.entry(1, "备注", row.get("notes", ""), column=1)
+        ttk.Label(
+            self.form,
+            text="类别可自行输入；收入填正数，转出/其他支出可填正数并自动记为负数。",
+            foreground=MUTED,
+        ).grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
+        self.buttons(3, self._ok)
+
+    def _ok(self):
+        try:
+            amount = float(self.amount.get())
+        except ValueError:
+            messagebox.showerror("输入无效", "金额必须填写有效数字。", parent=self.top)
+            return
+        self.values = {
+            "flow_date": self.flow_date.get().strip(),
+            "category": self.category.get().strip(),
+            "amount": amount,
+            "notes": self.notes.get().strip(),
+        }
+        self.confirmed = True
+        self.top.destroy()
+
+
+class _CashFlowManagerDialog(_BaseDialog):
+    """Manage the only user-editable inputs in the account overview."""
+
+    def __init__(self, parent, store, account_id):
+        super().__init__(parent, "管理资金调整")
+        self.store = store
+        self.account_id = account_id
+        self.rows = {}
+        self.top.resizable(True, True)
+        self.top.minsize(720, 430)
+        self.form.columnconfigure(0, weight=1)
+        self.form.rowconfigure(1, weight=1)
+        ttk.Label(
+            self.form,
+            text="仅在这里记录交易以外的资金变化；总资产、盈亏和可用资金由系统只读计算。",
+            foreground=MUTED,
+        ).grid(row=0, column=0, sticky=tk.W, pady=(0, 8))
+        self.tree = ttk.Treeview(
+            self.form, columns=("date", "category", "amount", "notes"), show="headings"
+        )
+        for key, label, width in (
+            ("date", "日期", 110), ("category", "类别", 130),
+            ("amount", "金额（元）", 120), ("notes", "备注", 300),
+        ):
+            self.tree.heading(key, text=label, anchor=tk.CENTER)
+            self.tree.column(key, width=width, anchor=tk.CENTER if key != "notes" else tk.W)
+        self.tree.grid(row=1, column=0, sticky=tk.NSEW)
+        self.tree.bind("<Double-1>", lambda _event: self._edit())
+        bar = ttk.Frame(self.form)
+        bar.grid(row=2, column=0, sticky=tk.E, pady=(10, 0))
+        ttk.Button(bar, text="新增", bootstyle="primary", command=self._add).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bar, text="编辑", bootstyle="secondary-outline", command=self._edit).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bar, text="删除", bootstyle="danger-outline", command=self._delete).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bar, text="关闭", bootstyle="secondary", command=self.top.destroy).pack(side=tk.LEFT, padx=4)
+        self._reload()
+
+    def _reload(self):
+        self.tree.delete(*self.tree.get_children())
+        self.rows = {}
+        for row in self.store.list_cash_flows(self.account_id):
+            iid = self.tree.insert("", tk.END, values=(
+                row["flow_date"], row["category"], f"{row['amount']:+,.2f}", row["notes"],
+            ))
+            self.rows[iid] = row
+
+    def _selected(self):
+        selected = self.tree.selection()
+        return self.rows.get(selected[0]) if selected else None
+
+    def _save(self, row=None):
+        dialog = _CashFlowDialog(self.top, row)
+        self.top.wait_window(dialog.top)
+        if not dialog.confirmed:
+            return
+        try:
+            self.store.save_cash_flow(
+                self.account_id, **dialog.values, flow_id=(row or {}).get("id")
+            )
+        except Exception as exc:
+            messagebox.showerror("资金调整保存失败", str(exc), parent=self.top)
+            return
+        self._reload()
+
+    def _add(self):
+        self._save()
+
+    def _edit(self):
+        row = self._selected()
+        if row:
+            self._save(row)
+
+    def _delete(self):
+        row = self._selected()
+        if not row or not messagebox.askyesno(
+            "删除资金调整",
+            f"确认删除 {row['flow_date']} {row['category']} {row['amount']:+,.2f} 元？",
+            parent=self.top,
+        ):
+            return
+        try:
+            self.store.delete_cash_flow(row["id"])
+        except Exception as exc:
+            messagebox.showerror("删除失败", str(exc), parent=self.top)
+            return
+        self._reload()
+
+
 class _AccountDialog(_BaseDialog):
-    def __init__(self, parent, account=None, market_value=0.0, summary=None):
-        super().__init__(parent, "账户设置")
+    def __init__(self, parent, account=None, market_value=0.0, summary=None, create_new=False):
+        super().__init__(parent, "新增账户" if create_new else "账户设置")
         account = account or {}
         summary = summary or {}
-        self.create_new = False
+        self.create_new = bool(create_new)
         self.market_value = float(market_value or 0)
         self.closed_pnl = float(summary.get("closed_pnl") or 0)
         self.floating_pnl = float(summary.get("floating_pnl") or 0)
+        self.cash_adjustments = float(summary.get("cash_adjustments") or 0)
         self._implied_initial = None
         self.mode = tk.StringVar(value=account.get("accounting_mode", "snapshot"))
         ttk.Label(self.form, text="建账方式").grid(row=0, column=0, sticky=tk.W, pady=4)
@@ -720,12 +1087,10 @@ class _AccountDialog(_BaseDialog):
                         value="snapshot", command=self._mode_changed).grid(row=0, column=1, sticky=tk.W)
         ttk.Radiobutton(self.form, text="初始资金＋历史清仓", variable=self.mode,
                         value="history", command=self._mode_changed).grid(row=0, column=2, columnspan=2, sticky=tk.W)
-        self.name = self.entry(1, "账户名称", account.get("name", "主账户"))
-        ttk.Button(self.form, text="＋ 新增账户", bootstyle="primary-outline",
-                   command=self._new_account).grid(
-                       row=1, column=2, columnspan=2, sticky=tk.EW,
-                       padx=(0, 12), pady=4,
-                   )
+        self.name = self.entry(1, "账户名称", account.get("name", "" if create_new else "主账户"))
+        self.account_number = self.entry(
+            1, "资金账号", account.get("broker_account_no", ""), column=1
+        )
         self.initial_label = ttk.Label(self.form, text="账户资金")
         self.initial_label.grid(row=2, column=0, sticky=tk.W, padx=(0, 8), pady=4)
         self.initial = tk.StringVar(value=account.get("initial_equity", 100000))
@@ -784,24 +1149,6 @@ class _AccountDialog(_BaseDialog):
         self.total.trace_add("write", lambda *_args: self._recalculate_account())
         self._mode_changed()
 
-    def _new_account(self):
-        self.create_new = True
-        self.top.title("新增账户")
-        self.market_value = 0.0
-        self.closed_pnl = 0.0
-        self.floating_pnl = 0.0
-        self._implied_initial = None
-        self.mode.set("snapshot")
-        self.name.set("")
-        self.initial.set("100000")
-        self.total.set("")
-        self.risk_limit.set("3")
-        self.trade_risk.set("1")
-        self.max_position.set("30")
-        self.cash_reserve.set("10")
-        self._mode_changed()
-        self.hint.set("填写新账户资料并确认；保存后会自动切换到这个账户。")
-
     def _update_available(self):
         try:
             available = float(self.initial.get()) - self.market_value
@@ -824,7 +1171,7 @@ class _AccountDialog(_BaseDialog):
             self.use_reverse_button.state(["disabled"])
             return
         system = history_reconciliation(
-            initial, None, self.closed_pnl, self.floating_pnl
+            initial, None, self.closed_pnl, self.floating_pnl, self.cash_adjustments
         )
         self.system_total.set(f"{system['system_total_assets']:.2f}")
         try:
@@ -837,13 +1184,14 @@ class _AccountDialog(_BaseDialog):
             self.use_reverse_button.state(["disabled"])
             return
         result = history_reconciliation(
-            initial, broker, self.closed_pnl, self.floating_pnl
+            initial, broker, self.closed_pnl, self.floating_pnl, self.cash_adjustments
         )
         self._implied_initial = result["implied_initial_equity"]
         if self._implied_initial is None:
             self.reverse_initial.set("—")
             self.reconciliation.set(
-                f"已清仓 {self.closed_pnl:+,.2f} 元 · 持仓浮盈亏 {self.floating_pnl:+,.2f} 元 · 未填写券商资产快照"
+                f"已清仓 {self.closed_pnl:+,.2f} · 持仓 {self.floating_pnl:+,.2f} · "
+                f"资金调整 {self.cash_adjustments:+,.2f} 元 · 未填写券商资产快照"
             )
             self.reconciliation_label.configure(foreground=MUTED)
             self.use_reverse_button.state(["disabled"])
@@ -904,8 +1252,8 @@ class _AccountDialog(_BaseDialog):
             self.use_reverse_button.grid()
             self._recalculate_account()
             self.hint.set(
-                "开户初始资金是固定基准；系统账面总资产 = 初始资金＋已清仓净盈亏＋当前持仓浮盈亏。"
-                "券商资产快照只用于独立对账，不会自动覆盖初始资金；转入转出、分红税费需另行核对。"
+                "开户初始资金是固定基准；系统账面总资产 = 初始资金＋已清仓净盈亏＋当前持仓浮盈亏"
+                "＋资金调整。券商资产快照只用于独立对账，不会自动覆盖初始资金。"
             )
 
     def _ok(self):
@@ -921,6 +1269,7 @@ class _AccountDialog(_BaseDialog):
             self.values = {
                 "name": self.name.get().strip(), "initial_equity": initial,
                 "accounting_mode": self.mode.get(), "current_total_assets": current,
+                "broker_account_no": self.account_number.get().strip(),
                 "risk_limit_pct": float(self.risk_limit.get()),
                 "per_trade_risk_pct": float(self.trade_risk.get()),
                 "max_position_pct": float(self.max_position.get()),
@@ -976,18 +1325,21 @@ class _IdentityDialog(_BaseDialog):
 
 
 class _BatchEditor:
-    def __init__(self, parent, row, dates, batches=None, inherit_first=True):
+    def __init__(self, parent, row, dates, batches=None, inherit_first=True, include_fees=False):
         self.parent = parent
         self.start_row = row
         self.dates = list(dates)
         self.inherit_first = inherit_first
+        self.include_fees = include_fees
         self.rows = []
         self._next_row = row + 1
         ttk.Label(parent, text="日期").grid(row=row, column=0, pady=(8, 2))
         ttk.Label(parent, text="价格").grid(row=row, column=1, pady=(8, 2))
         ttk.Label(parent, text="手数（100股/手）").grid(row=row, column=2, pady=(8, 2))
+        if include_fees:
+            ttk.Label(parent, text="税费合计").grid(row=row, column=3, pady=(8, 2))
         ttk.Button(parent, text="＋", width=3, bootstyle="primary-outline",
-                   command=self.add).grid(row=row, column=3, padx=4)
+                   command=self.add).grid(row=row, column=4 if include_fees else 3, padx=4)
         for batch in batches or [{}]:
             self.add(batch)
 
@@ -1000,20 +1352,23 @@ class _BatchEditor:
         date_var = tk.StringVar(value=default_date)
         price_var = tk.StringVar(value=batch.get("price", ""))
         hands_var = tk.StringVar(value=batch.get("hands", ""))
+        fees_var = tk.StringVar(value=batch.get("fees", "") if self.include_fees else "0")
         widgets = [
             ttk.Combobox(self.parent, textvariable=date_var, values=self.dates,
                          width=13, state="readonly"),
             ttk.Entry(self.parent, textvariable=price_var, width=13),
             ttk.Entry(self.parent, textvariable=hands_var, width=15),
         ]
+        if self.include_fees:
+            widgets.append(ttk.Entry(self.parent, textvariable=fees_var, width=12))
         for column, widget in enumerate(widgets):
             widget.grid(row=row_number, column=column, padx=3, pady=3)
         remove = ttk.Button(self.parent, text="−", width=3, bootstyle="secondary-outline",
                             command=lambda record=None: self.remove_record(record))
-        record = {"date": date_var, "price": price_var, "hands": hands_var,
+        record = {"date": date_var, "price": price_var, "hands": hands_var, "fees": fees_var,
                   "widgets": [*widgets, remove]}
         remove.configure(command=lambda r=record: self.remove_record(r))
-        remove.grid(row=row_number, column=3, padx=4)
+        remove.grid(row=row_number, column=4 if self.include_fees else 3, padx=4)
         self.rows.append(record)
 
     def remove_record(self, record):
@@ -1025,7 +1380,8 @@ class _BatchEditor:
 
     def values(self):
         return [{"date": row["date"].get().strip(), "price": float(row["price"].get()),
-                 "hands": int(row["hands"].get())} for row in self.rows]
+                 "hands": int(row["hands"].get()), "fees": float(row["fees"].get() or 0)}
+                for row in self.rows]
 
 
 class _PositionDialog(_IdentityDialog):
@@ -1045,7 +1401,9 @@ class _PositionDialog(_IdentityDialog):
         dates = trading_dates(store, position.get("code")) or trading_dates(store)
         batch_frame = ttk.Frame(self.form)
         batch_frame.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=(4, 0))
-        self.batches = _BatchEditor(batch_frame, 0, dates, position.get("buy_batches"))
+        self.batches = _BatchEditor(
+            batch_frame, 0, dates, position.get("buy_batches"), include_fees=True
+        )
         self.hint = tk.StringVar(value="输入代码后可自动带入名称，并识别最新策略结果或关注信号。")
         ttk.Label(self.form, textvariable=self.hint, foreground=MUTED).grid(
             row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
@@ -1167,20 +1525,7 @@ class _ClosedDialog(_IdentityDialog):
         self.pnl = self.entry(2, "盈亏", row.get("pnl", ""))
         self.return_pct = self.entry(2, "收益率 %", row.get("return_pct", ""), column=1)
         self.notes = self.entry(3, "备注", row.get("notes", ""))
-        if not row:
-            ttk.Button(self.form, text="批量填表", bootstyle="primary",
-                       command=self._open_batch).grid(row=3, column=2, columnspan=2,
-                                                      sticky=tk.EW, padx=(0, 12), pady=4)
         self.buttons(4, self._ok)
-
-    def _open_batch(self):
-        dialog = _ClosedBatchDialog(self.top, self.store, self.names)
-        self.top.wait_window(dialog.top)
-        if not dialog.confirmed:
-            return
-        self.batch_values = dialog.values
-        self.confirmed = True
-        self.top.destroy()
 
     def _ok(self):
         try:
@@ -1204,8 +1549,8 @@ class _ClosedBatchDialog(_BaseDialog):
     COLUMNS = (("代码", 11), ("名称", 14), ("清仓日期", 12), ("持仓天数", 9),
                ("盈亏", 10), ("收益率 %", 10))
 
-    def __init__(self, parent, store, names):
-        super().__init__(parent, "批量填写历史清仓")
+    def __init__(self, parent, store, names, initial_records=None, validation_text=""):
+        super().__init__(parent, "确认截图识别结果" if initial_records else "批量填写历史清仓")
         self.top.resizable(True, True)
         self.store = store
         self.names = names
@@ -1214,8 +1559,11 @@ class _ClosedBatchDialog(_BaseDialog):
         self.rows = []
         self._next_grid_row = 2
         self.dates = trading_dates(store)
-        ttk.Label(self.form, text="每行一笔；代码或名称填写一项即可自动关联。",
-                  foreground=MUTED).grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
+        hint = "请逐行核对；名称会自动匹配代码，确认后才写入本地账本。"
+        if validation_text:
+            hint += "\n" + validation_text
+        ttk.Label(self.form, text=hint, foreground=MUTED, justify=tk.LEFT,
+                  wraplength=820).grid(row=0, column=0, columnspan=5, sticky=tk.W, pady=(0, 8))
         ttk.Button(
             self.form,
             text="＋ 增加五行",
@@ -1228,7 +1576,12 @@ class _ClosedBatchDialog(_BaseDialog):
                           row=1, column=column, sticky=tk.EW, padx=2, pady=2)
         ttk.Label(self.form, text="操作", anchor=tk.CENTER,
                   font=("Microsoft YaHei UI", 9, "bold")).grid(row=1, column=6, padx=2)
-        self._add_rows(5)
+        records = list(initial_records or [])
+        if records:
+            for record in records:
+                self._add_row(record)
+        else:
+            self._add_rows(5)
         self.controls = ttk.Frame(self.form)
         self.controls.grid(row=self._next_grid_row, column=0, columnspan=7, sticky=tk.E, pady=(12, 0))
         ttk.Button(self.controls, text="确认导入", bootstyle="primary",
@@ -1240,12 +1593,19 @@ class _ClosedBatchDialog(_BaseDialog):
         for _index in range(max(1, int(count))):
             self._add_row()
 
-    def _add_row(self):
+    def _add_row(self, values=None):
         grid_row = self._next_grid_row
         self._next_grid_row += 1
         variables = [tk.StringVar() for _item in self.COLUMNS]
+        values = values or {}
         default_date = self.dates[0] if self.dates else date.today().isoformat()
-        variables[2].set(default_date)
+        initial = (
+            numeric_stock_code(values.get("code", "")), values.get("name", ""),
+            values.get("close_date") or default_date, values.get("holding_days", ""),
+            values.get("pnl", ""), values.get("return_pct", ""),
+        )
+        for variable, value in zip(variables, initial):
+            variable.set(value)
         widgets = []
         for column, ((_label, width), variable) in enumerate(zip(self.COLUMNS, variables)):
             if column == 2:
@@ -1337,5 +1697,165 @@ class _ClosedBatchDialog(_BaseDialog):
             messagebox.showerror("输入无效", f"请核对批量清仓表：{exc}", parent=self.top)
             return
         self.values = values
+        self.confirmed = True
+        self.top.destroy()
+
+
+class _ScreenshotPasteDialog(_BaseDialog):
+    def __init__(self, parent, store, names):
+        super().__init__(parent, "粘贴已清仓截图")
+        self.top.resizable(True, True)
+        self.store = store
+        self.names = names
+        self.images = []
+        self.status = tk.StringVar(value=f"在此窗口按 Ctrl+V 粘贴截图；一次最多 {MAX_SCREENSHOTS} 张。")
+        ttk.Label(self.form, textvariable=self.status, foreground=MUTED,
+                  wraplength=650, justify=tk.LEFT).grid(row=0, column=0, columnspan=3,
+                                                        sticky=tk.W, pady=(0, 8))
+        self.listbox = tk.Listbox(
+            self.form, height=8, width=72, bg=PANEL_BG, fg=TEXT,
+            selectbackground="#245a92", relief=tk.FLAT,
+        )
+        self.listbox.grid(row=1, column=0, columnspan=3, sticky=tk.NSEW)
+        self.form.rowconfigure(1, weight=1)
+        self.form.columnconfigure(0, weight=1)
+        ttk.Button(self.form, text="粘贴截图", bootstyle="primary-outline",
+                   command=self._paste).grid(row=2, column=0, sticky=tk.W, pady=(10, 0))
+        ttk.Button(self.form, text="移除选中", bootstyle="secondary-outline",
+                   command=self._remove).grid(row=2, column=1, pady=(10, 0))
+        self.recognize_button = ttk.Button(
+            self.form, text="识别并预览", bootstyle="primary", command=self._recognize
+        )
+        self.recognize_button.grid(row=2, column=2, sticky=tk.E, pady=(10, 0))
+        ttk.Button(self.form, text="取消", bootstyle="secondary",
+                   command=self.top.destroy).grid(row=3, column=2, sticky=tk.E, pady=(8, 0))
+        self.top.bind("<Control-v>", self._paste)
+        self.top.bind("<Control-V>", self._paste)
+        self.top.after(100, self.top.focus_force)
+
+    def _paste(self, _event=None):
+        if len(self.images) >= MAX_SCREENSHOTS:
+            messagebox.showinfo("已达上限", f"一次最多粘贴 {MAX_SCREENSHOTS} 张截图。", parent=self.top)
+            return "break"
+        try:
+            from PIL import Image, ImageGrab
+            content = ImageGrab.grabclipboard()
+        except Exception as exc:
+            messagebox.showerror("读取剪贴板失败", str(exc), parent=self.top)
+            return "break"
+        candidates = []
+        if isinstance(content, Image.Image):
+            candidates = [content.copy()]
+        elif isinstance(content, list):
+            for path in content:
+                try:
+                    candidates.append(Image.open(path).convert("RGB"))
+                except Exception:
+                    continue
+        if not candidates:
+            messagebox.showinfo("没有截图", "剪贴板中没有可识别的图片，请先在微信中复制截图。", parent=self.top)
+            return "break"
+        room = MAX_SCREENSHOTS - len(self.images)
+        for image in candidates[:room]:
+            self.images.append(image.convert("RGB"))
+            self.listbox.insert(tk.END, f"截图 {len(self.images)}  ·  {image.width} × {image.height}")
+        if len(candidates) > room:
+            messagebox.showinfo("部分已忽略", f"已保留前 {MAX_SCREENSHOTS} 张，超出部分未加入。", parent=self.top)
+        self.status.set(f"已粘贴 {len(self.images)}/{MAX_SCREENSHOTS} 张；可继续粘贴或开始识别。")
+        return "break"
+
+    def _remove(self):
+        selected = list(self.listbox.curselection())
+        if not selected:
+            return
+        for index in reversed(selected):
+            self.listbox.delete(index)
+            self.images.pop(index)
+        self.listbox.delete(0, tk.END)
+        for index, image in enumerate(self.images, 1):
+            self.listbox.insert(tk.END, f"截图 {index}  ·  {image.width} × {image.height}")
+        self.status.set(f"已粘贴 {len(self.images)}/{MAX_SCREENSHOTS} 张。")
+
+    def _recognize(self):
+        if not self.images:
+            messagebox.showinfo("请先粘贴", "请先粘贴至少一张已清仓截图。", parent=self.top)
+            return
+        self.recognize_button.state(["disabled"])
+        self.status.set(f"正在本地识别 {len(self.images)} 张截图，请稍候……")
+        images = [image.copy() for image in self.images]
+        self._recognition_queue = queue.Queue(maxsize=1)
+
+        def worker():
+            try:
+                self._recognition_queue.put((recognize_screenshots(images), None))
+            except Exception as exc:
+                self._recognition_queue.put((None, exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.top.after(100, self._poll_recognition)
+
+    def _poll_recognition(self):
+        if not self.top.winfo_exists():
+            return
+        try:
+            result, error = self._recognition_queue.get_nowait()
+        except queue.Empty:
+            self.top.after(100, self._poll_recognition)
+            return
+        self._recognition_done(result, error)
+
+    def _recognition_done(self, result, error):
+        if not self.top.winfo_exists():
+            return
+        self.recognize_button.state(["!disabled"])
+        if error:
+            self.status.set("识别失败；截图仍保留，可调整后重试。")
+            messagebox.showerror("截图识别失败", str(error), parent=self.top)
+            return
+        records, summaries, warnings = result
+        if not records:
+            self.status.set("未识别出完整交易记录。")
+            detail = "\n".join(warnings[:8]) or "请确认截图包含证券名称、清仓日期、持仓天数、盈亏和收益率。"
+            messagebox.showwarning("没有可预览记录", detail, parent=self.top)
+            return
+        summary_text = f"识别 {len(records)} 笔（跨截图重复项已合并）"
+        if summaries:
+            recognised = {}
+            for record in records:
+                if record["pnl"] == "":
+                    continue
+                month = record["close_date"].replace("-", "")[:6]
+                bucket = recognised.setdefault(month, [0, 0.0])
+                bucket[0] += 1
+                bucket[1] += float(record["pnl"])
+            checks, seen_months = [], set()
+            for item in summaries:
+                if item["month"] in seen_months:
+                    continue
+                seen_months.add(item["month"])
+                count, pnl = recognised.get(item["month"], [0, 0.0])
+                if count == item["count"] and abs(pnl - item["pnl"]) <= 0.02:
+                    checks.append(f"{item['month']} 月汇总一致")
+                else:
+                    checks.append(
+                        f"{item['month']} 月截图汇总 {item['count']}笔/{item['pnl']:+,.2f}元，"
+                        f"当前完整识别 {count}笔/{pnl:+,.2f}元"
+                    )
+            summary_text += "；" + "；".join(checks)
+        incomplete = sum(
+            any(record[key] == "" for key in ("holding_days", "pnl", "return_pct"))
+            for record in records
+        )
+        if incomplete:
+            summary_text += f"；{incomplete} 行存在空字段，必须在预览中补全或删除"
+        dialog = _ClosedBatchDialog(
+            self.top, self.store, self.names, initial_records=records,
+            validation_text=summary_text,
+        )
+        self.top.wait_window(dialog.top)
+        if not dialog.confirmed:
+            self.status.set("预览已取消；截图仍保留，可重新识别。")
+            return
+        self.values = dialog.values
         self.confirmed = True
         self.top.destroy()
