@@ -177,6 +177,8 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
             assert store.rows(f'SELECT COUNT(*) AS n FROM {table}')[0]['n'] == 0
         image = render_replay(store, records[0], len(records[0]['events']) - 1)
         assert image.width > 800 and image.height > 300
+        native = render_replay(store, records[0], 0, size=(900, 550))
+        assert native.size == (900, 550)
         assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == schema_before
     finally:
         service.pool.shutdown()

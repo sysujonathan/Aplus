@@ -8,15 +8,17 @@ import tkinter as tk
 from tkinter import messagebox
 
 import ttkbootstrap as ttk
-from PIL import Image, ImageTk
+from PIL import ImageTk
 
 from workbench.backtest import Assumptions
 from workbench.h2_replay import H2Settings, LABELS, MODEL
 from workbench.h2_replay_service import available_snapshots, load_receipt
-from workbench.market import completed_date
+from workbench.market import BOARDS, completed_date
 from .data import code_names
 from .h2_replay_chart import render_replay
-from .theme import ACCENT, BORDER, CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP
+from .research_views import comparison_rows, outcome, receipt_time, scope_caption
+from .toolbar import format_board_scope
+from .theme import CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP
 
 
 def number(value, suffix='', percent=False):
@@ -52,7 +54,20 @@ class AfterhoursPage(ttk.Frame):
         self._fit_after = None
         self._detail_visible = False
         self._names = {}
-        self.scope = tk.StringVar(value='全市场（已存行情）')
+        self._history_rows = {}
+        self._compare_ids = []
+        self._compare_vars = {}
+        self._shown_job = None
+        self._preview_trade = None
+        self._preview_photo = None
+        self._preview_after = None
+        self._preview_index = 0
+        self._preview_group = '全部'
+        self._list_expanded = False
+        self._sort_column, self._sort_desc = 'date', True
+        self._visible_ids = []
+        self.scope = tk.StringVar(value='market')
+        self.board_vars = {b: tk.BooleanVar(value=True) for b in BOARDS}
         self.start = tk.StringVar(value=(date.fromisoformat(completed_date()) - timedelta(days=365)).isoformat())
         self.end = tk.StringVar(value=completed_date())
         self.status = tk.StringVar(value='请选择日期与范围；首次使用请先在盘前任务更新行情。')
@@ -62,161 +77,14 @@ class AfterhoursPage(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)
         self._build()
-        self._normalize_fonts(self)
         self._poll_id = self.after(350, self._poll)
         self.bind('<Destroy>', self._destroyed, add='+')
 
-    def _normalize_fonts(self, widget):
-        """Scope pixel fonts to this page; avoid point sizes multiplied by DPI."""
-        if 'font' in widget.keys():
-            font = self.tk.splitlist(str(widget.cget('font')))
-            size = 28 if len(font) > 1 and font[1] == '18' else 15 if len(font) > 1 and font[1] == '11' else 13
-            bold = 'bold' if 'bold' in font else 'normal'
-            widget.configure(font=('Microsoft YaHei UI', -size, bold))
-        for child in widget.winfo_children():
-            if isinstance(child, ttk.Button):
-                child.configure(style='Afterhours.Primary.TButton' if child is self.run_button else 'Afterhours.TButton')
-            self._normalize_fonts(child)
-
     def _build(self):
-        style = ttk.Style()
-        style.configure('Afterhours.Treeview', rowheight=28, font=('Microsoft YaHei UI', -13))
-        style.configure('Afterhours.Treeview.Heading', font=('Microsoft YaHei UI', -13, 'bold'))
-        for name in ('Afterhours.TButton', 'Afterhours.Primary.TButton'):
-            background = ACCENT if name == 'Afterhours.Primary.TButton' else CONTROL_BG
-            style.configure(name, font=('Microsoft YaHei UI', -13), padding=(8, 5),
-                            background=background, bordercolor=BORDER, foreground=TEXT)
-            style.map(name, background=[('active', SELECTION)], foreground=[('disabled', MUTED)])
-        bar = ttk.Frame(self)
-        bar.grid(row=0, column=0, sticky=tk.EW)
-        for label, var, width, values in (
-            ('策略', None, 9, ['GAP H2 · 日线']),
-            ('范围', self.scope, 20, ['全市场（已存行情）', '关注名单']),
-        ):
-            ttk.Label(bar, text=label).pack(side=tk.LEFT, padx=(0, 5))
-            box = ttk.Combobox(bar, textvariable=var, values=values, width=width, state='readonly')
-            box.pack(side=tk.LEFT, padx=(0, 12))
-            if var is None:
-                box.current(0)
-        for label, var in [('从', self.start), ('至', self.end)]:
-            ttk.Label(bar, text=label).pack(side=tk.LEFT, padx=(0, 5))
-            ttk.Entry(bar, textvariable=var, width=12).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(bar, text='高级设置', command=self._settings_dialog, bootstyle='secondary').pack(side=tk.LEFT, padx=4)
-        self.run_button = ttk.Button(bar, text='开始回测', command=self._run)
-        self.run_button.pack(side=tk.RIGHT, padx=4)
-        self.stop_button = ttk.Button(bar, text='停止', command=self._stop, state=tk.DISABLED, bootstyle='secondary')
-        self.stop_button.pack(side=tk.RIGHT)
+        from .afterhours_workspace import build_workspace
+        build_workspace(self)
 
-        receipt = ttk.Frame(self)
-        receipt.grid(row=1, column=0, sticky=tk.EW, pady=(8, 6))
-        receipt.columnconfigure(0, weight=1)
-        self.status_label = ttk.Label(receipt, textvariable=self.status, foreground=MUTED, justify=tk.LEFT)
-        self.status_label.grid(row=0, column=0, sticky=tk.EW)
-        self.status_label.bind('<Configure>', lambda e: self.status_label.configure(wraplength=max(1, e.width)))
-        ttk.Button(receipt, text='成交假设／回执', command=self._receipt_dialog, bootstyle='secondary').grid(row=0, column=2)
-        self.history_box = ttk.Combobox(receipt, textvariable=self.history, state='readonly', width=31)
-        self.history_box.grid(row=0, column=1, padx=10)
-        self.history_box.bind('<<ComboboxSelected>>', self._history_selected)
-        self.progress = ttk.Progressbar(self, maximum=100, mode='determinate')
-        self.progress.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
-
-        self.host = ttk.Frame(self)
-        self.host.grid(row=3, column=0, sticky=tk.NSEW)
-        self.host.rowconfigure(0, weight=1)
-        self.host.columnconfigure(0, weight=1)
-        self.home = ttk.Frame(self.host)
-        self.home.grid(row=0, column=0, sticky=tk.NSEW)
-        self.home.columnconfigure(0, weight=1)
-        self.home.rowconfigure(1, weight=1)
-
-        stats = ttk.Frame(self.home)
-        stats.grid(row=0, column=0, sticky=tk.EW, pady=(0, 10))
-        self.stats = []
-        for i, label in enumerate(['机会数', '触发率', '胜率 · 已结束', '平均 R · 已结束', '初始风险中位数 · 已成交']):
-            stats.columnconfigure(i, weight=1, uniform='metric')
-            card = ttk.Frame(stats, padding=(0, 4))
-            card.grid(row=0, column=i, sticky=tk.EW)
-            ttk.Label(card, text=label, foreground=MUTED).pack(anchor=tk.W)
-            var = tk.StringVar(value='—')
-            ttk.Label(card, textvariable=var, font=('Microsoft YaHei UI', 18, 'bold')).pack(anchor=tk.W)
-            self.stats.append(var)
-
-        body = ttk.Frame(self.home)
-        body.grid(row=1, column=0, sticky=tk.NSEW)
-        body.rowconfigure(0, weight=1)
-        body.columnconfigure(0, weight=76, uniform='work')
-        body.columnconfigure(1, weight=24, uniform='work')
-        main = ttk.Frame(body)
-        main.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
-        main.columnconfigure(0, weight=1)
-        main.rowconfigure(2, weight=1)
-        self.completeness = tk.StringVar(value='尚未运行；不展示演示交易。')
-        self.completeness_label = ttk.Label(main, textvariable=self.completeness, foreground=MUTED, justify=tk.LEFT)
-        self.completeness_label.grid(row=0, column=0, sticky=tk.EW, pady=5)
-        self.completeness_label.bind('<Configure>', lambda e: self.completeness_label.configure(wraplength=max(1, e.width)))
-        filterbar = ttk.Frame(main)
-        filterbar.grid(row=1, column=0, sticky=tk.EW, pady=6)
-        ttk.Label(filterbar, text='机会结局').pack(side=tk.LEFT)
-        self.filter_box = ttk.Combobox(filterbar, textvariable=self.filter,
-                                      values=['全部', *LABELS.values()], width=16, state='readonly')
-        self.filter_box.pack(side=tk.LEFT, padx=8)
-        self.filter_box.bind('<<ComboboxSelected>>', lambda e: self._fill_rows())
-        ttk.Label(filterbar, text='双击或 Enter 看图', foreground=MUTED).pack(side=tk.RIGHT)
-        cols = ('date', 'code', 'name', 'entry', 'stop', 'risk', 'result', 'r')
-        table = ttk.Frame(main)
-        table.grid(row=2, column=0, sticky=tk.NSEW)
-        table.rowconfigure(0, weight=1)
-        table.columnconfigure(0, weight=1)
-        self.tree = ttk.Treeview(table, columns=cols, show='headings', selectmode='browse', style='Afterhours.Treeview')
-        for col, title, width in zip(cols, ['H2 日期', '代码', '名称', '成交／待挂价', 'SL1', '初始风险', '结局', '净 R'],
-                                     [98, 88, 102, 110, 82, 88, 130, 65]):
-            anchor = tk.W if col in ('date', 'code', 'name', 'result') else tk.E
-            self.tree.heading(col, text=title, anchor=anchor)
-            self.tree.column(col, width=width, minwidth=width, anchor=anchor,
-                             stretch=col in ('name', 'result'))
-        self.tree.grid(row=0, column=0, sticky=tk.NSEW)
-        ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.tree.yview).grid(row=0, column=1, sticky=tk.NS)
-        self.tree.configure(yscrollcommand=lambda a, b: table.winfo_children()[1].set(a, b))
-        horizontal = ttk.Scrollbar(table, orient=tk.HORIZONTAL, command=self.tree.xview)
-        horizontal.grid(row=1, column=0, sticky=tk.EW)
-        self.tree.configure(xscrollcommand=horizontal.set)
-        # The tree scrolls inside the 76% pane rather than forcing that pane wider.
-        table.configure(width=1)
-        table.grid_propagate(False)
-        self.tree.bind('<Double-1>', lambda e: self._open_selected())
-        self.tree.bind('<Return>', lambda e: self._open_selected())
-
-        side = ttk.Frame(body)
-        side.grid(row=0, column=1, sticky=tk.NSEW)
-        side.columnconfigure(0, weight=1)
-        side.rowconfigure(5, weight=1)
-        side.rowconfigure(5, minsize=90)
-        self.boundary_trees = {}
-        for index, (group, label, color) in enumerate([('profit', 'Top 盈利 · 净 R', UP), ('loss', 'Top 亏损 · 净 R', DOWN)]):
-            ttk.Label(side, text=label, foreground=color, font=('Microsoft YaHei UI', 11, 'bold')).grid(
-                row=index * 2, column=0, sticky=tk.W, pady=(6, 4))
-            tree = ttk.Treeview(side, columns=('code', 'r'), show='headings', height=5, selectmode='browse', style='Afterhours.Treeview')
-            tree.heading('code', text='代码 / H2 日期', anchor=tk.W)
-            tree.heading('r', text='净 R', anchor=tk.E)
-            tree.column('code', width=160, minwidth=100)
-            tree.column('r', width=65, minwidth=55, anchor=tk.E, stretch=False)
-            tree.grid(row=index * 2 + 1, column=0, sticky=tk.EW)
-            tree.bind('<Double-1>', lambda e, g=group: self._open_boundary(g))
-            tree.bind('<Return>', lambda e, g=group: self._open_boundary(g))
-            self.boundary_trees[group] = tree
-        side.bind('<Configure>', lambda e: [tree.configure(height=3 if e.height < 600 else 5)
-                                            for tree in self.boundary_trees.values()])
-        ttk.Label(side, text='已结束交易 R 分布', font=('Microsoft YaHei UI', 11, 'bold')).grid(
-            row=4, column=0, sticky=tk.W, pady=(15, 6))
-        self.distribution = tk.StringVar(value='没有已结束交易')
-        self.histogram = tk.Canvas(side, bg=CHART_BG, height=115, highlightthickness=0)
-        self.histogram.grid(row=5, column=0, sticky=tk.NSEW)
-        self.histogram.bind('<Configure>', lambda e: self._histogram())
-        side_note = ttk.Label(side, text='Top 各最多 5 笔，按净 R 排序；并列按 H2 日期、代码。', foreground=MUTED,
-                             justify=tk.LEFT)
-        side_note.grid(row=6, column=0, sticky=tk.EW, pady=8)
-        side_note.bind('<Configure>', lambda e: side_note.configure(wraplength=max(1, e.width)))
-
+    def _build_detail(self):
         self.detail = ttk.Frame(self.host)
         self.detail.grid(row=0, column=0, sticky=tk.NSEW)
         self.detail.rowconfigure(1, weight=1)
@@ -229,6 +97,11 @@ class AfterhoursPage(ttk.Frame):
         self.detail_title = tk.StringVar()
         ttk.Label(nav, textvariable=self.detail_title).pack(side=tk.LEFT, padx=12)
         ttk.Checkbutton(nav, text='完整走势（事后）', variable=self.posthoc, command=self._draw).pack(side=tk.RIGHT)
+        for widget in nav.winfo_children():
+            if isinstance(widget, ttk.Button):
+                widget.configure(style='ResearchAction.TButton')
+            elif 'font' in widget.keys():
+                widget.configure(font=('Microsoft YaHei UI', -17))
         replay = ttk.Frame(self.detail)
         replay.grid(row=1, column=0, sticky=tk.NSEW)
         replay.rowconfigure(0, weight=1)
@@ -247,10 +120,10 @@ class AfterhoursPage(ttk.Frame):
         timeline_host.rowconfigure(1, weight=1)
         timeline_host.columnconfigure(0, weight=1)
         ttk.Label(timeline_host, text='逐日事件 · ← → 切换').grid(row=0, column=0, sticky=tk.W)
-        self.timeline = ttk.Treeview(timeline_host, columns=('date', 'kind'), show='headings', selectmode='browse', style='Afterhours.Treeview')
+        self.timeline = ttk.Treeview(timeline_host, columns=('date', 'kind'), show='headings', selectmode='browse', style='ResearchList.Treeview')
         self.timeline.heading('date', text='日期', anchor=tk.W)
         self.timeline.heading('kind', text='事件', anchor=tk.W)
-        self.timeline.column('date', width=96, minwidth=88, stretch=False)
+        self.timeline.column('date', width=112, minwidth=100, stretch=False)
         self.timeline.column('kind', width=140, minwidth=80)
         self.timeline.grid(row=1, column=0, sticky=tk.NSEW, pady=6)
         scroll = ttk.Scrollbar(timeline_host, command=self.timeline.yview)
@@ -285,24 +158,260 @@ class AfterhoursPage(ttk.Frame):
             self._history_selected()
         self._loaded = True
 
+    def _board_changed(self):
+        self.scope.set('market')
+        self._scope_changed()
+
+    def _resize_research(self, event):
+        if event.widget is not self:
+            return
+        compact = event.height < 1100
+        if compact != self._compact_analysis:
+            self._compact_analysis = compact
+            for widget in self.boundary_trees.values():
+                widget.configure(height=3 if compact else 5)
+            self.histogram.configure(height=120 if compact else 178)
+        scale = 1.25 if event.width >= 2000 else 1
+        if scale == self._ui_scale:
+            return
+        self._ui_scale = scale
+        for widget, font in self._font_widgets:
+            if widget.winfo_exists():
+                widget.configure(font=(font[0], round(int(font[1])*scale), *font[2:]))
+        style = ttk.Style()
+        style.configure('ResearchList.Treeview', rowheight=round(32*scale), font=('Microsoft YaHei UI', -round(17*scale)))
+        style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', -round(17*scale), 'bold'))
+        for name in ('ResearchAction.TButton', 'ResearchRun.TButton', 'ResearchScope.TMenubutton'):
+            style.configure(name, font=('Microsoft YaHei UI', -round(17*scale)))
+        self.history_host.configure(width=round(230*scale))
+        self._render_history()
+        self._histogram()
+
+    def _scope_changed(self):
+        boards = [b for b, v in self.board_vars.items() if v.get()]
+        caption = '关注名单' if self.scope.get() == 'watch' else format_board_scope(boards).replace('范围：', '')
+        self.scope_button.configure(text='市场范围：' + caption)
+
+    def _select_history(self, job):
+        label = next((k for k, v in self.receipts.items() if v == job), None)
+        if label:
+            self.history.set(label)
+            self._history_selected()
+
+    def _render_history(self):
+        position = self.history_canvas.yview()[0]
+        for widget in self.history_cards.winfo_children():
+            widget.destroy()
+        self._compare_ids = [job for job in self._compare_ids if job in self._history_rows]
+        self._compare_vars = {}
+        for job, (row, report) in self._history_rows.items():
+            bg = SELECTION if job == self._shown_job else CONTROL_BG
+            card = tk.Frame(self.history_cards, bg=bg, padx=7, pady=8)
+            card.configure(bg=bg)
+            card.pack(fill=tk.X, pady=3)
+            var = tk.BooleanVar(value=job in self._compare_ids)
+            self._compare_vars[job] = var
+            check = tk.Checkbutton(card, variable=var, command=lambda j=job: self._mark_comparison(j),
+                                   bg=bg, activebackground=bg, selectcolor=bg)
+            check.configure(bg=bg, activebackground=bg, selectcolor=bg)
+            check.pack(side=tk.LEFT, anchor=tk.N)
+            settings = report.get('h2_settings', {})
+            condition = ('条件未记录' if not settings else '原策略条件' if settings == asdict(H2Settings())
+                         else f'风险 ≤ {settings["max_risk_pct"]}%' if settings.get('max_risk_pct') else '自定义研究条件')
+            if settings.get('min_mm_r'):
+                condition += f' · MM ≥ {settings["min_mm_r"]}R'
+            text = (receipt_time(row['created']) + ' · ' + job[:4] + '\n' + scope_caption(report) + '\n'
+                    + report.get('start', '') + ' → ' + report.get('end', '') + '\n'
+                    + condition + '\n'
+                    + {'completed': '完整完成', 'partial': '部分结果', 'cancelled': '已停止 · 部分结果'}.get(row['status'], row['status'])
+                    + f' · {report.get("opportunities", 0)} 次机会\n平均 {number(report.get("mean_r"), "R")}')
+            widget = tk.Button(card, text=text, command=lambda j=job: self._select_history(j),
+                               bg=bg, fg=TEXT, activebackground=SELECTION, activeforeground=TEXT,
+                               relief=tk.FLAT, anchor=tk.W, justify=tk.LEFT, wraplength=round(175*self._ui_scale),
+                               font=('Microsoft YaHei UI', -round(16*self._ui_scale)))
+            widget.configure(bg=bg, fg=TEXT, activebackground=SELECTION, activeforeground=TEXT)
+            widget.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            def wheel(event):
+                self.history_canvas.yview_scroll(-int(event.delta/120), 'units')
+                return 'break'
+            for target in (card, check, widget):
+                target.bind('<MouseWheel>', wheel)
+        self.history_canvas.yview_moveto(position)
+        self.compare_button.configure(state=tk.NORMAL if len(self._compare_ids) == 2 else tk.DISABLED)
+
+    def _mark_comparison(self, job):
+        if self._compare_vars[job].get():
+            if len(self._compare_ids) == 2:
+                removed = self._compare_ids.pop(0)
+                self._compare_vars[removed].set(False)
+            self._compare_ids.append(job)
+        else:
+            self._compare_ids.remove(job)
+        self.compare_button.configure(state=tk.NORMAL if len(self._compare_ids) == 2 else tk.DISABLED)
+
+    def _compare_reports(self):
+        if len(self._compare_ids) != 2:
+            return
+        arow, a = self._history_rows[self._compare_ids[0]]
+        brow, b = self._history_rows[self._compare_ids[1]]
+        dialog = ttk.Toplevel(master=self)
+        dialog.title('两次回测对比 · A − B')
+        dialog.geometry('1100x700')
+        dialog.transient(self.winfo_toplevel())
+        warning = ('含部分结果，不能直接判断策略优劣。' if any(r['status'] != 'completed' for r in (arow, brow))
+                   else '先核对条件和数据差异，再解读结果差异。')
+        ttk.Label(dialog, text=warning + ' 同一市场名称也可能使用不同快照。',
+                  font=('Microsoft YaHei UI', -17), padding=12).pack(anchor=tk.W)
+        from .afterhours_workspace import tree
+        table_host = ttk.Frame(dialog)
+        table_host.pack(fill=tk.BOTH, expand=True, padx=12)
+        widget = tree(table_host, [('field', '项目', 160, tk.W), ('a', 'A · '+receipt_time(arow['created']), 320, tk.W),
+                               ('b', 'B · '+receipt_time(brow['created']), 320, tk.W), ('delta', 'A − B / 条件差异', 190, tk.W)])
+        widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(table_host, command=widget.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        widget.configure(yscrollcommand=scroll.set)
+        states = {'completed': '完整完成', 'partial': '部分结果', 'cancelled': '已停止 · 部分结果'}
+        source = lambda report: '未记录' if 'real_data' not in report else '真实行情来源' if report['real_data'] else '导入研究／未认证'
+        for values in [('任务状态', states.get(arow['status'], '未完成'), states.get(brow['status'], '未完成'), '—'),
+                       ('来源口径', source(a), source(b), '—'),
+                       *comparison_rows(a, b)]:
+            widget.insert('', tk.END, values=values)
+        # Long parameter cells can be inspected in full without widening the window.
+        text = tk.Text(dialog, height=7, wrap='word', font=('Microsoft YaHei UI', -16))
+        text.pack(fill=tk.X, padx=12, pady=10)
+        text.insert('1.0', '选择一行查看完整内容。')
+        text.configure(state=tk.DISABLED)
+        def show(event):
+            if not widget.selection():
+                return
+            values = widget.item(widget.selection()[0], 'values')
+            text.configure(state=tk.NORMAL)
+            text.delete('1.0', tk.END)
+            text.insert('1.0', f'{values[0]}\nA：{values[1]}\nB：{values[2]}\n差异：{values[3]}')
+            text.configure(state=tk.DISABLED)
+        widget.bind('<<TreeviewSelect>>', show)
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+
+    def _set_category(self, value):
+        self.category.set(value)
+        self.filter.set('全部')
+        self._fill_rows()
+
+    def _sort_rows(self, column):
+        self._sort_desc = not self._sort_desc if self._sort_column == column else True
+        self._sort_column = column
+        for key, title in zip(self.tree['columns'], ['H2 日期', '代码', '名称', '成交 / 待挂价', 'SL1', '风险', '结局', '净 R']):
+            self.tree.heading(key, text=title + (' ↓' if self._sort_desc else ' ↑') if key == column else title)
+        self._fill_rows()
+
+    def _toggle_list(self):
+        self.home.tkraise()
+        self._list_expanded = not self._list_expanded
+        self.expand_button.configure(text='收起清单' if self._list_expanded else '展开清单')
+        if self._list_expanded:
+            self.list_host.grid_configure(columnspan=2)
+            self.list_host.tkraise()
+            self.tree.configure(displaycolumns=self.tree['columns'])
+        else:
+            self.list_host.grid_configure(columnspan=1)
+            self.preview_host.tkraise()
+            self.tree.configure(displaycolumns=('date', 'code', 'entry', 'risk', 'result', 'r'))
+            self._schedule_preview()
+
+    def _preview_selected(self, event=None):
+        selected = self.tree.selection()
+        if not selected:
+            return
+        record = next((r for r in self.records if r['id'] == selected[0]), None)
+        if record is None:
+            return
+        if self._preview_trade and self._preview_trade['id'] == record['id']:
+            return
+        self._preview_trade, self._preview_index = record, 0
+        self._preview_group = '全部'
+        self.preview_title.set(f'{record["code"]} · {self._names.get(record["code"], "")} · H2 {record["setup_date"]}')
+        events = [f'{e["date"]} · {e.get("text", e["kind"])}' for e in record['events']]
+        self.preview_event_box.configure(values=events)
+        if events:
+            self.preview_event_box.current(0)
+        self._schedule_preview()
+
+    def _preview_event_selected(self, event=None):
+        self._preview_index = self.preview_event_box.current()
+        self._schedule_preview()
+
+    def _schedule_preview(self, event=None):
+        if self._preview_after:
+            self.after_cancel(self._preview_after)
+        self._preview_after = self.after(150, self._draw_preview)
+
+    def _draw_preview(self):
+        self._preview_after = None
+        if not self._preview_trade or self._preview_index < 0 or self._list_expanded:
+            return
+        try:
+            size = (max(100, self.preview_chart.winfo_width()), max(100, self.preview_chart.winfo_height()))
+            image = self._render_image(self._preview_trade, self._preview_index, False, size)
+            self._preview_photo = ImageTk.PhotoImage(image)
+            self.preview_chart.configure(image=self._preview_photo, text='')
+        except Exception as exc:
+            self._preview_photo = None
+            self.preview_chart.configure(image='', text=f'K 线读取失败：{exc}')
+
+    def _open_preview(self):
+        if self._preview_trade:
+            index = self._preview_index
+            self._group = self._preview_group
+            self._open(self._preview_trade['id'])
+            self.timeline.selection_set(str(index))
+            self._event_index = index
+            self._draw()
+
+    def _preview_boundary(self, group):
+        selection = self.boundary_trees[group].selection()
+        if not selection:
+            return
+        record = next((r for r in self.records if r['id'] == selection[0]), None)
+        if record is None:
+            return
+        # The sample remains inspectable even when a category hides its row.
+        self._preview_trade = record
+        self._preview_group = group
+        self._preview_index = 0
+        self.preview_title.set(f'{record["code"]} · H2 {record["setup_date"]}')
+        values = [f'{e["date"]} · {e.get("text", e["kind"])}' for e in record['events']]
+        self.preview_event_box.configure(values=values)
+        if values:
+            self.preview_event_box.current(0)
+        self._schedule_preview()
+
     def _refresh_history(self):
         rows = self.store.rows("SELECT id,status,created,result FROM jobs WHERE kind='backtest' "
                                "AND status NOT IN ('queued','running') ORDER BY created DESC,rowid DESC")
         self.receipts = {}
+        self._history_rows = {}
         for row in rows:
-            report = json.loads(row['result'])
+            try:
+                report = json.loads(row['result'])
+            except (ValueError, TypeError):
+                continue
             if report.get('execution_model') == MODEL:
                 state = {'completed': '完成', 'partial': '部分完成', 'cancelled': '已停止'}.get(row['status'], '未完成')
                 label = f'{row["created"][:16]} · {state} · {row["id"][:5]}'
                 self.receipts[label] = row['id']
+                self._history_rows[row['id']] = (row, report)
         self.history_box.configure(values=list(self.receipts))
+        self._render_history()
 
     def _history_selected(self, _event=None):
-        if self.job or self.history.get() not in self.receipts:
+        if self.history.get() not in self.receipts:
             return
         try:
             row, report, records = load_receipt(self.store, self.receipts[self.history.get()])
+            self._shown_job = row['id']
             self._show_report(row, report, records)
+            self._render_history()
         except Exception as exc:
             self.status.set(f'回执读取失败：{exc}')
 
@@ -315,32 +424,21 @@ class AfterhoursPage(ttk.Frame):
             date.fromisoformat(end)
             if start > end or end > completed_date():
                 raise ValueError('请使用有效的已完成行情日期范围')
-            scope = 'watch' if self.scope.get() == '关注名单' else 'market'
-            snapshots, missing = available_snapshots(self.store, scope)
+            scope = self.scope.get()
+            boards = [b for b, var in self.board_vars.items() if var.get()] if scope == 'market' else None
+            snapshots, missing = available_snapshots(self.store, scope, boards)
             if missing:
                 raise ValueError(f'关注名单中 {len(missing)} 个标的未存日线，请先更新行情')
             if not snapshots:
                 raise ValueError('没有可回放的真实行情；请先更新行情')
             self.job = self.service.submit('backtest', dict(strategy='STRATEGY_GAP_H2', timeframe='daily',
                 execution_model=MODEL, datasets=[r['id'] for r in snapshots], start=start, end=end,
-                scope=scope, h2_settings=asdict(self.settings), assumptions=asdict(self.costs)))
+                scope=scope, boards=boards, h2_settings=asdict(self.settings), assumptions=asdict(self.costs)))
             self._back()
-            self.report, self.records, self._trade = {}, [], None
-            self._chart_cache.clear()
-            self.history.set('')
-            self.filter.set('全部')
-            self.filter_box.configure(values=['全部', *LABELS.values()])
-            self._fill_rows()
-            for var in self.stats:
-                var.set('—')
-            for tree in self.boundary_trees.values():
-                tree.delete(*tree.get_children())
-            self.completeness.set('正在回放；完成或停止后才显示本次结果。')
-            self.distribution.set('正在回放')
-            self._histogram()
+            self.progress.grid()
+            self.completeness.set('新回测进行中；这里保留上次选中的结果，完成后展示新回执。')
             self.run_button.configure(state=tk.DISABLED)
             self.stop_button.configure(state=tk.NORMAL)
-            self.history_box.configure(state=tk.DISABLED)
             self.status.set(f'准备回放 {len(snapshots)} 个已存标的；未保存的市场行情不在本次范围内')
         except Exception as exc:
             messagebox.showerror('不能开始回测', str(exc), parent=self)
@@ -360,6 +458,7 @@ class AfterhoursPage(ttk.Frame):
                 if row['status'] not in ('running', 'queued'):
                     finished = self.job
                     self.job = None
+                    self.progress.grid_remove()
                     self.run_button.configure(state=tk.NORMAL)
                     self.stop_button.configure(state=tk.DISABLED)
                     self.history_box.configure(state='readonly')
@@ -368,16 +467,26 @@ class AfterhoursPage(ttk.Frame):
                     if label:
                         self.history.set(label)
                         self._history_selected()
+                    else:
+                        self.completeness.set('本次未生成可用回执；旧结果保留。' + row['message'])
         self._poll_id = self.after(350, self._poll)
 
     def _show_report(self, row, report, records):
         self.report, self.records = report, records
+        self._trade = self._preview_trade = None
+        self._preview_photo = None
+        self.preview_chart.configure(image='', text='选择一笔机会看 K 线')
+        self.preview_event_box.configure(values=[])
+        self.preview_event.set('')
+        self.category.set('全部')
         self._chart_cache.clear()
         self._image = self._photo = None
         self.filter.set('全部')
         self.home.tkraise()
         self._detail_visible = False
         status = {'completed': '完成', 'partial': '部分完成', 'cancelled': '已停止'}.get(row['status'], row['status'])
+        self.result_title.set(f'{self._shown_job[:6] if self._shown_job else "本次"} 回测结果 · {status}')
+        self.result_context.set(scope_caption(report) + f' · {report["start"]} → {report["end"]}')
         self.status.set(f'{status} · {report["start"]} 至 {report["end"]} · '
                         f'已回放 {report["processed_datasets"]}/{report["requested_datasets"]} 个标的 · '
                         f'覆盖提示 {len(report["coverage_warnings"])} · 失败 {len(report["errors"])}'
@@ -386,7 +495,7 @@ class AfterhoursPage(ttk.Frame):
         if performance:
             self.status.set(self.status.get() + f' · 耗时 {performance["elapsed_seconds"]:.1f} 秒'
                             + f' · 复用 {performance["reused"]} 个标的')
-        values = [str(report['opportunities']), number(report['trigger_rate'], '%', True),
+        values = [str(report['opportunities']), str(report['filled']),
                   number(report['win_rate'], '%', True), number(report['mean_r'], 'R'),
                   number(report['median_risk_pct'], '%')]
         for var, value in zip(self.stats, values):
@@ -402,7 +511,7 @@ class AfterhoursPage(ttk.Frame):
             tree.delete(*tree.get_children())
             for identity in report['boundaries'][group]:
                 r = lookup[identity]
-                tree.insert('', tk.END, iid=identity, values=(f'{r["code"]} / {r["setup_date"][5:]}', number(r['r_multiple'], 'R')))
+                tree.insert('', tk.END, iid=identity, values=(f'{r["code"]} / {r["setup_date"][5:]}', number(r['r_multiple'], 'R')), tags=(group,))
         labels = ['< -2R', '-2 至 -1R', '-1 至 0R', '0 至 1R', '1 至 2R', '≥ 2R']
         self.distribution.set('\n'.join(f'{label:12}  {count} 笔' for label, count in zip(labels, report['distribution'])))
         self._histogram()
@@ -413,34 +522,56 @@ class AfterhoursPage(ttk.Frame):
         if not values or not sum(values):
             self.histogram.create_text(10, 45, text='没有已结束交易', fill=MUTED, anchor=tk.W)
             return
-        width, height = max(180, self.histogram.winfo_width()), max(60, self.histogram.winfo_height())
+        width = max(240, self.histogram.winfo_width())
         maximum = max(values)
-        step = width / len(values)
         for i, value in enumerate(values):
-            left, right = i * step + 5, (i + 1) * step - 5
-            baseline = height - 27
-            top = baseline - (height - 51) * value / maximum
-            self.histogram.create_rectangle(left, top, right, baseline, fill=DOWN if i < 3 else UP, outline='')
-            self.histogram.create_text((left + right) / 2, top - 8, text=str(value), fill=TEXT)
-            self.histogram.create_text((left + right) / 2, height - 12, text=['<-2', '-2~-1', '-1~0', '0~1', '1~2', '≥2'][i],
-                                       fill=MUTED, font=('Consolas', 8))
+            step = min(27*self._ui_scale, max(20, self.histogram.winfo_height()/6))
+            y = step/2 + i * step
+            self.histogram.create_text(0, y, text=['< −2R', '−2～−1', '−1～0', '0～1', '1～2', '≥ 2R'][i],
+                                       fill=MUTED, anchor=tk.W, font=('Microsoft YaHei UI', -round(14*self._ui_scale)))
+            left, right = 68, width - 72
+            self.histogram.create_rectangle(left, y-4, right, y+4, fill=CONTROL_BG, outline='')
+            self.histogram.create_rectangle(left, y-4, left+(right-left)*value/maximum, y+4,
+                                            fill=DOWN if i < 3 else UP, outline='')
+            self.histogram.create_text(width-48, y, text=str(value), fill=TEXT, anchor=tk.E, font=('Consolas', -15))
+            self.histogram.create_text(width-2, y, text=f'{value/sum(values):.0%}', fill=MUTED, anchor=tk.E,
+                                       font=('Consolas', -15))
 
     def _fill_rows(self):
         old = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         selected = self.filter.get().split(' (')[0]
+        rows = []
         for r in self.records:
             if selected != '全部' and LABELS[r['status']] != selected:
                 continue
+            category = self.category.get()
+            if category == '已结束' and r['status'] != 'closed' or category == '未成交' and r['filled']:
+                continue
+            if category == '持仓未结束' and r['status'] != 'open':
+                continue
+            rows.append(r)
+        def key(r):
             entry, stop, risk = list_prices(r)
-            outcome = LABELS[r['status']]
-            if r['status'] == 'closed':
-                reason = r.get('reason', '')
-                outcome = 'MM 止盈' if '止盈' in reason else '期限退出' if '期限' in reason else '止损'
+            return {'date': r['setup_date'], 'code': r['code'], 'name': self._names.get(r['code'], ''),
+                    'entry': entry, 'stop': stop, 'risk': risk, 'result': outcome(r), 'r': r.get('r_multiple')}[self._sort_column]
+        rows = sorted([r for r in rows if key(r) is not None], key=key, reverse=self._sort_desc) + [r for r in rows if key(r) is None]
+        self._visible_ids = [r['id'] for r in rows]
+        for r in rows:
+            entry, stop, risk = list_prices(r)
             self.tree.insert('', tk.END, iid=r['id'], values=(r['setup_date'], r['code'], self._names.get(r['code'], ''),
-                             number(entry), number(stop), number(risk, '%'), outcome, number(r.get('r_multiple'), 'R')))
+                             number(entry), number(stop), number(risk, '%'), outcome(r), number(r.get('r_multiple'), 'R')),
+                             tags=('profit',) if (r.get('r_multiple') or 0)>0 else ('loss',) if (r.get('r_multiple') or 0)<0 else ())
         if old and self.tree.exists(old[0]):
             self.tree.selection_set(old[0])
+        elif rows:
+            self.tree.selection_set(rows[0]['id'])
+        else:
+            self._preview_trade = self._preview_photo = None
+            self.preview_chart.configure(image='', text='当前分类没有机会')
+            self.preview_title.set('当前分类没有机会')
+            self.preview_event_box.configure(values=[])
+            self.preview_event.set('')
 
     def _open_selected(self):
         selected = self.tree.selection()
@@ -512,13 +643,7 @@ class AfterhoursPage(ttk.Frame):
         event = self._trade['events'][self._event_index]
         self.event_text.set(event['date'] + '\n' + event['text'] + '\n\n' +
                             ('事后走势：图中含此事件之后的数据' if self.posthoc.get() else '图中仅有此日及之前的数据'))
-        key = (self._trade['id'], self._event_index, self.posthoc.get())
         try:
-            if key not in self._chart_cache:
-                self._chart_cache[key] = render_replay(self.store, self._trade, self._event_index, self.posthoc.get())
-                if len(self._chart_cache) > 12:
-                    self._chart_cache.pop(next(iter(self._chart_cache)))
-            self._image = self._chart_cache[key]
             self._fit()
         except Exception as exc:
             self._image = self._photo = None
@@ -531,13 +656,24 @@ class AfterhoursPage(ttk.Frame):
 
     def _fit(self):
         self._fit_after = None
-        if self._image is None:
+        if self._trade is None:
             return
-        width, height = max(self.chart.winfo_width(), 10), max(self.chart.winfo_height(), 10)
-        image = self._image.copy()
-        image.thumbnail((width, height), Image.Resampling.LANCZOS)
-        self._photo = ImageTk.PhotoImage(image)
-        self.chart.configure(image=self._photo, text='')
+        size = (max(self.chart.winfo_width(), 100), max(self.chart.winfo_height(), 100))
+        try:
+            self._image = self._render_image(self._trade, self._event_index, self.posthoc.get(), size)
+            self._photo = ImageTk.PhotoImage(self._image)
+            self.chart.configure(image=self._photo, text='')
+        except Exception as exc:
+            self._image = self._photo = None
+            self.chart.configure(image='', text=f'K 线读取失败：{exc}')
+
+    def _render_image(self, record, event, posthoc, size):
+        key = (record['id'], event, posthoc, size)
+        if key not in self._chart_cache:
+            self._chart_cache[key] = render_replay(self.store, record, event, posthoc, size=size)
+            if len(self._chart_cache) > 12:
+                self._chart_cache.pop(next(iter(self._chart_cache)))
+        return self._chart_cache[key]
 
     def _settings_dialog(self):
         fields = [('lookback', '突破观察窗口（根）'), ('min_pullback', '最短回调（根）'),
@@ -547,7 +683,7 @@ class AfterhoursPage(ttk.Frame):
                                '只作用于下次回测；不改变盘前正式策略。\n风险与 MM 是额外筛选条件，在 H2 成立日执行。')
 
     def _parameter_dialog(self, title, obj, fields, cls, attribute, note):
-        dialog = ttk.Toplevel(self)
+        dialog = ttk.Toplevel(master=self)
         dialog.title(title)
         dialog.transient(self.winfo_toplevel())
         dialog.resizable(False, False)
@@ -576,7 +712,7 @@ class AfterhoursPage(ttk.Frame):
                    bootstyle='secondary').grid(row=len(fields) + 1, column=0, sticky=tk.W)
 
     def _receipt_dialog(self):
-        dialog = ttk.Toplevel(self)
+        dialog = ttk.Toplevel(master=self)
         dialog.title('成交假设与回测回执')
         dialog.transient(self.winfo_toplevel())
         box = ttk.Frame(dialog, padding=18)
@@ -617,3 +753,5 @@ class AfterhoursPage(ttk.Frame):
             self.after_cancel(self._poll_id)
             if self._fit_after:
                 self.after_cancel(self._fit_after)
+            if self._preview_after:
+                self.after_cancel(self._preview_after)

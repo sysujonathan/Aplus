@@ -7,7 +7,7 @@ import pytest
 from PIL import Image
 
 from gui.main_window import AplusMainWindow
-from workbench.h2_replay import run_replay, summarize_replay
+from workbench.h2_replay import MODEL, run_replay, summarize_replay
 from workbench.backtest import Assumptions
 from workbench.store import Store
 from workbench.market import save_dataset
@@ -31,9 +31,11 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             window.update()
             assert page.run_button.winfo_rootx() + page.run_button.winfo_width() <= window.winfo_rootx() + window.winfo_width()
             assert page.run_button.winfo_width() >= page.run_button.winfo_reqwidth()
-            assert page.tree.winfo_width() > 600
+            assert page.tree.winfo_width() > 350
             assert page.boundary_trees['profit'].winfo_width() > 200
-            assert page.tree.winfo_width() / (page.tree.winfo_width() + page.boundary_trees['profit'].winfo_width()) == pytest.approx(.76, abs=.04)
+            assert page.list_host.winfo_width() / page.review.winfo_width() == pytest.approx(.50, abs=.04)
+            assert page.preview_host.winfo_width() > 350
+            assert page.history_canvas.winfo_ismapped()
             for column in page.tree['columns']:
                 assert page.tree.heading(column, 'anchor') == page.tree.column(column, 'anchor')
             assert not page.tree.column('entry', 'stretch')
@@ -58,6 +60,11 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             window.update()
             assert page._event_index == 1
             assert page._photo is not None
+            page._preview_trade = records[0]
+            page._preview_index = 1
+            page._open_preview()
+            window.update()
+            assert page._event_index == 1
             page._back()
             assert not page._detail_visible and page.tree.selection() == (identity,)
             page.boundary_trees['profit'].selection_set(identity)
@@ -82,7 +89,55 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         page.start.set(h2_bars.date.iloc[124])
         page.end.set(h2_bars.date.iloc[-1])
         page._run()
-        assert page.job == 'new-job' and not page.records and not page.report
-        assert page.stats[0].get() == '—' and not page.tree.get_children()
+        assert page.job == 'new-job' and page.records and page.report
+        assert page.stats[0].get() == '1' and page.tree.exists(identity)
+        assert page.service.submit.call_args.args[1]['boards'] == list(page.board_vars)
+        page._set_category('未成交')
+        assert not page.tree.get_children()
+        page._set_category('已结束')
+        assert page.tree.exists(identity)
+        page._toggle_list()
+        window.update()
+        assert page.list_host.winfo_width() / page.review.winfo_width() > .95
+        page._toggle_list()
+        window.update()
+        assert page.preview_host.winfo_ismapped()
+        assert page.list_host.winfo_width() / page.review.winfo_width() == pytest.approx(.5, abs=.04)
+        from copy import deepcopy
+        page.records = [dict(deepcopy(records[0]), id=str(i), r_multiple=value) for i, value in enumerate([2, 10, -2, None])]
+        page._sort_rows('r')
+        assert list(page.tree.get_children()) == ['1', '0', '2', '3']
+        page._sort_rows('r')
+        assert list(page.tree.get_children()) == ['2', '0', '1', '3']
+        # Use the existing Tk interpreter; ttkbootstrap styles contain images
+        # belonging to that interpreter and cannot cross destroyed roots.
+        from workbench.service import Service
+        from tests.test_workbench import wait_for
+        from workbench.market import BOARDS
+        service = Service(store)
+        page.job = None
+        page.service = service
+        try:
+            jobs = []
+            for settings in ({}, {'max_risk_pct': 1}):
+                job = service.submit('backtest', dict(strategy='STRATEGY_GAP_H2', timeframe='daily',
+                    execution_model=MODEL, datasets=[store.rows('SELECT id FROM datasets')[0]['id']],
+                    start=h2_bars.date.iloc[124], end=h2_bars.date.iloc[-1],
+                    scope='market', boards=[BOARDS[0]], h2_settings=settings))
+                assert wait_for(store, job)['status'] == 'completed'
+                jobs.append(job)
+            page._refresh_history()
+            assert set(page.receipts.values()) == set(jobs)
+            page._select_history(jobs[0])
+            assert page.report['h2_settings']['max_risk_pct'] == 0
+            for job in jobs:
+                page._compare_vars[job].set(True)
+                page._mark_comparison(job)
+            assert page._compare_ids == jobs
+            page._compare_reports()
+            window.update()
+            assert any(child.winfo_class() == 'Toplevel' for child in page.winfo_children())
+        finally:
+            service.pool.shutdown()
     finally:
         window.destroy()
