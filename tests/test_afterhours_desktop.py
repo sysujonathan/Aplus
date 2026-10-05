@@ -1,5 +1,6 @@
 """Real Tk layout and interaction on Windows; Linux CI runs pure engine tests."""
 import os
+import gc
 import tkinter as tk
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,15 @@ from workbench.backtest import Assumptions
 from workbench.store import Store
 from workbench.market import save_dataset
 from tests.test_h2_plan import h2_bars, h2_spec, append_bar
+
+
+@pytest.fixture(autouse=True)
+def collect_destroyed_desktop_on_main_thread():
+    yield
+    # Tk variables in destroyed dialog/button cycles must finalize here,
+    # after the test's local references are released. Otherwise a later
+    # Service worker can trigger GC and call Tcl from that background thread.
+    gc.collect()
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
