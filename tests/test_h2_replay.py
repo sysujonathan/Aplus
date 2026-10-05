@@ -179,9 +179,16 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
         assert image.width > 800 and image.height > 300
         native = render_replay(store, records[0], 0, size=(900, 550))
         assert native.size == (900, 550)
+        info = native.info['replay_view']
+        assert (info['price_y'][1]-info['price_y'][0])/(info['plot_y'][1]-info['price_y'][1]) == pytest.approx(7)
+        assert max(r['date'] for r in info['candles']) <= records[0]['events'][0]['date']
         zoomed = render_replay(store, records[0], 0, size=(900, 550), viewport=(30, 20, .5))
         assert zoomed.info['replay_view']['bars'] == 30
         assert zoomed.info['replay_view']['offset'] == 20
+        assert len(zoomed.info['replay_view']['candles']) == 30
+        xs = zoomed.info['replay_view']['candle_x']
+        assert zoomed.info['replay_view']['price_x'][1]-xs[-1] < 2*(xs[1]-xs[0])
+        assert zoomed.info['replay_view']['candles'][0]['date'] == bars.date.iloc[zoomed.info['replay_view']['total']-50]
         assert zoomed.info['replay_view']['total'] == int((bars.date <= records[0]['events'][0]['date']).sum())
         assert native.tobytes() != zoomed.tobytes()
         assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == schema_before

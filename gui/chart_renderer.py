@@ -141,6 +141,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             type="candle",
             style=style,
             volume=True,
+            panel_ratios=(7, 1),
             title=dict(title=title, fontsize=9 if size[0]<1000 else 12) if size else title,
             ylabel="",
             figsize=(max(100, size[0])/110, max(100, size[1])/110) if size else (12.2, 7.5),
@@ -253,7 +254,13 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         if size:
             position = ax.get_position()
             image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
-                                            price_x=(position.x0*size[0], position.x1*size[0]))
+                                            price_x=(position.x0*size[0], position.x1*size[0]),
+                                            price_y=((1-position.y1)*size[1], (1-position.y0)*size[1]),
+                                            plot_y=((1-position.y1)*size[1], (1-axes[2].get_position().y0)*size[1]),
+                                            candle_x=[float(ax.transData.transform((i, 0))[0])*size[0]/fig.bbox.width
+                                                      for i in range(len(plot))],
+                                            candles=visible[['date', 'open', 'high', 'low', 'close']].to_dict('records'),
+                                            decimals=decimals)
         return image
     finally:
         if fig is not None:

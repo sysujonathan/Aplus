@@ -111,12 +111,18 @@ class AfterhoursPage(ttk.Frame):
         chart_host.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
         chart_host.grid_propagate(False)
         chart_host.columnconfigure(0, weight=1)
-        chart_host.rowconfigure(0, weight=1)
+        chart_host.rowconfigure(1, weight=1)
+        self.chart_readout = tk.StringVar(value='移到 K 线上查看开、高、低、收')
+        readout = ttk.Label(chart_host, textvariable=self.chart_readout, foreground=MUTED,
+                            font=('Microsoft YaHei UI', -14))
+        readout.grid(row=0, column=0, sticky=tk.EW, pady=(0, 4))
+        readout.bind('<Configure>', lambda e: readout.configure(wraplength=max(1, e.width)))
         self.chart = tk.Label(chart_host, bg=CHART_BG, fg=TEXT, text='选择一笔机会查看 K 线')
-        self.chart.grid(row=0, column=0, sticky=tk.NSEW)
+        self.chart.grid(row=1, column=0, sticky=tk.NSEW)
         self.chart.bind('<Configure>', self._schedule_fit)
         from .replay_navigation import ReplayNavigation
-        self.chart_navigation = ReplayNavigation(self.chart, self._schedule_fit)
+        self.chart_navigation = ReplayNavigation(self.chart, self._schedule_fit,
+            lambda text: self.chart_readout.set(text or '移到 K 线上查看开、高、低、收'))
         ttk.Button(nav, text='重置视图', command=self.chart_navigation.reset,
                    style='ResearchAction.TButton').pack(side=tk.RIGHT, padx=8)
         timeline_host = ttk.Frame(replay)
@@ -370,6 +376,8 @@ class AfterhoursPage(ttk.Frame):
 
     def _preview_event_selected(self, event=None):
         self._preview_index = self.preview_event_box.current()
+        self.preview_navigation.info = {}
+        self.preview_readout.set('移到 K 线上查看开、高、低、收')
         self._schedule_preview()
 
     def _schedule_preview(self, event=None):
@@ -390,6 +398,7 @@ class AfterhoursPage(ttk.Frame):
             self.preview_chart.configure(image=self._preview_photo, text='')
         except Exception as exc:
             self._preview_photo = None
+            self.preview_navigation.reset(False)
             self.preview_chart.configure(image='', text=f'K 线读取失败：{exc}')
 
     def _open_preview(self):
@@ -605,6 +614,7 @@ class AfterhoursPage(ttk.Frame):
             self.tree.selection_set(rows[0]['id'])
         else:
             self._preview_trade = self._preview_photo = None
+            self.preview_navigation.reset(False)
             self.preview_chart.configure(image='', text='当前分类没有机会')
             self.preview_title.set('当前分类没有机会')
             self.preview_event_box.configure(values=[])
@@ -686,6 +696,7 @@ class AfterhoursPage(ttk.Frame):
             self._fit()
         except Exception as exc:
             self._image = self._photo = None
+            self.chart_navigation.reset(False)
             self.chart.configure(image='', text=f'K 线读取失败：{exc}')
 
     def _schedule_fit(self, _event=None):
@@ -706,6 +717,7 @@ class AfterhoursPage(ttk.Frame):
             self.chart.configure(image=self._photo, text='')
         except Exception as exc:
             self._image = self._photo = None
+            self.chart_navigation.reset(False)
             self.chart.configure(image='', text=f'K 线读取失败：{exc}')
 
     def _render_image(self, record, event, posthoc, size, viewport=(None, 0, 1.0)):

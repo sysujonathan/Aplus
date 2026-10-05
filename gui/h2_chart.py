@@ -25,6 +25,10 @@ def draw_h2(ax, plot, plan):
         half_width = max(12, len(label) * 3.5) * scale
         dx = max((box.x0 + half_width - px) / scale,
                  min(dx, (box.x1 - half_width - px) / scale))
+        # A vertical leader above H2 looks like an extension of its wick.
+        # Use an offset dashed leader with an air gap at the actual candle high.
+        if label == 'H2':
+            dx = -28 if px > (box.x0 + box.x1) / 2 else 28
         if py + dy * scale > box.y1 - 16 * scale:
             dy = -18
         elif py + dy * scale < box.y0 + 16 * scale:
@@ -35,7 +39,8 @@ def draw_h2(ax, plot, plan):
                     bbox=dict(boxstyle='round,pad=.15', facecolor=CONTROL_BG,
                               edgecolor='none', alpha=.9),
                     arrowprops=dict(arrowstyle='-', color=color, lw=.9,
-                                    shrinkA=2, shrinkB=0), annotation_clip=True)
+                                    linestyle='--' if label == 'H2' else '-',
+                                    shrinkA=2, shrinkB=5 if label == 'H2' else 0), annotation_clip=True)
 
     for label, day_key, price_key, color, offset in (
         ('BO', 'bo_date', 'bo_high', ACCENT, (0, 16)),
