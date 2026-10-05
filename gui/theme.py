@@ -14,11 +14,12 @@ ACCENT_HOVER = "#58A6FF"
 SELECTION = "#253247"
 HOVER = "#202A36"
 
-# A 股习惯：上涨红、下跌绿。红绿仅用于行情和交易价位。
+# A 股习惯：上涨红、下跌绿。图内标注不占用涨跌颜色。
 UP = "#F04F5F"
 DOWN = "#20B26B"
 AVERAGE = "#F0A202"
-STOP = "#58A6FF"
-TARGET = "#FF5D5D"
+ANNOTATION = "#CBD5E1"
+STOP = "#A9B6C6"
+TARGET = "#CBD5E1"
 REPEAT = "#E3B341"
 DROP_TARGET = "#9A6700"

@@ -383,7 +383,7 @@ def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spe
     assert any('风险' in text and '收益' in text for text in labels)
     assert any('Entry 11.41' in text and 'SL1 10.29' in text for text in labels)
     assert not any('Rating' in text or 'Quality' in text or 'PB bars' in text for text in labels)
-    assert to_hex(colors['H1']).upper() == '#8E24AA'
+    assert to_hex(colors['H1']).upper() == '#CBD5E1'
     assert plan['rating']['factors']  # Still archived for tracing, outside the decision card.
 
 

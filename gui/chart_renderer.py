@@ -9,7 +9,7 @@ from .chart_annotations import (
     owns_risk_lines, restyle_strategy_annotations, signal_context, trend_specs,
 )
 from .theme import (
-    AVERAGE, BORDER, CHART_BG, CONTROL_BG, DOWN, GRID, MUTED, STOP, TARGET, TEXT, UP,
+    ANNOTATION, AVERAGE, BORDER, CHART_BG, CONTROL_BG, DOWN, GRID, MUTED, STOP, TARGET, TEXT, UP,
 )
 
 
@@ -164,6 +164,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         open_gap_count = 0
         annotate = getattr(strategy, "annotate_chart", None)
         if not h2 and callable(annotate):
+            previous = {id(artist) for artist in [*ax.lines, *ax.collections, *ax.patches]}
             result = annotate(
                 ax,
                 strategy_plot,
@@ -172,7 +173,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             )
             if isinstance(result, int):
                 open_gap_count = result
-            restyle_strategy_annotations(ax, strategy_type)
+            restyle_strategy_annotations(ax, strategy_type, previous)
         facts = [] if h2 else info_panel_lines(
             payload, strategy_info, frame, open_gap_count=open_gap_count
         )
@@ -239,7 +240,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                 ax.annotate(label, xy=(x, event['price']), xytext=(dx, dy),
                             textcoords='offset points', ha='center', color=TEXT, fontsize=8,
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
-                            arrowprops=dict(arrowstyle='-', color=TEXT, shrinkB=0))
+                            arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=0))
         buf = io.BytesIO()
         fig.savefig(
             buf,

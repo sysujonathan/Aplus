@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from workbench.h2_plan import STATE_LABELS
-from .theme import ACCENT, BORDER, CONTROL_BG, MUTED, STOP, TARGET, TEXT
+from .theme import ACCENT, ANNOTATION, BORDER, CONTROL_BG, MUTED, STOP, TARGET, TEXT
 
 
 def draw_h2(ax, plot, plan):
@@ -35,10 +35,10 @@ def draw_h2(ax, plot, plan):
             dy = 18
         ax.annotate(label, xy=(x, price), xytext=(dx, dy), textcoords='offset points',
                     ha='center', va='bottom' if dy >= 0 else 'top',
-                    fontsize=8, color=color,
+                    fontsize=8, color=ANNOTATION,
                     bbox=dict(boxstyle='round,pad=.15', facecolor=CONTROL_BG,
                               edgecolor='none', alpha=.9),
-                    arrowprops=dict(arrowstyle='-', color=color, lw=.9,
+                    arrowprops=dict(arrowstyle='-', color=ANNOTATION, lw=.9,
                                     linestyle='--' if label == 'H2' else '-',
                                     shrinkA=2, shrinkB=5 if label == 'H2' else 0), annotation_clip=True)
 
