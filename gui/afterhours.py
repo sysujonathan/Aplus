@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import date, timedelta
 import json
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 
 import ttkbootstrap as ttk
 from PIL import ImageTk
@@ -55,6 +55,7 @@ class AfterhoursPage(ttk.Frame):
         self._detail_visible = False
         self._names = {}
         self._history_rows = {}
+        self._deleted_history_rows = {}
         self._compare_ids = []
         self._compare_vars = {}
         self._shown_job = None
@@ -230,16 +231,15 @@ class AfterhoursPage(ttk.Frame):
             check.configure(bg=bg, activebackground=bg, selectcolor=bg)
             check.pack(side=tk.LEFT, anchor=tk.N)
             state = {'completed': '完成', 'partial': '部分', 'cancelled': '已停止'}.get(row['status'], '未完成')
-            scope = scope_caption(report).replace('市场范围未记录（旧报告）', '旧报告 · 范围未记录')
-            text = (receipt_time(row['created']) + ' · ' + state + '\n' + scope + '\n'
-                    + report.get('start', '') + '\n至 ' + report.get('end', '') + '\n'
-                    + f'{report.get("opportunities", 0)} 次机会 · {number(report.get("mean_r"), "R")}')
+            text = (self._history_name(row) + '\n'
+                    + receipt_time(row['created'], full_date=True) + '\n' + state)
             widget = tk.Button(card, text=text, command=lambda j=job: self._select_history(j),
                                bg=bg, fg=TEXT, activebackground=SELECTION, activeforeground=TEXT,
                                relief=tk.FLAT, anchor=tk.W, justify=tk.LEFT, wraplength=round(210*self._ui_scale),
                                font=('Microsoft YaHei UI', -round(16*self._ui_scale)))
             widget.configure(bg=bg, fg=TEXT, activebackground=SELECTION, activeforeground=TEXT)
             widget.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            widget.bind('<Configure>', lambda e, w=widget: w.configure(wraplength=max(1, e.width-10)))
             def wheel(event):
                 self.history_canvas.yview_scroll(-int(event.delta/120), 'units')
                 return 'break'
@@ -252,6 +252,108 @@ class AfterhoursPage(ttk.Frame):
         count = len(self._compare_ids)
         self.compare_button.configure(state=tk.NORMAL if count == 2 else tk.DISABLED,
                                       text='对比已选 2 次 →' if count == 2 else f'已选 {count}/2 · 勾选后对比')
+        state = tk.NORMAL if self._shown_job in self._history_rows else tk.DISABLED
+        self.rename_button.configure(state=state)
+        self.delete_button.configure(state=state)
+        self.restore_button.configure(state=tk.NORMAL if self._deleted_history_rows else tk.DISABLED)
+
+    @staticmethod
+    def _history_name(row):
+        display = row['display']
+        return (f'{display["number"]:02d} · {display["name"]}' if display['name']
+                else f'回测 {display["number"]:02d}')
+
+    def _rename_history(self):
+        if self._shown_job not in self._history_rows:
+            return
+        row, _ = self._history_rows[self._shown_job]
+        name = simpledialog.askstring('重命名回测', '输入名称（最多 40 个字）：',
+                                      initialvalue=row['display']['name'] or self._history_name(row), parent=self)
+        if name is None:
+            return
+        try:
+            self.store.rename_backtest(self._shown_job, name)
+            self._refresh_history()
+            self._select_history(self._shown_job)
+        except ValueError as exc:
+            messagebox.showerror('不能重命名', str(exc), parent=self)
+
+    def _delete_history(self):
+        job = self._shown_job
+        if job not in self._history_rows:
+            return
+        row, _ = self._history_rows[job]
+        if not messagebox.askyesno('删除回测', f'删除「{self._history_name(row)}」？\n'
+                                  '将从列表移除，可在“已删除 / 恢复”中找回。', parent=self):
+            return
+        self.store.set_backtest_deleted(job)
+        self._shown_job = None
+        self._refresh_history()
+        if self._history_rows:
+            self._select_history(next(iter(self._history_rows)))
+        else:
+            self._clear_history_result()
+
+    def _clear_history_result(self):
+        self._back()
+        self.history.set('')
+        self.report, self.records = {}, []
+        self._trade = self._preview_trade = None
+        self._chart_cache.clear()
+        self._image = self._photo = self._preview_photo = None
+        self.chart_navigation.reset(False)
+        self.preview_navigation.reset(False)
+        self.chart.configure(image='', text='选择一笔机会查看 K 线')
+        self.preview_chart.configure(image='', text='暂无回测记录')
+        self.preview_event_box.configure(values=[])
+        self.preview_event.set('')
+        self.preview_title.set('暂无回测记录')
+        self.preview_readout.set('移到 K 线上查看开、高、低、收')
+        self.chart_readout.set('移到 K 线上查看开、高、低、收')
+        self.event_text.set('')
+        self.detail_title.set('')
+        self.distribution.set('')
+        self.result_title.set('暂无回测记录')
+        self.result_context.set('')
+        self.completeness.set('可开始新回测，或从“已删除 / 恢复”找回记录。')
+        if not self.job:
+            self.status.set('暂无回测记录；可新建回测或恢复已删除记录。')
+        self.filter.set('全部')
+        self.filter_box.configure(values=['全部'])
+        for var in self.stats:
+            var.set('—')
+        for tree in (self.tree, self.timeline, *self.boundary_trees.values()):
+            tree.delete(*tree.get_children())
+        self._visible_ids = []
+        self._histogram()
+
+    def _restore_history_dialog(self):
+        if not self._deleted_history_rows:
+            return
+        dialog = ttk.Toplevel(master=self)
+        dialog.title('已删除的回测 · 选择后恢复')
+        dialog.geometry('650x380')
+        dialog.transient(self.winfo_toplevel())
+        table = ttk.Treeview(dialog, columns=('name', 'date'), show='headings', selectmode='browse')
+        table.heading('name', text='回测名称')
+        table.heading('date', text='创建日期')
+        table.column('name', width=340)
+        table.column('date', width=200)
+        table.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        for job, (row, _) in self._deleted_history_rows.items():
+            table.insert('', tk.END, iid=job, values=(self._history_name(row), receipt_time(row['created'], full_date=True)))
+        def restore():
+            if not table.selection():
+                return
+            job = table.selection()[0]
+            self.store.set_backtest_deleted(job, False)
+            self._refresh_history()
+            self._select_history(job)
+            dialog.destroy()
+        button = ttk.Button(dialog, text='恢复选中回测', command=restore, state=tk.DISABLED)
+        button.pack(pady=(0, 12))
+        table.bind('<<TreeviewSelect>>', lambda e: button.configure(state=tk.NORMAL if table.selection() else tk.DISABLED))
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
 
     def _mark_comparison(self, job):
         if self._compare_vars[job].get():
@@ -281,15 +383,16 @@ class AfterhoursPage(ttk.Frame):
         from .afterhours_workspace import tree
         table_host = ttk.Frame(dialog)
         table_host.pack(fill=tk.BOTH, expand=True, padx=12)
-        widget = tree(table_host, [('field', '项目', 160, tk.W), ('a', 'A · '+receipt_time(arow['created']), 320, tk.W),
-                               ('b', 'B · '+receipt_time(brow['created']), 320, tk.W), ('delta', 'A − B / 条件差异', 190, tk.W)])
+        widget = tree(table_host, [('field', '项目', 160, tk.W), ('a', 'A · '+self._history_name(arow), 320, tk.W),
+                               ('b', 'B · '+self._history_name(brow), 320, tk.W), ('delta', 'A − B / 条件差异', 190, tk.W)])
         widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll = ttk.Scrollbar(table_host, command=widget.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         widget.configure(yscrollcommand=scroll.set)
         states = {'completed': '完整完成', 'partial': '部分结果', 'cancelled': '已停止 · 部分结果'}
         source = lambda report: '未记录' if 'real_data' not in report else '真实行情来源' if report['real_data'] else '导入研究／未认证'
-        for values in [('任务状态', states.get(arow['status'], '未完成'), states.get(brow['status'], '未完成'), '—'),
+        for values in [('创建日期', receipt_time(arow['created'], full_date=True), receipt_time(brow['created'], full_date=True), '—'),
+                       ('任务状态', states.get(arow['status'], '未完成'), states.get(brow['status'], '未完成'), '—'),
                        ('来源口径', source(a), source(b), '—'),
                        *comparison_rows(a, b)]:
             widget.insert('', tk.END, values=values)
@@ -430,20 +533,19 @@ class AfterhoursPage(ttk.Frame):
         self._schedule_preview()
 
     def _refresh_history(self):
-        rows = self.store.rows("SELECT id,status,created,result FROM jobs WHERE kind='backtest' "
-                               "AND status NOT IN ('queued','running') ORDER BY created DESC,rowid DESC")
+        rows = self.store.backtest_history(MODEL, include_deleted=True)
         self.receipts = {}
         self._history_rows = {}
+        self._deleted_history_rows = {}
         for row in rows:
-            try:
-                report = json.loads(row['result'])
-            except (ValueError, TypeError):
+            report = json.loads(row['result'])
+            if row['display']['deleted']:
+                self._deleted_history_rows[row['id']] = (row, report)
                 continue
-            if report.get('execution_model') == MODEL:
-                state = {'completed': '完成', 'partial': '部分完成', 'cancelled': '已停止'}.get(row['status'], '未完成')
-                label = f'{row["created"][:16]} · {state} · {row["id"][:5]}'
-                self.receipts[label] = row['id']
-                self._history_rows[row['id']] = (row, report)
+            label = self._history_name(row) + ' · ' + receipt_time(row['created'], full_date=True)
+            self.receipts[label] = row['id']
+            self._history_rows[row['id']] = (row, report)
+        self.history.set(next((label for label, job in self.receipts.items() if job == self._shown_job), ''))
         self.history_box.configure(values=list(self.receipts))
         self._render_history()
 
@@ -530,7 +632,8 @@ class AfterhoursPage(ttk.Frame):
         self.home.tkraise()
         self._detail_visible = False
         status = {'completed': '完成', 'partial': '部分完成', 'cancelled': '已停止'}.get(row['status'], row['status'])
-        self.result_title.set(f'{self._shown_job[:6] if self._shown_job else "本次"} 回测结果 · {status}')
+        name = self._history_name(self._history_rows[self._shown_job][0]) if self._shown_job in self._history_rows else '本次回测'
+        self.result_title.set(f'{name} · {status}')
         self.result_context.set(scope_caption(report) + f' · {report["start"]} → {report["end"]}')
         self.status.set(f'{status} · {report["start"]} 至 {report["end"]} · '
                         f'已回放 {report["processed_datasets"]}/{report["requested_datasets"]} 个标的 · '

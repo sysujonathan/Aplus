@@ -177,6 +177,30 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             dialogs = [w for w in page.winfo_children() if w.winfo_class() == 'Toplevel']
             assert '覆盖提示与失败' not in ''.join(texts(dialogs[0]))
             assert '覆盖提示与失败' in ''.join(texts(dialogs[1]))
+            with patch('gui.afterhours.simpledialog.askstring', return_value='主板基准'):
+                page._rename_history()
+            assert '主板基准' in page.result_title.get()
+            assert page._compare_ids == jobs
+            assert page._history_rows[jobs[0]][0]['display']['number'] == 1
+            with patch('gui.afterhours.messagebox.askyesno', return_value=False):
+                page._delete_history()
+            assert jobs[0] in page._history_rows
+            with patch('gui.afterhours.messagebox.askyesno', return_value=True):
+                page._delete_history()
+                assert jobs[0] not in page._history_rows and page._shown_job == jobs[1]
+                assert page._compare_ids == [jobs[1]]
+                page._delete_history()
+            assert not page.records and not page.report and not page.tree.get_children()
+            assert page.result_title.get() == '暂无回测记录'
+            page._restore_history_dialog()
+            window.update()
+            restore_dialog = [w for w in page.winfo_children() if w.winfo_class() == 'Toplevel'][-1]
+            table = next(w for w in restore_dialog.winfo_children() if isinstance(w, __import__('ttkbootstrap').Treeview))
+            table.selection_set(jobs[0])
+            window.update()
+            next(w for w in restore_dialog.winfo_children() if isinstance(w, __import__('ttkbootstrap').Button)).invoke()
+            assert page._shown_job == jobs[0] and '主板基准' in page.result_title.get()
+            assert page._history_rows[jobs[0]][0]['display']['number'] == 1
         finally:
             service.pool.shutdown()
     finally:
