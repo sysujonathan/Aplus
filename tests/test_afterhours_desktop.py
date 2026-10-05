@@ -24,6 +24,29 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         assert trade.tk.call(
             "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
         ) == "center"
+        from gui.chart_renderer import render_chart
+        image = render_chart(h2_bars, {}, '', {})
+        window.geometry('1600x1000')
+        window.update()
+        for count in (1,4,6,9):
+            window.chart.set_layout(count)
+            window.update()
+            slot = window.chart._slots[0]
+            slot._image = image
+            slot._fit_image()
+            window.update()
+            info = image.info['replay_view']
+            i = len(info['candles'])//2
+            width, height = slot._photo.width(), slot._photo.height()
+            x = (slot.chart_label.winfo_width()-width)/2 + info['candle_x'][i]*width/image.width
+            y = (slot.chart_label.winfo_height()-height)/2 + sum(info['price_y'])/2*height/image.height
+            chart_height = slot.chart_label.winfo_height()
+            slot.chart_label.event_generate('<Motion>',x=round(x),y=round(y))
+            window.update()
+            assert str(info['candles'][i]['date'])[:10] in slot.readout.get()
+            assert slot.chart_label.winfo_height() == chart_height
+            slot.show_placeholder()
+            assert slot._image is None and '移到 K 线' in slot.readout.get()
         window._switch_section('afterhours')
         page = window.afterhours
         for size in ('2560x1440', '1600x1000', '1280x760'):

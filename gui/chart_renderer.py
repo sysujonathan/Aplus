@@ -242,6 +242,12 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
                             arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=0))
         buf = io.BytesIO()
+        # Default charts use a tight PNG crop. Retain its origin so mouse
+        # coordinates remain correct when that image is later fitted to a slot.
+        fig.canvas.draw()
+        crop = fig.get_tightbbox(fig.canvas.get_renderer()).padded(.02) if not size else None
+        factor = 110 / fig.dpi
+        crop_x, crop_y = (crop.x0*110, crop.y0*110) if crop else (0, 0)
         fig.savefig(
             buf,
             format="png",
@@ -252,16 +258,14 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         )
         buf.seek(0)
         image = Image.open(buf).copy()
-        if size:
-            position = ax.get_position()
-            image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
-                                            price_x=(position.x0*size[0], position.x1*size[0]),
-                                            price_y=((1-position.y1)*size[1], (1-position.y0)*size[1]),
-                                            plot_y=((1-position.y1)*size[1], (1-axes[2].get_position().y0)*size[1]),
-                                            candle_x=[float(ax.transData.transform((i, 0))[0])*size[0]/fig.bbox.width
-                                                      for i in range(len(plot))],
-                                            candles=visible[['date', 'open', 'high', 'low', 'close']].to_dict('records'),
-                                            decimals=decimals)
+        box, volume_box = ax.get_window_extent(), axes[2].get_window_extent()
+        image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
+            price_x=(box.x0*factor-crop_x, box.x1*factor-crop_x),
+            price_y=(image.height-(box.y1*factor-crop_y), image.height-(box.y0*factor-crop_y)),
+            plot_y=(image.height-(box.y1*factor-crop_y), image.height-(volume_box.y0*factor-crop_y)),
+            candle_x=[float(ax.transData.transform((i, 0))[0])*factor-crop_x for i in range(len(plot))],
+            candles=visible[['date', 'open', 'high', 'low', 'close']].to_dict('records'),
+            decimals=payload.get('price_decimals', decimals))
         return image
     finally:
         if fig is not None:
