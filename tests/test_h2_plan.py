@@ -352,10 +352,56 @@ def test_chart_annotations_point_to_candle_centers(h2_spec, h2_bars):
     by_label = dict(annotations)
     assert by_label['Entry'] == (len(dates) - 1, 11.41)
     assert by_label['SL1'] == (dates.index(plan['sl1_reference_date']), 10.29)
-    assert by_label['H2'][0] == dates.index(plan['h2_setup_date'])
+    assert by_label['H2信号'][0] == dates.index(plan['h2_setup_date'])
+    assert 'H2触发' not in by_label
     assert all(float(x).is_integer() for _, (x, _) in annotations)
     assert image.width > 500
     pd.testing.assert_frame_equal(calculated, before)
+
+
+@pytest.mark.parametrize('high,low,state', [(11.7, 10.5, 'TRIGGERED'),
+                                          (11.4, 9.9, 'INVALID')])
+def test_h2_label_distinguishes_setup_from_actual_trigger(h2_spec, h2_bars, high, low, state):
+    from matplotlib.axes import Axes
+    setup = h2_bars.date.iloc[-1]
+    latest = append_bar(h2_bars, high, low)
+    plan = anchored_plan(h2_spec, latest, setup)
+    assert plan['pending_state'] == state
+    instance, calculated = calculate(h2_spec, latest)
+    real_annotate = Axes.annotate
+    annotations = {}
+
+    def capture(ax, label, *args, **kwargs):
+        annotations[label] = kwargs['xy']
+        return real_annotate(ax, label, *args, **kwargs)
+
+    with patch.object(Axes, 'annotate', capture):
+        render_chart(calculated, plan, '', instance.get_metadata())
+    dates = calculated.tail(120).date.tolist()
+    assert annotations['H2信号'] == (dates.index(setup), 11.6)
+    assert 'H2' not in annotations
+    if state == 'TRIGGERED':
+        assert annotations['H2触发'] == (dates.index(latest.date.iloc[-1]), high)
+    else:
+        assert 'H2触发' not in annotations
+
+
+def test_volume_panel_is_less_than_half_its_previous_height(h2_spec, h2_bars):
+    import mplfinance as mpf
+    instance, calculated = calculate(h2_spec, h2_bars)
+    original_plot = mpf.plot
+    heights = []
+
+    def capture(*args, **kwargs):
+        fig, axes = original_plot(*args, **kwargs)
+        price, volume = axes[0].get_position().height, axes[2].get_position().height
+        heights.append(volume / (price + volume))
+        return fig, axes
+
+    with patch.object(mpf, 'plot', capture):
+        render_chart(calculated, signal_at_end(h2_spec, h2_bars), '', instance.get_metadata())
+    # mplfinance previously allocated 2 / (5 + 2) of chart height to volume.
+    assert heights[0] <= (2 / 7) / 2
 
 
 def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spec, h2_bars):

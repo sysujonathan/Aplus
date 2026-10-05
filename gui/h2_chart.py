@@ -40,11 +40,17 @@ def draw_h2(ax, plot, plan):
     for label, day_key, price_key, color, offset in (
         ('BO', 'bo_date', 'bo_high', ACCENT, (0, 16)),
         ('H1', 'h1_date', 'h1_high', '#8E24AA', (0, 30)),
-        ('H2', 'h2_setup_date', 'h2_high', TARGET, (0, 44)),
+        ('H2信号', 'h2_setup_date', 'h2_high', MUTED, (0, 22)),
         ('MM low', 'mm_low_date', 'mm_low', MUTED, (18, -18)),
         ('Gap Floor', 'gap_floor_date', 'gap_floor', ACCENT, (-12, -28)),
     ):
         mark(label, plan.get(day_key), plan.get(price_key), color, offset)
+    # The pullback setup is not the subsequent upside trigger. Only a verified
+    # trigger gets an H2 label; invalid/expired/pending setups remain signals.
+    trigger_day = plan.get('pending_end_date')
+    if state == 'TRIGGERED' and trigger_day in dates:
+        trigger_high = float(plot.iloc[dates.index(trigger_day)].high)
+        mark('H2触发', trigger_day, trigger_high, TARGET, (0, 44))
     floor, top = plan.get('gap_floor'), plan.get('gap_top')
     if floor is not None:
         ax.axhline(floor, color=ACCENT, linestyle=':', linewidth=.8, alpha=.65)

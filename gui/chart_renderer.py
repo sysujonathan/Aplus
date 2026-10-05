@@ -149,6 +149,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             type="candle",
             style=style,
             volume=True,
+            panel_ratios=(7, 1),
             title=dict(title=title, fontsize=9 if size[0]<1000 else 12) if size else title,
             ylabel="",
             figsize=(max(100, size[0])/110, max(100, size[1])/110) if size else (12.2, 7.5),
