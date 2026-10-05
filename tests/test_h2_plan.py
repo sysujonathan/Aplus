@@ -323,7 +323,7 @@ def test_watch_panel_passes_updated_plan_and_title(h2_spec, h2_bars, high, low, 
     assert shown_plan['pending_state'] == state
     assert shown_plan['h2_setup_date'] == payload['setup_date']
     title = panel._title_var.set.call_args_list[-1].args[0]
-    assert f"H2信号 {payload['setup_date']}" in title
+    assert f"机会起始 {payload['setup_date']}" in title
     assert '计划线来自信号日' not in title
     if state == 'PENDING':
         assert '明日计划基于' in title
@@ -350,16 +350,16 @@ def test_chart_annotations_point_to_candle_centers(h2_spec, h2_bars):
         image = render_chart(calculated, plan, '', instance.get_metadata())
     dates = calculated.tail(120).date.tolist()
     by_label = dict(annotations)
-    assert by_label['Entry'] == (len(dates) - 1, 11.41)
+    assert by_label['←Entry'] == (len(dates) - 1, 11.41)
     assert by_label['SL1'] == (dates.index(plan['sl1_reference_date']), 10.29)
-    assert by_label['H2信号'][0] == dates.index(plan['h2_setup_date'])
-    assert 'H2触发' not in by_label
+    assert not {'H2', 'H2信号', 'H2触发'} & by_label.keys()
     assert all(float(x).is_integer() for _, (x, _) in annotations)
     assert image.width > 500
     pd.testing.assert_frame_equal(calculated, before)
 
 
-@pytest.mark.parametrize('high,low,state', [(11.7, 10.5, 'TRIGGERED'),
+@pytest.mark.parametrize('high,low,state', [(11.4, 10.3, 'PENDING'),
+                                          (11.7, 10.5, 'TRIGGERED'),
                                           (11.4, 9.9, 'INVALID')])
 def test_h2_label_distinguishes_setup_from_actual_trigger(h2_spec, h2_bars, high, low, state):
     from matplotlib.axes import Axes
@@ -378,12 +378,13 @@ def test_h2_label_distinguishes_setup_from_actual_trigger(h2_spec, h2_bars, high
     with patch.object(Axes, 'annotate', capture):
         render_chart(calculated, plan, '', instance.get_metadata())
     dates = calculated.tail(120).date.tolist()
-    assert annotations['H2信号'] == (dates.index(setup), 11.6)
-    assert 'H2' not in annotations
+    assert not {'H2信号', 'H2触发'} & annotations.keys()
     if state == 'TRIGGERED':
-        assert annotations['H2触发'] == (dates.index(latest.date.iloc[-1]), high)
+        assert annotations['H2'] == (dates.index(latest.date.iloc[-1]), high)
+        assert '←Entry' not in annotations
     else:
-        assert 'H2触发' not in annotations
+        assert 'H2' not in annotations
+        assert ('←Entry' in annotations) == (state == 'PENDING')
 
 
 def test_volume_panel_is_less_than_half_its_previous_height(h2_spec, h2_bars):
