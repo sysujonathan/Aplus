@@ -122,6 +122,32 @@ def test_future_append_cannot_change_past_events_or_shape(h2_spec, h2_bars):
     assert full.date.max() == future.date.max() and len(events) == 1
 
 
+def test_replay_h2_marks_actual_trigger_after_fill_without_future_leak(h2_spec, h2_bars):
+    import matplotlib.pyplot as plt
+    from gui.h2_chart import draw_h2
+    bars = append_bar(h2_bars, 11.8, 10.8)
+    record = study(h2_spec, bars)[0]
+    trigger = next(e for e in record['events'] if e['kind'] == 'trigger')
+    assert trigger['date'] != record['setup_date']
+    for index in (0, len(record['events'])-1):
+        visible, payload, _ = replay_view(bars, record, index, posthoc=True)
+        fig, ax = plt.subplots()
+        try:
+            ax.set_xlim(-1, len(visible))
+            ax.set_ylim(8, 15)
+            draw_h2(ax, visible, payload)
+            marks = [text for text in ax.texts if text.get_text() == 'H2']
+            assert bool(marks) == (index > 0)
+            if marks:
+                dates = visible.date.tolist()
+                position = dates.index(trigger['date'])
+                assert marks[0].xy == (position, float(visible.iloc[position].high))
+                assert marks[0].arrow_patch.get_linestyle() == '--'
+                assert marks[0].arrow_patch.shrinkB >= 5
+        finally:
+            plt.close(fig)
+
+
 def test_boundaries_signs_ties_and_open_exclusion():
     records = [dict(id=str(i), code='sh.600000', setup_date=f'2025-01-{i + 1:02}',
                     status='closed', r_multiple=value) for i, value in enumerate([2, 2, 1, 0, -1, -2])]

@@ -69,7 +69,7 @@ def test_h2_leader_is_diagonal_dashed_and_separate_from_actual_high():
         ax.set_ylim(5, 20)
         plot = pd.DataFrame(dict(date=['2026-09-01', '2026-09-02'], high=[11, 12]))
         plan = dict(pending_state='TRIGGERED', pending_end_date='2026-09-02',
-                    h2_setup_date='2026-09-02', h2_high=12, replay_caption='Trigger confirmed')
+                    h2_setup_date='2026-09-01', h2_high=11, replay_caption='Trigger confirmed')
         draw_h2(ax, plot, plan)
         annotation = next(t for t in ax.texts if t.get_text() == 'H2')
         assert annotation.xy == (1, 12)

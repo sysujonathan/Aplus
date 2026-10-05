@@ -5,8 +5,9 @@ import io
 from PIL import Image
 
 from .chart_annotations import (
-    annotation_frame, annotation_kwargs, info_panel_lines, marker_specs,
+    annotation_kwargs, info_panel_lines, marker_specs,
     owns_risk_lines, restyle_strategy_annotations, signal_context, trend_specs,
+    GAP_STRATEGIES, gap_annotation_frame,
 )
 from .theme import (
     ANNOTATION, AVERAGE, BORDER, CHART_BG, CONTROL_BG, DOWN, GRID, MUTED, STOP, TARGET, TEXT, UP,
@@ -14,7 +15,8 @@ from .theme import (
 
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
-                 replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0):
+                 replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0,
+                 code=None, instrument_type=None):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -25,7 +27,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
 
     end = max(1, len(frame) - min(max(0, view_offset), max(0, len(frame)-view_bars)))
     visible = frame.iloc[max(0, end-view_bars):end].copy()
-    strategy_plot = annotation_frame(frame)
+    strategy_plot = visible.reset_index(drop=True).copy()
     plot = visible.copy()
     plot.index = pd.to_datetime(plot["date"])
     colors = mpf.make_marketcolors(
@@ -58,7 +60,25 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         adds.append(mpf.make_addplot(plot.ema20, color=AVERAGE, width=1.35))
     signal_column = meta.get("signal_column")
     h2 = signal_column == 'signal_gap_h2' and payload.get('plan_kind') == 'gap-h2-next-session'
-    decimals = payload.get('price_decimals', 2) if h2 else 2
+    structure_unavailable = False
+    if not h2 and strategy_type in GAP_STRATEGIES:
+        structure = gap_annotation_frame(frame, payload, strategy_type)
+        if structure is not None:
+            strategy_plot = structure.loc[structure.date.isin(visible.date)].reset_index(drop=True)
+        anchor = str(payload.get('setup_date') or payload.get('asof') or '')[:10]
+        structure_unavailable = structure is None or anchor not in visible.date.astype(str).str[:10].tolist()
+    # Precision belongs to the security, not the strategy or observed digits.
+    code = code or frame.attrs.get('code')
+    instrument_type = instrument_type or frame.attrs.get('instrument_type')
+    if code or instrument_type:
+        from decimal import Decimal
+        from workbench.prices import tick_size
+        tick = tick_size(code, float(visible.close.iloc[-1]), instrument_type=instrument_type)
+        decimals = max(0, -Decimal(str(tick)).as_tuple().exponent)
+    else:
+        # Compatibility for old stock charts without security context; H2
+        # plans already carry precision established by the same tick rules.
+        decimals = payload.get('price_decimals', 2) if h2 else 2
     for trend in trend_specs(strategy_type):
         if trend.column in plot and plot[trend.column].notna().any():
             adds.append(
@@ -97,7 +117,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                 )
             )
     strategy_info = {} if h2 else signal_context(strategy, frame, payload)
-    owns_levels = not h2 and owns_risk_lines(strategy_type)
+    owns_levels = not h2 and not structure_unavailable and owns_risk_lines(strategy_type)
     risk_levels = []
     lines, line_colors, styles = [], [], []
     levels = (("entry", TARGET, ":"), ("stop", STOP, "-."), ("mm_target", TARGET, "--")) if h2 else (
@@ -163,7 +183,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             draw_h2(ax, plot, payload)
         open_gap_count = 0
         annotate = getattr(strategy, "annotate_chart", None)
-        if not h2 and callable(annotate):
+        if not h2 and not structure_unavailable and callable(annotate):
             previous = {id(artist) for artist in [*ax.lines, *ax.collections, *ax.patches]}
             result = annotate(
                 ax,
@@ -174,9 +194,15 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             if isinstance(result, int):
                 open_gap_count = result
             restyle_strategy_annotations(ax, strategy_type, previous)
+            if strategy_type in GAP_STRATEGIES and 'GAP_H2' not in strategy_type:
+                for text in list(ax.texts):
+                    if text.get_text() == 'H2':
+                        text.remove()
         facts = [] if h2 else info_panel_lines(
             payload, strategy_info, frame, open_gap_count=open_gap_count
         )
+        if structure_unavailable:
+            facts.append('原信号结构待核对（保留归档计划价格）')
         if facts:
             ax.text(
                 .02,
@@ -265,7 +291,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             plot_y=(image.height-(box.y1*factor-crop_y), image.height-(volume_box.y0*factor-crop_y)),
             candle_x=[float(ax.transData.transform((i, 0))[0])*factor-crop_x for i in range(len(plot))],
             candles=visible[['date', 'open', 'high', 'low', 'close']].to_dict('records'),
-            decimals=payload.get('price_decimals', decimals))
+            decimals=decimals)
         return image
     finally:
         if fig is not None:

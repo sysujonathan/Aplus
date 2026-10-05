@@ -216,7 +216,8 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
             st.caption(f"H2信号 {payload['h2_setup_date']} · 行情 {bars.date.iloc[-1]} · " +
                        (f"明日计划基于{payload['plan_asof']}收盘"
                         if payload['pending_state'] == 'PENDING' else STATE_LABELS[payload['pending_state']]))
-            st.image(render_chart(calculated, payload, '', instance.get_metadata()), width='stretch')
+            st.image(render_chart(calculated, payload, '', instance.get_metadata(), code=o['code'],
+                                 instrument_type=bars.attrs.get('instrument_type')), width='stretch')
         else:
             candles(bars,payload.get('entry') if reference_ok else None,
                     payload.get('stop') if reference_ok else None,payload.get('target') if reference_ok else None)

@@ -177,8 +177,9 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             dialogs = [w for w in page.winfo_children() if w.winfo_class() == 'Toplevel']
             assert '覆盖提示与失败' not in ''.join(texts(dialogs[0]))
             assert '覆盖提示与失败' in ''.join(texts(dialogs[1]))
-            with patch('gui.afterhours.simpledialog.askstring', return_value='主板基准'):
+            with patch('gui.afterhours.simpledialog.askstring', return_value='主板基准') as prompt:
                 page._rename_history()
+                assert prompt.call_args.kwargs['initialvalue'] == ''
             assert '主板基准' in page.result_title.get()
             assert page._compare_ids == jobs
             assert page._history_rows[jobs[0]][0]['display']['number'] == 1
