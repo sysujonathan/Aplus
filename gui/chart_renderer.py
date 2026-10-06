@@ -16,7 +16,7 @@ from .theme import (
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
                  replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0,
-                 code=None, instrument_type=None):
+                 code=None, instrument_type=None, research_overlay=()):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -132,6 +132,13 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                 lines.append(value)
                 line_colors.append(color)
                 styles.append(dash)
+    for mark in research_overlay:
+        if mark['date'] <= str(visible.date.iloc[-1])[:10]:
+            value = float(mark['price'])
+            risk_levels.append(value)
+            lines.append(value)
+            line_colors.append(mark.get('color', ANNOTATION))
+            styles.append('--')
     kwargs = {}
     if adds:
         kwargs["addplot"] = adds
@@ -254,6 +261,24 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             for label in legend.get_texts():
                 label.set_color(TEXT)
         dates = visible.date.astype(str).str[:10].tolist()
+        for mark in research_overlay:
+            if mark['date'] > str(visible.date.iloc[-1])[:10]:
+                continue
+            value = float(mark['price'])
+            caption = f"{mark['label']} {value:.{decimals}f}"
+            if view_low <= value <= view_high:
+                ax.text(.01, value, caption, transform=ax.get_yaxis_transform(),
+                        color=ANNOTATION, fontsize=9, va='bottom',
+                        bbox=dict(facecolor=CHART_BG, edgecolor='none', alpha=.9))
+            else:
+                ax.text(.01,.025,caption + (' ↓' if value < view_low else ' ↑'),
+                        transform=ax.transAxes,color=ANNOTATION,fontsize=9)
+            if mark['date'] in dates and mark.get('anchor_price') is not None:
+                x = dates.index(mark['date'])
+                ax.annotate('候选 C', (x, mark['anchor_price']), xytext=(-30,-35),
+                            textcoords='offset points',color=ANNOTATION,fontsize=9,
+                            bbox=dict(facecolor=CHART_BG,edgecolor='none'),
+                            arrowprops=dict(arrowstyle='->',color=ANNOTATION,linestyle='--'))
         for event in replay_events:
             if event['date'] not in dates or event.get('price') is None:
                 continue
