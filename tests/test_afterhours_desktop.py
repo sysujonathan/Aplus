@@ -89,11 +89,19 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         page._show_report({'status': 'completed'}, report, records)
         identity = records[0]['id']
         assert len(page.tree.get_children()) == 1
+        page._names[records[0]['code']] = '测试股票'
         with patch('gui.afterhours.render_replay', return_value=Image.new('RGB', (1000, 500))) as render:
             page.tree.selection_set(identity)
             page._open_selected()
             window.update()
             assert page._detail_visible and page._event_index == 0
+            assert '测试股票' in page.detail_title.get()
+            for size in ('1280x760', '1600x1000', '2560x1440'):
+                window.geometry(size)
+                window.update()
+                assert page.timeline.winfo_width() >= 260
+                assert page.timeline_host.winfo_width() < page.chart.winfo_width()*.5
+                assert page.timeline.column('date', 'width') >= 100
             page._step_event(1)
             window.update()
             assert page._event_index == 1
@@ -152,6 +160,9 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         from workbench.service import Service
         from tests.test_workbench import wait_for
         from workbench.market import BOARDS
+        # Resizing replaces history-card Tk variables. Collect their dead
+        # callback cycles on this UI thread before starting a Service worker.
+        gc.collect()
         service = Service(store)
         page.job = None
         page.service = service
@@ -193,6 +204,27 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             assert '主板基准' in page.result_title.get()
             assert page._compare_ids == jobs
             assert page._history_rows[jobs[0]][0]['display']['number'] == 1
+            from workbench.stop_research import MODEL as STOP_MODEL
+            from workbench.stop_research_service import load_experiment
+            gc.collect()
+            experiment=service.submit('backtest',dict(execution_model=STOP_MODEL,source_job=jobs[0]))
+            assert wait_for(store,experiment)['status']=='completed'
+            iteration=window.strategy_iteration
+            iteration.service=service
+            window._switch_section('strategy')
+            window.update()
+            iteration._load(experiment)
+            window.update()
+            assert iteration.rows and iteration.report['source_job']==jobs[0]
+            for geometry in ('1800x1100','1280x760'):
+                window.geometry(geometry);window.update()
+                assert iteration.run.winfo_rootx()+iteration.run.winfo_width()<=window.winfo_rootx()+window.winfo_width()
+                assert iteration.chart.winfo_width()>350
+                assert iteration.samples.winfo_width()>300
+            assert iteration.samples.get_children()
+            iteration.group.set('无法对照');iteration._fill_rows();window.update()
+            assert iteration.samples.get_children()
+            assert load_experiment(store,experiment)[1]['excluded']>0
             with patch('gui.afterhours.messagebox.askyesno', return_value=False):
                 page._delete_history()
             assert jobs[0] in page._history_rows

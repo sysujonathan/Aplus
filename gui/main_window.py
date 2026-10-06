@@ -8,6 +8,7 @@ import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
 from .afterhours import AfterhoursPage
+from .strategy_iteration import StrategyIterationPage
 from .chart_items import ChartItem, chart_items
 from .chart_panel import ChartGrid
 from .data import REALTIME_MARKET_SOURCE
@@ -190,11 +191,9 @@ class AplusMainWindow(ttk.Window):
         self.afterhours = AfterhoursPage(self.page_host, self.service, self.store)
         self.afterhours.grid(row=0, column=0, sticky=tk.NSEW)
         self._pages["afterhours"] = self.afterhours
-        self._pages["strategy"] = self._placeholder_page(
-            "策略迭代",
-            "注册研究策略、运行验证、比较版本，再由交易员决定是否启用。",
-            "原有正式策略仍处于冻结保护中，本次界面调整不会改动它们。",
-        )
+        self.strategy_iteration = StrategyIterationPage(self.page_host,self.service,self.store)
+        self.strategy_iteration.grid(row=0,column=0,sticky=tk.NSEW)
+        self._pages['strategy'] = self.strategy_iteration
         self.trade_management = TradeManagementFrame(self.page_host, self.store)
         self.trade_management.grid(row=0, column=0, sticky=tk.NSEW)
         self._pages["other"] = self.trade_management
@@ -229,6 +228,8 @@ class AplusMainWindow(ttk.Window):
         return page
 
     def _switch_section(self, key):
+        if key == 'strategy':
+            self.strategy_iteration.refresh()
         if key == 'afterhours':
             self.afterhours.refresh()
         for name, page in self._pages.items():
