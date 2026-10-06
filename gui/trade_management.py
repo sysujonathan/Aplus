@@ -13,6 +13,9 @@ import ttkbootstrap as ttk
 
 from workbench.market import code_of
 from workbench.closed_import import MAX_SCREENSHOTS, recognize_screenshots
+from workbench.daily_returns import (
+    historical_daily_returns, parse_calendar_text, recognize_calendar_screenshots,
+)
 from workbench.trading import (
     history_reconciliation,
     management_report,
@@ -306,8 +309,8 @@ class TradeManagementFrame(ttk.Frame):
         self.closed_tree.bind("<Button-3>", self._closed_menu)
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
 
-        calendar_body = self._panel(2, 1, "收益日历")
-        self.return_calendar = _ReturnCalendar(calendar_body)
+        calendar_body = self._panel(2, 1, "盈亏日历")
+        self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns)
 
     def _build_quick_calculator(self, body):
         quick = ttk.Labelframe(body, text="拟建仓速算", padding=(8, 5))
@@ -436,10 +439,16 @@ class TradeManagementFrame(ttk.Frame):
         try:
             self._names = code_names(self.store)
             self._report = management_report(self.store, account_id)
+            calculated = historical_daily_returns(self.store, account_id)
+            self.store.save_daily_returns(account_id, calculated, replace_local=True)
+            daily_rows = self.store.list_daily_returns(account_id)
+            self.return_calendar.set_rows(daily_rows)
+            quote_day = self._report["summary"]["quote_date"]
+            daily = next((r for r in daily_rows if r["date"] == quote_day), None)
+            self._report["summary"]["daily_pnl"] = daily["pnl"] if daily else None
             self._fill_positions()
             self._fill_funds()
             self._fill_closed()
-            self.return_calendar.set_rows(self._report["closed"])
         except Exception as exc:
             self.quick_result.set(f"读取交易账本失败：{exc}")
             self.quick_result_label.configure(foreground=DOWN)
@@ -527,6 +536,7 @@ class TradeManagementFrame(ttk.Frame):
         summary = self._report["summary"]
         account = self._report["account"]
         hidden = not self._show_fund_values
+        self.return_calendar.set_hidden(hidden)
 
         def amount(value, signed=False):
             if hidden:
@@ -562,6 +572,21 @@ class TradeManagementFrame(ttk.Frame):
             self.funds_reconciliation.set(text)
         else:
             self.funds_reconciliation.set("初始资金（推算） —")
+
+    def _import_daily_returns(self):
+        account_id = self.current_account_id()
+        if not account_id:
+            messagebox.showinfo("请先设置账户", "请先选择资金账户。", parent=self)
+            return
+        dialog = _DailyReturnImportDialog(self)
+        self.wait_window(dialog.top)
+        if dialog.confirmed:
+            try:
+                self.store.save_daily_returns(account_id, dialog.values)
+            except ValueError as exc:
+                messagebox.showerror("日历导入失败", str(exc), parent=self)
+                return
+            self.reload_data()
 
     def _edit_account(self, create_new=False):
         account = None
@@ -794,18 +819,19 @@ class TradeManagementFrame(ttk.Frame):
 
 
 class _ReturnCalendar:
-    """Compact realised-P&L calendar; account-return snapshots can extend it later."""
+    """Account daily P&L. Dates, amounts and provenance are separate widgets."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, import_command=None):
         self.parent = parent
         self.rows = []
+        self.hidden = False
         self.anchor = date.today().replace(day=1)
         self._initialized = False
         controls = ttk.Frame(parent)
         controls.grid(row=0, column=0, sticky=tk.EW, pady=(0, 6))
         self.scale = tk.StringVar(value="月")
         ttk.Combobox(controls, textvariable=self.scale, values=("月", "年"),
-                     width=5, state="readonly").pack(side=tk.LEFT)
+                     width=3, state="readonly").pack(side=tk.LEFT)
         self.scale.trace_add("write", lambda *_args: self._scale_changed())
         self.previous_text = tk.StringVar(value="上月")
         self.next_text = tk.StringVar(value="下月")
@@ -816,7 +842,20 @@ class _ReturnCalendar:
             .pack(side=tk.LEFT, padx=6)
         ttk.Button(controls, textvariable=self.next_text, width=5, bootstyle="secondary-outline",
                    command=lambda: self.shift(1)).pack(side=tk.LEFT, padx=2)
-        ttk.Label(controls, text="按清仓日统计已实现盈亏", foreground=MUTED).pack(side=tk.RIGHT)
+        if import_command:
+            ttk.Button(controls, text="补录日历", bootstyle="primary-outline",
+                       command=import_command).pack(side=tk.RIGHT)
+        info = ttk.Label(controls, text="ⓘ", foreground=MUTED)
+        info.pack(side=tk.RIGHT, padx=5)
+        from ttkbootstrap.widgets import ToolTip
+        ToolTip(info, text="账户日盈亏：持仓当天涨跌 + 当天买卖影响 − 税费。\n"
+                "券商截图优先；本地计算需完整成交与同日行情。\n"
+                "清仓盈亏是整笔盈亏，无法代替日盈亏；缺失数据不记为零。\n"
+                "本地行情含前复权历史，跨除权日仅供估算；券商交割记录优先。\n"
+                "本地资金调整计入收益，转入转出除外；企业行动等以券商记录核验。")
+        self.summary = tk.StringVar()
+        ttk.Label(parent, textvariable=self.summary, foreground=MUTED).grid(
+            row=2, column=0, sticky=tk.W, pady=(4, 0))
         self.grid = ttk.Frame(parent)
         self.grid.grid(row=1, column=0, sticky=tk.NSEW)
         parent.rowconfigure(1, weight=1)
@@ -826,14 +865,19 @@ class _ReturnCalendar:
         valid = []
         for row in self.rows:
             try:
-                valid.append(datetime.fromisoformat(row["close_date"][:10]).date())
+                valid.append(date.fromisoformat(row["date"]))
             except (KeyError, TypeError, ValueError):
                 pass
         if valid and not self._initialized:
             latest = max(valid)
             self.anchor = latest.replace(day=1)
-        self._initialized = True
+        self._initialized = bool(valid) or self._initialized
         self.render()
+
+    def set_hidden(self, hidden):
+        if self.hidden != hidden:
+            self.hidden = hidden
+            self.render()
 
     def _scale_changed(self):
         yearly = self.scale.get() == "年"
@@ -852,6 +896,9 @@ class _ReturnCalendar:
     def render(self):
         for child in self.grid.winfo_children():
             child.destroy()
+        for index in range(7):
+            self.grid.columnconfigure(index, weight=0, minsize=0)
+            self.grid.rowconfigure(index, weight=0, minsize=0)
         if self.scale.get() == "年":
             self._render_year()
         else:
@@ -860,17 +907,13 @@ class _ReturnCalendar:
     def _render_month(self):
         year, month = self.anchor.year, self.anchor.month
         self.title.set(f"{year} 年 {month:02d} 月")
-        daily = {}
-        for row in self.rows:
-            try:
-                day = datetime.fromisoformat(row["close_date"][:10]).date()
-            except (KeyError, TypeError, ValueError):
-                continue
-            if (day.year, day.month) == (year, month):
-                bucket = daily.setdefault(day.day, [0.0, 0])
-                bucket[0] += float(row["pnl"])
-                bucket[1] += 1
-        for column, label in enumerate(("一", "二", "三", "四", "五", "六", "日")):
+        daily = {int(row["date"][-2:]): row for row in self.rows
+                 if row["date"].startswith(f"{year}-{month:02d}-")}
+        recorded = [r for r in daily.values() if r["status"] == "recorded"]
+        total = sum(r["pnl"] for r in recorded)
+        amount = "••••••" if self.hidden else f"{total:+,.2f} 元"
+        self.summary.set(f"已记录合计 {amount} · {len(recorded)} 天（未补日期不计入）")
+        for column, label in enumerate(("一", "二", "三", "四", "五")):
             self.grid.columnconfigure(column, weight=1)
             ttk.Label(self.grid, text=label, anchor=tk.CENTER, foreground=MUTED).grid(
                 row=0, column=column, sticky=tk.EW, pady=2)
@@ -878,43 +921,62 @@ class _ReturnCalendar:
         while len(weeks) < 6:
             weeks.append([0] * 7)
         for week_index, week in enumerate(weeks[:6], 1):
-            for column, day in enumerate(week):
-                if not day:
-                    text, color = "", MUTED
-                elif day in daily:
-                    pnl, count = daily[day]
-                    text = f"{day}\n{pnl:+,.0f}\n{count}笔"
-                    color = UP if pnl > 0 else (DOWN if pnl < 0 else TEXT)
-                else:
-                    text, color = str(day), MUTED
-                ttk.Label(self.grid, text=text, anchor=tk.CENTER, justify=tk.CENTER,
-                          foreground=color).grid(row=week_index, column=column,
-                                                 sticky=tk.NSEW, padx=2, pady=2)
-                self.grid.rowconfigure(week_index, weight=1, minsize=40)
+            for column, day in enumerate(week[:5]):
+                cell = ttk.Frame(self.grid)
+                cell.grid(row=week_index, column=column, sticky=tk.NSEW, padx=2, pady=2)
+                cell.columnconfigure(0, weight=1)
+                cell.rowconfigure(1, weight=1)
+                if day:
+                    item = daily.get(day)
+                    self._cell(cell, f"{day:02d}", item,
+                               future=date(year, month, day) > date.today())
+                self.grid.rowconfigure(week_index, weight=1, minsize=65)
+
+    def _cell(self, cell, label, item, future=False):
+        ttk.Label(cell, text=label, anchor=tk.CENTER, foreground=TEXT,
+                  font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky=tk.EW)
+        color, detail = MUTED, ""
+        if not item:
+            value = "—" if future else "待补数据"
+        elif item["status"] == "closed":
+            value = "休市"
+        else:
+            pnl = item["pnl"]
+            value = "••••••" if self.hidden else f"{pnl:+,.2f}"
+            color = MUTED if self.hidden else (UP if pnl > 0 else DOWN if pnl < 0 else MUTED)
+            detail = "券商" if item["source"] == "broker" else "本地计算"
+        ttk.Label(cell, text=value, anchor=tk.CENTER, foreground=color).grid(
+            row=1, column=0, sticky=tk.NSEW)
+        ttk.Label(cell, text=detail, anchor=tk.CENTER, foreground=MUTED,
+                  font=("Microsoft YaHei UI", 8)).grid(row=2, column=0, sticky=tk.EW)
 
     def _render_year(self):
         year = self.anchor.year
         self.title.set(f"{year} 年")
-        monthly = {month: [0.0, 0] for month in range(1, 13)}
+        monthly = {month: [] for month in range(1, 13)}
         for row in self.rows:
             try:
-                day = datetime.fromisoformat(row["close_date"][:10]).date()
+                day = date.fromisoformat(row["date"])
             except (KeyError, TypeError, ValueError):
                 continue
-            if day.year == year:
-                monthly[day.month][0] += float(row["pnl"])
-                monthly[day.month][1] += 1
+            if day.year == year and row["status"] == "recorded":
+                monthly[day.month].append(row)
         for month in range(1, 13):
-            pnl, count = monthly[month]
-            color = UP if pnl > 0 else (DOWN if pnl < 0 else MUTED)
-            ttk.Label(self.grid, text=f"{month} 月\n{pnl:+,.0f} 元\n{count} 笔",
-                      anchor=tk.CENTER, justify=tk.CENTER, foreground=color).grid(
-                          row=(month - 1) // 4, column=(month - 1) % 4,
-                          sticky=tk.NSEW, padx=5, pady=5)
+            rows = monthly[month]
+            item = ({"pnl": sum(r["pnl"] for r in rows), "source": "broker"
+                     if all(r["source"] == "broker" for r in rows) else "local", "status": "recorded"}
+                    if rows else None)
+            cell = ttk.Frame(self.grid)
+            cell.grid(row=(month - 1) // 4, column=(month - 1) % 4,
+                      sticky=tk.NSEW, padx=5, pady=5)
+            cell.columnconfigure(0, weight=1)
+            cell.rowconfigure(1, weight=1)
+            self._cell(cell, f"{month} 月 · {len(rows)} 天", item)
         for index in range(4):
             self.grid.columnconfigure(index, weight=1)
         for index in range(3):
             self.grid.rowconfigure(index, weight=1)
+        self.summary.set("按已记录的日盈亏汇总；未补齐月份不代表完整月收益。")
 
 
 class _BaseDialog:
@@ -1857,5 +1919,107 @@ class _ScreenshotPasteDialog(_BaseDialog):
             self.status.set("预览已取消；截图仍保留，可重新识别。")
             return
         self.values = dialog.values
+        self.confirmed = True
+        self.top.destroy()
+
+
+class _DailyReturnImportDialog(_BaseDialog):
+    """Review broker calendar observations before saving, not trading fills."""
+
+    def __init__(self, parent):
+        super().__init__(parent, "补录券商盈亏日历")
+        self.top.resizable(True, True)
+        self.images = []
+        self.status = tk.StringVar(value="Ctrl+V 粘贴完整月日历截图（最多 6 张），识别后请核对日期和金额。")
+        ttk.Label(self.form, textvariable=self.status, foreground=MUTED,
+                  wraplength=640).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 8))
+        ttk.Label(self.form, text="也可粘贴或编辑文本：2026-09-30 -24.00；休市填写：2026-09-25 休市。\n"
+                  "每行一天；确认后仅补充日历。同日券商记录优先，不改变资产或清仓记录。",
+                  foreground=MUTED, wraplength=640).grid(row=1, column=0, columnspan=3, sticky=tk.W)
+        self.editor = tk.Text(self.form, width=62, height=18, bg=PANEL_BG, fg=TEXT,
+                              insertbackground=TEXT, font=("Consolas", 11), undo=True)
+        self.editor.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW, pady=8)
+        self.form.rowconfigure(2, weight=1)
+        self.form.columnconfigure(0, weight=1)
+        self.paste_button = ttk.Button(self.form, text="粘贴截图", bootstyle="primary-outline",
+                                      command=self._paste_image)
+        self.paste_button.grid(row=3, column=0, sticky=tk.W)
+        self.save_button = ttk.Button(self.form, text="确认导入", bootstyle="primary", command=self._confirm)
+        self.save_button.grid(row=3, column=1, padx=8)
+        ttk.Button(self.form, text="取消", command=self.top.destroy).grid(row=3, column=2)
+        self.top.bind("<Control-v>", self._paste_image)
+        self.top.bind("<Control-V>", self._paste_image)
+        self._busy = False
+
+    def _paste_image(self, event=None):
+        if self._busy:
+            return "break"
+        from PIL import Image, ImageGrab
+
+        try:
+            clipboard = ImageGrab.grabclipboard()
+            if isinstance(clipboard, Image.Image):
+                images = [clipboard.copy()]
+            elif isinstance(clipboard, list):
+                if len(self.images) + len(clipboard) > MAX_SCREENSHOTS:
+                    self.status.set(f"一次最多 {MAX_SCREENSHOTS} 张截图。请先确认当前批次。")
+                    return "break"
+                images = []
+                for path in clipboard:
+                    with Image.open(path) as image:
+                        images.append(image.convert("RGB"))
+            else:
+                if event is None:
+                    self.status.set("剪贴板中没有图片；文本可以直接粘贴到下方编辑区。")
+                return None
+            if len(self.images) + len(images) > MAX_SCREENSHOTS:
+                self.status.set(f"一次最多 {MAX_SCREENSHOTS} 张截图。请先确认当前批次。")
+                return "break"
+        except Exception as exc:
+            self.status.set(f"读取截图失败：{exc}")
+            return "break"
+        self._busy = True
+        self.paste_button.state(["disabled"])
+        self.save_button.state(["disabled"])
+        self.status.set("正在本地识别，完成后请核对……")
+        self._result_queue = queue.Queue(maxsize=1)
+
+        def worker():
+            try:
+                self._result_queue.put((recognize_calendar_screenshots(images), images, None))
+            except Exception as exc:
+                self._result_queue.put((None, images, exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.top.after(100, self._poll)
+        return "break"
+
+    def _poll(self):
+        if not self.top.winfo_exists():
+            return
+        try:
+            rows, images, error = self._result_queue.get_nowait()
+        except queue.Empty:
+            self.top.after(100, self._poll)
+            return
+        self._busy = False
+        self.paste_button.state(["!disabled"])
+        self.save_button.state(["!disabled"])
+        if error:
+            self.status.set(f"识别失败：{error}；也可在下方填写日期与金额。")
+            return
+        self.images.extend(images)
+        for row in rows:
+            value = "休市" if row["status"] == "closed" else f"{row['pnl']:+.2f}"
+            self.editor.insert(tk.END, f"{row['date']} {value}\n")
+        total = sum(r["pnl"] for r in rows if r["pnl"] is not None)
+        self.status.set(f"本批识别 {len(rows)} 天，合计 {total:+,.2f} 元；请核对，确认前不保存。")
+
+    def _confirm(self):
+        try:
+            self.values = parse_calendar_text(self.editor.get("1.0", tk.END))
+        except ValueError as exc:
+            messagebox.showerror("请核对日历", str(exc), parent=self.top)
+            return
         self.confirmed = True
         self.top.destroy()
