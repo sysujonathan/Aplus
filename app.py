@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 from datetime import date
-from urllib.parse import urlencode
+from gui.tv import tv_link
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -147,12 +147,6 @@ def candles(frame,entry=None,stop=None,target=None):
                       paper_bgcolor='#171e28',plot_bgcolor='#171e28',font=dict(color='#dce3ef'),
                       xaxis=dict(gridcolor='#2a3443'),yaxis=dict(gridcolor='#2a3443'),template='plotly_dark')
     st.plotly_chart(fig,width='stretch')
-
-
-def tv_link(code,timeframe='daily'):
-    prefix,ticker = code.split('.')
-    return 'https://www.tradingview.com/chart/?'+urlencode({'symbol':{'sh':'SSE','sz':'SZSE','bj':'BSE'}[prefix]+':'+ticker,
-                                                        'interval':'W' if timeframe=='weekly' else 'D'})
 
 
 def desk_page():
