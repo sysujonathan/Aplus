@@ -4,6 +4,28 @@ from .h2_replay_chart import replay_view
 from .chart_renderer import render_chart
 
 
+def path_events(events, source, frame, cutoff):
+    """Copy visible events for drawing, without changing saved research paths."""
+    closes = dict(zip(frame.date.astype(str).str[:10], frame.close))
+    marks = []
+    for event in events:
+        day, kind = event['date'], event['kind']
+        if day > cutoff:
+            continue
+        label = {'trigger': '价格触发', 'fill': '模拟成交', 'exit': '退出',
+                 'holding': '持仓', 't1': 'T+1 限制', 'blocked': '成交受限'}.get(kind)
+        if not label or kind in ('holding', 't1', 'blocked') and day != cutoff:
+            continue
+        if kind == 'exit':
+            label = event.get('text', '').removeprefix('模拟退出：') or label
+            label = label.replace('MM 止盈', 'MM 退出')
+        price = event.get('price', closes.get(day))
+        if price is not None:
+            marks.append(dict(event, price=price, label=f'{source} · {label}',
+                              event_source=source))
+    return marks
+
+
 def render_comparison(store, row, cutoff, posthoc=False, *, size=None, viewport=(None,0,1.0)):
     if cutoff < row['setup_date']:
         raise ValueError('不能在 H2 成立之前展示此研究计划')
@@ -15,6 +37,8 @@ def render_comparison(store, row, cutoff, posthoc=False, *, size=None, viewport=
     index=indices[-1] if indices else 0
     # Payload uses only original events visible at the selected close.
     _,payload,events=replay_view(frame,original,index,False)
+    events = (path_events(events, 'SL1', frame, cutoff) +
+              path_events(row.get('candidate', {}).get('events', []), 'C', frame, cutoff))
     visible=frame.copy() if posthoc else frame[frame.date<=cutoff].copy()
     overlay=[]
     anchor=row.get('anchor',{})

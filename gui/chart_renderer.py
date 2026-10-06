@@ -283,15 +283,19 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             if event['date'] not in dates or event.get('price') is None:
                 continue
             x = dates.index(event['date'])
-            label = {'trigger': 'Trigger', 'fill': 'Fill', 'exit': 'Exit'}.get(event['kind'])
+            label = event.get('label') or {'trigger': 'Trigger', 'fill': 'Fill', 'exit': 'Exit'}.get(event['kind'])
             if label:
-                dx, dy = {'trigger': (-26, -34), 'fill': (20, -58), 'exit': (-12, -38)}[event['kind']]
+                dx, dy = {'trigger': (-26, -34), 'fill': (20, -58), 'exit': (-12, -38)}.get(event['kind'], (-26, -22))
+                candidate = event.get('event_source') == 'C'
+                if candidate:
+                    dx, dy = 26, abs(dy)
                 if x >= len(dates) - 4:
                     dx = min(dx, -18)
                 ax.annotate(label, xy=(x, event['price']), xytext=(dx, dy),
                             textcoords='offset points', ha='center', color=TEXT, fontsize=8,
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
-                            arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=0))
+                            arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=4 if event.get('event_source') else 0,
+                                            linestyle='--' if candidate else '-'))
         buf = io.BytesIO()
         # Default charts use a tight PNG crop. Retain its origin so mouse
         # coordinates remain correct when that image is later fitted to a slot.

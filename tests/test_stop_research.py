@@ -130,3 +130,44 @@ def test_service_saved_history_chart_cutoff_and_no_formal_state(tmp_path,h2_bars
         assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']==schema
         assert verify_frozen()==frozen
     finally:service.pool.shutdown()
+
+
+@pytest.mark.parametrize('posthoc', [False, True])
+def test_candidate_only_exit_day_draws_both_paths_without_future_events(tmp_path, h2_bars, h2_spec, monkeypatch, posthoc):
+    from matplotlib.axes import Axes
+    bars, original = example(h2_bars, h2_spec, 'rescue')
+    store = Store(tmp_path/'chart')
+    original['dataset_id'] = save_dataset(store, original['code'], bars, 'csv', '合成工程测试')
+    pair = compare_trade(bars, original, AnchorSettings(), ZERO)
+    before = deepcopy(pair)
+    baseline_day, candidate_day = original['exit_date'], pair['candidate']['exit_date']
+    assert baseline_day < candidate_day
+    marks = []
+    annotate = Axes.annotate
+    def capture(self, text, *args, **kwargs):
+        if text.startswith(('SL1 ·', 'C ·')):
+            marks.append((text, kwargs['xy'], kwargs['xytext'], kwargs['arrowprops']))
+        return annotate(self, text, *args, **kwargs)
+    monkeypatch.setattr(Axes, 'annotate', capture)
+    image = render_comparison(store, pair, candidate_day, posthoc, size=(1200, 700))
+    candles = image.info['replay_view']['candles']
+    baseline_exit = next(m for m in marks if m[0].startswith('SL1 ·') and '止损' in m[0])
+    candidate_exit = next(m for m in marks if m[0] == 'C · MM 退出')
+    assert candles[baseline_exit[1][0]]['date'] == baseline_day
+    assert candles[candidate_exit[1][0]]['date'] == candidate_day
+    assert baseline_exit[1][1] == original['exit']
+    assert candidate_exit[1][1] == pair['candidate']['exit']
+    assert candidate_exit[3]['linestyle'] == '--'
+    assert baseline_exit[3]['linestyle'] == '-'
+    marks.clear()
+    early = render_comparison(store, pair, baseline_day, posthoc, size=(1200, 700))
+    assert any(m[0] == 'C · 持仓' for m in marks)
+    assert not any(m[0] == 'C · MM 退出' for m in marks)
+    if not posthoc:
+        assert max(c['date'] for c in early.info['replay_view']['candles']) == baseline_day
+    # On the shared fill day, identical prices must have separate label positions.
+    marks.clear()
+    render_comparison(store, pair, original['entry_date'], posthoc, size=(1200, 700))
+    fills = [m for m in marks if m[0].endswith('模拟成交')]
+    assert len(fills) == 2 and fills[0][2] != fills[1][2]
+    assert pair == before
