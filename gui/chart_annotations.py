@@ -6,7 +6,7 @@ import logging
 
 import pandas as pd
 
-from .theme import BORDER, CONTROL_BG, TARGET
+from .theme import ANNOTATION, BORDER, CONTROL_BG, TARGET
 
 
 logger = logging.getLogger(__name__)
@@ -249,16 +249,24 @@ def info_panel_lines(payload, info, frame, open_gap_count=0):
     return lines
 
 
-def restyle_strategy_annotations(ax, strategy_type):
-    """保留策略语义，同时把旧白底标签接入石墨主题并修正 H2 的 H1 紫色。"""
+def restyle_strategy_annotations(ax, strategy_type, previous=None):
+    """Only strategy-created artists change color; candles retain red/green."""
     for text in ax.texts:
+        text.set_color(ANNOTATION)
         patch = text.get_bbox_patch()
         if patch is not None:
             patch.set_facecolor(CONTROL_BG)
             patch.set_edgecolor(BORDER)
             patch.set_alpha(.92)
-        if strategy_type in {"STRATEGY_GAP_H2", "STRATEGY_GAP_H2_ENHANCED"} and text.get_text() == "H1":
-            text.set_color("#8E24AA")
-            arrow = getattr(text, "arrow_patch", None)
-            if arrow is not None:
-                arrow.set_color("#8E24AA")
+        arrow = getattr(text, 'arrow_patch', None)
+        if arrow is not None:
+            arrow.set_color(ANNOTATION)
+    if previous is not None:
+        for artist in [*ax.lines, *ax.collections, *ax.patches]:
+            if id(artist) in previous:
+                continue
+            if hasattr(artist, 'set_color'):
+                artist.set_color(ANNOTATION)
+            else:
+                artist.set_edgecolor(ANNOTATION)
+                artist.set_facecolor(ANNOTATION)

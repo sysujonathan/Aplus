@@ -189,6 +189,63 @@ class Store:
         self.execute("INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)",
                      (now(), job, action, str(path), dumps(detail)))
 
+    def backtest_history(self, execution_model, *, include_deleted=False):
+        """Stable display identities in existing meta; reports remain immutable."""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            counter = db.execute("SELECT value FROM meta WHERE key='backtest_display_counter'").fetchone()
+            number = int(counter['value']) if counter else 0
+            history = []
+            for item in db.execute("SELECT id,status,created,result FROM jobs WHERE kind='backtest' "
+                                   "AND status NOT IN ('running','queued') ORDER BY created,rowid").fetchall():
+                row = dict(item)
+                try:
+                    report = json.loads(row['result'])
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(report, dict) or report.get('execution_model') != execution_model:
+                    continue
+                key = 'backtest_display:' + row['id']
+                saved = db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+                if saved:
+                    display = json.loads(saved['value'])
+                else:
+                    number += 1
+                    display = dict(number=number, name='', deleted=False)
+                    db.execute('INSERT INTO meta VALUES(?,?)', (key, dumps(display)))
+                row['display'] = display
+                if include_deleted or not display['deleted']:
+                    history.append(row)
+            db.execute("INSERT INTO meta VALUES('backtest_display_counter',?) ON CONFLICT(key) "
+                       "DO UPDATE SET value=excluded.value", (str(number),))
+            return list(reversed(history))
+
+    def rename_backtest(self, job, name):
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 40 or any(ord(c)<32 for c in name):
+            raise ValueError('名称请使用 1～40 个可见字符')
+        self._update_backtest_display(job, name=name.strip())
+
+    def set_backtest_deleted(self, job, deleted=True):
+        if type(deleted) is not bool:
+            raise ValueError('删除状态必须为布尔值')
+        self._update_backtest_display(job, deleted=deleted)
+
+    def _update_backtest_display(self, job, **changes):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT kind,status FROM jobs WHERE id=?', (job,)).fetchone()
+            if not row or row['kind'] != 'backtest' or row['status'] in ('running','queued'):
+                raise ValueError('只能管理已经结束或停止的回测')
+            key = 'backtest_display:' + job
+            saved = db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+            if not saved:
+                raise ValueError('请先加载回测记录')
+            display = json.loads(saved['value'])
+            display.update(changes)
+            db.execute('UPDATE meta SET value=? WHERE key=?', (dumps(display), key))
+            db.execute('INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)',
+                       (now(),job,'更新回测显示记录',str(self.path),dumps(changes)))
+
     def write_artifact(self, relative, content: bytes, job=None):
         # Windows non-strict resolve can return an extended path while another
         # thread creates the parent. Serialize path creation and atomic writes;

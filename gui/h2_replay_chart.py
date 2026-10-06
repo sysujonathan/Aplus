@@ -21,6 +21,11 @@ def replay_view(frame, record, event_index, posthoc=False):
                        mm_r_multiple=(fill['target'] - fill['price']) / risk)
     else:
         payload['replay_caption'] = '当时的次日计划' if payload.get('pending_state') == 'PENDING' else '当时机会已结束'
+    # The historical filled-plan card uses PENDING to retain its entry/stop
+    # prices. Keep the independently confirmed trigger from visible events.
+    triggers = [event for event in events if event['kind'] == 'trigger']
+    if triggers:
+        payload['replay_trigger_date'] = triggers[0]['date']
     marks = []
     for event in events:
         event = dict(event)
@@ -46,4 +51,5 @@ def render_replay(store, record, event_index, posthoc=False, *, size=None, viewp
     return render_chart(frame, payload, title,
                         {'signal_column': 'signal_gap_h2'}, replay_events=events,
                         view_bars=min(len(frame), max(1, bars or max(120, span))), size=size,
-                        view_offset=offset, price_scale=price_scale)
+                        view_offset=offset, price_scale=price_scale, code=record['code'],
+                        instrument_type=frame.attrs.get('instrument_type'))

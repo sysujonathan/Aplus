@@ -150,7 +150,7 @@ def test_info_panel_restores_plan_quality_rating_and_hit_factors():
     assert lines[2] == "命中：信号K质量 / 趋势过滤"
 
 
-def test_gap_h2_h1_marker_is_rethemed_purple_in_gui_adapter():
+def test_gap_h2_h1_marker_uses_neutral_colors_in_gui_adapter():
     figure, axis = plt.subplots()
     annotation = axis.annotate(
         "H1",
@@ -163,8 +163,8 @@ def test_gap_h2_h1_marker_is_rethemed_purple_in_gui_adapter():
 
     restyle_strategy_annotations(axis, "STRATEGY_GAP_H2")
 
-    assert to_hex(annotation.get_color()).upper() == "#8E24AA"
-    assert to_hex(annotation.arrow_patch.get_edgecolor()).upper() == "#8E24AA"
+    assert to_hex(annotation.get_color()).upper() == "#CBD5E1"
+    assert to_hex(annotation.arrow_patch.get_edgecolor()).upper() == "#CBD5E1"
     assert to_hex(annotation.get_bbox_patch().get_facecolor()).upper() == CONTROL_BG
     plt.close(figure)
 
@@ -259,3 +259,27 @@ def test_watch_render_keeps_original_plan_and_quality_with_new_market(monkeypatc
     assert captured["lines"][0] == "Entry 10.00 · SL 9.00 · TP1 12.00 · (2.00R)"
     assert "Quality 0.75" in captured["lines"][1]
     assert "PB bars 4" in captured["lines"][1]
+
+
+def test_neutral_strategy_colors_preserve_existing_candle_artists():
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex
+    from gui.theme import ANNOTATION, UP, DOWN
+    fig, ax = plt.subplots()
+    try:
+        wick, = ax.plot([0,0], [9,11], color=UP)
+        candle = ax.scatter([1], [10], color=DOWN)
+        previous = {id(a) for a in [*ax.lines, *ax.collections, *ax.patches]}
+        level, = ax.plot([0,3], [12,12], color='green', linestyle='--')
+        mark = ax.scatter([2], [11], color='red')
+        annotation = ax.annotate('H2', xy=(2,11), xytext=(1,13), color='red',
+                                 arrowprops=dict(arrowstyle='-',color='red'))
+        restyle_strategy_annotations(ax, 'STRATEGY_GAP_H2', previous)
+        assert to_hex(wick.get_color()).upper() == UP
+        assert to_hex(candle.get_facecolors()[0]).upper() == DOWN
+        assert to_hex(level.get_color()).upper() == ANNOTATION
+        assert to_hex(mark.get_facecolors()[0]).upper() == ANNOTATION
+        assert to_hex(annotation.arrow_patch.get_edgecolor()).upper() == ANNOTATION
+        assert annotation.xy == (2,11) and level.get_linestyle() == '--'
+    finally:
+        plt.close(fig)

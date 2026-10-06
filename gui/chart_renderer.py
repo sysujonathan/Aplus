@@ -10,12 +10,13 @@ from .chart_annotations import (
     GAP_STRATEGIES, gap_annotation_frame,
 )
 from .theme import (
-    AVERAGE, BORDER, CHART_BG, CONTROL_BG, DOWN, GRID, MUTED, STOP, TARGET, TEXT, UP,
+    ANNOTATION, AVERAGE, BORDER, CHART_BG, CONTROL_BG, DOWN, GRID, MUTED, STOP, TARGET, TEXT, UP,
 )
 
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
-                 replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0):
+                 replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0,
+                 code=None, instrument_type=None):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -66,7 +67,18 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             strategy_plot = structure.loc[structure.date.isin(visible.date)].reset_index(drop=True)
         anchor = str(payload.get('setup_date') or payload.get('asof') or '')[:10]
         structure_unavailable = structure is None or anchor not in visible.date.astype(str).str[:10].tolist()
-    decimals = payload.get('price_decimals', 2) if h2 else 2
+    # Precision belongs to the security, not the strategy or observed digits.
+    code = code or frame.attrs.get('code')
+    instrument_type = instrument_type or frame.attrs.get('instrument_type')
+    if code or instrument_type:
+        from decimal import Decimal
+        from workbench.prices import tick_size
+        tick = tick_size(code, float(visible.close.iloc[-1]), instrument_type=instrument_type)
+        decimals = max(0, -Decimal(str(tick)).as_tuple().exponent)
+    else:
+        # Compatibility for old stock charts without security context; H2
+        # plans already carry precision established by the same tick rules.
+        decimals = payload.get('price_decimals', 2) if h2 else 2
     for trend in trend_specs(strategy_type):
         if trend.column in plot and plot[trend.column].notna().any():
             adds.append(
@@ -172,6 +184,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         open_gap_count = 0
         annotate = getattr(strategy, "annotate_chart", None)
         if not h2 and not structure_unavailable and callable(annotate):
+            previous = {id(artist) for artist in [*ax.lines, *ax.collections, *ax.patches]}
             result = annotate(
                 ax,
                 strategy_plot,
@@ -180,7 +193,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             )
             if isinstance(result, int):
                 open_gap_count = result
-            restyle_strategy_annotations(ax, strategy_type)
+            restyle_strategy_annotations(ax, strategy_type, previous)
             if strategy_type in GAP_STRATEGIES and 'GAP_H2' not in strategy_type:
                 for text in list(ax.texts):
                     if text.get_text() == 'H2':
@@ -253,8 +266,14 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                 ax.annotate(label, xy=(x, event['price']), xytext=(dx, dy),
                             textcoords='offset points', ha='center', color=TEXT, fontsize=8,
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
-                            arrowprops=dict(arrowstyle='-', color=TEXT, shrinkB=0))
+                            arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=0))
         buf = io.BytesIO()
+        # Default charts use a tight PNG crop. Retain its origin so mouse
+        # coordinates remain correct when that image is later fitted to a slot.
+        fig.canvas.draw()
+        crop = fig.get_tightbbox(fig.canvas.get_renderer()).padded(.02) if not size else None
+        factor = 110 / fig.dpi
+        crop_x, crop_y = (crop.x0*110, crop.y0*110) if crop else (0, 0)
         fig.savefig(
             buf,
             format="png",
@@ -265,10 +284,14 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         )
         buf.seek(0)
         image = Image.open(buf).copy()
-        if size:
-            position = ax.get_position()
-            image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
-                                            price_x=(position.x0*size[0], position.x1*size[0]))
+        box, volume_box = ax.get_window_extent(), axes[2].get_window_extent()
+        image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
+            price_x=(box.x0*factor-crop_x, box.x1*factor-crop_x),
+            price_y=(image.height-(box.y1*factor-crop_y), image.height-(box.y0*factor-crop_y)),
+            plot_y=(image.height-(box.y1*factor-crop_y), image.height-(volume_box.y0*factor-crop_y)),
+            candle_x=[float(ax.transData.transform((i, 0))[0])*factor-crop_x for i in range(len(plot))],
+            candles=visible[['date', 'open', 'high', 'low', 'close']].to_dict('records'),
+            decimals=decimals)
         return image
     finally:
         if fig is not None:

@@ -1,5 +1,6 @@
 """Real Tk layout and interaction on Windows; Linux CI runs pure engine tests."""
 import os
+import gc
 import tkinter as tk
 from unittest.mock import Mock, patch
 
@@ -14,6 +15,15 @@ from workbench.market import save_dataset
 from tests.test_h2_plan import h2_bars, h2_spec, append_bar
 
 
+@pytest.fixture(autouse=True)
+def collect_destroyed_desktop_on_main_thread():
+    yield
+    # Tk variables in destroyed dialog/button cycles must finalize here,
+    # after the test's local references are released. Otherwise a later
+    # Service worker can trigger GC and call Tcl from that background thread.
+    gc.collect()
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
 def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_bars, h2_spec):
     store = Store(tmp_path / 'gui')
@@ -24,6 +34,29 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         assert trade.tk.call(
             "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
         ) == "center"
+        from gui.chart_renderer import render_chart
+        image = render_chart(h2_bars, {}, '', {})
+        window.geometry('1600x1000')
+        window.update()
+        for count in (1,4,6,9):
+            window.chart.set_layout(count)
+            window.update()
+            slot = window.chart._slots[0]
+            slot._image = image
+            slot._fit_image()
+            window.update()
+            info = image.info['replay_view']
+            i = len(info['candles'])//2
+            width, height = slot._photo.width(), slot._photo.height()
+            x = (slot.chart_label.winfo_width()-width)/2 + info['candle_x'][i]*width/image.width
+            y = (slot.chart_label.winfo_height()-height)/2 + sum(info['price_y'])/2*height/image.height
+            chart_height = slot.chart_label.winfo_height()
+            slot.chart_label.event_generate('<Motion>',x=round(x),y=round(y))
+            window.update()
+            assert str(info['candles'][i]['date'])[:10] in slot.readout.get()
+            assert slot.chart_label.winfo_height() == chart_height
+            slot.show_placeholder()
+            assert slot._image is None and '移到 K 线' in slot.readout.get()
         window._switch_section('afterhours')
         page = window.afterhours
         for size in ('2560x1440', '1600x1000', '1280x760'):
@@ -154,6 +187,31 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             dialogs = [w for w in page.winfo_children() if w.winfo_class() == 'Toplevel']
             assert '覆盖提示与失败' not in ''.join(texts(dialogs[0]))
             assert '覆盖提示与失败' in ''.join(texts(dialogs[1]))
+            with patch('gui.afterhours.simpledialog.askstring', return_value='主板基准') as prompt:
+                page._rename_history()
+                assert prompt.call_args.kwargs['initialvalue'] == ''
+            assert '主板基准' in page.result_title.get()
+            assert page._compare_ids == jobs
+            assert page._history_rows[jobs[0]][0]['display']['number'] == 1
+            with patch('gui.afterhours.messagebox.askyesno', return_value=False):
+                page._delete_history()
+            assert jobs[0] in page._history_rows
+            with patch('gui.afterhours.messagebox.askyesno', return_value=True):
+                page._delete_history()
+                assert jobs[0] not in page._history_rows and page._shown_job == jobs[1]
+                assert page._compare_ids == [jobs[1]]
+                page._delete_history()
+            assert not page.records and not page.report and not page.tree.get_children()
+            assert page.result_title.get() == '暂无回测记录'
+            page._restore_history_dialog()
+            window.update()
+            restore_dialog = [w for w in page.winfo_children() if w.winfo_class() == 'Toplevel'][-1]
+            table = next(w for w in restore_dialog.winfo_children() if isinstance(w, __import__('ttkbootstrap').Treeview))
+            table.selection_set(jobs[0])
+            window.update()
+            next(w for w in restore_dialog.winfo_children() if isinstance(w, __import__('ttkbootstrap').Button)).invoke()
+            assert page._shown_job == jobs[0] and '主板基准' in page.result_title.get()
+            assert page._history_rows[jobs[0]][0]['display']['number'] == 1
         finally:
             service.pool.shutdown()
     finally:

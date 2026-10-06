@@ -57,3 +57,21 @@ def test_other_strategy_annotation_routes_survive_h2_integration(key):
     assert args[2] == key
     assert kwargs['anchor_signal_date'] == payload['setup_date']
     assert kwargs['sl_price'] == 9. and kwargs['tp1'] == 12.
+
+
+@pytest.mark.parametrize('code,kind,decimals', [('sh.600000', None, 2), ('sh.510300', 'etf', 3),
+                                             ('sz.159915', 'exchange_fund', 3)])
+def test_non_h2_readout_precision_comes_from_confirmed_instrument(code, kind, decimals):
+    from gui.replay_navigation import candle_readout
+    frame = _bars()
+    frame.loc[frame.index[-1], ['open', 'high', 'low', 'close']] = [1.234, 1.267, 1.201, 1.245]
+    image = render_chart(frame, {}, '', {}, code=code, instrument_type=kind, size=(1000, 600))
+    info = image.info['replay_view']
+    assert info['decimals'] == decimals
+    text = candle_readout(info, info['candle_x'][-1], sum(info['price_y'])/2)
+    assert f'{1.234:.{decimals}f}' in text and f'{1.245:.{decimals}f}' in text
+
+
+def test_unknown_fund_does_not_silently_assume_stock_tick():
+    with pytest.raises(ValueError, match='尚未确认'):
+        render_chart(_bars(), {}, '', {}, code='sh.510300')

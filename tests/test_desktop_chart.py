@@ -50,7 +50,35 @@ def test_chart_without_signal_or_price_levels_renders_without_mutation():
     corner = image.convert("RGB").getpixel((0, 0))
     expected = tuple(int(CHART_BG[i:i + 2], 16) for i in (1, 3, 5))
     assert max(abs(a - b) for a, b in zip(corner, expected)) <= 2
+    info = image.info['replay_view']
+    from gui.replay_navigation import candle_readout
+    for i in (0,4,9):
+        text = candle_readout(info, info['candle_x'][i], sum(info['price_y'])/2)
+        assert frame.date.iloc[i] in text and '收 10.50' in text
+    assert 0 < info['price_x'][0] < info['candle_x'][0] < info['candle_x'][-1] < info['price_x'][1] < image.width
     pd.testing.assert_frame_equal(frame, before)
+
+
+def test_multichart_hover_maps_scaled_image_and_centered_margins():
+    from PIL import Image
+    from types import SimpleNamespace
+    image = Image.new('RGB',(1000,600))
+    image.info['replay_view'] = dict(price_x=(100,900),plot_y=(50,550),candle_x=[200,400,600],
+        candles=[dict(date=f'2026-01-0{i}',open=1.23,high=1.25,low=1.21,close=1.24) for i in (1,2,3)])
+    panel = Mock(_image=image)
+    panel._photo.width.return_value=500
+    panel._photo.height.return_value=300
+    panel.chart_label.winfo_width.return_value=700
+    panel.chart_label.winfo_height.return_value=500
+    ChartPanel._hover_candle(panel,SimpleNamespace(x=300,y=200))
+    assert '2026-01-02' in panel.readout.set.call_args.args[0]
+    ChartPanel._hover_candle(panel,SimpleNamespace(x=300,y=360))
+    assert '2026-01-02' in panel.readout.set.call_args.args[0]
+    ChartPanel._hover_candle(panel,SimpleNamespace(x=50,y=200))
+    assert '移到 K 线' in panel.readout.set.call_args.args[0]
+    panel._image=None
+    ChartPanel._hover_candle(panel,SimpleNamespace(x=300,y=200))
+    assert '移到 K 线' in panel.readout.set.call_args.args[0]
 
 
 def test_watch_chart_uses_latest_market_but_keeps_anchor_payload(tmp_path):

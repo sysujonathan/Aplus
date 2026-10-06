@@ -2,14 +2,14 @@
 from workbench.h2_replay import LABELS
 
 
-def receipt_time(created):
+def receipt_time(created, full_date=False):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     try:
         stamp = datetime.fromisoformat(created)
         if stamp.tzinfo:
             stamp = stamp.astimezone(ZoneInfo('Asia/Shanghai'))
-        return stamp.strftime('%m-%d %H:%M')
+        return stamp.strftime('%Y-%m-%d %H:%M' if full_date else '%m-%d %H:%M')
     except (ValueError, TypeError):
         return str(created)[:16]
 

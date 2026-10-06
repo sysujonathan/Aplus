@@ -7,6 +7,7 @@ from PIL import Image, ImageTk
 
 from .chart_renderer import render_chart
 from .chart_items import ChartItem
+from .replay_navigation import candle_readout
 from .theme import (
     ACCENT,
     APP_BG,
@@ -71,7 +72,7 @@ class ChartPanel(native_ttk.Frame):
         self._image = None
         self._photo = None
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
         self.header = tk.Frame(self, bg=CONTROL_BG, height=24)
         self.header.grid(row=0, column=0, sticky=tk.EW)
@@ -102,8 +103,19 @@ class ChartPanel(native_ttk.Frame):
         )
         self._tv_btn.pack(side=tk.RIGHT, fill=tk.Y)
 
+        self.readout = tk.StringVar(value='移到 K 线上查看开、高、低、收')
+        self.readout_frame = native_ttk.Frame(self, style='ChartBody.TFrame', height=42)
+        self.readout_frame.grid(row=1, column=0, sticky=tk.EW)
+        self.readout_frame.pack_propagate(False)
+        readout_label = native_ttk.Label(self.readout_frame, textvariable=self.readout, style='ChartBody.TLabel',
+                                        font=('Microsoft YaHei UI', -12), padding=(6,3))
+        readout_label.pack(fill=tk.BOTH, expand=True)
+        def size_readout(event):
+            readout_label.configure(wraplength=max(1,event.width-12))
+            self.readout_frame.configure(height=42 if event.width<480 else 24)
+        self.readout_frame.bind('<Configure>', size_readout)
         self.chart_frame = native_ttk.Frame(self, style="ChartBody.TFrame")
-        self.chart_frame.grid(row=1, column=0, sticky=tk.NSEW)
+        self.chart_frame.grid(row=2, column=0, sticky=tk.NSEW)
         self.chart_frame.grid_propagate(False)
         self.chart_frame.columnconfigure(0, weight=1)
         self.chart_frame.rowconfigure(0, weight=1)
@@ -114,6 +126,8 @@ class ChartPanel(native_ttk.Frame):
             anchor=tk.CENTER,
         )
         self.chart_label.grid(row=0, column=0, sticky=tk.NSEW)
+        self.chart_label.bind('<Motion>', self._hover_candle)
+        self.chart_label.bind('<Leave>', lambda e: self.readout.set('移到 K 线上查看开、高、低、收'))
         self.chart_frame.bind("<Configure>", lambda _event: self._fit_image())
         for widget in (self, self.header, self.title_label, self.chart_label):
             widget.bind("<Button-1>", self._activate, add="+")
@@ -142,6 +156,7 @@ class ChartPanel(native_ttk.Frame):
             self._tv_btn.configure(bg=DROP_TARGET)
 
     def show_placeholder(self, title="空位"):
+        self.readout.set('移到 K 线上查看开、高、低、收')
         self._code = None
         self._observation_id = None
         self._image = None
@@ -166,6 +181,8 @@ class ChartPanel(native_ttk.Frame):
         self._image = None
         self._photo = None
         self._title_var.set("加载中…")
+        if hasattr(self, 'readout'):
+            self.readout.set('移到 K 线上查看开、高、低、收')
         self.chart_label.configure(image="", text="正在生成 K 线…")
         self._tv_btn.configure(state=tk.DISABLED)
         if store is None or observation_id is None:
@@ -225,6 +242,8 @@ class ChartPanel(native_ttk.Frame):
                 instance.get_metadata(),
                 strategy=instance,
                 strategy_type=observation["strategy"],
+                code=self._code,
+                instrument_type=bars.attrs.get('instrument_type'),
             )
             chart_identity = f"{self._code}  {name}".rstrip()
             if mode == "watch":
@@ -259,6 +278,7 @@ class ChartPanel(native_ttk.Frame):
             self._fit_image()
         except Exception as exc:
             self._code = None
+            self._image = self._photo = None
             self._title_var.set("加载失败")
             self.chart_label.configure(image="", text=f"图表加载失败：{exc}")
 
@@ -277,6 +297,20 @@ class ChartPanel(native_ttk.Frame):
         resized = self._image.resize(size, Image.Resampling.LANCZOS)
         self._photo = ImageTk.PhotoImage(resized, master=self)
         self.chart_label.configure(image=self._photo, text="")
+        self.readout.set('移到 K 线上查看开、高、低、收')
+
+    def _hover_candle(self, event):
+        text = ''
+        if self._image is not None and self._photo is not None:
+            # The fitted image is centered, with possible letterboxing. Convert
+            # both resize and margins back to original PNG coordinates.
+            w, h = self._photo.width(), self._photo.height()
+            left = (self.chart_label.winfo_width()-w)/2
+            top = (self.chart_label.winfo_height()-h)/2
+            if left <= event.x < left+w and top <= event.y < top+h:
+                x, y = (event.x-left)*self._image.width/w, (event.y-top)*self._image.height/h
+                text = candle_readout(self._image.info.get('replay_view', {}), x, y)
+        self.readout.set(text or '移到 K 线上查看开、高、低、收')
 
     def _open_tv(self):
         if self._code:

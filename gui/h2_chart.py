@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from workbench.h2_plan import STATE_LABELS
-from .theme import ACCENT, BORDER, CONTROL_BG, MUTED, STOP, TARGET, TEXT
+from .theme import ACCENT, ANNOTATION, BORDER, CONTROL_BG, MUTED, STOP, TARGET, TEXT
 
 
 def draw_h2(ax, plot, plan):
@@ -25,17 +25,22 @@ def draw_h2(ax, plot, plan):
         half_width = max(12, len(label) * 3.5) * scale
         dx = max((box.x0 + half_width - px) / scale,
                  min(dx, (box.x1 - half_width - px) / scale))
+        # A vertical leader above H2 looks like an extension of its wick.
+        # Use an offset dashed leader with an air gap at the actual candle high.
+        if label == 'H2':
+            dx = -28 if px > (box.x0 + box.x1) / 2 else 28
         if py + dy * scale > box.y1 - 16 * scale:
             dy = -18
         elif py + dy * scale < box.y0 + 16 * scale:
             dy = 18
         ax.annotate(label, xy=(x, price), xytext=(dx, dy), textcoords='offset points',
                     ha='center', va='bottom' if dy >= 0 else 'top',
-                    fontsize=8, color=color,
+                    fontsize=8, color=ANNOTATION,
                     bbox=dict(boxstyle='round,pad=.15', facecolor=CONTROL_BG,
                               edgecolor='none', alpha=.9),
-                    arrowprops=dict(arrowstyle='-', color=color, lw=.9,
-                                    shrinkA=2, shrinkB=0), annotation_clip=True)
+                    arrowprops=dict(arrowstyle='-', color=ANNOTATION, lw=.9,
+                                    linestyle='--' if label == 'H2' else '-',
+                                    shrinkA=2, shrinkB=5 if label == 'H2' else 0), annotation_clip=True)
 
     for label, day_key, price_key, color, offset in (
         ('BO', 'bo_date', 'bo_high', ACCENT, (0, 16)),
@@ -46,8 +51,8 @@ def draw_h2(ax, plot, plan):
         mark(label, plan.get(day_key), plan.get(price_key), color, offset)
     # The pullback setup is not the subsequent upside trigger. Only a verified
     # trigger gets an H2 label; invalid/expired/pending setups remain signals.
-    trigger_day = plan.get('pending_end_date')
-    if state == 'TRIGGERED' and trigger_day in dates:
+    trigger_day = plan.get('replay_trigger_date') or (plan.get('pending_end_date') if state == 'TRIGGERED' else None)
+    if trigger_day in dates:
         trigger_high = float(plot.iloc[dates.index(trigger_day)].high)
         mark('H2', trigger_day, trigger_high, TARGET, (0, 30))
     floor, top = plan.get('gap_floor'), plan.get('gap_top')

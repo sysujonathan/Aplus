@@ -122,6 +122,32 @@ def test_future_append_cannot_change_past_events_or_shape(h2_spec, h2_bars):
     assert full.date.max() == future.date.max() and len(events) == 1
 
 
+def test_replay_h2_marks_actual_trigger_after_fill_without_future_leak(h2_spec, h2_bars):
+    import matplotlib.pyplot as plt
+    from gui.h2_chart import draw_h2
+    bars = append_bar(h2_bars, 11.8, 10.8)
+    record = study(h2_spec, bars)[0]
+    trigger = next(e for e in record['events'] if e['kind'] == 'trigger')
+    assert trigger['date'] != record['setup_date']
+    for index in (0, len(record['events'])-1):
+        visible, payload, _ = replay_view(bars, record, index, posthoc=True)
+        fig, ax = plt.subplots()
+        try:
+            ax.set_xlim(-1, len(visible))
+            ax.set_ylim(8, 15)
+            draw_h2(ax, visible, payload)
+            marks = [text for text in ax.texts if text.get_text() == 'H2']
+            assert bool(marks) == (index > 0)
+            if marks:
+                dates = visible.date.tolist()
+                position = dates.index(trigger['date'])
+                assert marks[0].xy == (position, float(visible.iloc[position].high))
+                assert marks[0].arrow_patch.get_linestyle() == '--'
+                assert marks[0].arrow_patch.shrinkB >= 5
+        finally:
+            plt.close(fig)
+
+
 def test_boundaries_signs_ties_and_open_exclusion():
     records = [dict(id=str(i), code='sh.600000', setup_date=f'2025-01-{i + 1:02}',
                     status='closed', r_multiple=value) for i, value in enumerate([2, 2, 1, 0, -1, -2])]
@@ -179,9 +205,16 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
         assert image.width > 800 and image.height > 300
         native = render_replay(store, records[0], 0, size=(900, 550))
         assert native.size == (900, 550)
+        info = native.info['replay_view']
+        assert (info['price_y'][1]-info['price_y'][0])/(info['plot_y'][1]-info['price_y'][1]) == pytest.approx(7)
+        assert max(r['date'] for r in info['candles']) <= records[0]['events'][0]['date']
         zoomed = render_replay(store, records[0], 0, size=(900, 550), viewport=(30, 20, .5))
         assert zoomed.info['replay_view']['bars'] == 30
         assert zoomed.info['replay_view']['offset'] == 20
+        assert len(zoomed.info['replay_view']['candles']) == 30
+        xs = zoomed.info['replay_view']['candle_x']
+        assert zoomed.info['replay_view']['price_x'][1]-xs[-1] < 2*(xs[1]-xs[0])
+        assert zoomed.info['replay_view']['candles'][0]['date'] == bars.date.iloc[zoomed.info['replay_view']['total']-50]
         assert zoomed.info['replay_view']['total'] == int((bars.date <= records[0]['events'][0]['date']).sum())
         assert native.tobytes() != zoomed.tobytes()
         assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == schema_before
