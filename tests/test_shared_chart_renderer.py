@@ -44,6 +44,13 @@ def test_other_strategy_annotation_routes_survive_h2_integration(key):
     frame = _bars()
     payload = {'asof': frame.date.iloc[-1], 'setup_date': frame.date.iloc[-1],
                'entry': 10., 'stop': 9., 'target': 12.}
+    # 缺口路由需要已核验结构；缺少结构时不允许绘图器补造价格。
+    prefix = {'STRATEGY_STRUCTURAL_GAP': 'struct_gap',
+              'STRATEGY_GAP_PINBAR': 'gap_pinbar'}.get(key)
+    if prefix:
+        frame.loc[frame.index[-1], prefix+'_floor_exact'] = 9.
+        frame.loc[frame.index[-1], prefix+'_top_exact'] = 9.5
+        frame.loc[frame.index[-1], prefix+'_prior_low'] = 6.5 if prefix == 'struct_gap' else 6.
     render_chart(frame, payload, '', strategy.get_metadata(), strategy=strategy, strategy_type=key)
     strategy.annotate_chart.assert_called_once()
     args, kwargs = strategy.annotate_chart.call_args

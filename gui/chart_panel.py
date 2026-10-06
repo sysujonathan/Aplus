@@ -237,7 +237,7 @@ class ChartPanel(native_ttk.Frame):
                 if h2:
                     signal_day = payload.get('h2_setup_date', signal_day)
                     title = (f"{chart_identity}  ·  {spec.name} · {period}"
-                             f" · 行情 {current_day} · H2信号 {signal_day}")
+                             f" · 行情 {current_day} · 机会起始 {signal_day}")
                     title += (f" · 明日计划基于{payload['plan_asof']}收盘"
                               if payload.get('pending_state') == 'PENDING'
                               else f" · {STATE_LABELS[payload['pending_state']]}")

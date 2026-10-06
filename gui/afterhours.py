@@ -635,7 +635,7 @@ class AfterhoursPage(ttk.Frame):
         self.detail.focus_set()
         self.detail_title.set(f'{self._trade["code"]} · H2 {self._trade["setup_date"]} · {LABELS[self._trade["status"]]}')
         self.timeline.delete(*self.timeline.get_children())
-        titles = {'setup': 'H2 成立', 'plan': '更新次日计划', 'trigger': '价格触发', 'fill': '模拟成交',
+        titles = {'setup': '待挂机会形成', 'plan': '更新次日计划', 'trigger': '价格触发', 'fill': '模拟成交',
                   'holding': '持仓', 'exit': '模拟退出', 't1': 'T+1 限制', 'blocked': '成交受限'}
         for i, event in enumerate(self._trade['events']):
             self.timeline.insert('', tk.END, iid=str(i), values=(event['date'], titles.get(event['kind'], LABELS.get(event['kind'], event['kind']))))
@@ -718,10 +718,10 @@ class AfterhoursPage(ttk.Frame):
 
     def _settings_dialog(self):
         fields = [('lookback', '突破观察窗口（根）'), ('min_pullback', '最短回调（根）'),
-                  ('max_pullback', '最长回调（根）'), ('wait_bars', 'H2 后等待期限（根）'),
+                  ('max_pullback', '最长回调（根）'), ('wait_bars', '机会形成后等待期限（根）'),
                   ('max_risk_pct', '初始风险上限（%，0 不筛选）'), ('min_mm_r', '最低 MM 收益（R，0 不筛选）')]
         self._parameter_dialog('GAP H2 · 本次研究条件', self.settings, fields, H2Settings, 'settings',
-                               '只作用于下次回测；不改变盘前正式策略。\n风险与 MM 是额外筛选条件，在 H2 成立日执行。')
+                               '只作用于下次回测；不改变盘前正式策略。\n风险与 MM 是额外筛选条件，在待挂机会形成日执行。')
 
     def _parameter_dialog(self, title, obj, fields, cls, attribute, note):
         dialog = ttk.Toplevel(master=self)
@@ -763,7 +763,7 @@ class AfterhoursPage(ttk.Frame):
         costs = receipt.get('assumptions', asdict(self.costs))
         text = ('此结果的研究条件（未运行时显示下次条件）：\n'
                 + f'突破观察 {settings["lookback"]} 根；回调 {settings["min_pullback"]}～{settings["max_pullback"]} 根；'
-                + f'H2 后等待 {settings["wait_bars"]} 根\n'
+                + f'机会形成后等待 {settings["wait_bars"]} 根\n'
                 + f'风险上限 {settings["max_risk_pct"]}%；最低 MM {settings["min_mm_r"]}R（0 表示不筛选）\n\n'
                 + f'成交假设：最长持有 {costs["holding_bars"]} 个交易日；单边佣金 {costs["commission_bps"]} 基点；'
                 + f'卖出税费 {costs["sell_tax_bps"]} 基点；单边滑点 {costs["slippage_bps"]} 基点\n'

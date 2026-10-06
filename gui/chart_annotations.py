@@ -82,6 +82,62 @@ def annotation_frame(frame):
     return frame.tail(120).reset_index(drop=True).copy()
 
 
+def gap_annotation_frame(frame, payload, strategy_type):
+    """只读恢复归档缺口结构；不让冻结绘图器用最新突破或估算低点冒充原结构。"""
+    prefixes = {
+        'STRATEGY_STRUCTURAL_GAP': ('struct_gap', 'is_breakout'),
+        'STRATEGY_GAP_PINBAR': ('gap_pinbar', 'is_breakout_gp'),
+        'STRATEGY_GAP_H2': ('gap_h2', 'is_breakout_h2'),
+        'STRATEGY_GAP_H2_ENHANCED': ('gap_h2', 'is_breakout_h2'),
+    }
+    prefix, bo_column = prefixes[strategy_type]
+    anchor = str(payload.get('setup_date') or payload.get('asof') or '')[:10]
+    data = frame.reset_index(drop=True).copy()
+    matches = data.index[data.date.astype(str).str[:10] == anchor]
+    if not len(matches):
+        return None
+    position = int(matches[0])
+    exact_columns = [prefix + suffix for suffix in ('_floor_exact', '_prior_low', '_top_exact')]
+    stop, target = _number(payload.get('stop')), _number(payload.get('target'))
+    if all(column in data and pd.notna(data.loc[position, column]) for column in exact_columns):
+        # 同日重算结构也要与归档计划口径一致，不能混用两份价位。
+        floor, prior, top = (float(data.loc[position, column]) for column in exact_columns)
+        expected_target = floor+top-prior if prefix == 'struct_gap' else 2*floor-prior
+        if (stop is not None and target is not None
+                and abs(floor-stop) <= .011 and abs(expected_target-target) <= .021):
+            return data
+    if stop is None or target is None or bo_column not in data:
+        return None
+    # 归档只保存价格，必须由真实突破窗口同时印证 Floor 和 MM，
+    # 不能用 floor*0.98 或最新突破高点补造结构。
+    candidates = []
+    from config import settings
+    lookback = getattr(settings, 'STRUCT_GAP_LOOKBACK', 60)
+    for bo in data.index[data[bo_column].fillna(False).astype(bool)]:
+        if bo > position or bo < lookback + 1:
+            continue
+        window = data.iloc[bo-lookback-1:bo-1]
+        floor, prior = float(window.high.max()), float(window.low.min())
+        top = float(data.iloc[bo:position].low.min()) if bo < position else None
+        expected_target = floor + top - prior if prefix == 'struct_gap' and top is not None else 2*floor-prior
+        if abs(floor-stop) <= .011 and abs(expected_target-target) <= .021 and top is not None:
+            candidates.append((bo, floor, prior, top))
+    if len(candidates) != 1:
+        return None
+    bo, floor, prior, top = candidates[0]
+    if top <= floor:
+        return None
+    for column, value in zip(exact_columns, (floor, prior, top)):
+        data.loc[position, column] = value
+    entry = _number(payload.get('entry'))
+    if entry is not None:
+        column = 'entry_struct_gap' if prefix == 'struct_gap' else 'entry_' + prefix
+        data.loc[position, column] = entry
+    # 仅标注副本定位原突破，不能被原形态之后的突破抢走丈量窗口。
+    data.loc[bo+1:position, bo_column] = False
+    return data
+
+
 def signal_context(strategy, frame, payload):
     """按原信号日提取信息框语义；关注图推进行情时不改写原计划。"""
     if strategy is None:
