@@ -89,11 +89,19 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         page._show_report({'status': 'completed'}, report, records)
         identity = records[0]['id']
         assert len(page.tree.get_children()) == 1
+        page._names[records[0]['code']] = '测试股票'
         with patch('gui.afterhours.render_replay', return_value=Image.new('RGB', (1000, 500))) as render:
             page.tree.selection_set(identity)
             page._open_selected()
             window.update()
             assert page._detail_visible and page._event_index == 0
+            assert '测试股票' in page.detail_title.get()
+            for size in ('1280x760', '1600x1000', '2560x1440'):
+                window.geometry(size)
+                window.update()
+                assert page.timeline.winfo_width() >= 260
+                assert page.timeline_host.winfo_width() < page.chart.winfo_width()*.5
+                assert page.timeline.column('date', 'width') >= 100
             page._step_event(1)
             window.update()
             assert page._event_index == 1
@@ -152,8 +160,8 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         from workbench.service import Service
         from tests.test_workbench import wait_for
         from workbench.market import BOARDS
-        # Layout/replay work above can leave temporary Tk objects in cycles.
-        # Finalize those on the owning thread before starting background jobs.
+        # Resizing replaces history-card Tk variables. Collect their dead
+        # callback cycles on this UI thread before starting a Service worker.
         gc.collect()
         service = Service(store)
         page.job = None

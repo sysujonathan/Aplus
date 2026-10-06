@@ -177,10 +177,21 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             **kwargs,
         )
         ax = axes[0]
-        for axis in axes:
+        if size:
+            # Reserve coordinate-label pixels, not a percentage of a large
+            # monitor. Both panels share the same edges and retain 7:1 height.
+            width, height = max(100, size[0]), max(100, size[1])
+            left, right = 8/width, 1-min(64, width*.3)/width
+            bottom, top = min(48, height*.2)/height, 1-min(30, height*.15)/height
+            volume_height = (top-bottom)/8
+            for text in fig.texts:
+                text.set_position(((left+right)/2, 1-4/height))
+                text.set_verticalalignment('top')
+        for index, axis in enumerate(axes):
             if size:
-                position = axis.get_position()
-                axis.set_position([.07, position.y0, .82, position.height])
+                is_price = index < 2
+                axis.set_position([left, bottom+volume_height if is_price else bottom,
+                                   right-left, volume_height*(7 if is_price else 1)])
             axis.set_facecolor(CHART_BG)
             axis.tick_params(colors=MUTED, labelsize=8)
             for spine in axis.spines.values():

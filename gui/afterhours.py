@@ -106,10 +106,10 @@ class AfterhoursPage(ttk.Frame):
         replay = ttk.Frame(self.detail)
         replay.grid(row=1, column=0, sticky=tk.NSEW)
         replay.rowconfigure(0, weight=1)
-        replay.columnconfigure(0, weight=76, uniform='replay')
-        replay.columnconfigure(1, weight=24, uniform='replay')
+        replay.columnconfigure(0, weight=1)
+        replay.columnconfigure(1, weight=0)
         chart_host = ttk.Frame(replay)
-        chart_host.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 10))
+        chart_host.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 6))
         chart_host.grid_propagate(False)
         chart_host.columnconfigure(0, weight=1)
         chart_host.rowconfigure(1, weight=1)
@@ -126,8 +126,9 @@ class AfterhoursPage(ttk.Frame):
             lambda text: self.chart_readout.set(text or '移到 K 线上查看开、高、低、收'))
         ttk.Button(nav, text='重置视图', command=self.chart_navigation.reset,
                    style='ResearchAction.TButton').pack(side=tk.RIGHT, padx=8)
-        timeline_host = ttk.Frame(replay)
+        self.timeline_host = timeline_host = ttk.Frame(replay, width=300)
         timeline_host.grid(row=0, column=1, sticky=tk.NSEW)
+        timeline_host.grid_propagate(False)
         timeline_host.rowconfigure(1, weight=1)
         timeline_host.columnconfigure(0, weight=1)
         timeline_heading = ttk.Label(timeline_host, text='逐日事件 · ← → 切换\n滚轮缩放 · 拖动价格轴 · 双击复位',
@@ -198,6 +199,7 @@ class AfterhoursPage(ttk.Frame):
         for name in ('ResearchAction.TButton', 'ResearchRun.TButton', 'ResearchScope.TMenubutton'):
             style.configure(name, font=('Microsoft YaHei UI', -round(17*scale)))
         self.history_host.configure(width=round(270*scale))
+        self.timeline_host.configure(width=round(300*scale))
         self._render_history()
         self._histogram()
         self._layout_list()
@@ -746,7 +748,9 @@ class AfterhoursPage(ttk.Frame):
         self.detail.tkraise()
         self._detail_visible = True
         self.detail.focus_set()
-        self.detail_title.set(f'{self._trade["code"]} · H2 {self._trade["setup_date"]} · {LABELS[self._trade["status"]]}')
+        code = self._trade['code']
+        identity = ' · '.join(part for part in (code, self._names.get(code, '')) if part)
+        self.detail_title.set(f'{identity} · H2 {self._trade["setup_date"]} · {LABELS[self._trade["status"]]}')
         self.timeline.delete(*self.timeline.get_children())
         titles = {'setup': '待挂机会形成', 'plan': '更新次日计划', 'trigger': '价格触发', 'fill': '模拟成交',
                   'holding': '持仓', 'exit': '模拟退出', 't1': 'T+1 限制', 'blocked': '成交受限'}
