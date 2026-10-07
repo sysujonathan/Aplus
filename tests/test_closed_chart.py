@@ -156,6 +156,51 @@ def test_same_day_batches_group_chart_labels_but_preserve_individual_records():
     assert len(data["events"]) == 2 and data["events"][0]["label"] == "买入"
 
 
+def test_closed_marker_text_and_offsets_grow_with_window_without_moving_trade():
+    from gui.closed_trade_chart import render_closed_chart, closed_label_scale
+    from matplotlib.axes import Axes
+    data = {"frame": bars(), "code": "sh.600000", "name": "测试", "events":
+            closed_chart_events(bars(), summary())[0]}
+    original = Axes.annotate
+    calls = []
+    def capture(axis, *args, **kwargs):
+        calls.append(kwargs)
+        return original(axis, *args, **kwargs)
+    with patch.object(Axes, "annotate", new=capture):
+        small = render_closed_chart(data, size=(1100, 550))
+        small_marks = list(calls)
+        calls.clear()
+        large = render_closed_chart(data, size=(2200, 1100))
+        large_marks = list(calls)
+    assert small.size == (1100, 550) and large.size == (2200, 1100)
+    assert len(small_marks) == len(large_marks) == 2
+    ratio = closed_label_scale((2200, 1100)) / closed_label_scale((1100, 550))
+    for small_mark, large_mark in zip(small_marks, large_marks):
+        assert large_mark["fontsize"] > small_mark["fontsize"]
+        assert large_mark["fontsize"] == pytest.approx(small_mark["fontsize"] * ratio)
+        assert large_mark["xy"] == small_mark["xy"]
+        assert large_mark["xytext"] == pytest.approx(tuple(v * ratio for v in small_mark["xytext"]))
+    assert closed_label_scale((720, 300)) == closed_label_scale(None) == 1.25
+    assert closed_label_scale((8000, 6000)) == 2.75
+
+
+def test_research_chart_default_marker_style_is_unchanged():
+    from gui.chart_renderer import render_chart
+    from matplotlib.axes import Axes
+    events = [{"date": "2026-09-23", "price": 10.5, "kind": "fill", "label": "Fill"}]
+    original = Axes.annotate
+    calls = []
+    def capture(axis, *args, **kwargs):
+        calls.append(kwargs)
+        return original(axis, *args, **kwargs)
+    with patch.object(Axes, "annotate", new=capture):
+        default = render_chart(bars(), {}, "", {}, replay_events=events, size=(1100, 550))
+        explicit = render_chart(bars(), {}, "", {}, replay_events=events, size=(1100, 550),
+                                replay_label_scale=1.0)
+    assert all(call["fontsize"] == 8 for call in calls)
+    assert default.tobytes() == explicit.tobytes()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Actual Windows Tk viewer")
 def test_edit_popup_chart_and_automatic_archive_double_click_are_read_only(tmp_path):
     import ttkbootstrap as ttk

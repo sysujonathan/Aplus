@@ -10,6 +10,13 @@ from .replay_navigation import ReplayNavigation
 from .theme import APP_BG, CHART_BG, MUTED, TEXT
 
 
+def closed_label_scale(size):
+    """Readable small-window labels; bounded proportional growth on large displays."""
+    if size is None:
+        return 1.25
+    return min(2.75, max(1.25, min(size[0] / 1100, size[1] / 500)))
+
+
 def render_closed_chart(data, *, size=None, viewport=(None, 0, 1.0)):
     bars, offset, price_scale = viewport
     # Same-day batches would draw labels on top of one another. The graph
@@ -30,6 +37,7 @@ def render_closed_chart(data, *, size=None, viewport=(None, 0, 1.0)):
         data["frame"], {}, f'{data["code"]} {data["name"]} · 买卖点（事后查看）', {},
         replay_events=marks, size=size, code=data["code"],
         view_bars=bars or 120, view_offset=offset, price_scale=price_scale,
+        replay_label_scale=closed_label_scale(size),
     )
 
 

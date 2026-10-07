@@ -16,7 +16,7 @@ from .theme import (
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
                  replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0,
-                 code=None, instrument_type=None, research_overlay=()):
+                 code=None, instrument_type=None, research_overlay=(), replay_label_scale=1.0):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -302,8 +302,10 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                     dx, dy = 26, abs(dy)
                 if x >= len(dates) - 4:
                     dx = min(dx, -18)
-                ax.annotate(label, xy=(x, event['price']), xytext=(dx, dy),
-                            textcoords='offset points', ha='center', color=TEXT, fontsize=8,
+                ax.annotate(label, xy=(x, event['price']),
+                            xytext=(dx * replay_label_scale, dy * replay_label_scale),
+                            textcoords='offset points', ha='center', color=TEXT,
+                            fontsize=8 * replay_label_scale,
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
                             arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=4 if event.get('event_source') else 0,
                                             linestyle='--' if candidate else '-'))
