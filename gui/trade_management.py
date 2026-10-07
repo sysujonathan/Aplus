@@ -781,10 +781,18 @@ class TradeManagementFrame(ttk.Frame):
         if not row:
             return
         if row.get("position_id"):
-            messagebox.showinfo("完整成交链路", "这笔清仓由持仓全部卖出自动归档，保留原始买卖链路。",
-                                parent=self)
+            self._view_closed_chart(row)
             return
         self._open_closed_dialog(row)
+
+    def _view_closed_chart(self, row):
+        from .closed_trade_chart import ClosedTradeChartDialog
+        try:
+            dialog = ClosedTradeChartDialog(self, self.store, row)
+        except Exception as exc:
+            messagebox.showerror("无法查看 K 线", str(exc), parent=self)
+            return
+        self.wait_window(dialog.top)
 
     def _open_closed_dialog(self, row):
         if not self.current_account_id():
@@ -1576,6 +1584,7 @@ class _ClosedDialog(_IdentityDialog):
     def __init__(self, parent, store, names, row=None):
         super().__init__(parent, "编辑清仓记录" if row else "新增历史清仓", store, names)
         row = row or {}
+        self.record = dict(row)
         self.batch_values = None
         self.identity_fields(row.get("code", ""), row.get("name", ""))
         dates = trading_dates(store, row.get("code")) or trading_dates(store)
@@ -1589,7 +1598,26 @@ class _ClosedDialog(_IdentityDialog):
         self.pnl = self.entry(2, "盈亏", row.get("pnl", ""))
         self.return_pct = self.entry(2, "收益率 %", row.get("return_pct", ""), column=1)
         self.notes = self.entry(3, "备注", row.get("notes", ""))
-        self.buttons(4, self._ok)
+        self.chart_button = ttk.Button(self.form, text="查看 K 线买卖点", bootstyle="primary-outline",
+                                       command=self._view_chart)
+        self.chart_button.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+        self.buttons(5, self._ok)
+
+    def _view_chart(self):
+        from .closed_trade_chart import ClosedTradeChartDialog
+        try:
+            code = self._resolve_name()
+            if not code:
+                raise ValueError("请填写有效的股票代码或名称。")
+            row = {**self.record, "code": code, "name": self.name.get().strip(),
+                   "close_date": self.close_date.get().strip(), "holding_days": int(self.days.get())}
+            dialog = ClosedTradeChartDialog(self.top, self.store, row)
+        except Exception as exc:
+            messagebox.showerror("无法查看 K 线", str(exc), parent=self.top)
+            return
+        self.top.wait_window(dialog.top)
+        if self.top.winfo_exists():
+            self.top.grab_set()
 
     def _ok(self):
         try:
