@@ -945,11 +945,12 @@ class _ReturnCalendar:
             pnl = item["pnl"]
             value = "••••••" if self.hidden else f"{pnl:+,.2f}"
             color = MUTED if self.hidden else (UP if pnl > 0 else DOWN if pnl < 0 else MUTED)
-            detail = "券商" if item["source"] == "broker" else "本地计算"
+            detail = "本地计算" if item["source"] == "local" else ""
         ttk.Label(cell, text=value, anchor=tk.CENTER, foreground=color).grid(
             row=1, column=0, sticky=tk.NSEW)
-        ttk.Label(cell, text=detail, anchor=tk.CENTER, foreground=MUTED,
-                  font=("Microsoft YaHei UI", 8)).grid(row=2, column=0, sticky=tk.EW)
+        if detail:
+            ttk.Label(cell, text=detail, anchor=tk.CENTER, foreground=MUTED,
+                      font=("Microsoft YaHei UI", 8)).grid(row=2, column=0, sticky=tk.EW)
 
     def _render_year(self):
         year = self.anchor.year

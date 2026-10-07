@@ -168,12 +168,18 @@ def test_calendar_date_color_and_grid_height_are_independent_of_returns(tmp_path
         assert next(str(l.cget("foreground")) for l in labels if l.cget("text") == "-12.34") == DOWN
         assert next(str(l.cget("foreground")) for l in labels if l.cget("text") == "+45.67") == UP
         assert any(l.cget("text") == "休市" for l in labels)
+        assert all(l.cget("text") != "券商" for l in labels)
         assert len([c for c in view.grid.winfo_children() if isinstance(c, ttk.Frame)]) == 30
+        view.set_rows(view.rows + [{"date": "2026-09-04", "pnl": .25, "source": "local", "status": "recorded"}])
+        labels = [l for c in view.grid.winfo_children() for l in c.winfo_children()]
+        assert any(l.cget("text") == "本地计算" for l in labels)
+        assert all(l.cget("text") != "券商" for l in labels)
         view.set_hidden(True)
         labels = [l for c in view.grid.winfo_children() if isinstance(c, ttk.Frame) for l in c.winfo_children()]
         assert all(l.cget("text") != "-12.34" for l in labels)
         view.scale.set("年")
         assert len(view.grid.winfo_children()) == 12
+        assert all(l.cget("text") != "券商" for c in view.grid.winfo_children() for l in c.winfo_children())
         view.scale.set("月")
         view.shift(-1)
         assert len([c for c in view.grid.winfo_children() if isinstance(c, ttk.Frame)]) == 30
