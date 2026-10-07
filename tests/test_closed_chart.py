@@ -180,8 +180,30 @@ def test_edit_popup_chart_and_automatic_archive_double_click_are_read_only(tmp_p
         dialog.top.destroy()
         chart = ClosedTradeChartDialog(root, store, summary())
         root.update()
+        assert tuple(map(int, chart.top.resizable())) == (1, 1)
+        assert not chart.top.transient()
+        # Verify the real Windows title-bar style, not just Tk's resize flag.
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.GetParent.restype = ctypes.c_void_p
+        hwnd = user32.GetParent(ctypes.c_void_p(chart.top.winfo_id()))
+        style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), -16)
+        assert style & 0x00010000  # WS_MAXIMIZEBOX
+        assert style & 0x00040000  # WS_THICKFRAME
         chart.draw()
         assert chart._photo is not None
+        chart.top.state("zoomed")
+        root.update()
+        assert chart.top.state() == "zoomed"
+        chart.draw()
+        assert chart._photo.width() == chart.chart.winfo_width()
+        assert chart._photo.height() == chart.chart.winfo_height()
+        chart.top.state("normal")
+        chart.top.geometry("1000x650")
+        root.update()
+        chart.draw()
+        assert chart._photo.width() == chart.chart.winfo_width()
+        assert chart._photo.height() == chart.chart.winfo_height()
         assert chart.chart.bind("<MouseWheel>") and chart.chart.bind("<B1-Motion>")
         chart.events_tree.selection_set("0")
         chart._locate()

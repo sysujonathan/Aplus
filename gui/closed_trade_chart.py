@@ -40,7 +40,9 @@ class ClosedTradeChartDialog:
         self.top = tk.Toplevel(parent)
         self.top.title(f'K 线买卖点 · {self.data["name"]} {self.data["code"]}')
         self.top.configure(bg=APP_BG)
-        self.top.transient(parent.winfo_toplevel())
+        # Windows transient/tool dialogs suppress the title-bar maximize box.
+        # Keep a normal resizable window; grab_set still protects the editor.
+        self.top.resizable(True, True)
         self.top.geometry(f'{min(1200, self.top.winfo_screenwidth()-80)}x'
                           f'{min(800, self.top.winfo_screenheight()-100)}')
         self.top.minsize(720, 480)
