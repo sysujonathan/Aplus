@@ -129,7 +129,26 @@ def test_spatial_ocr_keeps_dates_distinct_from_amounts_and_holiday():
     assert rows[-1]["date"] == "2026-09-25"
 
 
-def test_calendar_date_color_and_grid_height_are_independent_of_returns(tmp_path):
+def test_calendar_clipboard_supports_image_file_drop_and_wechat_path(tmp_path):
+    from PIL import Image
+    from gui.trade_management import _calendar_clipboard_images
+
+    image = Image.new("RGB", (12, 24), "red")
+    path = tmp_path / "微信 截图.png"
+    image.save(path)
+    for content, text in ((image, ""), ([str(path)], ""), (None, f'"{path}"'), (str(path), "")):
+        loaded = _calendar_clipboard_images(content, text)
+        assert len(loaded) == 1 and loaded[0].size == (12, 24)
+        assert loaded[0].getpixel((0, 0)) == (255, 0, 0)
+    with pytest.raises(ValueError, match="超出上限"):
+        _calendar_clipboard_images([str(path)] * 2, room=1)
+    with pytest.raises(ValueError, match="不是本地图片"):
+        _calendar_clipboard_images(None, "2026-09-30 -24.00")
+    with pytest.raises(ValueError, match="不是本地图片"):
+        _calendar_clipboard_images(None, "https://example.test/picture.png")
+
+
+def test_calendar_date_color_and_grid_height_are_independent_of_returns(tmp_path, monkeypatch):
     import tkinter as tk
     import ttkbootstrap as ttk
     from gui.trade_management import _ReturnCalendar
@@ -159,5 +178,132 @@ def test_calendar_date_color_and_grid_height_are_independent_of_returns(tmp_path
         view.shift(-1)
         assert len([c for c in view.grid.winfo_children() if isinstance(c, ttk.Frame)]) == 30
         root.update_idletasks()
+        _exercise_calendar_paste_queue(root, tmp_path, monkeypatch)
     finally:
         root.destroy()
+
+
+def _exercise_calendar_paste_queue(root, tmp_path, monkeypatch):
+    import threading
+    import time
+    from types import SimpleNamespace
+    from PIL import Image, ImageGrab
+    from gui import trade_management as page
+
+    gate, started = threading.Event(), threading.Event()
+    calls, workers = [], []
+    failing = [False]
+
+    def recognize(images):
+        workers.append(threading.get_ident())
+        started.set()
+        assert gate.wait(5)
+        identity = images[0].getpixel((0, 0))[0]
+        calls.append(identity)
+        if failing[0]:
+            failing[0] = False
+            raise ValueError("测试识别失败")
+        return parse_calendar_text(f"2026-09-{identity:02d} {identity}.00")
+
+    def pump_until(condition):
+        deadline = time.monotonic() + 5
+        while not condition():
+            root.update()
+            if time.monotonic() > deadline:
+                pytest.fail("截图队列没有完成")
+            time.sleep(.01)
+
+    monkeypatch.setattr(page, "recognize_calendar_screenshots", recognize)
+    monkeypatch.setattr(page.messagebox, "showinfo", lambda *args, **kwargs: None)
+    dialog = page._DailyReturnImportDialog(root)
+    dialog.top.withdraw()
+    try:
+        for index in range(1, 7):
+            image = Image.new("RGB", (100, 200), (index, 0, 0))
+            # The second clipboard is WeChat's image path rather than bitmap bits.
+            if index == 2:
+                path = tmp_path / "second screenshot.png"
+                image.save(path)
+                monkeypatch.setattr(ImageGrab, "grabclipboard", lambda: None)
+                monkeypatch.setattr(dialog.top, "clipboard_get", lambda: str(path))
+            else:
+                monkeypatch.setattr(ImageGrab, "grabclipboard", lambda image=image: image)
+            assert dialog._paste_image() == "break"
+        assert started.wait(2)
+        assert len(dialog.items) == 6
+        assert [item["state"] for item in dialog.items] == ["running"] + ["queued"] * 5
+        assert all("thumbnail" in item for item in dialog.items)
+        assert not hasattr(dialog, "editor")
+        assert "disabled" in dialog.save_button.state()
+        assert dialog._paste_image() == "break" and len(dialog.items) == 6
+        assert not dialog.confirmed
+        dialog._review()
+        assert not dialog.confirmed
+        # Remove both an in-flight and a queued image; neither result may be saved.
+        dialog._remove(dialog.items[0]["id"])
+        dialog._remove(dialog.items[-1]["id"])
+        gate.set()
+        pump_until(lambda: dialog._running_id is None and all(item["state"] == "done" for item in dialog.items))
+        assert calls == [1, 2, 3, 4, 5]
+        assert [item["rows"][0]["date"] for item in dialog.items] == [f"2026-09-0{i}" for i in range(2, 6)]
+        assert "disabled" not in dialog.save_button.state()
+        assert all(identity != threading.get_ident() for identity in workers)
+        # Failed images remain removable/retryable and block incomplete imports.
+        failing[0] = True
+        monkeypatch.setattr(ImageGrab, "grabclipboard", lambda: Image.new("RGB", (20, 20), (6, 0, 0)))
+        dialog._paste_image()
+        pump_until(lambda: dialog.items[-1]["state"] == "error")
+        assert "disabled" in dialog.save_button.state()
+        identity = dialog.items[-1]["id"]
+        dialog._retry(identity)
+        pump_until(lambda: dialog.items[-1]["state"] == "done")
+        assert "disabled" not in dialog.save_button.state()
+        review = page._DailyReturnReviewDialog(dialog.top, [row for item in dialog.items for row in item["rows"]])
+        review.top.withdraw()
+        original = review.editor.get("1.0", "end")
+        assert review._guard_image_paste() == "break"
+        assert review.editor.get("1.0", "end") == original
+        monkeypatch.setattr(ImageGrab, "grabclipboard", lambda: None)
+        monkeypatch.setattr(review.editor, "clipboard_get", lambda: "2026-09-30 -24.00")
+        assert review._guard_image_paste() is None
+        # The actual Tk Text paste event must be intercepted before its class binding.
+        monkeypatch.setattr(ImageGrab, "grabclipboard", lambda: Image.new("RGB", (20, 20)))
+        review.editor.event_generate("<<Paste>>")
+        root.update()
+        assert review.editor.get("1.0", "end") == original
+        review._confirm()
+        assert review.confirmed and len(review.values) == 5
+        dialog.top.grab_set()
+
+        def cancel_review(parent, rows):
+            import tkinter as tk
+            top = tk.Toplevel(parent)
+            top.after_idle(top.destroy)
+            return SimpleNamespace(top=top, confirmed=False)
+
+        monkeypatch.setattr(page, "_DailyReturnReviewDialog", cancel_review)
+        dialog._review()
+        assert not dialog.confirmed and len(dialog.items) == 5
+
+        def confirm_review(parent, rows):
+            result = cancel_review(parent, rows)
+            result.confirmed, result.values = True, rows
+            return result
+
+        monkeypatch.setattr(page, "_DailyReturnReviewDialog", confirm_review)
+        dialog._review()
+        assert dialog.confirmed and len(dialog.values) == 5 and dialog._closed
+        # Closing an active window must not call Tcl from the recognition worker.
+        gate.clear()
+        closing = page._DailyReturnImportDialog(root)
+        closing.top.withdraw()
+        closing._paste_image()
+        closing.top.destroy()
+        assert closing._closed
+        gate.set()
+        pump_until(lambda: not closing._result_queue.empty())
+        closing._poll()
+    finally:
+        gate.set()
+        if not dialog._closed:
+            dialog.top.destroy()

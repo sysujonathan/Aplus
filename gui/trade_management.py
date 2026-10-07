@@ -7,6 +7,7 @@ import queue
 import threading
 import tkinter as tk
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from tkinter import font as tkfont, messagebox
 
 import ttkbootstrap as ttk
@@ -1924,96 +1925,241 @@ class _ScreenshotPasteDialog(_BaseDialog):
 
 
 class _DailyReturnImportDialog(_BaseDialog):
-    """Review broker calendar observations before saving, not trading fills."""
+    """Paste continuously; a serial background worker never touches Tk."""
 
     def __init__(self, parent):
         super().__init__(parent, "补录券商盈亏日历")
         self.top.resizable(True, True)
-        self.images = []
-        self.status = tk.StringVar(value="Ctrl+V 粘贴完整月日历截图（最多 6 张），识别后请核对日期和金额。")
+        self.top.minsize(740, 650)
+        self.items = []
+        self._sequence = 0
+        self._running_id = None
+        self._closed = False
+        self._result_queue = queue.Queue()
+        self.status = tk.StringVar(value="Ctrl+V 连续粘贴完整月日历截图，最多 6 张；识别在后台进行。")
         ttk.Label(self.form, textvariable=self.status, foreground=MUTED,
-                  wraplength=640).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 8))
-        ttk.Label(self.form, text="也可粘贴或编辑文本：2026-09-30 -24.00；休市填写：2026-09-25 休市。\n"
-                  "每行一天；确认后仅补充日历。同日券商记录优先，不改变资产或清仓记录。",
-                  foreground=MUTED, wraplength=640).grid(row=1, column=0, columnspan=3, sticky=tk.W)
-        self.editor = tk.Text(self.form, width=62, height=18, bg=PANEL_BG, fg=TEXT,
-                              insertbackground=TEXT, font=("Consolas", 11), undo=True)
-        self.editor.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW, pady=8)
+                  wraplength=680).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 8))
+        ttk.Label(self.form, text="识别完成后集中核对；确认前不保存，不改变资产或清仓记录。",
+                  foreground=MUTED).grid(row=1, column=0, columnspan=3, sticky=tk.W)
+        self.gallery = ttk.Frame(self.form)
+        self.gallery.grid(row=2, column=0, columnspan=3, sticky=tk.NSEW, pady=10)
         self.form.rowconfigure(2, weight=1)
         self.form.columnconfigure(0, weight=1)
         self.paste_button = ttk.Button(self.form, text="粘贴截图", bootstyle="primary-outline",
                                       command=self._paste_image)
         self.paste_button.grid(row=3, column=0, sticky=tk.W)
-        self.save_button = ttk.Button(self.form, text="确认导入", bootstyle="primary", command=self._confirm)
-        self.save_button.grid(row=3, column=1, padx=8)
-        ttk.Button(self.form, text="取消", command=self.top.destroy).grid(row=3, column=2)
+        self.text_button = ttk.Button(self.form, text="录入文本", bootstyle="secondary-outline",
+                                      command=lambda: self._review(manual=True))
+        self.text_button.grid(row=4, column=0, sticky=tk.W, pady=(8, 0))
+        self.save_button = ttk.Button(self.form, text="核对并导入", bootstyle="primary", command=self._review)
+        self.save_button.grid(row=3, column=1, padx=8, sticky=tk.E)
+        ttk.Button(self.form, text="取消", command=self.top.destroy).grid(row=3, column=2, sticky=tk.E)
         self.top.bind("<Control-v>", self._paste_image)
         self.top.bind("<Control-V>", self._paste_image)
-        self._busy = False
+        self.top.bind("<Destroy>", self._on_destroy, add="+")
+        self._render_items()
+        self.top.after(100, self._poll)
+
+    def _on_destroy(self, event):
+        if event.widget == self.top:
+            self._closed = True
 
     def _paste_image(self, event=None):
-        if self._busy:
+        if len(self.items) >= MAX_SCREENSHOTS:
+            self.status.set(f"已达 {MAX_SCREENSHOTS} 张上限；可移除截图后继续粘贴。")
             return "break"
-        from PIL import Image, ImageGrab
+        from PIL import ImageGrab
 
         try:
             clipboard = ImageGrab.grabclipboard()
-            if isinstance(clipboard, Image.Image):
-                images = [clipboard.copy()]
-            elif isinstance(clipboard, list):
-                if len(self.images) + len(clipboard) > MAX_SCREENSHOTS:
-                    self.status.set(f"一次最多 {MAX_SCREENSHOTS} 张截图。请先确认当前批次。")
-                    return "break"
-                images = []
-                for path in clipboard:
-                    with Image.open(path) as image:
-                        images.append(image.convert("RGB"))
-            else:
-                if event is None:
-                    self.status.set("剪贴板中没有图片；文本可以直接粘贴到下方编辑区。")
-                return None
-            if len(self.images) + len(images) > MAX_SCREENSHOTS:
-                self.status.set(f"一次最多 {MAX_SCREENSHOTS} 张截图。请先确认当前批次。")
-                return "break"
+            try:
+                text = self.top.clipboard_get() if clipboard is None else ""
+            except tk.TclError:
+                text = ""
+            images = _calendar_clipboard_images(clipboard, text, MAX_SCREENSHOTS - len(self.items))
         except Exception as exc:
             self.status.set(f"读取截图失败：{exc}")
             return "break"
-        self._busy = True
-        self.paste_button.state(["disabled"])
-        self.save_button.state(["disabled"])
-        self.status.set("正在本地识别，完成后请核对……")
-        self._result_queue = queue.Queue(maxsize=1)
+        for image in images:
+            self._sequence += 1
+            self.items.append({"id": self._sequence, "image": image, "state": "queued",
+                               "rows": [], "error": ""})
+        self._start_next()
+        self._render_items()
+        # Always consume image paste: native Text paste must not insert paths.
+        return "break"
+
+    def _start_next(self):
+        if self._closed or self._running_id is not None:
+            return
+        item = next((item for item in self.items if item["state"] == "queued"), None)
+        if item is None:
+            return
+        item["state"] = "running"
+        self._running_id = item["id"]
+        image, identity, results = item["image"], item["id"], self._result_queue
 
         def worker():
             try:
-                self._result_queue.put((recognize_calendar_screenshots(images), images, None))
+                results.put((identity, recognize_calendar_screenshots([image]), None))
             except Exception as exc:
-                self._result_queue.put((None, images, exc))
+                results.put((identity, None, str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
-        self.top.after(100, self._poll)
-        return "break"
 
     def _poll(self):
-        if not self.top.winfo_exists():
+        if self._closed:
             return
-        try:
-            rows, images, error = self._result_queue.get_nowait()
-        except queue.Empty:
-            self.top.after(100, self._poll)
+        changed = False
+        while True:
+            try:
+                identity, rows, error = self._result_queue.get_nowait()
+            except queue.Empty:
+                break
+            if identity == self._running_id:
+                self._running_id = None
+            item = next((item for item in self.items if item["id"] == identity), None)
+            # A removed screenshot's late result must not reappear or be saved.
+            if item is not None:
+                item.update(state="error" if error else "done", rows=rows or [], error=error or "")
+            changed = True
+        self._start_next()
+        if changed:
+            self._render_items()
+        self.top.after(100, self._poll)
+
+    def _remove(self, identity):
+        self.items = [item for item in self.items if item["id"] != identity]
+        self._start_next()
+        self._render_items()
+
+    def _retry(self, identity):
+        item = next((item for item in self.items if item["id"] == identity), None)
+        if item is not None and item["state"] == "error":
+            item.update(state="queued", error="", rows=[])
+            self._start_next()
+            self._render_items()
+
+    def _render_items(self):
+        from PIL import ImageTk
+
+        for child in self.gallery.winfo_children():
+            child.destroy()
+        for column in range(3):
+            self.gallery.columnconfigure(column, weight=1, uniform="screenshots", minsize=210)
+        for row in range(2):
+            self.gallery.rowconfigure(row, weight=1, minsize=235)
+        if not self.items:
+            ttk.Label(self.gallery, text="从微信复制月日历截图后，在此按 Ctrl+V\n可连续粘贴，无需等待识别。",
+                      anchor=tk.CENTER, justify=tk.CENTER, foreground=MUTED).grid(
+                          row=0, column=0, rowspan=2, columnspan=3, sticky=tk.NSEW)
+        for index, item in enumerate(self.items):
+            card = ttk.Labelframe(self.gallery, text=f"截图 {index + 1}", padding=5)
+            card.grid(row=index // 3, column=index % 3, sticky=tk.NSEW, padx=4, pady=4)
+            thumbnail = item["image"].copy()
+            thumbnail.thumbnail((185, 165))
+            item["thumbnail"] = ImageTk.PhotoImage(thumbnail, master=self.top)
+            ttk.Label(card, image=item["thumbnail"], anchor=tk.CENTER).pack(fill=tk.BOTH, expand=True)
+            state = item["state"]
+            label = {"queued": "等待识别", "running": "正在识别…", "done": f"已识别 {len(item['rows'])} 天",
+                     "error": "识别失败，请重试或移除"}[state]
+            ttk.Label(card, text=label, foreground=DOWN if state == "error" else MUTED,
+                      anchor=tk.CENTER).pack(fill=tk.X, pady=3)
+            if state == "error":
+                from ttkbootstrap.widgets import ToolTip
+                ToolTip(card, text=item["error"])
+            controls = ttk.Frame(card)
+            controls.pack(fill=tk.X)
+            ttk.Button(controls, text="移除", bootstyle="secondary-outline",
+                       command=lambda identity=item["id"]: self._remove(identity)).pack(side=tk.RIGHT)
+            if state == "error":
+                ttk.Button(controls, text="重试", bootstyle="primary-outline",
+                           command=lambda identity=item["id"]: self._retry(identity)).pack(side=tk.LEFT)
+        pending = sum(item["state"] in {"queued", "running"} for item in self.items)
+        failed = sum(item["state"] == "error" for item in self.items)
+        done = sum(item["state"] == "done" for item in self.items)
+        self.status.set(f"已粘贴 {len(self.items)}/{MAX_SCREENSHOTS} 张 · 完成 {done} · 待完成 {pending}"
+                        + (f" · 失败 {failed}，请重试或移除" if failed else "；可继续粘贴。"))
+        ready = bool(self.items) and not pending and not failed
+        self.save_button.state(["!disabled" if ready else "disabled"])
+        self.text_button.state(["disabled" if pending or failed else "!disabled"])
+        self.paste_button.state(["disabled" if len(self.items) >= MAX_SCREENSHOTS else "!disabled"])
+
+    def _review(self, manual=False):
+        if any(item["state"] != "done" for item in self.items) or (not self.items and not manual):
+            self.status.set("请等待全部截图识别完成，并重试或移除失败截图。")
             return
-        self._busy = False
-        self.paste_button.state(["!disabled"])
-        self.save_button.state(["!disabled"])
-        if error:
-            self.status.set(f"识别失败：{error}；也可在下方填写日期与金额。")
-            return
-        self.images.extend(images)
-        for row in rows:
+        rows = [row for item in self.items for row in item["rows"]]
+        dialog = _DailyReturnReviewDialog(self.top, rows)
+        self.top.wait_window(dialog.top)
+        if dialog.confirmed:
+            self.values = dialog.values
+            self.confirmed = True
+            self.top.destroy()
+        elif not self._closed:
+            self.top.grab_set()
+
+
+def _calendar_clipboard_images(content, text="", room=MAX_SCREENSHOTS):
+    """Read image bits, file-drop lists or WeChat's absolute local image path."""
+    from PIL import Image
+
+    if isinstance(content, Image.Image):
+        if room < 1:
+            raise ValueError("截图已达上限")
+        return [content.convert("RGB")]
+    paths = content if isinstance(content, list) else str(content or text).strip().splitlines()
+    paths = [str(path).strip().strip('"') for path in paths if str(path).strip()]
+    if not paths:
+        raise ValueError("剪贴板没有图片，请先在微信复制截图")
+    if len(paths) > room:
+        raise ValueError(f"本次图片超出上限，还能加入 {room} 张；本次未加入，请分批复制")
+    images = []
+    for value in paths:
+        path = Path(value)
+        if not path.is_absolute() or path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"}:
+            raise ValueError("剪贴板不是本地图片；日盈亏文本请使用“录入文本”")
+        with Image.open(path) as image:
+            images.append(image.convert("RGB"))
+    return images
+
+
+class _DailyReturnReviewDialog(_BaseDialog):
+    """Editable review is separate from the continuous image-paste surface."""
+
+    def __init__(self, parent, rows):
+        super().__init__(parent, "核对日历识别结果")
+        self.top.resizable(True, True)
+        ttk.Label(self.form, text="每行：日期 盈亏（或休市）。重叠日期相同值自动合并；冲突值请更正或删除。\n"
+                  "例如：2026-09-30 -24.00。确认后仅补充日历，不改变资产或清仓记录。",
+                  foreground=MUTED, wraplength=680).grid(row=0, column=0, columnspan=2, sticky=tk.W)
+        self.editor = tk.Text(self.form, width=68, height=20, bg=PANEL_BG, fg=TEXT,
+                              insertbackground=TEXT, font=("Consolas", 11), undo=True)
+        self.editor.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW, pady=8)
+        self.form.rowconfigure(1, weight=1)
+        self.form.columnconfigure(0, weight=1)
+        for row in sorted(rows, key=lambda row: row["date"]):
             value = "休市" if row["status"] == "closed" else f"{row['pnl']:+.2f}"
             self.editor.insert(tk.END, f"{row['date']} {value}\n")
-        total = sum(r["pnl"] for r in rows if r["pnl"] is not None)
-        self.status.set(f"本批识别 {len(rows)} 天，合计 {total:+,.2f} 元；请核对，确认前不保存。")
+        ttk.Button(self.form, text="确认导入", bootstyle="primary", command=self._confirm).grid(row=2, column=0, sticky=tk.E)
+        ttk.Button(self.form, text="返回截图", command=self.top.destroy).grid(row=2, column=1, padx=8)
+        # Widget bindings run before Text's default paste, unlike Toplevel bindings.
+        self.editor.bind("<<Paste>>", self._guard_image_paste)
+
+    def _guard_image_paste(self, event=None):
+        from PIL import Image, ImageGrab
+        try:
+            content = ImageGrab.grabclipboard()
+            text = self.editor.clipboard_get() if content is None else ""
+            path = Path(text.strip().strip('"'))
+            is_image = isinstance(content, (Image.Image, list)) or (
+                path.is_absolute() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".tif", ".tiff"})
+        except Exception:
+            return None  # Plain daily-record text is still pasted normally.
+        if not is_image:
+            return None
+        messagebox.showinfo("请返回截图列表", "请点“返回截图”继续粘贴图片；这里仅核对日期和金额。", parent=self.top)
+        return "break"
 
     def _confirm(self):
         try:
