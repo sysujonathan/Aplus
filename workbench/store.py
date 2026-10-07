@@ -775,3 +775,50 @@ class Store:
         if not self.execute("DELETE FROM cash_flows WHERE id=?", (flow_id,)):
             raise ValueError("资金流水不存在")
         self.event(None, "删除资金流水", self.path, flow_id=flow_id)
+
+    def list_daily_returns(self, account_id):
+        """Account-scoped observations in meta, compatible with schema 8."""
+        rows = self.rows("SELECT value FROM meta WHERE key=?", (f"daily_returns:{account_id}",))
+        return sorted(json.loads(rows[0]["value"]).values(), key=lambda r: r["date"]) if rows else []
+
+    def save_daily_returns(self, account_id, rows, *, replace_local=False):
+        """Atomically record confirmed broker observations or local estimates.
+
+        Independent of fills/cash flows: these values never alter equity or
+        realised P&L. Local refresh must not overwrite a broker observation.
+        """
+        from datetime import date
+
+        prepared = {}
+        for row in rows:
+            day = str(row.get("date") or "")
+            date.fromisoformat(day)
+            source, status = row.get("source", "broker"), row.get("status", "recorded")
+            value = row.get("pnl")
+            if source not in {"broker", "local"} or status not in {"recorded", "closed"}:
+                raise ValueError("日盈亏来源或状态无效")
+            if status == "recorded":
+                if value is None or isinstance(value, bool) or not math.isfinite(float(value)):
+                    raise ValueError(f"{day} 盈亏金额无效")
+                value = round(float(value), 2)
+            elif value is not None:
+                raise ValueError("休市不能同时填写盈亏")
+            item = {"date": day, "pnl": value, "source": source, "status": status}
+            if day in prepared and item != prepared[day]:
+                raise ValueError(f"{day} 存在冲突记录")
+            prepared[day] = item
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
+                raise ValueError("交易账户不存在")
+            key = f"daily_returns:{account_id}"
+            existing = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            saved = json.loads(existing["value"]) if existing else {}
+            if replace_local:
+                saved = {day: item for day, item in saved.items() if item["source"] == "broker"}
+            for day, item in prepared.items():
+                if item["source"] == "local" and saved.get(day, {}).get("source") == "broker":
+                    continue
+                saved[day] = item
+            db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) "
+                       "DO UPDATE SET value=excluded.value", (key, dumps(saved)))

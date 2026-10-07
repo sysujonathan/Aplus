@@ -119,7 +119,7 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert '其他工具' not in source
     assert 'self.rowconfigure(1, weight=1, minsize=210)' in page
     assert 'self.rowconfigure(2, weight=3, minsize=630)' in page
-    for title in ("持仓管理", "资金账户", "已清仓", "收益日历"):
+    for title in ("持仓管理", "资金账户", "已清仓", "盈亏日历"):
         assert title in page
     assert "拟建仓速算" in page
     assert 'style="PositionSell.primary.Outline.TButton"' in page
