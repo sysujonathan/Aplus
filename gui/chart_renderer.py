@@ -16,7 +16,8 @@ from .theme import (
 
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
                  replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0,
-                 code=None, instrument_type=None, research_overlay=(), replay_label_scale=1.0):
+                 code=None, instrument_type=None, research_overlay=(), replay_label_scale=1.0,
+                 holding_levels=()):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -139,6 +140,12 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             lines.append(value)
             line_colors.append(mark.get('color', ANNOTATION))
             styles.append('--')
+    for level in holding_levels:
+        if level.get('price') is not None:
+            risk_levels.append(float(level['price']))
+            lines.append(float(level['price']))
+            line_colors.append(level['color'])
+            styles.append(level['style'])
     kwargs = {}
     if adds:
         kwargs["addplot"] = adds
@@ -155,7 +162,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         view_low = price_low - price_span * .12
         view_high = price_high + price_span * .18
     for level in risk_levels:
-        if price_low - price_span * .18 <= level <= price_high + price_span * .18:
+        holding_level = any(mark.get('price') == level for mark in holding_levels)
+        if holding_level or price_low - price_span * .18 <= level <= price_high + price_span * .18:
             view_low = min(view_low, level - price_span * .02)
             view_high = max(view_high, level + price_span * .02)
     center, half = (view_low+view_high)/2, (view_high-view_low)/2 * price_scale
@@ -177,6 +185,14 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             **kwargs,
         )
         ax = axes[0]
+        for level in holding_levels:
+            value = level.get('price')
+            if value is not None and view_low <= value <= view_high:
+                ax.text(.015, value, f"{level['label']} {level['value']:.4f}",
+                        transform=ax.get_yaxis_transform(), color=level['color'],
+                        fontsize=8 * replay_label_scale,
+                        va='top' if value > view_high - (view_high-view_low)*.08 else 'bottom',
+                        bbox=dict(facecolor=CHART_BG, edgecolor='none', alpha=.8), clip_on=True)
         if size:
             # Reserve coordinate-label pixels, not a percentage of a large
             # monitor. Both panels share the same edges and retain 7:1 height.
@@ -300,6 +316,10 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                 candidate = event.get('event_source') == 'C'
                 if candidate:
                     dx, dy = 26, abs(dy)
+                if holding_levels:
+                    # Keep the real fill arrow inside the price panel after
+                    # wide targets expand its range; never move its anchor.
+                    dy = abs(dy) if event['price'] < (view_low+view_high)/2 else -abs(dy)
                 if x >= len(dates) - 4:
                     dx = min(dx, -18)
                 ax.annotate(label, xy=(x, event['price']),
@@ -307,7 +327,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                             textcoords='offset points', ha='center', color=TEXT,
                             fontsize=8 * replay_label_scale,
                             bbox=dict(facecolor=CONTROL_BG, edgecolor=BORDER, alpha=.9),
-                            arrowprops=dict(arrowstyle='-', color=ANNOTATION, shrinkB=4 if event.get('event_source') else 0,
+                            arrowprops=dict(arrowstyle='->' if holding_levels else '-', color=ANNOTATION,
+                                            shrinkB=4 if event.get('event_source') else 0,
                                             linestyle='--' if candidate else '-'))
         buf = io.BytesIO()
         # Default charts use a tight PNG crop. Retain its origin so mouse
