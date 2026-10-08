@@ -12,6 +12,7 @@ import urllib.request
 from .daily_returns import calculate_daily_pnl
 from .market import code_of, load_dataset
 from .closed_chart import _ReadOnlySnapshots
+from .exchange_calendar import is_trading_day
 
 CHINA = timezone(timedelta(hours=8))
 INTERVAL = 15
@@ -22,14 +23,10 @@ def china_now():
 
 
 def session_status(moment, calendar):
-    day = moment.date().isoformat()
-    if (not isinstance(calendar, dict)
-        or not isinstance(calendar.get("start"), str)
-        or not isinstance(calendar.get("end"), str)
-        or not isinstance(calendar.get("trading_days"), list)
-        or not calendar["start"] <= day <= calendar["end"]):
+    trading = is_trading_day(moment.date(), calendar)
+    if trading is None:
         return "交易日历待更新（可手动刷新）"
-    if day not in calendar.get("trading_days", []):
+    if not trading:
         return "休市"
     clock = moment.time().replace(tzinfo=None)
     if time(9, 30) <= clock <= time(11, 30) or time(13) <= clock <= time(15):

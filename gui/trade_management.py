@@ -14,6 +14,7 @@ from tkinter import font as tkfont, messagebox
 import ttkbootstrap as ttk
 
 from workbench.market import code_of
+from workbench.exchange_calendar import is_trading_day
 from workbench.holding_quotes import (
     QuotePoller, china_now, saved_quotes, select_quotes, session_status,
     snapshot_reference, value_holdings, net_invested,
@@ -67,7 +68,7 @@ class TradeManagementFrame(ttk.Frame):
         self._sell_buttons = {}
         self._sort_reverse = {}
         self._accounts = []
-        self._show_fund_values = True
+        self._show_fund_values = False
         self._quote_poller = QuotePoller()
         self._live_quotes = {}
         self._quote_failed = set()
@@ -101,7 +102,7 @@ class TradeManagementFrame(ttk.Frame):
                         command=self._toggle_auto_quotes, bootstyle="success-round-toggle").pack(
                             side=tk.RIGHT, padx=(8, 0))
         self.eye_button = ttk.Button(
-            header, text="👁 隐藏", width=9, bootstyle="primary",
+            header, text="👁 显示", width=9, bootstyle="primary",
             command=self._toggle_fund_values,
         )
         self.eye_button.pack(side=tk.RIGHT)
@@ -331,7 +332,9 @@ class TradeManagementFrame(ttk.Frame):
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
 
         calendar_body = self._panel(2, 1, "盈亏日历")
-        self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns)
+        self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns,
+                                               calendar_provider=self._quote_calendar)
+        self.return_calendar.set_hidden(True)
 
     def _build_quick_calculator(self, body):
         quick = ttk.Labelframe(body, text="拟建仓速算", padding=(8, 5))
@@ -413,8 +416,15 @@ class TradeManagementFrame(ttk.Frame):
         return f"{account['name']} · {visible}"
 
     def _toggle_fund_values(self):
+        self._set_fund_values(not self._show_fund_values)
+
+    def hide_private_values(self):
+        """Re-entering the page must not reuse a previous explicit reveal."""
+        self._set_fund_values(False)
+
+    def _set_fund_values(self, visible):
         account_id = self.current_account_id()
-        self._show_fund_values = not self._show_fund_values
+        self._show_fund_values = visible
         self.eye_button.configure(text="👁 隐藏" if self._show_fund_values else "👁 显示")
         self._account_by_label = {self._account_label(row): row["id"] for row in self._accounts}
         labels = list(self._account_by_label)
@@ -553,7 +563,7 @@ class TradeManagementFrame(ttk.Frame):
         quotes = select_quotes(self._history_quotes, self._live_quotes, self._quote_codes,
                                self._quote_failed, moment, calendar)
         status = session_status(moment, calendar)
-        key = repr((quotes, status, self.auto_quote_var.get(), moment.date()))
+        key = repr((quotes, status, self.auto_quote_var.get(), moment.date(), self._quote_poller.delay))
         if key == self._quote_view_key:
             return
         self._quote_view_key = key
@@ -583,8 +593,12 @@ class TradeManagementFrame(ttk.Frame):
             text += f" · {missing} 只缺少行情"
         if times and dates:
             text += f" · {len(dates)} 只历史收盘 {min(dates)}"
-        if self.auto_quote_var.get() and status != "交易中":
-            text += " · " + status
+        if self.auto_quote_var.get():
+            if status == "交易中":
+                action = "自动重试" if self._quote_poller.failures else "自动更新"
+                text += f" · {action}（{self._quote_poller.delay}秒）"
+            else:
+                text += " · 自动暂停：" + status
         self.asof_var.set(text)
 
     @staticmethod
@@ -705,7 +719,7 @@ class TradeManagementFrame(ttk.Frame):
         for key, (value, signed) in values.items():
             variable, label = self.fund_metrics[key]
             variable.set(amount(value, signed=signed))
-            if signed and value not in (None, 0):
+            if not hidden and signed and value not in (None, 0):
                 label.configure(foreground=UP if value > 0 else DOWN)
             else:
                 label.configure(foreground=TEXT)
@@ -1005,8 +1019,9 @@ class TradeManagementFrame(ttk.Frame):
 class _ReturnCalendar:
     """Account daily P&L. Dates, amounts and provenance are separate widgets."""
 
-    def __init__(self, parent, import_command=None):
+    def __init__(self, parent, import_command=None, calendar_provider=None):
         self.parent = parent
+        self.calendar_provider = calendar_provider
         self.rows = []
         self.hidden = False
         self.anchor = date.today().replace(day=1)
@@ -1090,6 +1105,8 @@ class _ReturnCalendar:
 
     def _render_month(self):
         year, month = self.anchor.year, self.anchor.month
+        market_calendar = self.calendar_provider() if self.calendar_provider else None
+        today = china_now().date()
         self.title.set(f"{year} 年 {month:02d} 月")
         daily = {int(row["date"][-2:]): row for row in self.rows
                  if row["date"].startswith(f"{year}-{month:02d}-")}
@@ -1112,16 +1129,21 @@ class _ReturnCalendar:
                 cell.rowconfigure(1, weight=1)
                 if day:
                     item = daily.get(day)
+                    day_date = date(year, month, day)
+                    trading = is_trading_day(day_date, market_calendar)
+                    # Display only: no fabricated zero-return rows or ledger writes.
+                    if not item and trading is False:
+                        item = {"status": "closed"}
                     self._cell(cell, f"{day:02d}", item,
-                               future=date(year, month, day) > date.today())
+                               future=day_date > today, unknown_calendar=trading is None)
                 self.grid.rowconfigure(week_index, weight=1, minsize=65)
 
-    def _cell(self, cell, label, item, future=False):
+    def _cell(self, cell, label, item, future=False, unknown_calendar=False):
         ttk.Label(cell, text=label, anchor=tk.CENTER, foreground=TEXT,
                   font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky=tk.EW)
         color, detail = MUTED, ""
         if not item:
-            value = "—" if future else "待补数据"
+            value = "—" if future else ("日历待更新" if unknown_calendar else "待补数据")
         elif item["status"] == "closed":
             value = "休市"
         else:

@@ -121,10 +121,11 @@ def test_sessions(clock, expected):
     assert session_status(datetime.fromisoformat("2026-09-30T" + clock).replace(tzinfo=CHINA), CALENDAR) == expected
 
 
-def test_no_guessing_calendar_or_holiday():
+def test_published_schedule_fills_expired_calendar_but_never_guesses_unknown_year():
     assert session_status(NOW + timedelta(days=1), CALENDAR) == "休市"
     for calendar in (None, [], {}, {**CALENDAR, "end": "2026-09-29"}):
-        assert "待更新" in session_status(NOW, calendar)
+        assert session_status(NOW, calendar) == "交易中"
+        assert "待更新" in session_status(NOW.replace(year=2027, day=29), calendar)
 
 
 def test_stale_failed_and_previous_day_quotes_are_explicit():
@@ -417,7 +418,8 @@ def test_gui_background_fetch_responsive_and_auto_pauses_outside_verified_sessio
                         page._quote_tick()
                     start.assert_not_called()
                     with patch.object(page, "_quote_calendar", return_value=None):
-                        page._quote_tick()
+                        with patch("gui.trade_management.china_now", return_value=NOW.replace(year=2027, day=29)):
+                            page._quote_tick()
                     start.assert_not_called()
                 assert "日历待更新" in page.asof_var.get()
             page.destroy()
@@ -425,3 +427,136 @@ def test_gui_background_fetch_responsive_and_auto_pauses_outside_verified_sessio
         release.set()
         for child in root.winfo_children():
             child.destroy()
+
+
+@pytest.mark.parametrize("day", ["2026-01-01", "2026-01-02", "2026-02-16", "2026-02-23",
+    "2026-04-06", "2026-05-05", "2026-06-19", "2026-09-25", "2026-10-01",
+    "2026-10-02", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-10"])
+def test_published_exchange_holidays_and_makeup_weekends_closed(day):
+    from workbench.exchange_calendar import is_trading_day
+    assert is_trading_day(day) is False
+    assert session_status(datetime.fromisoformat(day + "T10:00").replace(tzinfo=CHINA), None) == "休市"
+
+
+def test_calendar_coverage_validation_and_local_overrides():
+    from workbench.exchange_calendar import is_trading_day
+    old = {**CALENDAR, "end": "2026-10-02"}
+    assert is_trading_day("2026-10-08", old) is True
+    assert is_trading_day("2027-10-08", old) is None
+    assert is_trading_day("2027-10-09", old) is False
+    # A verified local calendar can express a special closure in any year.
+    local = {"start": "2027-10-01", "end": "2027-10-10", "trading_days": ["2027-10-07"]}
+    assert is_trading_day("2027-10-07", local) is True
+    assert is_trading_day("2027-10-08", local) is False
+    for days in (["bad-date"], [["2026-10-08"]], ["2026-10-08"] * 2, ["2025-01-01"]):
+        assert is_trading_day("2026-10-08", {**old, "end": "2026-12-31", "trading_days": days}) is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_auto_polling_resumes_after_holiday_without_manual_refresh(tmp_path, quote_window):
+    from gui.trade_management import TradeManagementFrame
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "不复权")
+    # Same calendar cutoff as the user's installation, independent of bar data.
+    store.write_artifact("trading_calendar.json", b'{"start":"1990-12-19","end":"2026-10-02",'
+                         b'"trading_days":["2026-09-30"]}')
+    store.holding_auto_quotes(True)
+    clock = datetime(2026, 10, 8, 11, 19, tzinfo=CHINA)
+    now = Mock(return_value=clock)
+    monotonic = Mock(return_value=100.)
+    calls = []
+    def fetch(codes):
+        calls.append(tuple(codes))
+        return {CODE: quote(12 + len(calls), moment=now())}, set()
+    root = quote_window
+    with patch("gui.trade_management.china_now", now), \
+         patch("gui.trade_management.time.monotonic", monotonic):
+        page = TradeManagementFrame(root, store)
+        page.after_cancel(page._quote_timer)
+        page._quote_poller = QuotePoller(fetch)
+        before = database(store)
+        try:
+            def consume():
+                response = page._quote_poller.results.get(timeout=2)
+                page._quote_poller.results.put(response)
+                page._quote_tick()
+                page.after_cancel(page._quote_timer)
+            page._quote_tick()
+            page.after_cancel(page._quote_timer)
+            consume()
+            assert len(calls) == 1 and "11:19:00" in page.asof_var.get()
+            assert "自动更新（15秒）" in page.asof_var.get()
+            assert page._report["positions"][0]["current_price"] == 13
+            page._quote_tick()
+            page.after_cancel(page._quote_timer)
+            assert len(calls) == 1  # no early/overlapping request
+            monotonic.return_value = 115.
+            now.return_value = clock.replace(second=15)
+            page._quote_tick()
+            page.after_cancel(page._quote_timer)
+            consume()
+            assert len(calls) == 2 and "11:19:15" in page.asof_var.get()
+            assert page._report["positions"][0]["current_price"] == 14
+            for paused in (clock.replace(hour=12), clock.replace(day=7), clock.replace(hour=15, minute=1)):
+                now.return_value = paused
+                monotonic.return_value += 200
+                page._quote_tick()
+                page.after_cancel(page._quote_timer)
+                assert len(calls) == 2
+                assert "自动暂停" in page.asof_var.get()
+            assert database(store) == before
+        finally:
+            page._quote_timer = None
+            page.destroy()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_page_entry_hides_account_calendar_before_raise_and_quotes_do_not_reveal(tmp_path, quote_window):
+    from types import SimpleNamespace
+    from gui.trade_management import TradeManagementFrame
+    from gui.main_window import AplusMainWindow
+    from gui.theme import TEXT
+    from workbench.daily_returns import parse_calendar_text
+    store, aid, _pid = ledger(tmp_path)
+    store.save_daily_returns(aid, parse_calendar_text("2026-10-08 -24.00"))
+    root = quote_window
+    with patch("gui.trade_management.china_now", return_value=datetime(2026, 10, 8, 11, tzinfo=CHINA)):
+        page = TradeManagementFrame(root, store)
+        try:
+            assert not page._show_fund_values and page.return_calendar.hidden
+            assert page.fund_total.get() == "••••••" and "显示" in page.eye_button.cget("text")
+            page._toggle_fund_values()
+            assert page._show_fund_values and not page.return_calendar.hidden
+            assert page.fund_total.get() != "••••••"
+            # Exercise the real section routing, asserting masking before tkraise.
+            main = SimpleNamespace(trade_management=page,
+                _pages={"premarket": Mock(), "other": page},
+                _section_buttons={"premarket": Mock(), "other": Mock()})
+            AplusMainWindow._switch_section(main, "premarket")
+            with patch.object(page, "tkraise", side_effect=lambda: (
+                pytest.fail("Private values were raised") if page._show_fund_values else None)):
+                AplusMainWindow._switch_section(main, "other")
+            assert page.current_account_id() == aid and page.return_calendar.hidden
+            assert page.fund_total.get() == "••••••"
+            cells = {c.winfo_children()[0].cget("text"): c for c in page.return_calendar.grid.winfo_children()
+                     if c.winfo_children()}
+            for day in ("01", "02", "05", "06", "07"):
+                assert cells[day].winfo_children()[1].cget("text") == "休市"
+            assert cells["08"].winfo_children()[1].cget("text") == "••••••"
+            page._live_quotes = {CODE: quote(13, moment=datetime(2026, 10, 8, 11, tzinfo=CHINA))}
+            page._apply_quote_view()
+            assert page.fund_total.get() == "••••••" and page.return_calendar.hidden
+            assert all(str(label.cget("foreground")) == TEXT for _, label in page.fund_metrics.values())
+            page._toggle_fund_values()
+            assert not page.return_calendar.hidden and page.fund_total.get() != "••••••"
+            before = database(store)
+            page.return_calendar.set_rows([])
+            page.return_calendar.anchor = datetime(2026, 10, 1).date()
+            page.return_calendar.render()
+            cells = {c.winfo_children()[0].cget("text"): c for c in page.return_calendar.grid.winfo_children()
+                     if c.winfo_children()}
+            assert cells["08"].winfo_children()[1].cget("text") == "待补数据"
+            assert "0 天" in page.return_calendar.summary.get()
+            assert database(store) == before  # no fake zero-return holiday records
+        finally:
+            page.destroy()
