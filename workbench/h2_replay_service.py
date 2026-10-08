@@ -130,7 +130,7 @@ def execute_replay(service, job, spec):
                   stop_reason='已停止；只保存完整回放完毕的标的，本次是部分结果' if stopped else '',
                   requested_datasets=len(ids), processed_datasets=len(snapshots),
                   datasets=snapshots, real_data=bool(snapshots) and all(
-                      r['source'] in ('baostock', 'legacy-engine-a') for r in snapshots),
+                      r['source'] in ('baostock', 'tickflow', 'legacy-engine-a') for r in snapshots),
                   strategy_version=strategy.version,
                   h2_settings=asdict(settings), assumptions={k: v for k, v in asdict(costs).items()
                       if k in ('holding_bars', 'commission_bps', 'sell_tax_bps', 'slippage_bps')}, timeframe='daily',

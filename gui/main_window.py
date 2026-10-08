@@ -550,7 +550,8 @@ class AplusMainWindow(ttk.Window):
         # 一次本地扫描日，因此迁入的历史成果仍能作为默认工作基线。
         current_date = getattr(self, "_cur_date", None)
         if not current_date or not any(current_date):
-            return REALTIME_MARKET_SOURCE
+            from workbench.sources import market_source
+            return market_source(self.store)
 
         return candidate_source_for_date(
             self.store,

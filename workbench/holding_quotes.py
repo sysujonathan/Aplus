@@ -13,6 +13,7 @@ from .daily_returns import calculate_daily_pnl
 from .market import code_of, load_dataset
 from .closed_chart import _ReadOnlySnapshots
 from .exchange_calendar import is_trading_day
+from .sources import market_source
 
 CHINA = timezone(timedelta(hours=8))
 INTERVAL = 15
@@ -56,10 +57,18 @@ def parse_quotes(text, codes, moment):
     return result
 
 
+class QuoteFailures(set):
+    """Backwards-compatible failure set with ephemeral, readable diagnostics."""
+    def __init__(self,codes=(),details=None):
+        super().__init__(codes)
+        self.details=details or {}
+
+
 def fetch_quotes(codes):
     codes = sorted({code_of(c) for c in codes})
     supported = [c for c in codes if c.startswith(("sh.", "sz."))]
     quotes = {}
+    details={}
     # A dedicated direct opener: never mutate global proxy environment/config.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     for start in range(0, len(supported), 80):
@@ -72,9 +81,13 @@ def fetch_quotes(codes):
             with opener.open(request, timeout=8) as response:
                 payload = response.read(1024 * 1024).decode("gbk")
             quotes.update(parse_quotes(payload, batch, china_now()))
-        except Exception:
+        except Exception as exc:
+            details.update({code:f'{type(exc).__name__}: {exc}' for code in batch})
             continue
-    return quotes, set(codes) - quotes.keys()
+    failed=set(codes)-quotes.keys()
+    for code in failed:
+        details.setdefault(code,'该标的未返回有效报价' if code in supported else '新浪接口不支持该市场')
+    return quotes, QuoteFailures(failed,details)
 
 
 class QuotePoller:
@@ -98,8 +111,8 @@ class QuotePoller:
         def work():
             try:
                 quotes, failed = self.fetch(codes)
-            except Exception:
-                quotes, failed = {}, set(codes)
+            except Exception as exc:
+                quotes, failed = {}, QuoteFailures(codes,{code:f'{type(exc).__name__}: {exc}' for code in codes})
             self.results.put((generation, quotes, failed))
         threading.Thread(target=work, daemon=True, name="holding-quotes").start()
         return True
@@ -125,9 +138,9 @@ def saved_quotes(store, codes):
     prices = {}
     reader = _ReadOnlySnapshots(store)
     for code in sorted(set(codes)):
-        rows = store.rows("SELECT * FROM datasets WHERE timeframe='daily' AND code=? "
+        rows = store.rows("SELECT * FROM datasets WHERE timeframe='daily' AND code=? AND source=? "
                           "ORDER BY end DESC, CASE WHEN adjustment IN ('不复权','none','3') "
-                          "THEN 0 ELSE 1 END,created DESC,rowid DESC LIMIT 1", (code,))
+                          "THEN 0 ELSE 1 END,created DESC,rowid DESC LIMIT 1", (code,market_source(store)))
         if not rows:
             continue
         try:
@@ -149,8 +162,22 @@ def select_quotes(history, live, codes, failed, moment, calendar):
     trading = session_status(moment, calendar) == "交易中"
     for code in codes:
         quote = live.get(code)
-        if quote and quote.get("date") == moment.date().isoformat():
-            stamp = datetime.fromisoformat(quote["quote_time"])
+        saved=history.get(code)
+        stamp=None
+        try:
+            if quote:
+                stamp=datetime.fromisoformat(quote['quote_time'])
+                if stamp.tzinfo is None or stamp>moment+timedelta(seconds=60) or quote['date']!=stamp.date().isoformat():
+                    stamp=None
+        except (KeyError,ValueError,TypeError):
+            stamp=None
+        # Midnight/holidays do not invalidate a completed session's quote.
+        # A verified daily close outranks an older same-day intraday quote.
+        usable=stamp is not None and quote['date']<=moment.date().isoformat()
+        if usable and saved:
+            usable=quote['date']>=saved['date'] and not (
+                quote['date']==saved['date'] and stamp.date()<moment.date() and stamp.time().replace(tzinfo=None)<time(15))
+        if usable:
             state = "更新失败" if code in failed else (
                 "行情滞后" if trading and (moment - stamp).total_seconds() > 45 else "最新报价")
             quotes[code] = {**quote, "state": state}
@@ -218,9 +245,15 @@ def value_holdings(base, quotes, fills, moment, reference=None):
         row["account_risk_pct"] = row["risk_amount"] / total * 100 if total else None
     # A live quote is unadjusted. Do not mix it with forward-adjusted yesterday.
     daily_quotes = {c: q for c, q in quotes.items() if not q.get("adjusted")}
-    s["daily_pnl"] = calculate_daily_pnl(fills, daily_quotes, moment.date().isoformat())
+    quote_days={q['date'] for q in daily_quotes.values() if q.get('date')}
+    asof=moment.date().isoformat()
+    if len(quote_days)==1 and moment.time().replace(tzinfo=None)<time(9,30):
+        asof=next(iter(quote_days))
+    elif len(quote_days)==1 and is_trading_day(moment.date()) is False:
+        asof=next(iter(quote_days))
+    s["daily_pnl"] = calculate_daily_pnl(fills, daily_quotes, asof)
     if s["daily_pnl"] is not None:
         s["daily_pnl"] += sum(float(f["amount"]) for f in report["cash_flows"]
-                              if f["flow_date"][:10] == moment.date().isoformat()
+                              if f["flow_date"][:10] == asof
                               and not any(w in f["category"] for w in ("转入", "转出", "入金", "出金", "转账")))
     return report

@@ -589,6 +589,9 @@ class TradeManagementFrame(ttk.Frame):
             text += " · 请在账户设置校准现金基准"
         if self._quote_failed or stale:
             text += " · 更新失败／行情滞后" if self._quote_failed else " · 行情滞后"
+            reasons=getattr(self._quote_failed,'details',{})
+            if reasons:
+                text+='：'+next(iter(reasons.values()))[:95]
         if missing:
             text += f" · {missing} 只缺少行情"
         if times and dates:
@@ -609,9 +612,6 @@ class TradeManagementFrame(ttk.Frame):
 
     def _position_values(self, row):
         quote = _price(row["current_price"])
-        state = row.get("quote_state", "")
-        if state and state != "最新报价":
-            quote += " · " + state
         return (numeric_stock_code(row["code"]), row["name"], _money(row["market_value"]),
                 _money(row["floating_pnl"]), quote, _price(row["diluted_cost"]),
                 _pct(row["allocation_pct"]), row["quantity"], _price(row["stop"]),

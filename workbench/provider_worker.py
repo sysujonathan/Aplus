@@ -6,7 +6,12 @@ import sys
 
 def main():
     from .market import DirectBaoStock
-    provider = DirectBaoStock()
+    vendor = sys.argv[1] if len(sys.argv)>1 else 'baostock'
+    if vendor == 'tickflow':
+        from .tickflow import TickFlowHTTP
+        provider = TickFlowHTTP()
+    else:
+        provider = DirectBaoStock()
     for line in sys.stdin:
         try:
             request = json.loads(line)
@@ -18,6 +23,8 @@ def main():
                 elif operation == 'logout':
                     provider.__exit__()
                     result = None
+                elif vendor == 'tickflow' and operation in {'batch','instruments'}:
+                    result = getattr(provider,operation)(*request['args'])
                 elif operation in {'fetch','universe','calendar','basics'}:
                     frame = getattr(provider,operation)(*request['args'])
                     result = frame.to_dict(orient='records')
@@ -27,7 +34,9 @@ def main():
                     raise ValueError('Unknown provider operation')
             response = {'data':result}
         except Exception as exc:
-            response = {'error':str(exc)}
+            from .provider_guard import ProviderError
+            response = {'error': exc.detail() if isinstance(exc,ProviderError) else
+                        {'source':vendor,'operation':operation,'error':str(exc)}}
         sys.stdout.write(json.dumps(response,ensure_ascii=True)+'\n')
         sys.stdout.flush()
         if operation == 'logout':

@@ -7,18 +7,18 @@ import pandas as pd
 
 from .market import FIELDS, load_dataset, save_dataset, validate_bars, verify_dataset
 from .readiness import check_response_dates
+from .sources import coverage_state, save_coverage
 
 
-def local_history(store, code, job, coverage=None):
-    coverage = coverage if coverage is not None else store.rows(
-        'SELECT * FROM sync_coverage WHERE code=?', (code,))
+def local_history(store, code, job, coverage=None, source='baostock'):
+    coverage = coverage if coverage is not None else coverage_state(store,code,source)
     if coverage:
         state = coverage[0]
         frame, _ = load_dataset(store, state['dataset_id'], job)
         return frame, state
-    records = store.rows("SELECT * FROM datasets WHERE code=? AND source='baostock' "
+    records = store.rows("SELECT * FROM datasets WHERE code=? AND source=? "
                          "AND adjustment='前复权' AND timeframe='daily' "
-                         "ORDER BY end DESC,created DESC,rowid DESC LIMIT 1", (code,))
+                         "ORDER BY end DESC,created DESC,rowid DESC LIMIT 1", (code,source))
     if not records:
         return None, None
     record = records[0]
@@ -38,26 +38,22 @@ def local_history(store, code, job, coverage=None):
     return frame, state
 
 
-def sync_stock(store, provider, code, start, end, job=None, force=False):
+def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock'):
     """provider is lazy: a fully cached request makes no network connection."""
-    coverage = store.rows(
-        'SELECT c.*,d.path,d.sha256 FROM sync_coverage c '
-        'LEFT JOIN datasets d ON d.id=c.dataset_id WHERE c.code=?', (code,))
+    coverage = coverage_state(store,code,source)
     state = coverage[0] if coverage else None
     if state and not force and state['start'] <= start and end <= state['end']:
         # Preserve the tamper gate while avoiding pandas CSV parsing and the
         # full OHLCV validation pass for every unchanged stock.
-        verify_dataset(store, state['dataset_id'], job, state)
+        verify_dataset(store, state['dataset_id'], job)
         store.event(job, '跳过已有行情', code=code, start=start, end=end,
                     dataset=state['dataset_id'], integrity='sha256')
         return state['dataset_id'], 'skipped'
-    old, state = local_history(store, code, job, coverage)
+    old, state = local_history(store, code, job, coverage,source)
     # A v1 runtime has no sync_coverage row.  Its last successful immutable
     # snapshot is recovered above once, then future runs use the fast path.
     if state and not force and state['start'] <= start and end <= state['end']:
-        store.execute('INSERT INTO sync_coverage VALUES(?,?,?,?) ON CONFLICT(code) DO UPDATE SET '
-                      'dataset_id=excluded.dataset_id,start=excluded.start,end=excluded.end',
-                      (code, state['dataset_id'], state['start'], state['end']))
+        save_coverage(store,code,state['dataset_id'],state['start'],state['end'],source)
         store.event(job, '跳过已有行情', code=code, start=start, end=end, dataset=state['dataset_id'])
         return state['dataset_id'], 'skipped'
     left = min(start, state['start']) if state else start
@@ -66,6 +62,9 @@ def sync_stock(store, provider, code, start, end, job=None, force=False):
     def fetch(a, b):
         store.event(job, '请求行情区间', code=code, start=a, end=b)
         result = provider().fetch(code, a, b)
+        if result.attrs.get('suspension_evidence'):
+            store.event(job,'核对公开停牌证据',code=code,source=source,
+                        evidence=result.attrs['suspension_evidence'])
         check_response_dates(store, result, a, b)
         if result.empty:
             return pd.DataFrame(columns=FIELDS)
@@ -105,12 +104,11 @@ def sync_stock(store, provider, code, start, end, job=None, force=False):
             action = 'refreshed'
         else:
             frame = pd.concat([old, *pieces], ignore_index=True).drop_duplicates('date', keep='last')
-    did = save_dataset(store, code, frame, 'baostock', '前复权', job)
+    did = save_dataset(store, code, frame, source, '前复权', job)
     # Do not permanently cache an unpublished trading day as an empty success.
     # A holiday/suspension may therefore recheck only the tail, never full history.
     right = min(right, frame.date.max())
     # Save progress only after the complete snapshot is durable. Never replace old files.
-    store.execute('INSERT INTO sync_coverage VALUES(?,?,?,?) ON CONFLICT(code) DO UPDATE SET '
-                  'dataset_id=excluded.dataset_id,start=excluded.start,end=excluded.end', (code, did, left, right))
+    save_coverage(store,code,did,left,right,source)
     store.event(job, '保存同步进度', code=code, start=left, end=right, dataset=did, outcome=action)
     return did, action

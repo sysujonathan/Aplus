@@ -1,0 +1,41 @@
+"""Reviewed public announcements, not inferred halts or synthetic price bars.
+
+This small evidence catalogue is deliberately NOT a whole-market halt service.
+Unknown gaps continue to fail validation. Dates use [halt, resume) semantics.
+"""
+from datetime import date, timedelta
+
+CNINFO = 'https://static.cninfo.com.cn/finalpage/'
+ZMD = 'https://www.zmd.com.cn/mtsc/uploads/StockExchangeFile/'
+PUBLIC_HALTS = {
+    'sz.000906': [
+        ('2017-11-10','2017-11-14',[ZMD+'20240112164816888.PDF']),
+        ('2019-10-14','2019-10-28',[CNINFO+'2019-10-26/1207022236.PDF']),
+        ('2020-06-15','2020-06-22',[ZMD+'20240112132526524.PDF']),
+        ('2021-03-15','2021-03-22',[CNINFO+'2021-03-20/1209418870.PDF']),
+        ('2021-05-18','2021-05-24',[CNINFO+'2021-05-18/1209996021.PDF',CNINFO+'2021-05-24/1210047115.PDF']),
+    ],
+    'sz.002259': [
+        ('2016-11-07','2016-12-29',[CNINFO+'2016-12-29/1202970651.PDF']),
+        ('2017-09-05','2017-09-19',[CNINFO+'2017-09-19/1203981994.PDF']),
+        ('2018-01-22','2018-06-15',[CNINFO+'2018-03-13/1204469547.PDF',CNINFO+'2018-06-15/1205060952.PDF']),
+        ('2018-10-08','2018-10-09',[CNINFO+'2018-10-08/1205479283.PDF']),
+        ('2019-04-30','2019-05-06',['https://disc.static.szse.cn/download/disc/disk01/finalpage/2019-04-30/433a7303-a1b2-4c93-9335-3302c092204c.PDF']),
+        ('2021-09-23','2021-09-24',['https://disc.static.szse.cn/download/disc/disk02/finalpage/2021-09-23/29138e5f-8129-4002-983b-dff56c27ded5.PDF']),
+        ('2025-05-19','2025-05-20',[CNINFO+'2025-05-19/1223573337.PDF']),
+    ],
+}
+
+
+def announcement_evidence(code, start, end):
+    days, receipts = set(), []
+    for halt, resume, urls in PUBLIC_HALTS.get(code,[]):
+        if halt > end or resume <= start:
+            continue
+        current = date.fromisoformat(max(halt,start))
+        last = min(date.fromisoformat(resume)-timedelta(days=1),date.fromisoformat(end))
+        while current <= last:
+            days.add(current.isoformat())
+            current += timedelta(days=1)
+        receipts.append(dict(halt=halt,resume=resume,urls=list(urls),verified='2026-10-09'))
+    return sorted(days), receipts

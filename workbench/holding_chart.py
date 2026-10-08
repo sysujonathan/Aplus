@@ -5,6 +5,7 @@ from datetime import datetime
 from .closed_chart import _ReadOnlySnapshots, closed_chart_events
 from .market import BaoStock, load_dataset, validate_bars
 from .holding_quotes import net_invested
+from .sources import market_source
 
 
 def load_holding_chart(store, row, *, quote=None):
@@ -19,9 +20,9 @@ def load_holding_chart(store, row, *, quote=None):
     if not fills or quantity <= 0:
         raise ValueError("没有有效的在持仓成交链路。")
     snapshots = store.rows(
-        "SELECT * FROM datasets WHERE code=? AND timeframe='daily' "
-        "ORDER BY end DESC, CASE WHEN adjustment IN ('不复权','none','3') THEN 0 ELSE 1 END,"
-        "created DESC,rowid DESC LIMIT 1", (position["code"],))
+        "SELECT * FROM datasets WHERE code=? AND timeframe='daily' AND source IN (?,'csv','legacy-engine-a') "
+        "ORDER BY CASE WHEN source=? THEN 0 ELSE 1 END,end DESC, CASE WHEN adjustment IN ('不复权','none','3') THEN 0 ELSE 1 END,"
+        "created DESC,rowid DESC LIMIT 1", (position["code"],market_source(store),market_source(store)))
     if not snapshots:
         raise ValueError("本地没有该标的日线，请先在盘前任务更新行情。")
     frame, record = load_dataset(_ReadOnlySnapshots(store), snapshots[0]["id"])
@@ -74,7 +75,11 @@ def fetch_holding_reference(data, cancel_event):
     """Only download this security's raw reference prices; never touch Store."""
     end = data["close_date"]
     start = min((e["date"] for e in data["events"] if e["price"] is not None), default=end)
-    provider = BaoStock()
+    if data.get('dataset',{}).get('source')=='tickflow':
+        from .tickflow import TickFlow
+        provider = TickFlow()
+    else:
+        provider = BaoStock()
     provider.cancel_event = cancel_event
     provider.login_timeout, provider.query_timeout = 8, 12
     with provider:

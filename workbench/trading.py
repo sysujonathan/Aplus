@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from .sources import market_source
 
 
 def _number(value, default=0.0):
@@ -25,9 +26,9 @@ def latest_prices(store, codes):
     result = {}
     for code in sorted(set(codes)):
         rows = store.rows(
-            "SELECT * FROM datasets WHERE source='baostock' AND timeframe='daily' "
+            "SELECT * FROM datasets WHERE source=? AND timeframe='daily' "
             "AND code=? ORDER BY end DESC,created DESC,rowid DESC LIMIT 1",
-            (code,),
+            (market_source(store),code),
         )
         if not rows:
             continue
@@ -348,8 +349,8 @@ def trading_dates(store, code=None, limit=180):
     """Return recent completed A-share dates for lot date selectors."""
     from workbench.market import load_dataset
 
-    args = []
-    where = "source='baostock' AND timeframe='daily'"
+    args = [market_source(store)]
+    where = "source=? AND timeframe='daily'"
     if code:
         where += " AND code=?"
         args.append(code)

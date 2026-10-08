@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date
+from .sources import market_source
 
 def calculate_daily_pnl(fills, quotes, asof):
     """Opening inventory movement + same-day trade cash/stock changes - fees.
@@ -76,8 +77,8 @@ def historical_daily_returns(store, account_id):
     by_day = {}
     for code in sorted({f["code"] for f in fills}):
         snapshots = store.rows(
-            "SELECT id FROM datasets WHERE code=? AND source='baostock' AND timeframe='daily' "
-            "ORDER BY end DESC,created DESC,rowid DESC LIMIT 1", (code,),
+            "SELECT id FROM datasets WHERE code=? AND source=? AND timeframe='daily' "
+            "ORDER BY end DESC,created DESC,rowid DESC LIMIT 1", (code,market_source(store)),
         )
         if not snapshots:
             continue

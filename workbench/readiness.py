@@ -5,6 +5,7 @@ import pandas as pd
 
 from .market import latest_datasets, select_board_codes, board_of
 from .store import dumps
+from .sources import market_source
 
 
 def save_directory(store, directory, day, job=None, basics=None):
@@ -81,6 +82,33 @@ def expected_day(store, asof):
         raise ValueError('缺少有效交易日历，请先同步一次市场数据') from exc
 
 
+def extend_exchange_calendar(store,start,end,job=None):
+    """Keep verified historical dates; extend only published exchange years."""
+    from datetime import date,timedelta
+    from .exchange_calendar import is_trading_day, SCHEDULES
+    path=store.root/'trading_calendar.json'
+    old=json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+    if old:
+        if old['start']>start:
+            raise ValueError('本地已核验交易日历缺少更早区间；不能从缺失 K 线推测休市')
+        left=old['start']; days=set(old['trading_days'])
+        cursor=date.fromisoformat(old['end'])+timedelta(days=1)
+        if old['end']>=end:
+            return old
+    else:
+        left=start; days=set(); cursor=date.fromisoformat(start)
+    last=date.fromisoformat(end)
+    while cursor<=last:
+        if cursor.year not in SCHEDULES:
+            raise ValueError(f'{cursor.year} 年缺少已核验历史交易日历；请迁入已有 trading_calendar.json，不能把缺数据当休市')
+        if is_trading_day(cursor):
+            days.add(cursor.isoformat())
+        cursor+=timedelta(days=1)
+    payload=dict(start=left,end=end,trading_days=sorted(days),extension_source='交易所已公布休市安排')
+    store.write_artifact('trading_calendar.json',dumps(payload).encode(),job)
+    return payload
+
+
 def check_response_dates(store, frame, start, end):
     """Reject unexplained holes in returned history; do not invent suspension bars.
 
@@ -105,13 +133,14 @@ def check_response_dates(store, frame, start, end):
                          + '、'.join(missing[:5]) + '；保留原快照，请重试')
 
 
-def audit_scope(store, boards, asof, dataset_ids=None):
+def audit_scope(store, boards, asof, dataset_ids=None, source=None):
     """Cheap UI check; actual files still hash-validated before strategy execution.
 
     Suspension is excused only by the directory for this exact trading day.
     This gate establishes stock coverage and freshness, NOT every historical bar.
     """
-    report = {'expected': 0, 'ready': 0, 'suspended': 0, 'gaps': [],
+    source=source or market_source(store)
+    report = {'expected': 0, 'ready': 0, 'suspended': 0, 'gaps': [], 'source':source,
               'eligible_ids': [], 'expected_day': None, 'boards': boards}
     try:
         day = expected_day(store, asof)
@@ -126,10 +155,10 @@ def audit_scope(store, boards, asof, dataset_ids=None):
         if directory_day != day:
             raise ValueError(f'股票目录日期为 {directory_day or "未核验"}，应为 {day}；请同步该日期行情，避免遗漏新股或误判停牌')
         directory = directory.drop_duplicates('code').set_index('code')
-        records = latest_datasets(store, 'baostock')
+        records = latest_datasets(store, source)
         if dataset_ids is not None:
             ids = set(dataset_ids)
-            records = store.rows("SELECT * FROM datasets WHERE source='baostock' AND timeframe='daily'")
+            records = store.rows("SELECT * FROM datasets WHERE source=? AND timeframe='daily'",(source,))
             records = [r for r in records if r['id'] in ids]
         records = {r['code']: r for r in records if r['timeframe'] == 'daily'}
         for code in codes:

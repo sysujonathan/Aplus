@@ -10,6 +10,7 @@ from .readiness import audit_scope
 from .scope import selected_boards, save_boards, scan_datasets
 from .strategies import prepare
 from .store import dumps
+from .sources import SOURCES,market_source,set_market_source
 
 TF = {'daily':'日线', 'weekly':'周线'}
 
@@ -44,6 +45,10 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
     st.caption('更新行情 → 匹配策略 → TradingView 人工分析 · 想再观察几天，加入右侧关注列表')
     busy = bool(store.rows("SELECT id FROM jobs WHERE status IN ('queued','running')"))
     with st.expander('数据与扫描设置', expanded=True):
+        source=st.selectbox('日 K 数据源',list(SOURCES),index=list(SOURCES).index(market_source(store)),
+                            format_func=SOURCES.get,disabled=busy)
+        if source!=market_source(store):
+            set_market_source(store,source)
         selected = selected_boards(store)
         columns = st.columns(4)
         boards = [name for col,name in zip(columns,BOARDS)
@@ -61,7 +66,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         columns = st.columns(min(6,max(1,len(active))))
         strategies = [key for i,(key,s) in enumerate(active.items())
                       if columns[i % len(columns)].checkbox(s.name,value=True,key='desk_strategy_'+key,disabled=busy)]
-        ids = [r['id'] for r in scan_datasets(store,'baostock')]
+        ids = [r['id'] for r in scan_datasets(store,source)]
         audit = audit_scope(store,boards,str(end),ids)
         a,b,c = st.columns([1,1,3])
         if a.button('同步市场数据',type='primary',disabled=busy):
@@ -70,9 +75,9 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
             elif begin > end:
                 st.error('历史起点不能晚于行情日期')
             else:
-                start(service,'sync',{'boards':boards,'start':str(begin),'end':str(end),'force':False})
+                start(service,'sync',{'source':source,'boards':boards,'start':str(begin),'end':str(end),'force':False})
         if b.button('匹配策略',type='primary',disabled=busy or not audit['complete'] or not strategies):
-            start(service,'scan',{'source':'baostock','boards':boards,'datasets':ids,
+            start(service,'scan',{'source':source,'boards':boards,'datasets':ids,
                                  'strategies':strategies,'timeframes':periods,'asof':str(end)})
         c.caption(f"应有 {audit['expected']} 只 · 日期就绪 {audit['ready']} 只 · 停牌 {audit['suspended']} 只 · "
                   f"缺口 {len(audit['gaps'])} 项。目录、上市与退市状态随同步自动核对。")
@@ -87,9 +92,9 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
     # Only genuine market scans appear on the daily desk; historical demo stays in storage.
     jobs = store.rows("SELECT * FROM jobs WHERE kind='scan' ORDER BY created DESC,rowid DESC LIMIT 100")
     observations = store.rows("SELECT o.*,d.source,d.adjustment FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-                              "WHERE d.source='baostock' ORDER BY o.created DESC")
+                              "WHERE d.source=? ORDER BY o.created DESC",(source,))
     by_oid = {o['id']:o for o in observations}
-    jobs = [j for j in jobs if json.loads(j['spec']).get('source')=='baostock'
+    jobs = [j for j in jobs if json.loads(j['spec']).get('source')==source
             or any(oid in by_oid for oid in json.loads(j['result']).get('observation_ids',[]))]
     rows, receipt_key, settings = [], 'empty', {}
     if jobs:
@@ -194,7 +199,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         from_watch=st.session_state.get('desk_from_watch',False)
         reference_ok=True
         if from_watch:
-            latest=next((r for r in latest_datasets(store,'baostock') if r['code']==o['code'] and r['timeframe']=='daily'),None)
+            latest=next((r for r in latest_datasets(store,source) if r['code']==o['code'] and r['timeframe']=='daily'),None)
             if latest:
                 current,current_record=load_dataset(store,latest['id'])
                 overlap=frame.merge(current,on='date',suffixes=('_old','_new'))

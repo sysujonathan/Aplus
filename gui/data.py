@@ -8,11 +8,12 @@ import json
 import re
 
 import pandas as pd
+from workbench.sources import market_source
 
 
 REALTIME_MARKET_SOURCE = "baostock"
 LEGACY_MARKET_SOURCE = "legacy-engine-a"
-LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, LEGACY_MARKET_SOURCE)
+LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, 'tickflow', LEGACY_MARKET_SOURCE)
 
 _pinyin = None
 _pinyin_style = None
@@ -128,12 +129,13 @@ def code_names(store):
         return {}
 
 
-def load_candidates(store, timeframe="daily", source=REALTIME_MARKET_SOURCE, asof_filter=None):
+def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     """按一个明确行情来源读取扫描观察，返回 {strategy_key: [row, ...]}。
 
     asof_filter: (year, month, day) 三元组，元素为 None 表示该位不约束。
     用 LIKE 前缀匹配 asof（形如 2026-09-20 或带时间），避免依赖具体存储格式。
     """
+    source=source or market_source(store)
     sql = (
         "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id, "
         "d.source AS source "
@@ -194,12 +196,12 @@ def candidate_dates(store, timeframe="daily", source=None):
             "SELECT day FROM ("
             "SELECT substr(o.asof,1,10) AS day FROM observations o "
             "JOIN datasets d ON d.id=o.dataset_id "
-            "WHERE d.source IN (?,?) AND o.timeframe=? "
+            "WHERE d.source IN (?,?,?) AND o.timeframe=? "
             "UNION "
             "SELECT d.end AS day FROM datasets d "
             "WHERE d.source=? AND d.timeframe=?"
             ") WHERE day IS NOT NULL AND day<>'' ORDER BY day DESC",
-            (*LOCAL_CANDIDATE_SOURCES, timeframe, REALTIME_MARKET_SOURCE, timeframe),
+            (*LOCAL_CANDIDATE_SOURCES, timeframe, market_source(store), timeframe),
         )
     return [row["day"] for row in rows if row.get("day")]
 
@@ -209,22 +211,22 @@ def latest_candidate_date(store, timeframe="daily"):
     return latest_scan_date(store, timeframe=timeframe)
 
 
-def latest_market_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+def latest_market_date(store, timeframe="daily", source=None):
     """返回指定正式行情源的最新 K 线日期。"""
     rows = store.rows(
         "SELECT MAX(end) AS day FROM datasets WHERE source=? AND timeframe=?",
-        (source, timeframe),
+        (source or market_source(store), timeframe),
     )
     return rows[0]["day"] if rows and rows[0].get("day") else None
 
 
-def latest_observation_date(store, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+def latest_observation_date(store, timeframe="daily", source=None):
     """返回指定行情来源最近一次保存观察结果的日期。"""
     rows = store.rows(
         "SELECT MAX(o.asof) AS day FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "
         "WHERE d.source=? AND o.timeframe=?",
-        (source, timeframe),
+        (source or market_source(store), timeframe),
     )
     return rows[0]["day"] if rows and rows[0].get("day") else None
 
@@ -234,18 +236,18 @@ def latest_scan_date(store, timeframe="daily"):
     rows = store.rows(
         "SELECT MAX(o.asof) AS day FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source IN (?,?) AND o.timeframe=?",
+        "WHERE d.source IN (?,?,?) AND o.timeframe=?",
         (*LOCAL_CANDIDATE_SOURCES, timeframe),
     )
     return rows[0]["day"] if rows and rows[0].get("day") else None
 
 
-def latest_market_dataset(store, code, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+def latest_market_dataset(store, code, timeframe="daily", source=None):
     """按股票读取最新正式行情快照；不会回退到工程 A 历史源。"""
     rows = store.rows(
         "SELECT * FROM datasets WHERE source=? AND timeframe=? AND code=? "
         "ORDER BY end DESC, created DESC, rowid DESC LIMIT 1",
-        (source, timeframe, code),
+        (source or market_source(store), timeframe, code),
     )
     return rows[0] if rows else None
 
@@ -256,7 +258,7 @@ def candidate_source_for_date(store, timeframe="daily", asof_filter=None):
     sql = (
         "SELECT d.source, MAX(o.asof) AS latest FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source IN (?,?) AND o.timeframe=?"
+        "WHERE d.source IN (?,?,?) AND o.timeframe=?"
     )
     params = [*LOCAL_CANDIDATE_SOURCES, timeframe]
     if pattern is not None:
@@ -266,9 +268,9 @@ def candidate_source_for_date(store, timeframe="daily", asof_filter=None):
         " GROUP BY d.source ORDER BY latest DESC, "
         "CASE d.source WHEN ? THEN 0 ELSE 1 END LIMIT 1"
     )
-    params.append(REALTIME_MARKET_SOURCE)
+    params.append(market_source(store))
     rows = store.rows(sql, params)
-    return rows[0]["source"] if rows else REALTIME_MARKET_SOURCE
+    return rows[0]["source"] if rows else market_source(store)
 
 
 def _build_asof_pattern(asof_filter):
@@ -304,13 +306,13 @@ def load_observation_candles(store, observation_id):
     return frame, record, payload
 
 
-def latest_observation(store, code, timeframe="daily", source=REALTIME_MARKET_SOURCE):
+def latest_observation(store, code, timeframe="daily", source=None):
     """在一个明确行情来源内按代码取最近观察；无则返回 None。"""
     rows = store.rows(
         "SELECT o.id FROM observations o JOIN datasets d ON d.id=o.dataset_id "
         "WHERE d.source=? AND o.timeframe=? AND o.code=? "
         "ORDER BY o.created DESC LIMIT 1",
-        (source, timeframe, code),
+        (source or market_source(store), timeframe, code),
     )
     return rows[0]["id"] if rows else None
 

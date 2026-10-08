@@ -45,7 +45,7 @@ STATUS = {'completed':'已完成','partial':'部分完成','failed':'失败','ca
           'interrupted':'上次中断','running':'运行中','queued':'排队中'}
 KIND = {'sync':'行情同步','scan':'策略匹配','backtest':'回测研究','validate':'策略验证','universe':'股票名单'}
 TF = {'daily':'日线','weekly':'周线','monthly':'月线'}
-SOURCE = {'baostock':'真实行情 · BaoStock','csv':'自行导入 · CSV','demo':'演示行情 · 非真实市场'}
+SOURCE = {'baostock':'真实行情 · BaoStock','tickflow':'真实行情 · TickFlow','csv':'自行导入 · CSV','demo':'演示行情 · 非真实市场'}
 
 
 def submit(kind,spec):

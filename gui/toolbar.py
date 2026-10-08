@@ -7,6 +7,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 
 from .theme import MUTED
+from workbench.sources import market_source, set_market_source, SOURCES
 
 _LABEL_FG = MUTED
 _ALL = "全部"
@@ -142,6 +143,8 @@ def sync_start_date(store, full_history=False):
     """First use builds full history; later runs reuse coverage incrementally."""
     if full_history:
         return "2016-01-01"
+    if market_source(store)=='tickflow':
+        return '2016-01-01'  # Source switch builds complete same-source history.
     try:
         state = store.rows(
             "SELECT COUNT(*) AS count, MAX(start) AS latest_start FROM sync_coverage"
@@ -257,6 +260,11 @@ class ToolBar(ttk.Frame):
             )
         self.scope_button.configure(menu=scope_menu)
         self.scope_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.source_var=tk.StringVar(value=SOURCES[market_source(store)] if store else 'BaoStock')
+        self.source_combo=ttk.Combobox(actions,textvariable=self.source_var,values=list(SOURCES.values()),
+                                       width=9,state='readonly')
+        self.source_combo.pack(side=tk.LEFT,padx=(0,5))
+        self.source_combo.bind('<<ComboboxSelected>>',self._source_changed)
         self.btn_sync = ttk.Button(
             actions, text="更新行情", command=self._on_sync, bootstyle="primary", cursor="hand2"
         )
@@ -658,7 +666,7 @@ class ToolBar(ttk.Frame):
         text = format_data_chain_status(market, signal, readiness)
         self._mkt_var.set(text)
         self._header_data_var.set(
-            format_header_data_status(market, signal, boards, audit)
+            SOURCES[market_source(self.store)]+' · '+format_header_data_status(market, signal, boards, audit)
         )
         return text
 
@@ -684,6 +692,20 @@ class ToolBar(ttk.Frame):
         )
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
+    def _source_changed(self,event=None):
+        if self.store is None:
+            return
+        source=next(k for k,v in SOURCES.items() if v==self.source_var.get())
+        try:
+            set_market_source(self.store,source)
+            self._load_market_status()
+            self._select_latest_date()
+            self._fire_date()
+            self.set_status(f'日 K 来源已切换为 {SOURCES[source]}；旧快照与旧回测保留，首次更新建立该来源完整历史')
+        except Exception as exc:
+            self.source_var.set(SOURCES[market_source(self.store)])
+            self.set_status(str(exc))
+
     def _on_auto(self):
         """先更新行情，成功后自动用同一范围执行策略扫描。"""
         if self._job_id:
@@ -724,6 +746,7 @@ class ToolBar(ttk.Frame):
         # 空仓首次更新自动建立完整历史；已有覆盖后仍由同步器只补缺口。
         start = sync_start_date(self.store, self.full_history_var.get())
         spec = {
+            "source":market_source(self.store),
             "boards": boards,
             "start": start,
             "end": None,
@@ -745,7 +768,7 @@ class ToolBar(ttk.Frame):
             from workbench.scope import save_boards, scan_datasets
 
             save_boards(self.store, boards)
-            ids = [r["id"] for r in scan_datasets(self.store, "baostock")]
+            ids = [r["id"] for r in scan_datasets(self.store, market_source(self.store))]
             if not ids:
                 self.set_status("所选板块没有可用行情：请先更新行情，再扫描")
                 return
@@ -754,7 +777,7 @@ class ToolBar(ttk.Frame):
                 self.set_status("扫描未开始：请至少选择一个策略")
                 return
             spec = {
-                "source": "baostock",
+                "source": market_source(self.store),
                 "boards": boards,
                 "datasets": ids,
                 "strategies": strategies,
@@ -792,6 +815,8 @@ class ToolBar(ttk.Frame):
             self.strategy_scope_button,
         ):
             button.state(["disabled"])
+        if hasattr(self,'source_combo'):
+            self.source_combo.state(['disabled'])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
 
@@ -862,6 +887,8 @@ class ToolBar(ttk.Frame):
             self.strategy_scope_button,
         ):
             btn.state(["!disabled"])
+        if hasattr(self,'source_combo'):
+            self.source_combo.state(['!disabled','readonly'])
         try:
             r = json.loads(result_json) if result_json else {}
         except Exception:

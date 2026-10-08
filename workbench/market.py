@@ -158,21 +158,23 @@ class DirectBaoStock:
         socket.setdefaulttimeout(25)
         result = bs.login()
         if result.error_code != '0':
-            raise RuntimeError(f'行情服务登录失败：{result.error_msg}')
+            from .provider_guard import ProviderError
+            raise ProviderError('baostock','login',result.error_msg,result.error_code)
         return self
 
     def __exit__(self, *exc):
         self.bs.logout()
 
     @staticmethod
-    def collect(result):
+    def collect(result, operation='query'):
+        from .provider_guard import ProviderError
         if result.error_code != '0':
-            raise RuntimeError(f'行情服务返回错误：{result.error_msg}')
+            raise ProviderError('baostock',operation,result.error_msg,result.error_code)
         rows = []
         while result.next():
             rows.append(result.get_row_data())
         if result.error_code != '0':
-            raise RuntimeError(f'行情读取中断：{result.error_msg}')
+            raise ProviderError('baostock',operation,result.error_msg,result.error_code)
         return pd.DataFrame(rows, columns=result.fields)
 
     def universe(self, date):
