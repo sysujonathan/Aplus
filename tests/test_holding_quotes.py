@@ -270,10 +270,12 @@ def test_holding_adjusted_axis_only_converts_with_same_date_raw_price(tmp_path):
     row = report(store, aid)["positions"][0]
     data = load_holding_chart(store, row)
     assert all(l["price"] is None for l in data["levels"])
-    assert any("暂不画" in w for w in data["warnings"])
+    assert data["reference_needed"]
     wrong = load_holding_chart(store, row, quote=quote(moment=NOW-timedelta(days=1)))
     assert all(l["price"] is None for l in wrong["levels"])
-    data = load_holding_chart(store, row, quote=quote())
+    intraday = load_holding_chart(store, row, quote=quote())
+    assert intraday["reference_needed"]  # an intraday price is NOT the daily close
+    data = load_holding_chart(store, row, quote=quote(moment=NOW.replace(hour=15)))
     assert data["levels"][0]["price"] == pytest.approx(5.005)
     assert data["events"][0]["execution_price"] == 10
     assert data["events"][0]["price"] == 5.25
@@ -346,7 +348,11 @@ def test_gui_live_overlay_keeps_rows_selection_calendar_and_ledger(tmp_path, quo
             assert page._live_quotes[CODE]["price"] == 12
             editor = _PositionDialog(page, store, {}, page._selected_position())
             labels = [str(w.cget("text")) for w in editor.form.winfo_children() if "text" in w.keys()]
-            assert "查看 K 线／成本及止盈止损" in labels
+            assert "查看持仓图" in labels
+            with patch.object(editor, "_autofill_plan") as autofill:
+                editor._resolve_code()
+                autofill.assert_not_called()
+            assert float(editor.stop.get()) == 9 and float(editor.tp1.get()) == 12
             editor.top.destroy()
             chart = HoldingTradeChartDialog(root, store, page._selected_position())
             root.update()
@@ -560,3 +566,161 @@ def test_page_entry_hides_account_calendar_before_raise_and_quotes_do_not_reveal
             assert database(store) == before  # no fake zero-return holiday records
         finally:
             page.destroy()
+
+
+def test_reference_conversion_uses_saved_risk_and_each_fill_date_without_writes(tmp_path):
+    from workbench.holding_chart import apply_holding_reference
+    store, aid, _pid = ledger(tmp_path)
+    raw = bars()
+    adjusted = raw.copy()
+    for key in ("open", "high", "low", "close"):
+        adjusted[key] *= pd.Series([.5, .5, .25])
+    save_dataset(store, CODE, adjusted, "baostock", "前复权")
+    before = database(store)
+    data = load_holding_chart(store, report(store, aid)["positions"][0])
+    resolved = apply_holding_reference(data, raw)
+    assert [l["price"] for l in resolved["levels"]] == pytest.approx([2.5025, 2.25, 3., 3.25, 3.5])
+    assert [l["value"] for l in resolved["levels"]] == pytest.approx([10.01, 9, 12, 13, 14])
+    assert resolved["events"][0]["price"] == 5  # actual buy 10, NOT adjusted close 5.25
+    assert resolved["events"][0]["execution_price"] == 10
+    assert resolved["events"][0]["date"] == "2026-09-29"
+    assert data["events"][0]["price"] == 5.25 and data["reference_needed"]
+    assert all(l["price"] is None for l in data["levels"])
+    assert not resolved["reference_needed"]
+    assert data["frame"].ema20.tolist() == pytest.approx(adjusted.close.ewm(span=20, adjust=False).mean())
+    assert database(store) == before
+    partial = apply_holding_reference(data, raw.tail(1))
+    assert partial["events"][0]["price"] == 5.25
+    assert any("部分成交日" in w for w in partial["warnings"])
+
+
+@pytest.mark.parametrize("fault", ["missing_end", "future", "zero", "nan"])
+def test_invalid_raw_reference_never_fabricates_lines(tmp_path, fault):
+    from workbench.holding_chart import apply_holding_reference
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    data = load_holding_chart(store, report(store, aid)["positions"][0])
+    raw = bars()
+    if fault == "missing_end":
+        raw = raw.iloc[:-1]
+    elif fault == "future":
+        raw = pd.concat([raw, raw.tail(1).assign(date="2026-10-01")], ignore_index=True)
+    else:
+        raw.loc[2, "close"] = 0 if fault == "zero" else float("nan")
+    with pytest.raises(ValueError):
+        apply_holding_reference(data, raw)
+    assert data["reference_needed"] and all(l["price"] is None for l in data["levels"])
+
+
+def test_latest_holding_bars_not_replaced_by_older_unadjusted_snapshot(tmp_path):
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars().iloc[:-1], "baostock", "不复权")
+    latest = save_dataset(store, CODE, bars(), "baostock", "前复权")
+    data = load_holding_chart(store, report(store, aid)["positions"][0])
+    assert data["dataset"]["id"] == latest and data["close_date"] == "2026-09-30"
+    assert data["reference_needed"]
+
+
+def test_raw_reference_provider_is_bounded_cancelable_and_never_changes_default_query(tmp_path):
+    from workbench.holding_chart import fetch_holding_reference
+    from workbench.provider_process import BaoStock
+    from workbench.market import DirectBaoStock
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    data = load_holding_chart(store, report(store, aid)["positions"][0])
+    cancel = threading.Event()
+    provider = Mock()
+    provider.__enter__ = Mock(return_value=provider)
+    provider.__exit__ = Mock(return_value=False)
+    provider.fetch_unadjusted.return_value = bars()
+    with patch("workbench.holding_chart.BaoStock", return_value=provider):
+        assert len(fetch_holding_reference(data, cancel)) == 3
+    assert provider.cancel_event is cancel
+    assert (provider.login_timeout, provider.query_timeout) == (8, 12)
+    provider.fetch_unadjusted.assert_called_once_with(CODE, "2026-09-29", "2026-09-30")
+    process = BaoStock()
+    with patch.object(process, "_query") as query:
+        process.fetch(CODE, "2026-09-29", "2026-09-30")
+        assert query.call_args.args == ("fetch", [CODE, "2026-09-29", "2026-09-30"])
+        process.fetch_unadjusted(CODE, "2026-09-29", "2026-09-30")
+        assert query.call_args.args == ("fetch", [CODE, "2026-09-29", "2026-09-30", "3"])
+    direct = DirectBaoStock()
+    direct.bs = Mock()
+    frame = bars().assign(tradestatus="1", code=CODE, adjustflag="3")
+    with patch.object(direct, "collect", return_value=frame):
+        direct.fetch(CODE, "2026-09-29", "2026-09-30")
+        assert direct.bs.query_history_k_data_plus.call_args.kwargs["adjustflag"] == "2"
+        assert direct.bs.query_history_k_data_plus.call_args.args[1] == "date,open,high,low,close,volume,tradestatus"
+        direct.fetch(CODE, "2026-09-29", "2026-09-30", "3")
+        assert direct.bs.query_history_k_data_plus.call_args.kwargs["adjustflag"] == "3"
+    for invalid in (frame.assign(code="sz.000001"), frame.assign(adjustflag="2")):
+        with patch.object(direct, "collect", return_value=invalid), pytest.raises(ValueError):
+            direct.fetch(CODE, "2026-09-29", "2026-09-30", "3")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.parametrize("failed", [False, True])
+def test_holding_reference_background_keeps_gui_responsive_and_fails_visibly(tmp_path, quote_window, failed):
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    store, aid, _pid = ledger(tmp_path)
+    adjusted = bars()
+    for key in ("open", "high", "low", "close"):
+        adjusted[key] /= 2
+    save_dataset(store, CODE, adjusted, "baostock", "前复权")
+    before = database(store)
+    entered, release = threading.Event(), threading.Event()
+    def slow(data, cancel):
+        entered.set()
+        release.wait(3)
+        if failed:
+            raise TimeoutError("测试超时")
+        return bars()
+    root = quote_window
+    with patch("workbench.holding_chart.fetch_holding_reference", new=slow):
+        chart = HoldingTradeChartDialog(root, store, report(store, aid)["positions"][0])
+        try:
+            assert entered.wait(2) and chart.data["reference_needed"]
+            idle = Mock()
+            chart.top.after_idle(idle)
+            root.update()
+            idle.assert_called_once()
+            release.set()
+            response = chart._reference_results.get(timeout=2)
+            chart._reference_results.put(response)
+            chart.top.after_cancel(chart._reference_after)
+            chart._reference_after = None
+            chart._poll_reference()
+            assert chart.top.title().startswith("持仓图")
+            if failed:
+                assert all(l["price"] is None for l in chart.data["levels"])
+                assert "核验失败" in chart.note.cget("text") and "正在后台" not in chart.note.cget("text")
+            else:
+                assert [l["price"] for l in chart.data["levels"]] == pytest.approx([5.005, 4.5, 6, 6.5, 7])
+                assert chart.data["events"][0]["price"] == 5
+                assert "已核验" in chart.note.cget("text")
+            assert database(store) == before
+        finally:
+            release.set()
+            chart.close()
+            assert chart._reference_cancel.is_set() and chart._reference_after is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_closing_holding_chart_cancels_pending_reference_without_late_gui_write(tmp_path, quote_window):
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    entered, release = threading.Event(), threading.Event()
+    def slow(data, cancel):
+        entered.set()
+        release.wait(3)
+        assert cancel.is_set()
+        return bars()
+    with patch("workbench.holding_chart.fetch_holding_reference", new=slow):
+        chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0])
+        assert entered.wait(2)
+        chart.close()
+        assert chart._reference_cancel.is_set() and chart._reference_after is None
+        release.set()
+        chart._reference_results.get(timeout=2)
+        quote_window.update()

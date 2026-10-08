@@ -105,6 +105,9 @@ class BaoStock:
     def fetch(self, code, start, end):
         return self._query('fetch',[code,start,end])
 
+    def fetch_unadjusted(self, code, start, end):
+        return self._query('fetch',[code,start,end,'3'])
+
     def universe(self, date):
         return self._query('universe',[date])
 

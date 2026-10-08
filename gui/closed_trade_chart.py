@@ -1,5 +1,7 @@
 """Closed-trade chart viewer using the existing research renderer/navigation."""
 import tkinter as tk
+import queue
+import threading
 
 import ttkbootstrap as ttk
 from PIL import ImageTk
@@ -85,7 +87,7 @@ class ClosedTradeChartDialog:
                        + "\n".join(warnings))
         if self.data.get("levels"):
             explanation += "\n" + " · ".join(f'{level["label"]} {level["value"]:.4f}' for level in self.data["levels"])
-        note = ttk.Label(host, text=explanation, foreground=MUTED, justify=tk.LEFT)
+        note = self.note = ttk.Label(host, text=explanation, foreground=MUTED, justify=tk.LEFT)
         note.grid(row=1, column=0, sticky=tk.EW, pady=(6, 4))
         note.bind("<Configure>", lambda e: note.configure(wraplength=max(1, e.width)))
         self.readout = tk.StringVar(value="滚轮缩放 · 拖动平移／价格轴 · 双击复位 · 悬停查看 OHLC")
@@ -174,4 +176,55 @@ class ClosedTradeChartDialog:
 class HoldingTradeChartDialog(ClosedTradeChartDialog):
     def __init__(self, parent, store, row, *, quote=None):
         from workbench.holding_chart import load_holding_chart
+        self._reference_cancel = threading.Event()
+        self._reference_after = None
+        self._reference_results = queue.Queue()
         super().__init__(parent, store, row, data=load_holding_chart(store, row, quote=quote))
+        self.top.title(f'持仓图 · {self.data["name"]} {self.data["code"]}')
+        if self.data.get("reference_needed"):
+            self._start_reference()
+
+    def _start_reference(self):
+        from workbench.holding_chart import fetch_holding_reference
+        data, cancel, results = self.data, self._reference_cancel, self._reference_results
+        def work():
+            try:
+                results.put((fetch_holding_reference(data, cancel), None))
+            except Exception as exc:
+                results.put((None, str(exc)))
+        threading.Thread(target=work, daemon=True, name="holding-chart-reference").start()
+        self._reference_after = self.top.after(100, self._poll_reference)
+
+    def _poll_reference(self):
+        self._reference_after = None
+        if self._reference_cancel.is_set():
+            return
+        try:
+            raw, error = self._reference_results.get_nowait()
+        except queue.Empty:
+            self._reference_after = self.top.after(100, self._poll_reference)
+            return
+        if error is None:
+            from workbench.holding_chart import apply_holding_reference
+            try:
+                self.data = apply_holding_reference(self.data, raw)
+            except Exception as exc:
+                error = str(exc)
+        warnings = [w for w in self.data["warnings"] if not w.startswith("缺少对应的不复权收盘价")]
+        if error:
+            warnings.insert(0, f"水平线坐标核验失败：{error}。请关闭后重试；不将原价直接画到复权坐标。")
+        snapshot = self.data["dataset"]
+        text = (f'{snapshot["source"]} · {snapshot["adjustment"]} · '
+                f'{snapshot["start"]}～{snapshot["end"]} · 快照 {snapshot["id"][:12]}\n'
+                + "\n".join(warnings[:3]) + "\n"
+                + " · ".join(f'{level["label"]} {level["value"]:.4f}' for level in self.data["levels"]))
+        self.note.configure(text=text)
+        self.schedule()
+
+    def _destroyed(self, event):
+        if event.widget is self.top:
+            self._reference_cancel.set()
+            if self._reference_after:
+                self.top.after_cancel(self._reference_after)
+                self._reference_after = None
+        super()._destroyed(event)

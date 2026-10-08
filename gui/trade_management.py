@@ -809,7 +809,7 @@ class TradeManagementFrame(ttk.Frame):
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="卖出", command=self._sell_position)
         menu.add_command(label="编辑持仓", command=self._edit_position)
-        menu.add_command(label="查看 K 线／成本及止盈止损", command=self._view_position_chart)
+        menu.add_command(label="查看持仓图", command=self._view_position_chart)
         menu.add_separator()
         menu.add_command(label="删除误录持仓", command=self._delete_position)
         menu.tk_popup(event.x_root, event.y_root)
@@ -1660,6 +1660,7 @@ class _PositionDialog(_IdentityDialog):
     def __init__(self, parent, store, names, position=None):
         super().__init__(parent, "编辑持仓" if position else "新增持仓", store, names)
         position = position or {}
+        self._editing_position = bool(position.get("id"))
         self.identity_fields(position.get("code", ""), position.get("name", ""))
         self.plan_id = position.get("plan_id")
         self.observation_id = position.get("observation_id")
@@ -1682,14 +1683,14 @@ class _PositionDialog(_IdentityDialog):
         )
         self.buttons(6, self._ok)
         if position.get("id"):
-            self.hint.set(self.hint.get() + " K 线使用已保存的成交及止盈止损计划。")
-            ttk.Button(self.form, text="查看 K 线／成本及止盈止损", bootstyle="primary-outline",
+            self.hint.set("持仓图使用已保存的成交与风控价位；修改后请先确认。")
+            ttk.Button(self.form, text="查看持仓图", bootstyle="primary-outline",
                        command=lambda: parent._open_position_chart(self.top, position)).grid(
                            row=6, column=0, columnspan=2, sticky=tk.W, pady=8)
 
     def _resolve_code(self):
         code = super()._resolve_code()
-        if code:
+        if code and not self._editing_position:
             self._autofill_plan(silent=True, resolved=code)
         return code
 
