@@ -228,6 +228,9 @@ class AplusMainWindow(ttk.Window):
         return page
 
     def _switch_section(self, key):
+        if key == "other" and hasattr(self, "trade_management"):
+            # Mask before raising the page, not after revealing the old frame.
+            self.trade_management.hide_private_values()
         if key == 'strategy':
             self.strategy_iteration.refresh()
         if key == 'afterhours':

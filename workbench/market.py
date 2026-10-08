@@ -185,10 +185,20 @@ class DirectBaoStock:
     def basics(self):
         return self.collect(self.bs.query_stock_basic())
 
-    def fetch(self, code, start, end):
+    def fetch(self, code, start, end, adjustflag='2'):
+        # Research/sync keep their existing default. Holding charts explicitly
+        # request raw prices in an isolated provider process, without saving them.
+        if adjustflag not in ('2', '3'):
+            raise ValueError('Unsupported adjustment')
+        fields = 'date,open,high,low,close,volume,tradestatus'
+        if adjustflag == '3':
+            fields += ',code,adjustflag'
         result = self.collect(self.bs.query_history_k_data_plus(
-            code, 'date,open,high,low,close,volume,tradestatus', start_date=start,
-            end_date=end, frequency='d', adjustflag='2'))
+            code, fields, start_date=start,
+            end_date=end, frequency='d', adjustflag=adjustflag))
+        if adjustflag == '3' and not result.empty:
+            if not result.code.eq(code).all() or not result.adjustflag.eq('3').all():
+                raise ValueError('不复权行情身份或复权口径不符')
         evidence = {'returned_dates': result.date.tolist() if not result.empty else [],
                     'suspended_dates': result.loc[result.tradestatus == '0', 'date'].tolist() if not result.empty else []}
         if not result.empty:

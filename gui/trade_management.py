@@ -5,6 +5,7 @@ import calendar
 import json
 import queue
 import threading
+import time
 import tkinter as tk
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,11 @@ from tkinter import font as tkfont, messagebox
 import ttkbootstrap as ttk
 
 from workbench.market import code_of
+from workbench.exchange_calendar import is_trading_day
+from workbench.holding_quotes import (
+    QuotePoller, china_now, saved_quotes, select_quotes, session_status,
+    snapshot_reference, value_holdings, net_invested,
+)
 from workbench.closed_import import MAX_SCREENSHOTS, recognize_screenshots
 from workbench.daily_returns import (
     historical_daily_returns, parse_calendar_text, recognize_calendar_screenshots,
@@ -30,7 +36,7 @@ from .tree_scroll import numeric_stock_code
 
 
 def _money(value):
-    return f"{float(value or 0):,.0f}"
+    return "—" if value is None else f"{float(value or 0):,.0f}"
 
 
 def _price(value):
@@ -38,11 +44,12 @@ def _price(value):
 
 
 def _pct(value):
-    return f"{float(value or 0):.2f}%"
+    return "—" if value is None else f"{float(value or 0):.2f}%"
 
 
 def _sort_value(value):
     text = str(value or "").replace(",", "").replace("%", "").replace("¥", "").replace("*", "")
+    text = text.split(" · ", 1)[0]
     try:
         return 0, float(text)
     except ValueError:
@@ -61,7 +68,14 @@ class TradeManagementFrame(ttk.Frame):
         self._sell_buttons = {}
         self._sort_reverse = {}
         self._accounts = []
-        self._show_fund_values = True
+        self._show_fund_values = False
+        self._quote_poller = QuotePoller()
+        self._live_quotes = {}
+        self._quote_failed = set()
+        self._base_report = None
+        self._quote_timer = None
+        self._quote_due = 0.0
+        self._quote_view_key = None
         self.columnconfigure(0, weight=3)
         self.columnconfigure(1, weight=2)
         self.rowconfigure(1, weight=1, minsize=210)
@@ -70,18 +84,25 @@ class TradeManagementFrame(ttk.Frame):
         self._build_panels()
         self.bind_all("<Button-1>", self._clear_position_selection, add="+")
         self.reload()
+        self.bind("<Destroy>", self._quotes_destroyed, add="+")
+        self._quote_timer = self.after(200, self._quote_tick)
 
     def _build_header(self):
         header = ttk.Frame(self)
         header.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 2))
         self.account_var = tk.StringVar()
         self.asof_var = tk.StringVar(value="尚无持仓行情")
-        ttk.Button(
+        self.refresh_button = ttk.Button(
             header, text="刷新", width=7, bootstyle="secondary-outline",
-            command=self.reload_data,
-        ).pack(side=tk.RIGHT, padx=(6, 0))
+            command=self._manual_quote_refresh,
+        )
+        self.refresh_button.pack(side=tk.RIGHT, padx=(6, 0))
+        self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
+        ttk.Checkbutton(header, text="自动行情", variable=self.auto_quote_var,
+                        command=self._toggle_auto_quotes, bootstyle="success-round-toggle").pack(
+                            side=tk.RIGHT, padx=(8, 0))
         self.eye_button = ttk.Button(
-            header, text="👁 隐藏", width=9, bootstyle="primary",
+            header, text="👁 显示", width=9, bootstyle="primary",
             command=self._toggle_fund_values,
         )
         self.eye_button.pack(side=tk.RIGHT)
@@ -282,7 +303,7 @@ class TradeManagementFrame(ttk.Frame):
         self.fund_metrics = {}
         for index, (key, label) in enumerate((
             ("market_value", "证券市值"), ("floating_pnl", "持仓盈亏"),
-            ("daily_pnl", "当日盈亏"), ("withdrawable_cash", "可取"),
+            ("daily_pnl", "当日盈亏（暂估）"), ("withdrawable_cash", "可取"),
             ("available_cash", "可用"), ("asset_pnl", "资产盈亏"),
         )):
             cell = ttk.Frame(metrics)
@@ -311,7 +332,9 @@ class TradeManagementFrame(ttk.Frame):
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
 
         calendar_body = self._panel(2, 1, "盈亏日历")
-        self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns)
+        self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns,
+                                               calendar_provider=self._quote_calendar)
+        self.return_calendar.set_hidden(True)
 
     def _build_quick_calculator(self, body):
         quick = ttk.Labelframe(body, text="拟建仓速算", padding=(8, 5))
@@ -393,8 +416,15 @@ class TradeManagementFrame(ttk.Frame):
         return f"{account['name']} · {visible}"
 
     def _toggle_fund_values(self):
+        self._set_fund_values(not self._show_fund_values)
+
+    def hide_private_values(self):
+        """Re-entering the page must not reuse a previous explicit reveal."""
+        self._set_fund_values(False)
+
+    def _set_fund_values(self, visible):
         account_id = self.current_account_id()
-        self._show_fund_values = not self._show_fund_values
+        self._show_fund_values = visible
         self.eye_button.configure(text="👁 隐藏" if self._show_fund_values else "👁 显示")
         self._account_by_label = {self._account_label(row): row["id"] for row in self._accounts}
         labels = list(self._account_by_label)
@@ -417,6 +447,10 @@ class TradeManagementFrame(ttk.Frame):
         menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
     def reload_data(self):
+        self._quote_poller.invalidate()
+        self._base_report = None
+        self._quote_view_key = None
+        self._quote_due = 0.0
         for button in self._sell_buttons.values():
             button.destroy()
         self._sell_buttons = {}
@@ -426,6 +460,7 @@ class TradeManagementFrame(ttk.Frame):
         self._closed_ids = {}
         account_id = self.current_account_id()
         if not account_id:
+            self._report = None
             self.quick_result.set("请先点“账户设置”，再使用持仓管理与拟建仓速算")
             self.quick_result_label.configure(foreground=MUTED)
             self.fund_total.set("—")
@@ -447,6 +482,19 @@ class TradeManagementFrame(ttk.Frame):
             quote_day = self._report["summary"]["quote_date"]
             daily = next((r for r in daily_rows if r["date"] == quote_day), None)
             self._report["summary"]["daily_pnl"] = daily["pnl"] if daily else None
+            self._base_report = self._report
+            self._holding_fills = self.store.rows(
+                "SELECT f.*,p.code FROM position_fills f JOIN positions p ON p.id=f.position_id "
+                "WHERE p.account_id=? ORDER BY f.trade_date,f.created,f.id", (account_id,))
+            self._quote_codes = {row["code"] for row in self._report["positions"]}
+            self._quote_codes.update(f["code"] for f in self._holding_fills
+                                     if f["trade_date"][:10] == china_now().date().isoformat())
+            self._history_quotes = saved_quotes(self.store, self._quote_codes)
+            self._cash_reference = None
+            if self._report["account"].get("accounting_mode") == "snapshot":
+                self._cash_reference = self.store.holding_cash_reference(
+                    account_id, snapshot_reference(self._report, self._holding_fills))
+            self._apply_quote_view()
             self._fill_positions()
             self._fill_funds()
             self._fill_closed()
@@ -454,18 +502,133 @@ class TradeManagementFrame(ttk.Frame):
             self.quick_result.set(f"读取交易账本失败：{exc}")
             self.quick_result_label.configure(foreground=DOWN)
 
-    def _fill_positions(self):
+    def _quote_calendar(self):
+        try:
+            return json.loads((self.store.root / "trading_calendar.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _toggle_auto_quotes(self):
+        self._quote_poller.invalidate()
+        if self.store is not None:
+            self.store.holding_auto_quotes(self.auto_quote_var.get())
+        self._quote_due = 0.0
+        self._quote_view_key = None
+        if self.auto_quote_var.get() and session_status(china_now(), self._quote_calendar()) == "交易中":
+            self._start_quotes()
+        self._apply_quote_view()
+
+    def _manual_quote_refresh(self):
+        self._start_quotes()
+
+    def _start_quotes(self):
+        if not self._base_report or not self._quote_codes:
+            self.asof_var.set("暂无持仓，无需更新行情")
+            return
+        if self._quote_poller.start(self._quote_codes):
+            self.refresh_button.configure(state="disabled")
+            self.asof_var.set("正在获取报价…")
+
+    def _quotes_destroyed(self, event):
+        if event.widget is self:
+            self._quote_poller.invalidate()
+            if self._quote_timer:
+                self.after_cancel(self._quote_timer)
+                self._quote_timer = None
+
+    def _quote_tick(self):
+        result = self._quote_poller.take()
+        if result is not None:
+            quotes, self._quote_failed = result
+            for code, quote in quotes.items():
+                if quote["quote_time"] >= self._live_quotes.get(code, {}).get("quote_time", ""):
+                    self._live_quotes[code] = quote
+            self._quote_due = time.monotonic() + self._quote_poller.delay
+            self._quote_view_key = None
+        if not self._quote_poller.busy:
+            self.refresh_button.configure(state="normal")
+        moment, calendar = china_now(), self._quote_calendar()
+        if self.auto_quote_var.get() and session_status(moment, calendar) == "交易中":
+            if time.monotonic() >= self._quote_due:
+                self._start_quotes()
+        if not self._quote_poller.busy:
+            self._apply_quote_view(moment, calendar)
+        self._quote_timer = self.after(1000, self._quote_tick)
+
+    def _apply_quote_view(self, moment=None, calendar=None):
+        if not self._base_report:
+            return
+        moment = moment or china_now()
+        calendar = calendar if calendar is not None else self._quote_calendar()
+        quotes = select_quotes(self._history_quotes, self._live_quotes, self._quote_codes,
+                               self._quote_failed, moment, calendar)
+        status = session_status(moment, calendar)
+        key = repr((quotes, status, self.auto_quote_var.get(), moment.date(), self._quote_poller.delay))
+        if key == self._quote_view_key:
+            return
+        self._quote_view_key = key
+        self._report = value_holdings(self._base_report, quotes, self._holding_fills,
+                                      moment, self._cash_reference)
+        # Stable tree identities/order, selection, buttons, scroll and editing dialogs.
+        for iid, pid in self._position_ids.items():
+            row = next((r for r in self._report["positions"] if r["id"] == pid), None)
+            if row and self.position_tree.exists(iid):
+                self.position_tree.item(iid, values=self._position_values(row), tags=self._position_tags(row))
+        if self.position_tree.exists("__summary__"):
+            self.position_tree.item("__summary__", values=self._position_summary())
+        self._fill_funds(update_calendar=False)
+        times = [q.get("quote_time", "") for q in quotes.values() if q.get("source") == "sina"]
+        dates = [q.get("date", "") for q in quotes.values() if q.get("source") == "history"]
+        missing = len(self._quote_codes - quotes.keys())
+        stale = any(q.get("state") in ("更新失败", "行情滞后") for q in quotes.values())
+        if times:
+            text = "报价 " + min(times).replace("T", " ")[:19]
+        else:
+            text = "历史收盘 " + min(dates) if dates else ("缺少行情" if self._quote_codes else "暂无持仓")
+        if self._cash_reference is None and self._report["account"].get("accounting_mode") == "snapshot":
+            text += " · 请在账户设置校准现金基准"
+        if self._quote_failed or stale:
+            text += " · 更新失败／行情滞后" if self._quote_failed else " · 行情滞后"
+        if missing:
+            text += f" · {missing} 只缺少行情"
+        if times and dates:
+            text += f" · {len(dates)} 只历史收盘 {min(dates)}"
+        if self.auto_quote_var.get():
+            if status == "交易中":
+                action = "自动重试" if self._quote_poller.failures else "自动更新"
+                text += f" · {action}（{self._quote_poller.delay}秒）"
+            else:
+                text += " · 自动暂停：" + status
+        self.asof_var.set(text)
+
+    @staticmethod
+    def _position_tags(row):
+        pnl = row["floating_pnl"]
+        tag = "profit" if pnl is not None and pnl > 0 else ("loss" if pnl is not None and pnl < 0 else "")
+        return (tag,) if tag else ()
+
+    def _position_values(self, row):
+        quote = _price(row["current_price"])
+        state = row.get("quote_state", "")
+        if state and state != "最新报价":
+            quote += " · " + state
+        return (numeric_stock_code(row["code"]), row["name"], _money(row["market_value"]),
+                _money(row["floating_pnl"]), quote, _price(row["diluted_cost"]),
+                _pct(row["allocation_pct"]), row["quantity"], _price(row["stop"]),
+                _pct(row["distance_stop_pct"]), _pct(row["trade_risk_pct"]),
+                _pct(row["account_risk_pct"]), "")
+
+    def _position_summary(self):
         s = self._report["summary"]
-        self.asof_var.set(f"持仓行情 {s['quote_date']}" if s["quote_date"] else "持仓暂无最新行情")
+        return ("汇总", "—", _money(s["market_value"]), _money(s["floating_pnl"]),
+                "—", "—", _pct(s["position_pct"]),
+                sum(int(row["quantity"]) for row in self._report["positions"]),
+                "—", "—", "—", _pct(s["risk_pct"]), "")
+
+    def _fill_positions(self):
         for row in self._report["positions"]:
-            tag = "profit" if row["floating_pnl"] > 0 else ("loss" if row["floating_pnl"] < 0 else "")
-            iid = self.position_tree.insert("", tk.END, values=(
-                numeric_stock_code(row["code"]), row["name"], _money(row["market_value"]),
-                _money(row["floating_pnl"]), _price(row["current_price"]) + ("" if row["has_quote"] else "*"),
-                _price(row["diluted_cost"]), _pct(row["allocation_pct"]), row["quantity"],
-                _price(row["stop"]), _pct(row["distance_stop_pct"]),
-                _pct(row["trade_risk_pct"]), _pct(row["account_risk_pct"]), "",
-            ), tags=(tag,) if tag else ())
+            iid = self.position_tree.insert("", tk.END, values=self._position_values(row),
+                                            tags=self._position_tags(row))
             self._position_ids[iid] = row["id"]
             self._sell_buttons[iid] = ttk.Button(
                 self.position_tree,
@@ -475,12 +638,8 @@ class TradeManagementFrame(ttk.Frame):
                 command=lambda pid=row["id"]: self._sell_position_by_id(pid),
             )
         if len(self._report["positions"]) > 1:
-            self.position_tree.insert("", tk.END, iid="__summary__", values=(
-                "汇总", "—", _money(s["market_value"]), _money(s["floating_pnl"]),
-                "—", "—", _pct(s["position_pct"]),
-                sum(int(row["quantity"]) for row in self._report["positions"]),
-                "—", "—", "—", _pct(s["risk_pct"]), "",
-            ), tags=("summary",))
+            self.position_tree.insert("", tk.END, iid="__summary__", values=self._position_summary(),
+                                      tags=("summary",))
         self.after_idle(self._refit_tree, self.position_tree)
         self.after_idle(self._layout_position_overlays)
 
@@ -533,11 +692,12 @@ class TradeManagementFrame(ttk.Frame):
             self._closed_ids[iid] = row["id"]
         self.after_idle(self._refit_tree, self.closed_tree)
 
-    def _fill_funds(self):
+    def _fill_funds(self, update_calendar=True):
         summary = self._report["summary"]
         account = self._report["account"]
         hidden = not self._show_fund_values
-        self.return_calendar.set_hidden(hidden)
+        if update_calendar:
+            self.return_calendar.set_hidden(hidden)
 
         def amount(value, signed=False):
             if hidden:
@@ -547,7 +707,7 @@ class TradeManagementFrame(ttk.Frame):
             return f"{float(value):+,.2f}" if signed else f"{float(value):,.2f}"
 
         self.fund_total.set(amount(summary["total_assets"]))
-        self.fund_position.set(f"证券仓位：{summary['position_pct']:.2f}%")
+        self.fund_position.set("证券仓位：" + _pct(summary['position_pct']))
         values = {
             "market_value": (summary["market_value"], False),
             "floating_pnl": (summary["floating_pnl"], True),
@@ -559,14 +719,14 @@ class TradeManagementFrame(ttk.Frame):
         for key, (value, signed) in values.items():
             variable, label = self.fund_metrics[key]
             variable.set(amount(value, signed=signed))
-            if signed and value not in (None, 0):
+            if not hidden and signed and value not in (None, 0):
                 label.configure(foreground=UP if value > 0 else DOWN)
             else:
                 label.configure(foreground=TEXT)
         if hidden:
             self.funds_reconciliation.set("初始资金（推算） •••••• 元")
         elif account.get("accounting_mode") == "history":
-            if summary["broker_total_assets"] is not None:
+            if summary["broker_total_assets"] is not None and summary["implied_initial_equity"] is not None:
                 text = f"初始资金（推算） {summary['implied_initial_equity']:,.2f} 元"
             else:
                 text = "初始资金（推算） —"
@@ -599,6 +759,8 @@ class TradeManagementFrame(ttk.Frame):
             self._report["summary"]["market_value"] if self._report else 0.0
         )
         summary = {} if create_new else (self._report["summary"] if self._report else {})
+        if account and account.get("accounting_mode") == "history" and self._base_report:
+            summary = self._base_report["summary"]
         dialog = _AccountDialog(self, account, market_value=market_value,
                                 summary=summary, create_new=create_new)
         self.wait_window(dialog.top)
@@ -606,7 +768,15 @@ class TradeManagementFrame(ttk.Frame):
             return
         try:
             account_id = None if create_new else (account or {}).get("id")
-            saved = self.store.save_account(**dialog.values, account_id=account_id)
+            reference = None
+            if dialog.values["accounting_mode"] == "snapshot":
+                if market_value is None:
+                    raise ValueError("持仓行情不全，无法校准快照现金；请先补齐行情。")
+                reference = {"cash": dialog.values["current_total_assets"] - market_value,
+                             "invested": net_invested(self._holding_fills) if not create_new and self._report else 0,
+                             "adjustments": summary.get("cash_adjustments", 0)}
+            saved = self.store.save_account(**dialog.values, account_id=account_id,
+                                            snapshot_reference=reference)
         except Exception as exc:
             messagebox.showerror("账户保存失败", str(exc), parent=self)
             return
@@ -639,6 +809,7 @@ class TradeManagementFrame(ttk.Frame):
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="卖出", command=self._sell_position)
         menu.add_command(label="编辑持仓", command=self._edit_position)
+        menu.add_command(label="查看持仓图", command=self._view_position_chart)
         menu.add_separator()
         menu.add_command(label="删除误录持仓", command=self._delete_position)
         menu.tk_popup(event.x_root, event.y_root)
@@ -650,6 +821,24 @@ class TradeManagementFrame(ttk.Frame):
         row = self._selected_position()
         if row:
             self._open_position_dialog(row)
+
+    def _view_position_chart(self):
+        row = self._selected_position()
+        if row:
+            self._open_position_chart(self, row)
+
+    def _open_position_chart(self, parent, row):
+        from .closed_trade_chart import HoldingTradeChartDialog
+        previous_grab = parent.grab_current()
+        try:
+            quote = self._live_quotes.get(row["code"]) or self._history_quotes.get(row["code"])
+            dialog = HoldingTradeChartDialog(parent, self.store, row, quote=quote)
+        except Exception as exc:
+            messagebox.showerror("无法查看 K 线", str(exc), parent=parent)
+            return
+        parent.wait_window(dialog.top)
+        if previous_grab is not None and previous_grab.winfo_exists():
+            previous_grab.grab_set()
 
     def _open_position_dialog(self, position):
         if not self.current_account_id():
@@ -830,8 +1019,9 @@ class TradeManagementFrame(ttk.Frame):
 class _ReturnCalendar:
     """Account daily P&L. Dates, amounts and provenance are separate widgets."""
 
-    def __init__(self, parent, import_command=None):
+    def __init__(self, parent, import_command=None, calendar_provider=None):
         self.parent = parent
+        self.calendar_provider = calendar_provider
         self.rows = []
         self.hidden = False
         self.anchor = date.today().replace(day=1)
@@ -915,6 +1105,8 @@ class _ReturnCalendar:
 
     def _render_month(self):
         year, month = self.anchor.year, self.anchor.month
+        market_calendar = self.calendar_provider() if self.calendar_provider else None
+        today = china_now().date()
         self.title.set(f"{year} 年 {month:02d} 月")
         daily = {int(row["date"][-2:]): row for row in self.rows
                  if row["date"].startswith(f"{year}-{month:02d}-")}
@@ -937,16 +1129,21 @@ class _ReturnCalendar:
                 cell.rowconfigure(1, weight=1)
                 if day:
                     item = daily.get(day)
+                    day_date = date(year, month, day)
+                    trading = is_trading_day(day_date, market_calendar)
+                    # Display only: no fabricated zero-return rows or ledger writes.
+                    if not item and trading is False:
+                        item = {"status": "closed"}
                     self._cell(cell, f"{day:02d}", item,
-                               future=date(year, month, day) > date.today())
+                               future=day_date > today, unknown_calendar=trading is None)
                 self.grid.rowconfigure(week_index, weight=1, minsize=65)
 
-    def _cell(self, cell, label, item, future=False):
+    def _cell(self, cell, label, item, future=False, unknown_calendar=False):
         ttk.Label(cell, text=label, anchor=tk.CENTER, foreground=TEXT,
                   font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky=tk.EW)
         color, detail = MUTED, ""
         if not item:
-            value = "—" if future else "待补数据"
+            value = "—" if future else ("日历待更新" if unknown_calendar else "待补数据")
         elif item["status"] == "closed":
             value = "休市"
         else:
@@ -1165,7 +1362,10 @@ class _AccountDialog(_BaseDialog):
         )
         self.initial_label = ttk.Label(self.form, text="账户资金")
         self.initial_label.grid(row=2, column=0, sticky=tk.W, padx=(0, 8), pady=4)
-        self.initial = tk.StringVar(value=account.get("initial_equity", 100000))
+        initial = account.get("initial_equity", 100000)
+        if account.get("accounting_mode") == "snapshot" and summary.get("total_assets") is not None:
+            initial = summary["total_assets"]
+        self.initial = tk.StringVar(value=initial)
         self.initial_entry = ttk.Entry(self.form, textvariable=self.initial, width=22)
         self.initial_entry.grid(row=2, column=1, sticky=tk.EW, padx=(0, 12))
         self.available_label = ttk.Label(self.form, text="可用资金")
@@ -1308,7 +1508,7 @@ class _AccountDialog(_BaseDialog):
             self.reconciliation_label.grid_remove()
             self.use_reverse_button.grid_remove()
             self._update_available()
-            self.hint.set("直接填写证券 App 当前总资产；增加持仓后自动计算持仓市值、可用资金和仓位。")
+            self.hint.set("核对证券 App 当前总资产与可用资金；确认时保存现金基准，之后现金只随成交及资金调整变化。")
         else:
             self.initial_label.configure(text="开户初始资金")
             self.available_label.grid_remove()
@@ -1460,6 +1660,7 @@ class _PositionDialog(_IdentityDialog):
     def __init__(self, parent, store, names, position=None):
         super().__init__(parent, "编辑持仓" if position else "新增持仓", store, names)
         position = position or {}
+        self._editing_position = bool(position.get("id"))
         self.identity_fields(position.get("code", ""), position.get("name", ""))
         self.plan_id = position.get("plan_id")
         self.observation_id = position.get("observation_id")
@@ -1481,10 +1682,15 @@ class _PositionDialog(_IdentityDialog):
             row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
         )
         self.buttons(6, self._ok)
+        if position.get("id"):
+            self.hint.set("持仓图使用已保存的成交与风控价位；修改后请先确认。")
+            ttk.Button(self.form, text="查看持仓图", bootstyle="primary-outline",
+                       command=lambda: parent._open_position_chart(self.top, position)).grid(
+                           row=6, column=0, columnspan=2, sticky=tk.W, pady=8)
 
     def _resolve_code(self):
         code = super()._resolve_code()
-        if code:
+        if code and not self._editing_position:
             self._autofill_plan(silent=True, resolved=code)
         return code
 

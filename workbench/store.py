@@ -329,7 +329,7 @@ class Store:
                      per_trade_risk_pct=1.0, max_position_pct=30.0,
                      cash_reserve_pct=10.0, account_id=None, active=True,
                      accounting_mode="snapshot", current_total_assets=None,
-                     broker_account_no=""):
+                     broker_account_no="", snapshot_reference=None):
         """Create or update a local manual-trading account profile."""
         name = str(name or "").strip()
         values = (initial_equity, risk_limit_pct, per_trade_risk_pct,
@@ -356,6 +356,12 @@ class Store:
             raise ValueError("单票上限需在 0% 到 100% 之间，现金保留需在 0% 到 100% 以内")
         if per_trade_risk_pct > risk_limit_pct:
             raise ValueError("单笔风险不能高于总持仓风险上限")
+        if snapshot_reference is not None:
+            if not isinstance(snapshot_reference, dict) or not all(
+                isinstance(snapshot_reference.get(k), (int, float))
+                and math.isfinite(snapshot_reference[k]) for k in ("cash", "invested", "adjustments")
+            ):
+                raise ValueError("快照现金基准无效")
         stamp = now()
         account_id = account_id or uuid.uuid4().hex[:16]
         with self.connect() as db:
@@ -376,8 +382,42 @@ class Store:
                     (account_id, name, *values, int(bool(active)), stamp, stamp,
                      accounting_mode, current_total_assets, broker_account_no),
                 )
+            db.execute("DELETE FROM meta WHERE key=?", ("holding_cash_reference:" + account_id,))
+            if accounting_mode == "snapshot" and snapshot_reference is not None:
+                db.execute("INSERT INTO meta VALUES(?,?)",
+                           ("holding_cash_reference:" + account_id, dumps(snapshot_reference)))
         self.event(None, "保存交易账户", self.path, account_id=account_id, name=name)
         return account_id
+
+    def holding_auto_quotes(self, enabled=None):
+        """Local UI preference only; no migration and no trading/audit writes."""
+        if enabled is not None:
+            if not isinstance(enabled, bool):
+                raise ValueError("自动行情开关必须为布尔值")
+            self.execute("INSERT INTO meta VALUES('holding_auto_quotes',?) ON CONFLICT(key) "
+                         "DO UPDATE SET value=excluded.value", ("1" if enabled else "0",))
+        rows = self.rows("SELECT value FROM meta WHERE key='holding_auto_quotes'")
+        return bool(rows and rows[0]["value"] == "1")
+
+    def holding_cash_reference(self, account_id, reference=None):
+        """Freeze the existing snapshot cash basis once; prices cannot change it."""
+        key = "holding_cash_reference:" + account_id
+        if reference is not None:
+            if not isinstance(reference, dict) or not all(
+                isinstance(reference.get(k), (int, float)) and math.isfinite(reference[k])
+                for k in ("cash", "invested", "adjustments")
+            ):
+                raise ValueError("快照现金基准无效")
+            self.execute("INSERT OR IGNORE INTO meta VALUES(?,?)", (key, dumps(reference)))
+        rows = self.rows("SELECT value FROM meta WHERE key=?", (key,))
+        try:
+            value = json.loads(rows[0]["value"]) if rows else None
+            if value is not None and not all(math.isfinite(float(value[k]))
+                                             for k in ("cash", "invested", "adjustments")):
+                return None
+            return {k: float(value[k]) for k in ("cash", "invested", "adjustments")} if value is not None else None
+        except (ValueError, KeyError, TypeError):
+            return None
 
     def list_executions(self, account_id=None, code=None):
         sql = "SELECT * FROM executions WHERE 1=1"
