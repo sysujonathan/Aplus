@@ -338,13 +338,13 @@ def test_job_refresh_keeps_traders_selected_date():
 
 def test_data_chain_status_marks_market_ahead_of_scan():
     assert format_data_chain_status("2026-09-30", "2026-09-29") == (
-        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠ 待扫描"
+        "行情 2026-09-30 ✓ · 信号 2026-09-29 ⚠ 待扫描"
     )
     readiness = "主板：可扫描 3188/应有 3197 · 停牌 9 · 缺口 0"
     assert format_data_chain_status("2026-09-30", "2026-09-30", readiness) == (
-        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-30 ✓ · " + readiness
+        "行情 2026-09-30 ✓ · 信号 2026-09-30 ✓ · " + readiness
     )
-    assert format_data_chain_status(None, None) == "行情最新 无 — · 信号最新 无 —"
+    assert format_data_chain_status(None, None) == "行情 无 — · 信号 无 —"
 
 
 def test_scope_readiness_explains_selected_range_in_trader_terms():
@@ -370,7 +370,7 @@ def test_header_keeps_versions_and_compact_scope_visible():
         "2026-09-29",
         ["沪深主板"],
         {"expected": 3197, "ready": 3188},
-    ) == "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠待扫描 · 主板 3188/3197"
+    ) == "行情 2026-09-30 ✓ · 信号 2026-09-29 ⚠待扫描 · 主板 3188/3197"
 
 
 def test_task_timings_keep_sync_and_scan_separate_after_completion():

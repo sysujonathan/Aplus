@@ -113,4 +113,5 @@ def test_stop_between_strategies_commits_first_judgment(store,frame,monkeypatch)
 def test_pending_quality_is_not_labelled_a_price_gap():
     text=format_header_data_status('2026-10-08','2026-09-30',['沪深主板'],dict(source='tickflow',
         expected=3,ready=0,gaps=[dict(category='quality_pending'),dict(category='missing_dataset')]))
-    assert '待核验 1' in text and '排除 1' in text
+    assert '待核验 1' in text and '排除' not in text
+    assert '主板 0/3' in text and '最新' not in text

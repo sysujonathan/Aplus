@@ -24,7 +24,9 @@ def integrity_view(report, timeframe, boards=None, asof=None):
     immature = {g['code'] for g in audit['gaps'] if g.get('category') == 'insufficient_bars'}
     candidates = {g['code'] for g in audit['gaps']} - immature
     halts = {g['code'] for g in report.get('current_halts', [])}
-    result['scan_repair_codes'] = sorted(candidates - halts - {'范围核验'})
+    result['retry_codes'] = sorted(candidates & set(report.get('unchanged_repair_codes',[])))
+    result['scan_repair_codes'] = sorted(candidates - halts - {'范围核验'} - set(result['retry_codes']))
+    result['repair_codes'] = sorted(set(report['repair_codes']) - set(report.get('unchanged_repair_codes',[])))
     result['input_gaps'] = []
     result['outside_input_history'] = []
     for item in report['unknown_history']:
@@ -62,6 +64,8 @@ def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='
         return integrity_view(result, timeframe)
     codes = set(select_board_codes(pd.read_csv(directory_file(store,source),dtype=str),boards))
     records = {r['code']:r for r in latest_datasets(store,source) if r['code'] in codes}
+    from .repair_outcomes import unchanged_repairs
+    result['unchanged_repair_codes']=unchanged_repairs(store,source,asof,records)
     calendar = calendar_of(store,source)
     from .suspensions import announcement_evidence
     for code in sorted(codes):
@@ -90,6 +94,11 @@ def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='
     # cannot manufacture the 125 bars required by the unchanged strategy engine.
     immature = {g['code'] for g in audit['gaps'] if g.get('category') == 'insufficient_bars'}
     result['repair_codes'] = [c for c in result['repair_codes'] if c not in immature]
+    # An unchanged download is not a pending repair once new evidence closes
+    # its hole; keep the marker only for still unresolved price issues.
+    unresolved=set(result['repair_codes']) | {g['code'] for p in periods.values() for g in p['gaps']
+                                           if g.get('category') != 'insufficient_bars'}
+    result['unchanged_repair_codes']=[c for c in result['unchanged_repair_codes'] if c in unresolved]
     blocked = {g['code'] for g in result['excluded']}
     result['scan_repair_codes'] = [c for c in result['repair_codes'] if c in blocked]
     return integrity_view(result, timeframe)

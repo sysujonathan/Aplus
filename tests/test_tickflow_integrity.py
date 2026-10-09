@@ -151,6 +151,13 @@ def test_repair_that_returns_same_hole_is_partial_not_fake_complete(store,monkey
         result=json.loads(row['result'])
         assert row['status']=='partial' and result['repair_remaining']==['sh.600000']
         assert fake.calls==[['sh.600000']] and result['scan_readiness']['scan_allowed']
+        assert result['integrity']['unchanged_repair_codes']==['sh.600000']
+        assert result['integrity']['repair_codes']==[]
+        assert result['repair_resolved']==[]  # Remembered does not mean excused.
+        from workbench.tickflow_integrity import integrity_view
+        view=integrity_view(result['integrity'],'daily')
+        assert view['scan']['scan_allowed']
+        assert view['repair_codes']==[]
     finally:
         service.pool.shutdown()
 
@@ -179,6 +186,17 @@ def test_changed_evidence_version_reassesses_quality_instead_of_stale_waiver(sto
     bad['missing_dates']=[]; bad['evidence_version']='outdated'
     store.execute('UPDATE meta SET value=? WHERE key=?',(json.dumps(bad),key))
     assert quality_for(store,rows[0])['missing_dates']==[data.date.iloc[200]]
+
+
+def test_unchanged_marker_is_not_an_unresolved_issue_for_complete_data(store):
+    from workbench.repair_outcomes import before_repair, remember_repairs
+    data=bars(); first,last=scope(store,data,['sh.600000'])
+    did=snapshot(store,'sh.600000',data,first,last)
+    before=before_repair(store,'tickflow',['sh.600000'])
+    remember_repairs(store,'tickflow',last,before,[did])
+    report=integrity_report(store,['沪深主板'],last)
+    assert report['scan']['complete']
+    assert report['unchanged_repair_codes']==[] and report['repair_codes']==[]
 
 
 def test_ui_cache_only_gate_never_parses_legacy_full_history_on_main_thread(store,monkeypatch):

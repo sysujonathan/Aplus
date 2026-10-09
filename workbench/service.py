@@ -138,7 +138,12 @@ class Service:
             candidate = BaoStock()
             candidate.cancel_event = self.cancel_flags[job]
             with candidate:
-                save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
+                # Public dates already certified locally need no repeat 36-year
+                # network query. The source's prices/connection remain isolated.
+                try:
+                    expected_day(self.store, end)
+                except ValueError:
+                    save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
                 end = expected_day(self.store, end)
                 directory = candidate.universe(end)
                 if directory.empty:

@@ -4,7 +4,7 @@ from .sources import coverage_state, directory_file, directory_date, SOURCES
 from .readiness import extend_exchange_calendar, expected_day, save_directory
 from .store import dumps
 from .sync import sync_stock
-from .provider_guard import ProviderGuard, ProviderError, error_detail
+from .provider_guard import ProviderGuard, ProviderError, error_detail, restricted
 from .tencent import Tencent
 
 
@@ -44,6 +44,8 @@ def sync_tencent(service, job, spec):
         catalog_source='sina_public_securities_only',repair_codes=spec.get('repair_codes',[]),
         limitations=['腾讯历史为不复权：除权除息可能形成价格跳空，跨除权回测不包含分红及股数调整；不与其他来源混算'])
     repair=set(spec.get('repair_codes') or [])
+    from .repair_outcomes import before_repair, remember_repairs
+    repair_before=before_repair(service.store,'tencent',repair)
     with provider:
         if 'boards' in spec:
             if not spec['boards']: raise ValueError('请至少勾选一个板块')
@@ -79,6 +81,7 @@ def sync_tencent(service, job, spec):
         report['confirmed_halts']=halts
         codes=[c for c in codes if c not in halts and (not repair or c in repair)]
         report['requested']=len(codes)
+        consecutive_failures = network_failures = 0
         for code in codes:
             service.check_stop(job)
             service.progress(job,report['processed'],len(codes),f'腾讯独立历史 {code} · {start}～{end}')
@@ -92,19 +95,32 @@ def sync_tencent(service, job, spec):
                 did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
                     force=spec.get('force',False) or code in repair,source='tencent')
                 report['datasets'].append(did); report[outcome]+=1; report['success']+=1
+                if outcome != 'skipped':
+                    consecutive_failures = 0
             except InterruptedError:
                 raise
             except (ProviderError,TimeoutError) as exc:
                 report['errors'].append(dict(code=code,**error_detail(exc,'tencent')))
-                report['cooldown']=ProviderGuard(service.store,'tencent').failure(exc)
-                report['stop_reason']=str(exc)
-                report['processed']+=1
-                break  # Bounded failure, no reconnect/retry against the same endpoint.
+                consecutive_failures += 1; network_failures += 1
+                # Never retry this stock in this job. A sporadic timeout must not
+                # discard thousands of unrelated codes, but a dead/limited
+                # endpoint must not trigger thousands of reconnections either.
+                stop = (restricted(exc) or getattr(exc,'code',None) in ('403','429') or
+                        consecutive_failures >= 3 or network_failures >= 10)
+                if stop:
+                    report['cooldown']=ProviderGuard(service.store,'tencent').failure(exc)
+                    report['stop_reason']=f'腾讯请求已停止（连续失败 {consecutive_failures} / 累计 {network_failures}）；已保存数据保留，稍后更新仅续拉未齐项：{exc}'
+                    report['processed']+=1
+                    break
+                service.store.event(job,'腾讯单股网络失败，继续其他标的',code=code,
+                                    consecutive=consecutive_failures,total_failures=network_failures)
             except (ValueError,OSError) as exc:
                 report['errors'].append(dict(code=code,error=str(exc)))
             report['processed']+=1
             service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
     report['remaining']=len(codes)-report['processed']
+    report['network_failures']=network_failures
+    remember_repairs(service.store,'tencent',end,repair_before,report['datasets'])
     if 'boards' in spec:
         from .tickflow_integrity import integrity_report
         receipt=integrity_report(service.store,spec['boards'],end,report['errors'],
@@ -121,7 +137,8 @@ def sync_tencent(service, job, spec):
             report['errors'].extend(g for g in receipt['scan']['gaps'] if g['code'] not in known)
             report.setdefault('stop_reason','腾讯部分标的未就绪；已保存真实行情，完整性窗口可定向补拉')
         if repair:
-            pending=set(receipt['repair_codes'] if spec.get('repair_scope')=='history' else receipt['scan_repair_codes'])
+            pending=set(receipt['repair_codes']+receipt.get('unchanged_repair_codes',[]) if spec.get('repair_scope')=='history' else
+                        [g['code'] for g in receipt['scan']['gaps']])
             report['repair_resolved']=sorted(repair-pending)
             report['repair_remaining']=sorted(repair&pending)
     if report['errors']: report.setdefault('stop_reason',report['errors'][0]['error'])

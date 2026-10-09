@@ -154,6 +154,31 @@ def test_tencent_sync_then_scan_and_mixed_backtest_rejection(store,monkeypatch):
     finally:service.pool.shutdown()
 
 
+def test_tencent_cache_hits_do_not_reset_network_failure_budget(store,monkeypatch):
+    data=bars(); codes=[f'sh.{600000+i}' for i in range(7)]
+    first,last=scope(store,data,codes)
+    for code in codes[1:5:2]:
+        sync_stock(store,lambda:Mock(fetch=Mock(return_value=data.copy())),code,first,last,source='tencent')
+    calls=[]
+    class Provider:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def universe(self,*a):return pd.DataFrame(dict(code=codes,tradeStatus=['unknown']*len(codes)))
+        def fetch(self,code,*a):
+            calls.append(code)
+            raise ProviderError('tencent','history_page','simulated timeout')
+    monkeypatch.setattr('workbench.tencent_service.Tencent',Provider)
+    service=Service(store)
+    try:
+        row=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+        result=json.loads(row['result'])
+        assert row['status']=='partial' and result['skipped']==2
+        assert calls==[codes[0],codes[2],codes[4]]
+        assert result['network_failures']==3 and result['processed']==5 and result['remaining']==2
+        assert result['cooldown']
+    finally:service.pool.shutdown()
+
+
 @pytest.mark.parametrize('source',['tickflow','tencent'])
 def test_current_day_week_bootstrap_is_not_ten_year_history(store,monkeypatch,source):
     from gui.toolbar import sync_start_date
@@ -184,3 +209,38 @@ def test_returning_to_baostock_does_not_display_tencent_candidates(store):
     assert latest_scan_date(store)==stamp
     set_market_source(store,'baostock')
     assert latest_scan_date(store) is None and candidate_source_for_date(store)=='baostock'
+
+
+@pytest.mark.parametrize('failures,expected,limited,total',[
+    ({'sh.600000':None},5,False,5),
+    ({'sh.600000':None,'sh.600001':None,'sh.600002':None},3,True,5),
+    ({'sh.600000':'429'},1,True,5),
+    ({f'sh.{600000+i}':None for i in range(0,19,2)},19,True,21),
+])
+def test_tencent_isolated_failure_continues_but_outage_and_limits_stop(store,monkeypatch,failures,expected,limited,total):
+    data=bars(); codes=[f'sh.{600000+i}' for i in range(total)]
+    first,last=scope(store,data,codes); calls=[]
+    class Provider:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+        def universe(self,*a):return pd.DataFrame(dict(code=codes,tradeStatus=['unknown']*len(codes)))
+        def fetch(self,code,*a):
+            calls.append(code)
+            if code in failures:
+                raise ProviderError('tencent','history_page','simulated timeout',failures[code])
+            return data.copy()
+    monkeypatch.setattr('workbench.tencent_service.Tencent',Provider)
+    service=Service(store)
+    try:
+        row=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+        result=json.loads(row['result'])
+        assert row['status']=='partial' and len(calls)==expected and len(set(calls))==expected
+        assert bool(result.get('cooldown'))==limited
+        assert result['remaining']==len(codes)-expected
+        assert result['success']==sum(c not in failures for c in calls)
+        assert not ProviderGuard(store,'baostock').state()
+        if not limited:
+            calls.clear(); failures.clear()
+            retry=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+            assert retry['status']=='completed' and calls==['sh.600000']
+    finally:service.pool.shutdown()

@@ -35,6 +35,8 @@ def sync_tickflow(service, job, spec):
         else:
             codes=list(dict.fromkeys(spec['codes']))
         repair = set(spec.get('repair_codes') or [])
+        from .repair_outcomes import before_repair, remember_repairs
+        repair_before=before_repair(service.store,'tickflow',repair)
         if repair and ('boards' not in spec or not repair.issubset(set(codes))):
             raise ValueError('补拉标的必须属于已核验的所选板块')
         from .suspensions import announcement_evidence
@@ -119,6 +121,7 @@ def sync_tickflow(service, job, spec):
                 if stopped: break
             if stopped: break
     report['remaining']=max(0,len(codes)-report['processed'])
+    remember_repairs(service.store,'tickflow',end,repair_before,report['datasets'])
     for did in report['datasets']:
         rows = service.store.rows('SELECT value FROM meta WHERE key=?', ('market_quality:'+did,))
         if rows:
@@ -148,7 +151,7 @@ def sync_tickflow(service, job, spec):
                     report['errors'].append(g); known.add(g['code'])
         if repair:
             pending = ({g['code'] for g in report['integrity']['scan']['gaps']} if repair_scope == 'scan'
-                       else set(report['integrity']['repair_codes']))
+                       else set(report['integrity']['repair_codes']+report['integrity'].get('unchanged_repair_codes',[])))
             remaining=sorted(repair & pending)
             report['repair_scope']=repair_scope
             report['repair_remaining']=remaining

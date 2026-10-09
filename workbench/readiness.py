@@ -38,6 +38,23 @@ def save_directory(store, directory, day, job=None, basics=None, retired_codes=N
         old = pd.read_csv(path, dtype=str)
         removed = set(old.code) - set(directory.code)
         missing = sorted(removed - retired)
+        if (missing and source == 'baostock' and basics is not None and
+                set(old.columns) == {'code','code_name','tradeStatus','ipoDate'} and
+                old.tradeStatus.eq('unknown').all()):
+            # PR27 stored TickFlow's public all-market catalog in this legacy
+            # global path. It is not evidence of BaoStock's supported universe.
+            # Do not compare membership across providers: the public catalog
+            # also contains obsolete/never-listed identities, not only BJ.
+            # The provider's own active basics were validated above; preserve
+            # every legacy identity without labelling it retired or suspended.
+            from .sources import isolate_tickflow_legacy
+            isolate_tickflow_legacy(store)
+            store.write_artifact(f'directories/{day}-legacy-public-catalog.csv',
+                                 old.to_csv(index=False).encode('utf-8-sig'),job)
+            store.event(job,'旧公共目录与BaoStock目录分离，未匹配身份保留待核对',
+                        codes=missing, non_bj=[c for c in missing if not c.startswith('bj.')],
+                        evidence=f'directories/{day}-basics.csv')
+            missing=[]
         if missing:
             store.event(job, '股票目录缩减待核对', expected=len(old), received=len(directory), missing=missing)
             raise ValueError(f'股票目录原有 {len(old)} 只，本次返回 {len(directory)} 只，缺少 {len(missing)} 只：'

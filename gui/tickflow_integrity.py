@@ -26,13 +26,20 @@ def show_integrity(parent,report,on_repair):
     scroll.pack(side=tk.RIGHT,fill=tk.Y); text.pack(fill=tk.BOTH,expand=True)
     controls=ttk.Frame(window); controls.grid(row=3,column=0,sticky='ew',padx=12,pady=12)
     include_history=tk.BooleanVar(value=False)
+    retry_unchanged=tk.BooleanVar(value=False)
     ttk.Checkbutton(controls,text='高级：同时核对区间外历史',variable=include_history).pack(anchor=tk.W)
+    ttk.Checkbutton(controls,text='重试已补拉但未变化的缺口',variable=retry_unchanged).pack(anchor=tk.W)
     buttons=ttk.Frame(controls); buttons.pack(fill=tk.X,pady=(5,0))
     def selected_report():
         return integrity_view(report,'daily' if period.get()=='日线' else 'weekly')
+    def selected_codes(view):
+        codes=set(view['repair_codes'] if include_history.get() else view['scan_repair_codes'])
+        if retry_unchanged.get():
+            codes.update(view.get('unchanged_repair_codes',[]) if include_history.get() else view.get('retry_codes',[]))
+        return sorted(codes)
     def repair():
         view=selected_report()
-        codes=view['repair_codes'] if include_history.get() else view['scan_repair_codes']
+        codes=selected_codes(view)
         if not codes:
             return
         on_repair(codes,view['timeframe'],include_history.get()); window.destroy()
@@ -41,7 +48,7 @@ def show_integrity(parent,report,on_repair):
     def selection_changed(*args):
         view=selected_report(); scan=view['scan']
         counts=view.get('counts',{})
-        summary.set(f"应有 {scan['expected']} · 可扫描 {scan['ready']} · 已确认当日停牌 {scan['suspended']} · 排除 {len(scan['gaps'])}\n"
+        summary.set(f"应有 {scan['expected']} · 可扫描 {scan['ready']} · 已确认当日停牌 {scan['suspended']} · 数据未齐 {len(scan['gaps'])}\n"
                     f"K 线根数不足 {counts.get('insufficient_bars',0)} 只（不要求补造）；"
                     f"当前输入未知缺口 {counts.get('input_gap_stocks',0)} 只。\n"
                     '区间外历史另列，不作为当前扫描补拉完成的前置条件；未知缺口不当作停牌。')
@@ -52,7 +59,9 @@ def show_integrity(parent,report,on_repair):
         if view.get('unsupported_directory'):
             lines.append('公共目录板块身份待适配（保留记录，未纳入当前范围）：')
             lines.extend(f"{g['code']} {g.get('name','')}" for g in view['unsupported_directory'])
-        lines.append('当前扫描排除项：')
+        if view.get('retry_codes'):
+            lines.append(f"已补拉但数据未变化 {len(view['retry_codes'])} 只：需核对停牌公告或供应商缺数；默认不重复下载，不视为停牌。")
+        lines.append('数据未齐，暂不参与当前扫描（不是策略筛选未命中）：')
         lines.extend(f"{g['code']}：{g['error']}" for g in view['excluded'])
         if not view['excluded']:
             lines.append('无；当前周期输入已核验。' if scan['complete'] else '范围尚未核验。')
@@ -76,10 +85,10 @@ def show_integrity(parent,report,on_repair):
             lines.extend(f"{g.get('code','')}：{g['error']}" for g in view['request_failures'])
         text.configure(state='normal'); text.delete('1.0',tk.END)
         text.insert('1.0','\n'.join(lines)); text.configure(state='disabled')
-        codes=view['repair_codes'] if include_history.get() else view['scan_repair_codes']
+        codes=selected_codes(view)
         button.configure(text=f'仅补拉缺口（{len(codes)} 只）')
         button.state(['!disabled'] if codes else ['disabled'])
-    traces=[(var,var.trace_add('write',selection_changed)) for var in (include_history,period)]
+    traces=[(var,var.trace_add('write',selection_changed)) for var in (include_history,period,retry_unchanged)]
     selection_changed()
     ttk.Button(buttons,text='关闭',command=window.destroy).pack(side=tk.RIGHT)
     footer=ttk.Label(window,text='仅请求所选缺口标的；同源历史重取以保持复权一致。完成后复检，不自动循环请求。',

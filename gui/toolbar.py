@@ -112,10 +112,11 @@ def format_header_data_status(market_date, signal_date, boards, audit):
     coverage = f"{scope} {ready}/{expected}" if expected > 0 else f"{scope} 待核验"
     if (audit or {}).get('source') in FALLBACK_SOURCES and (audit or {}).get('gaps'):
         pending = sum(g.get('category') == 'quality_pending' for g in audit['gaps'])
-        coverage += f" · 排除 {len(audit['gaps'])-pending}"
+        # The count already expresses usable/total. Details belong in the repair
+        # entry; repeating exclusions here makes the persistent header wrap.
         if pending:
             coverage += f" · 待核验 {pending}"
-    return f"行情最新 {market} {market_mark} · 信号最新 {signal} {scan_mark} · {coverage}"
+    return f"行情 {market} {market_mark} · 信号 {signal} {scan_mark} · {coverage}"
 
 
 def format_data_chain_status(market_date, signal_date, readiness=None):
@@ -125,7 +126,7 @@ def format_data_chain_status(market_date, signal_date, readiness=None):
     pending = bool(market_date and (not signal_date or market > signal))
     market_mark = "✓" if market_date else "—"
     scan_mark = "⚠ 待扫描" if pending else ("✓" if signal_date else "—")
-    text = f"行情最新 {market} {market_mark} · 信号最新 {signal} {scan_mark}"
+    text = f"行情 {market} {market_mark} · 信号 {signal} {scan_mark}"
     if readiness:
         text += " · " + readiness
     return text
@@ -188,7 +189,7 @@ class ToolBar(ttk.Frame):
         self._sync_elapsed = None
         self._scan_elapsed = None
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
-        self._header_data_var = tk.StringVar(value="行情最新 连接中… · 信号最新 连接中…")
+        self._header_data_var = tk.StringVar(value="行情 连接中… · 信号 连接中…")
         self._timing_var = tk.StringVar(value=format_task_timings())
         self.full_history_var = tk.BooleanVar(value=False)    # 首次自动完整历史；也可手动要求重新核对
         try:
@@ -696,7 +697,7 @@ class ToolBar(ttk.Frame):
     def _load_market_status(self):
         if self.store is None:
             self._mkt_var.set("行情：未连接")
-            self._header_data_var.set("行情最新 无 — · 信号最新 无 — · 范围待核验")
+            self._header_data_var.set("行情 无 — · 信号 无 — · 范围待核验")
             return self._mkt_var.get()
         from .data import latest_market_date, latest_scan_date
 
@@ -718,8 +719,8 @@ class ToolBar(ttk.Frame):
             if market_source(self.store) in FALLBACK_SOURCES:
                 pending=sum(g.get('category') == 'quality_pending' for g in audit.get('gaps',[]))
                 count=len(audit.get('gaps',[]))-pending
-                self.btn_integrity.configure(text=(f'⚠ 待核验 {pending} / 排除 {count}' if pending else
-                    f'⚠ 扫描排除 {count} / 补拉' if count else '完整性 / 补拉'))
+                self.btn_integrity.configure(text=(f'⚠ 待核验 {pending} / 补拉' if pending else
+                    f'⚠ 数据未齐 {count} / 补拉' if count else '完整性 / 补拉'))
                 self.btn_integrity.pack(side=tk.LEFT,padx=3,after=self.btn_sync)
             else:
                 self.btn_integrity.pack_forget()
@@ -761,6 +762,13 @@ class ToolBar(ttk.Frame):
             self.set_status('请先更新所选来源行情，结束后会生成完整性回执与补拉列表')
             return
         report=json.loads(rows[0]['value'])
+        if 'unchanged_repair_codes' not in report:
+            # Upgrade an old receipt read-only; do not force another bulk pull
+            # just to explain the user's previous unchanged repair operation.
+            from workbench.market import latest_datasets
+            from workbench.repair_outcomes import unchanged_repairs
+            records={r['code']:r for r in latest_datasets(self.store,source)}
+            report['unchanged_repair_codes']=unchanged_repairs(self.store,source,report['asof'],records)
         from workbench.tickflow_integrity import integrity_view
         from workbench.readiness import expected_day
         from workbench.market import completed_date
@@ -997,12 +1005,12 @@ class ToolBar(ttk.Frame):
                     f"停牌 {r.get('suspended', 0)} · 失败 {len(r.get('errors', []))}")
         elif status == "partial":
             head = (f"命中 {r.get('signals', 0)} 个信号" if kind == "扫描策略"
-                    else f"补齐 {r.get('updated', 0)} · 失败 {len(r.get('errors', []))} 项")
+                    else f"已保存 {r.get('success', 0)} · 未下载 {r.get('remaining', 0)} · 数据未齐 {len(r.get('errors', []))}")
             text = f"⚠ {kind}部分完成：{head} —— {str(r.get('stop_reason', ''))[:44]}"
             if kind == '扫描策略' and r.get('coverage', {}).get('source') in FALLBACK_SOURCES:
                 c = r['coverage']
                 text = (f"⚠ 扫描部分完成：可扫描 {c['ready']}/{c['expected']} 只 · "
-                        f"排除 {len(c['gaps'])} 只 · 命中 {r.get('signals', 0)} 个信号（详情见回执）")
+                        f"数据未齐 {len(c['gaps'])} 只暂不扫描 · 命中 {r.get('signals', 0)} 个信号（详情见回执）")
         elif status == "cancelled":
             text = f"⏹ {kind}已停止（已保存的记录保留）：{message[:48]}"
         elif status == "failed":
@@ -1034,7 +1042,7 @@ class ToolBar(ttk.Frame):
         self.set_status(text)
         if kind == '更新行情' and r.get('integrity'):
             i=r['integrity']
-            self.set_status(text+f"；当前扫描排除 {len(i['scan']['gaps'])} 只 · 历史待核验 {len(i['unknown_history'])} 只，点击「完整性 / 补拉」")
+            self.set_status(text+f"；可扫描 {i['scan']['ready']}/{i['scan']['expected']} · 数据未齐 {len(i['scan']['gaps'])} 只暂不扫描，点击「完整性 / 补拉」")
         if self._on_job_finished:
             try:
                 self._on_job_finished(kind, status)

@@ -65,6 +65,42 @@ def test_missing_live_stock_is_not_delisting_and_future_ipo_not_required(store):
     save_directory(store,directory(['sh.600000','sh.600001']),'2024-01-02',basics=info)
 
 
+def test_legacy_public_catalog_is_not_a_baostock_membership_baseline(store):
+    from workbench.sources import directory_file
+    old=directory(['sh.600000','bj.920002','sh.601313'],['unknown']*3)
+    old['ipoDate']=['2000-01-01','2023-01-01','2014-07-08']
+    save_directory(store,old,'2024-01-01')
+    save_directory(store,directory(['sh.600000']),'2024-01-02',basics=basic(['sh.600000']))
+    assert set(pd.read_csv(directory_file(store,'tickflow')).code)==set(old.code)
+    assert set(pd.read_csv(store.root/'universe.csv').code)=={'sh.600000'}
+    assert (store.root/'directories/2024-01-02-legacy-public-catalog.csv').exists()
+    assert not any('确认退市' in e['action'] for e in store.rows('SELECT * FROM events'))
+    event=next(e for e in store.rows('SELECT * FROM events') if '未匹配身份' in e['action'])
+    assert json.loads(event['detail'])['non_bj']==['sh.601313']
+
+
+def test_legacy_migration_cannot_waive_missing_active_basics_member(store):
+    old=directory(['sh.600000','sh.600001'],['unknown']*2)
+    old['ipoDate']=['2000-01-01']*2
+    save_directory(store,old,'2024-01-01')
+    with pytest.raises(ValueError,match='应在市却缺少 1'):
+        save_directory(store,directory(['sh.600000']),'2024-01-02',
+                       basics=basic(['sh.600000','sh.600001']))
+    assert set(pd.read_csv(store.root/'universe.csv').code)==set(old.code)
+
+
+def test_unknown_status_alone_is_not_legacy_catalog_provenance(store):
+    save_directory(store,directory(['sh.600000','sh.600001'],['unknown']*2),'2024-01-01')
+    with pytest.raises(ValueError,match='缺少 1'):
+        save_directory(store,directory(['sh.600000']),'2024-01-02',basics=basic(['sh.600000']))
+
+
+def test_native_baostock_catalog_still_rejects_unexplained_bj_removal(store):
+    save_directory(store,directory(['sh.600000','bj.920002']),'2024-01-01')
+    with pytest.raises(ValueError,match='缺少 1'):
+        save_directory(store,directory(['sh.600000']),'2024-01-02',basics=basic(['sh.600000']))
+
+
 def test_dual_timeframe_resume_keeps_daily_when_interrupted_before_weekly(store,monkeypatch):
     frame=pd.DataFrame({'date':pd.bdate_range('2020-01-01',periods=800).strftime('%Y-%m-%d'),
                         'open':20.,'high':21.,'low':19.,'close':20.5,'volume':10000.})

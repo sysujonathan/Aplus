@@ -315,10 +315,16 @@ class TradeManagementFrame(ttk.Frame):
             value_label.pack(anchor=tk.W)
             self.fund_metrics[key] = (variable, value_label)
         self.funds_reconciliation = tk.StringVar(value="")
-        ttk.Label(funds, textvariable=self.funds_reconciliation, foreground=MUTED,
-                  font=("Microsoft YaHei UI", 9), anchor=tk.W).grid(
+        reconciliation_label = ttk.Label(funds, textvariable=self.funds_reconciliation, foreground=MUTED,
+                  font=("Microsoft YaHei UI", 9), anchor=tk.W)
+        reconciliation_label.grid(
                       row=3, column=0, sticky=tk.EW, pady=(4, 0)
                   )
+        from ttkbootstrap.widgets import ToolTip
+        ToolTip(reconciliation_label, text="反推初始资金＝券商资产快照－清仓盈亏－持仓浮盈亏－资金净变动。\n"
+                "用于核对补录，不是已登记初始资金，也不会自动覆盖它。\n"
+                "按历史估值核对；资产快照、估值与记录应对应同一时点。\n"
+                "切换历史来源可能改变估值日期或复权口径，差额不一定是漏记。")
 
         closed = self._panel(2, 0, "已清仓", self._show_closed_add_menu)
         closed.rowconfigure(0, weight=1)
@@ -728,11 +734,11 @@ class TradeManagementFrame(ttk.Frame):
         if hidden:
             self.funds_reconciliation.set("初始资金（推算） •••••• 元")
         elif account.get("accounting_mode") == "history":
-            if summary["broker_total_assets"] is not None and summary["implied_initial_equity"] is not None:
-                text = f"初始资金（推算） {summary['implied_initial_equity']:,.2f} 元"
-            else:
-                text = "初始资金（推算） —"
-            self.funds_reconciliation.set(text)
+            # Independent broker assets must retain their diagnostic residual;
+            # displaying the registered initial would make this check tautological.
+            initial = summary["implied_initial_equity"]
+            self.funds_reconciliation.set(f"初始资金（推算） {initial:,.2f} 元"
+                                          if initial is not None else "初始资金（推算） —")
         else:
             self.funds_reconciliation.set("初始资金（推算） —")
 
@@ -1479,7 +1485,7 @@ class _AccountDialog(_BaseDialog):
             self.reconciliation_label.configure(foreground=UP)
         else:
             self.reconciliation.set(
-                f"⚠ 对账差额 {difference:+,.2f} 元（券商－系统），请核对漏记或资金变动"
+                f"⚠ 对账差额 {difference:+,.2f} 元（券商－系统），请核对估值时点、漏记或资金变动"
             )
             self.reconciliation_label.configure(foreground=DOWN)
         self.use_reverse_button.state(["!disabled"])
