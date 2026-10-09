@@ -139,7 +139,7 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert '"资金账号"' in page
     assert 'text="👁 隐藏"' in page
     assert 'command=self.reload_data' in page
-    assert '初始资金（推算）' in page
+    assert 'initial = summary["implied_initial_equity"]' in page
     assert 'self.funds_reconciliation.set("初始资金（推算） —")' in page
     assert 'f"持仓 {summary[\'floating_pnl\']:+,.2f}＋资金调整' not in page
     assert 'text="税费合计"' in page

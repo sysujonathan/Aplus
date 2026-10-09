@@ -12,6 +12,7 @@ from .h2_replay_cache import cache_key, engine_version, read_cache, write_cache
 from .market import BOARDS, board_of, completed_date, load_dataset
 from .store import digest, dumps
 from .strategies import catalog, prepare
+from .sources import market_source, SOURCES
 
 
 def available_snapshots(store, scope='market', boards=None):
@@ -23,6 +24,8 @@ def available_snapshots(store, scope='market', boards=None):
     watch = {r['code'] for r in store.rows('SELECT code FROM watchlist WHERE active=1')}
     rows = store.rows("SELECT * FROM datasets WHERE timeframe='daily' AND source!='demo' "
                       "ORDER BY end DESC,created DESC,rowid DESC")
+    if any(r['source'] in SOURCES for r in rows):
+        rows=[r for r in rows if r['source']==market_source(store)]
     selected = {}
     for row in rows:
         if scope == 'market' and boards is not None and board_of(row['code']) not in boards:
@@ -59,7 +62,8 @@ def execute_replay(service, job, spec):
     end = min(spec['end'], completed_date())
     from .readiness import expected_day
     try:
-        coverage_end = expected_day(service.store, end)
+        first_source=service.store.rows('SELECT source FROM datasets WHERE id=?',(ids[0],))
+        coverage_end = expected_day(service.store, end,first_source[0]['source'] if first_source and first_source[0]['source'] in SOURCES else 'baostock')
     except ValueError:
         # CSV can be researched without a certified exchange calendar, but its
         # last trading day must not be mistaken for a verified complete range.
@@ -85,6 +89,8 @@ def execute_replay(service, job, spec):
                 raise ValueError('合成演示行情不能进入此真实行情回放入口')
             if snapshot['timeframe'] != 'daily':
                 raise ValueError('需要日线行情快照')
+            from .history_quality import require_research_history
+            require_research_history(service.store, snapshot, end, spec['start'])
             frame = prepare(frame, 'daily', end)
             frame.attrs['code'] = snapshot['code']
             # ETF settlement and tick require explicit instrument metadata. CSV
@@ -130,7 +136,7 @@ def execute_replay(service, job, spec):
                   stop_reason='已停止；只保存完整回放完毕的标的，本次是部分结果' if stopped else '',
                   requested_datasets=len(ids), processed_datasets=len(snapshots),
                   datasets=snapshots, real_data=bool(snapshots) and all(
-                      r['source'] in ('baostock', 'legacy-engine-a') for r in snapshots),
+                      r['source'] in ('baostock', 'tickflow', 'tencent', 'legacy-engine-a') for r in snapshots),
                   strategy_version=strategy.version,
                   h2_settings=asdict(settings), assumptions={k: v for k, v in asdict(costs).items()
                       if k in ('holding_bars', 'commission_bps', 'sell_tax_bps', 'slippage_bps')}, timeframe='daily',
@@ -140,6 +146,7 @@ def execute_replay(service, job, spec):
                   performance=dict(elapsed_seconds=time.perf_counter() - started,
                                    calculated=calculated, reused=reused, cache_enabled=bool(use_cache)),
                   limitations=['独立机会允许重叠；不模拟组合资金、仓位或复利',
+                               '腾讯不复权历史跨除权可能影响信号；不包含分红及除权股数调整，不直接等同总回报',
                                '日线无法确认盘中先后、涨跌停排队及实际流动性；单一价格不成交',
                                '入场与结构失效／MM 同日发生时保守不成交',
                                'A 股买入日按 T+1 不退出；买入日破 SL1 则下一可交易日开盘延迟止损',

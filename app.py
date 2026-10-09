@@ -15,6 +15,7 @@ import streamlit as st
 from workbench.backtest import Assumptions
 from workbench.market import completed_date, latest_datasets, load_dataset, parse_codes
 from workbench.service import Service, demo_data, import_csv
+from workbench.sources import SOURCES
 from workbench.store import ROOT, Store
 from workbench.strategies import catalog, prepare, register, set_active, verify_frozen
 
@@ -45,7 +46,8 @@ STATUS = {'completed':'已完成','partial':'部分完成','failed':'失败','ca
           'interrupted':'上次中断','running':'运行中','queued':'排队中'}
 KIND = {'sync':'行情同步','scan':'策略匹配','backtest':'回测研究','validate':'策略验证','universe':'股票名单'}
 TF = {'daily':'日线','weekly':'周线','monthly':'月线'}
-SOURCE = {'baostock':'真实行情 · BaoStock','csv':'自行导入 · CSV','demo':'演示行情 · 非真实市场'}
+SOURCE = {**{key: '真实行情 · ' + label for key, label in SOURCES.items()},
+          'csv':'自行导入 · CSV','demo':'演示行情 · 非真实市场'}
 
 
 def submit(kind,spec):

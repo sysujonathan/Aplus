@@ -139,6 +139,24 @@ def test_board_sync_checks_dates_and_repeat_reuses_all_bars(store, frame, monkey
     assert json.loads(second['result'])['skipped']==2 and len(calls)==2
 
 
+def test_verified_calendar_cache_allows_sync_without_calendar_network(store,frame,monkeypatch):
+    end=frame.date.iloc[-1]; start=frame.date.iloc[0]
+    setup_scope(store,['sh.600000'],start,end)
+    class Provider:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def calendar(self,*args):pytest.fail('已核验日历覆盖目标日，不应重复查询')
+        def universe(self,*args):return pd.DataFrame(dict(code=['sh.600000'],tradeStatus=['1'],code_name=['测试']))
+        def basics(self):return pd.DataFrame(dict(code=['sh.600000'],ipoDate=['2000-01-01'],outDate=[''],type=['1'],status=['1']))
+        def fetch(self,*args):return frame.copy()
+    monkeypatch.setattr('workbench.service.BaoStock',Provider)
+    service=Service(store)
+    try:
+        row=wait_for(store,service.submit('sync',dict(boards=['沪深主板'],start=start,end=end)))
+        assert row['status']=='completed',row['message']
+    finally:service.pool.shutdown()
+
+
 def test_two_connections_are_bounded_and_reused(store, frame):
     import threading
     from workbench.sync_batch import sync_results

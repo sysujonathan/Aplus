@@ -315,10 +315,16 @@ class TradeManagementFrame(ttk.Frame):
             value_label.pack(anchor=tk.W)
             self.fund_metrics[key] = (variable, value_label)
         self.funds_reconciliation = tk.StringVar(value="")
-        ttk.Label(funds, textvariable=self.funds_reconciliation, foreground=MUTED,
-                  font=("Microsoft YaHei UI", 9), anchor=tk.W).grid(
+        reconciliation_label = ttk.Label(funds, textvariable=self.funds_reconciliation, foreground=MUTED,
+                  font=("Microsoft YaHei UI", 9), anchor=tk.W)
+        reconciliation_label.grid(
                       row=3, column=0, sticky=tk.EW, pady=(4, 0)
                   )
+        from ttkbootstrap.widgets import ToolTip
+        ToolTip(reconciliation_label, text="反推初始资金＝券商资产快照－清仓盈亏－持仓浮盈亏－资金净变动。\n"
+                "用于核对补录，不是已登记初始资金，也不会自动覆盖它。\n"
+                "按历史估值核对；资产快照、估值与记录应对应同一时点。\n"
+                "切换历史来源可能改变估值日期或复权口径，差额不一定是漏记。")
 
         closed = self._panel(2, 0, "已清仓", self._show_closed_add_menu)
         closed.rowconfigure(0, weight=1)
@@ -577,18 +583,23 @@ class TradeManagementFrame(ttk.Frame):
         if self.position_tree.exists("__summary__"):
             self.position_tree.item("__summary__", values=self._position_summary())
         self._fill_funds(update_calendar=False)
-        times = [q.get("quote_time", "") for q in quotes.values() if q.get("source") == "sina"]
+        times = [q.get("quote_time", "") for q in quotes.values() if q.get("source") in ("sina", "tencent")]
         dates = [q.get("date", "") for q in quotes.values() if q.get("source") == "history"]
         missing = len(self._quote_codes - quotes.keys())
         stale = any(q.get("state") in ("更新失败", "行情滞后") for q in quotes.values())
         if times:
             text = "报价 " + min(times).replace("T", " ")[:19]
+            if any(q.get('source') == 'tencent' for q in quotes.values()):
+                text += ' · 腾讯' + ('／新浪' if any(q.get('source') == 'sina' for q in quotes.values()) else '')
         else:
             text = "历史收盘 " + min(dates) if dates else ("缺少行情" if self._quote_codes else "暂无持仓")
         if self._cash_reference is None and self._report["account"].get("accounting_mode") == "snapshot":
             text += " · 请在账户设置校准现金基准"
         if self._quote_failed or stale:
             text += " · 更新失败／行情滞后" if self._quote_failed else " · 行情滞后"
+            reasons=getattr(self._quote_failed,'details',{})
+            if reasons:
+                text+='：'+next(iter(reasons.values()))[:95]
         if missing:
             text += f" · {missing} 只缺少行情"
         if times and dates:
@@ -609,9 +620,6 @@ class TradeManagementFrame(ttk.Frame):
 
     def _position_values(self, row):
         quote = _price(row["current_price"])
-        state = row.get("quote_state", "")
-        if state and state != "最新报价":
-            quote += " · " + state
         return (numeric_stock_code(row["code"]), row["name"], _money(row["market_value"]),
                 _money(row["floating_pnl"]), quote, _price(row["diluted_cost"]),
                 _pct(row["allocation_pct"]), row["quantity"], _price(row["stop"]),
@@ -726,11 +734,11 @@ class TradeManagementFrame(ttk.Frame):
         if hidden:
             self.funds_reconciliation.set("初始资金（推算） •••••• 元")
         elif account.get("accounting_mode") == "history":
-            if summary["broker_total_assets"] is not None and summary["implied_initial_equity"] is not None:
-                text = f"初始资金（推算） {summary['implied_initial_equity']:,.2f} 元"
-            else:
-                text = "初始资金（推算） —"
-            self.funds_reconciliation.set(text)
+            # Independent broker assets must retain their diagnostic residual;
+            # displaying the registered initial would make this check tautological.
+            initial = summary["implied_initial_equity"]
+            self.funds_reconciliation.set(f"初始资金（推算） {initial:,.2f} 元"
+                                          if initial is not None else "初始资金（推算） —")
         else:
             self.funds_reconciliation.set("初始资金（推算） —")
 
@@ -1477,7 +1485,7 @@ class _AccountDialog(_BaseDialog):
             self.reconciliation_label.configure(foreground=UP)
         else:
             self.reconciliation.set(
-                f"⚠ 对账差额 {difference:+,.2f} 元（券商－系统），请核对漏记或资金变动"
+                f"⚠ 对账差额 {difference:+,.2f} 元（券商－系统），请核对估值时点、漏记或资金变动"
             )
             self.reconciliation_label.configure(foreground=DOWN)
         self.use_reverse_button.state(["!disabled"])

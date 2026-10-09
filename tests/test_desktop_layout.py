@@ -126,6 +126,23 @@ def test_incomplete_market_update_never_chains_strategy_scan():
         assert toolbar._auto_scan_after_sync is False
 
 
+def test_partial_tickflow_auto_update_chains_only_explicitly_ready_scope():
+    import json
+    for allowed in (False, True):
+        toolbar = Mock()
+        toolbar._job_id = 'job-sync'
+        toolbar._job_kind = '更新行情'
+        toolbar._auto_scan_after_sync = True
+        toolbar._auto_chain_cancelled = False
+        toolbar._on_job_finished = None
+        ToolBar._finish_job(toolbar, 'partial', result_json=json.dumps(
+            dict(source='tickflow', scan_readiness=dict(scan_allowed=allowed))))
+        if allowed:
+            toolbar.after_idle.assert_called_once_with(toolbar._start_auto_scan)
+        else:
+            toolbar.after_idle.assert_not_called()
+
+
 def test_stop_cancels_auto_scan_handoff_even_when_market_job_just_completed():
     toolbar = Mock()
     toolbar._job_id = "job-sync"
@@ -321,13 +338,13 @@ def test_job_refresh_keeps_traders_selected_date():
 
 def test_data_chain_status_marks_market_ahead_of_scan():
     assert format_data_chain_status("2026-09-30", "2026-09-29") == (
-        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠ 待扫描"
+        "行情 2026-09-30 ✓ · 信号 2026-09-29 ⚠ 待扫描"
     )
     readiness = "主板：可扫描 3188/应有 3197 · 停牌 9 · 缺口 0"
     assert format_data_chain_status("2026-09-30", "2026-09-30", readiness) == (
-        "行情最新 2026-09-30 ✓ · 信号最新 2026-09-30 ✓ · " + readiness
+        "行情 2026-09-30 ✓ · 信号 2026-09-30 ✓ · " + readiness
     )
-    assert format_data_chain_status(None, None) == "行情最新 无 — · 信号最新 无 —"
+    assert format_data_chain_status(None, None) == "行情 无 — · 信号 无 —"
 
 
 def test_scope_readiness_explains_selected_range_in_trader_terms():
@@ -353,7 +370,7 @@ def test_header_keeps_versions_and_compact_scope_visible():
         "2026-09-29",
         ["沪深主板"],
         {"expected": 3197, "ready": 3188},
-    ) == "行情最新 2026-09-30 ✓ · 信号最新 2026-09-29 ⚠待扫描 · 主板 3188/3197"
+    ) == "行情 2026-09-30 ✓ · 信号 2026-09-29 ⚠待扫描 · 主板 3188/3197"
 
 
 def test_task_timings_keep_sync_and_scan_separate_after_completion():
@@ -369,6 +386,9 @@ def test_toolbar_status_panel_is_not_hidden_by_responsive_layout():
     toolbar.actions = Mock()
     toolbar.filters = Mock()
     toolbar.status_panel = Mock()
+    toolbar.status_label = Mock()
+    toolbar.timing_label = Mock()
+    toolbar._status_required_width = Mock(return_value=500)
     toolbar.header.winfo_reqwidth.return_value = 100
     toolbar.actions.winfo_reqwidth.return_value = 700
     toolbar.filters.winfo_reqwidth.return_value = 400

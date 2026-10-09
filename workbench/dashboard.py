@@ -10,6 +10,7 @@ from .readiness import audit_scope
 from .scope import selected_boards, save_boards, scan_datasets
 from .strategies import prepare
 from .store import dumps
+from .sources import SOURCES,market_source,set_market_source,FALLBACK_SOURCES
 
 TF = {'daily':'日线', 'weekly':'周线'}
 
@@ -24,7 +25,8 @@ def names(store):
                 basic=pd.read_csv(path,dtype=str).fillna('')
                 if 'code_name' in basic:
                     result.update(zip(basic.code,basic.code_name))
-        frame = pd.read_csv(store.root/'universe.csv',dtype=str)
+        from .sources import directory_file
+        frame = pd.read_csv(directory_file(store, market_source(store)),dtype=str)
         result.update(zip(frame.code,frame.code_name))
         return result
     except (OSError, AttributeError, ValueError):
@@ -44,6 +46,10 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
     st.caption('更新行情 → 匹配策略 → TradingView 人工分析 · 想再观察几天，加入右侧关注列表')
     busy = bool(store.rows("SELECT id FROM jobs WHERE status IN ('queued','running')"))
     with st.expander('数据与扫描设置', expanded=True):
+        source=st.selectbox('日 K 数据源',list(SOURCES),index=list(SOURCES).index(market_source(store)),
+                            format_func=SOURCES.get,disabled=busy)
+        if source!=market_source(store):
+            set_market_source(store,source)
         selected = selected_boards(store)
         columns = st.columns(4)
         boards = [name for col,name in zip(columns,BOARDS)
@@ -61,8 +67,9 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         columns = st.columns(min(6,max(1,len(active))))
         strategies = [key for i,(key,s) in enumerate(active.items())
                       if columns[i % len(columns)].checkbox(s.name,value=True,key='desk_strategy_'+key,disabled=busy)]
-        ids = [r['id'] for r in scan_datasets(store,'baostock')]
-        audit = audit_scope(store,boards,str(end),ids)
+        ids = [r['id'] for r in scan_datasets(store,source)]
+        audits = [audit_scope(store,boards,str(end),ids,timeframe=tf,history_cache_only=True) for tf in periods]
+        audit = audits[0]
         a,b,c = st.columns([1,1,3])
         if a.button('同步市场数据',type='primary',disabled=busy):
             if not boards:
@@ -70,15 +77,43 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
             elif begin > end:
                 st.error('历史起点不能晚于行情日期')
             else:
-                start(service,'sync',{'boards':boards,'start':str(begin),'end':str(end),'force':False})
-        if b.button('匹配策略',type='primary',disabled=busy or not audit['complete'] or not strategies):
-            start(service,'scan',{'source':'baostock','boards':boards,'datasets':ids,
+                start(service,'sync',{'source':source,'boards':boards,'start':str(begin),'end':str(end),'force':False})
+        if b.button('匹配策略',type='primary',disabled=busy or not any(a['scan_allowed'] for a in audits) or not strategies):
+            start(service,'scan',{'source':source,'boards':boards,'datasets':ids,
                                  'strategies':strategies,'timeframes':periods,'asof':str(end)})
         c.caption(f"应有 {audit['expected']} 只 · 日期就绪 {audit['ready']} 只 · 停牌 {audit['suspended']} 只 · "
                   f"缺口 {len(audit['gaps'])} 项。目录、上市与退市状态随同步自动核对。")
         if not audit['complete']:
             with st.expander('数据尚未就绪 · 查看原因'):
                 coverage_panel(audit)
+        if source in FALLBACK_SOURCES:
+            rows=store.rows('SELECT value FROM meta WHERE key=?',(source+'_integrity',))
+            if rows:
+                integrity=json.loads(rows[0]['value'])
+                from .tickflow_integrity import integrity_view
+                from .readiness import expected_day
+                try:
+                    receipt_day=expected_day(store,str(end),source)
+                    integrity=integrity_view(integrity,'daily',boards,receipt_day)
+                except ValueError:
+                    integrity=None
+                if integrity is not None:
+                    with st.expander(SOURCES[source]+' 完整性 / 定向补拉'):
+                        period=st.selectbox('补拉复检周期',periods,format_func=TF.get,key='tf_repair_period',disabled=busy)
+                        try:
+                            integrity=integrity_view(integrity,period)
+                        except ValueError as exc:
+                            st.warning(str(exc))
+                            integrity=None
+                        if integrity is not None:
+                            st.caption(f"回执日期 {integrity['asof']} · 当前扫描排除 {len(integrity['scan']['gaps'])} 只；区间外历史单独核对")
+                            st.json(integrity)
+                        historical=st.checkbox('同时补拉扫描区间外历史缺口',key='tf_repair_history',disabled=busy)
+                        repair=(integrity['repair_codes'] if historical else integrity['scan_repair_codes']) if integrity else []
+                        if st.button(f'仅补拉缺口（{len(repair)} 只）',disabled=busy or not repair):
+                            start(service,'sync',dict(source=source,boards=boards,start=str(begin),end=str(end),
+                                force=False,repair_codes=repair,scan_timeframe=period,
+                                repair_scope='history' if historical else 'scan'))
         st.caption('北交所仍受当前数据源覆盖限制，不能用沪深数据代替；研究、维护入口留在侧栏。')
     with st.expander('运行进度与回执',expanded=busy):
         current_job()
@@ -87,9 +122,9 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
     # Only genuine market scans appear on the daily desk; historical demo stays in storage.
     jobs = store.rows("SELECT * FROM jobs WHERE kind='scan' ORDER BY created DESC,rowid DESC LIMIT 100")
     observations = store.rows("SELECT o.*,d.source,d.adjustment FROM observations o JOIN datasets d ON d.id=o.dataset_id "
-                              "WHERE d.source='baostock' ORDER BY o.created DESC")
+                              "WHERE d.source=? ORDER BY o.created DESC",(source,))
     by_oid = {o['id']:o for o in observations}
-    jobs = [j for j in jobs if json.loads(j['spec']).get('source')=='baostock'
+    jobs = [j for j in jobs if json.loads(j['spec']).get('source')==source
             or any(oid in by_oid for oid in json.loads(j['result']).get('observation_ids',[]))]
     rows, receipt_key, settings = [], 'empty', {}
     if jobs:
@@ -194,7 +229,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         from_watch=st.session_state.get('desk_from_watch',False)
         reference_ok=True
         if from_watch:
-            latest=next((r for r in latest_datasets(store,'baostock') if r['code']==o['code'] and r['timeframe']=='daily'),None)
+            latest=next((r for r in latest_datasets(store,source) if r['code']==o['code'] and r['timeframe']=='daily'),None)
             if latest:
                 current,current_record=load_dataset(store,latest['id'])
                 overlap=frame.merge(current,on='date',suffixes=('_old','_new'))

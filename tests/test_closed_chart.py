@@ -203,6 +203,20 @@ def test_research_chart_default_marker_style_is_unchanged():
 
 @pytest.mark.skipif(os.name != "nt", reason="Actual Windows Tk viewer")
 def test_edit_popup_chart_and_automatic_archive_double_click_are_read_only(tmp_path):
+    # Production has one persistent Tk root. Repeated in-process Tcl lifetimes
+    # in the full suite can fail to load auto.tcl despite the file being present.
+    # Run every existing interaction/style/read-only assertion in a fresh process.
+    import subprocess
+    import sys
+    from pathlib import Path
+    result=subprocess.run([sys.executable,'-c',
+        'from pathlib import Path; from tests.test_closed_chart import check_native_closed_viewer; '
+        f'check_native_closed_viewer(Path({str(tmp_path)!r}))'],
+        cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,timeout=45)
+    assert result.returncode==0,result.stdout+result.stderr
+
+
+def check_native_closed_viewer(tmp_path):
     import ttkbootstrap as ttk
     from gui.trade_management import _ClosedDialog, TradeManagementFrame
     from gui.closed_trade_chart import ClosedTradeChartDialog

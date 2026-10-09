@@ -9,9 +9,11 @@ import time
 from pathlib import Path
 
 import pandas as pd
+from .provider_guard import ProviderError, ConnectionLease, baostock_connection_active
 
 
 class BaoStock:
+    vendor = 'baostock'
     login_timeout = 30
     query_timeout = 60
     logout_timeout = 3
@@ -20,15 +22,28 @@ class BaoStock:
         self.process = None
         self.cancel_event = threading.Event()
         self.on_wait = lambda operation, seconds: None
+        self.lease = None
+        self.lock_root = None
 
     def __enter__(self):
-        self._start()
+        try:
+            self._start()
+        except BaseException:
+            self._stop()
+            if self.lease:
+                self.lease.release(); self.lease=None
+            raise
         return self
 
     def _start(self):
+        if self.lease is None:
+            self.lease = ConnectionLease(name=self.vendor,root=self.lock_root).acquire()
+        if self.vendor == 'baostock' and baostock_connection_active():
+            self.lease.release(); self.lease = None
+            raise ProviderError('baostock','connect','检测到本机已有 BaoStock 连接（可能来自 BPA）；未并发登录，请等另一工具结束','LOCAL_BUSY')
         self.messages = queue.Queue()
         self.process = subprocess.Popen(
-            [sys.executable, '-u', '-m', 'workbench.provider_worker'],
+            [sys.executable, '-u', '-m', 'workbench.provider_worker',self.vendor],
             cwd=Path(__file__).resolve().parents[1], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding='utf-8',
@@ -73,7 +88,7 @@ class BaoStock:
                 if cancellable and self.cancel_event.is_set():
                     raise InterruptedError('已停止下载，已保存行情保留')
                 if elapsed >= timeout:
-                    raise TimeoutError(f'行情{operation}超过 {timeout} 秒无完整响应，已关闭卡住连接')
+                    raise TimeoutError(f'{self.vendor} · {operation} 超过 {timeout} 秒无完整响应，已关闭卡住连接')
                 if cancellable and int(elapsed)//5 > last_notice:
                     last_notice = int(elapsed)//5
                     self.on_wait(operation,int(elapsed))
@@ -82,10 +97,18 @@ class BaoStock:
                 except queue.Empty:
                     continue
                 if 'error' in response:
-                    raise RuntimeError(response['error'])
+                    error = response['error']
+                    if isinstance(error,dict):
+                        exc=ProviderError(self.vendor,operation,error.get('message',error.get('error','未知错误')),
+                                          error.get('error_code'),round(elapsed,3))
+                        exc.retry_after=error.get('retry_after')
+                        raise exc
+                    raise ProviderError(self.vendor,operation,str(error),elapsed=round(elapsed,3))
                 return response.get('data')
         except BaseException:
             self._stop()
+            if self.lease:
+                self.lease.release(); self.lease = None
             raise
 
     def _query(self, operation, args):
@@ -96,6 +119,8 @@ class BaoStock:
             self._stop()
             raise InterruptedError('已停止下载，已保存行情保留')
         result = self._request(operation,args,self.query_timeout)
+        if self.vendor != 'baostock':
+            return result
         if isinstance(result, dict) and 'rows' in result:
             frame = pd.DataFrame(result['rows'])
             frame.attrs.update(result.get('evidence', {}))
@@ -125,3 +150,5 @@ class BaoStock:
             pass
         finally:
             self._stop()
+            if self.lease:
+                self.lease.release(); self.lease = None

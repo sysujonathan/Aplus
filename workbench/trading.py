@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from .sources import market_source
 
 
 def _number(value, default=0.0):
@@ -25,9 +28,9 @@ def latest_prices(store, codes):
     result = {}
     for code in sorted(set(codes)):
         rows = store.rows(
-            "SELECT * FROM datasets WHERE source='baostock' AND timeframe='daily' "
+            "SELECT * FROM datasets WHERE source=? AND timeframe='daily' "
             "AND code=? ORDER BY end DESC,created DESC,rowid DESC LIMIT 1",
-            (code,),
+            (market_source(store),code),
         )
         if not rows:
             continue
@@ -344,23 +347,30 @@ def management_report(store, account_id, price_map=None):
     }
 
 
-def trading_dates(store, code=None, limit=180):
-    """Return recent completed A-share dates for lot date selectors."""
-    from workbench.market import load_dataset
+def trading_dates(store, code=None, limit=180, today=None):
+    """Ledger dates through today, independent of prices and individual bars.
 
-    args = []
-    where = "source='baostock' AND timeframe='daily'"
-    if code:
-        where += " AND code=?"
-        args.append(code)
-    rows = store.rows(
-        f"SELECT id FROM datasets WHERE {where} ORDER BY end DESC,created DESC,rowid DESC LIMIT 1",
-        tuple(args),
-    )
-    if not rows:
+    ``code`` remains accepted for existing callers; a stock's stale/missing
+    price file must never decide which dates a real fill can be recorded on.
+    Covered public calendars take precedence over published annual schedules.
+    """
+    from .exchange_calendar import is_trading_day
+    from .sources import calendar_file
+
+    today = today or datetime.now(ZoneInfo('Asia/Shanghai')).date()
+    if limit <= 0:
         return []
     try:
-        frame, _record = load_dataset(store, rows[0]["id"])
-    except Exception:
-        return []
-    return [str(day)[:10] for day in frame["date"].tail(limit).tolist()][::-1]
+        calendar = json.loads(calendar_file(store, market_source(store)).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        calendar = None
+    dates = []
+    # Bounded work even when an unpublished year has no verified calendar.
+    # Unknown days are not assumed open; no price files or network are read.
+    for offset in range(max(366, limit * 3)):
+        candidate = today - timedelta(days=offset)
+        if is_trading_day(candidate, calendar) is True:
+            dates.append(candidate.isoformat())
+            if len(dates) == limit:
+                break
+    return dates

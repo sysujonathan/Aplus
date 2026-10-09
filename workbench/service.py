@@ -20,6 +20,8 @@ from .strategies import (calculate, catalog, prepare, prepare_indicators, scan_e
 from .sync import sync_stock
 from .readiness import audit_scope, expected_day, save_calendar, save_directory
 from .sync_batch import sync_results
+from .sources import market_source, SOURCES, coverage_state, FALLBACK_SOURCES
+from .provider_guard import ProviderGuard, ProviderError, restricted, error_detail
 
 
 def merge_scan_reports(previous, current):
@@ -29,6 +31,10 @@ def merge_scan_reports(previous, current):
     for key in ['errors','observation_ids']:
         merged[key] = previous.get(key,[]) + current.get(key,[])
     merged['strategy_versions'] = dict(previous.get('strategy_versions',{}), **current.get('strategy_versions',{}))
+    coverage = current.get('coverage')
+    if coverage and coverage.get('source') in FALLBACK_SOURCES and current.get('timeframe'):
+        merged['coverage_by_timeframe'] = dict(previous.get('coverage_by_timeframe',{}),
+                                               **{current['timeframe']:coverage})
     return merged
 
 
@@ -46,6 +52,11 @@ class Service:
             raise ValueError('未知任务类型')
         if kind in {'scan','backtest','validate'}:
             verify_frozen()
+        if kind=='sync':
+            spec=dict(spec,source=spec.get('source') or market_source(self.store))
+            if spec['source'] not in SOURCES:
+                raise ValueError('未知日 K 数据源')
+            ProviderGuard(self.store,spec['source']).check()
         with self.lock:
             if self.store.rows("SELECT id FROM jobs WHERE status IN ('running','queued')"):
                 raise ValueError('已有任务正在运行。请等待结束或停止后再开始，避免争用行情连接')
@@ -77,7 +88,12 @@ class Service:
         except InterruptedError as exc:
             self.store.execute("UPDATE jobs SET status='cancelled',finished=?,message=? WHERE id=?", (now(),str(exc),job))
         except Exception as exc:
-            self.store.event(job,'任务异常',error=str(exc),traceback=traceback.format_exc())
+            source=spec.get('source','baostock')
+            detail=error_detail(exc,source)
+            if kind=='sync' and isinstance(exc,(ProviderError,TimeoutError)):
+                detail['cooldown']=ProviderGuard(self.store,source).failure(exc)
+            self.store.event(job,'任务异常',**detail,traceback=traceback.format_exc())
+            self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps({'errors':[detail],'stop_reason':str(exc),'source':source}),job))
             self.store.execute("UPDATE jobs SET status='failed',finished=?,message=? WHERE id=?", (now(),str(exc),job))
         finally:
             self.store.event(job,'任务结束',self.store.path)
@@ -102,6 +118,13 @@ class Service:
         raise ValueError('最近十天未取得股票名单，请检查行情服务')
 
     def _sync(self, job,spec):
+        source=spec.get('source','baostock')
+        ProviderGuard(self.store,source).check()
+        if source=='tickflow':
+            return self._sync_tickflow(job,spec)
+        if source=='tencent':
+            from .tencent_service import sync_tencent
+            return sync_tencent(self,job,spec)
         # end=None 表示“直到最新交易日”。completed_date() 返回字符串，不能与 None
         # 直接 min（会报 "'<' not supported between str and NoneType"），故先归一化。
         end = completed_date() if not spec.get('end') else min(spec['end'], completed_date())
@@ -115,7 +138,12 @@ class Service:
             candidate = BaoStock()
             candidate.cancel_event = self.cancel_flags[job]
             with candidate:
-                save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
+                # Public dates already certified locally need no repeat 36-year
+                # network query. The source's prices/connection remain isolated.
+                try:
+                    expected_day(self.store, end)
+                except ValueError:
+                    save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
                 end = expected_day(self.store, end)
                 directory = candidate.universe(end)
                 if directory.empty:
@@ -129,7 +157,7 @@ class Service:
             codes = list(dict.fromkeys(spec['codes']))
         if not codes:
             raise ValueError('请先选择股票范围')
-        report = {'requested':len(codes),'success':0,'errors':[], 'datasets':[], 'end_requested':end,
+        report = {'source':source,'requested':len(codes),'success':0,'errors':[], 'datasets':[], 'end_requested':end,
                   'skipped':0,'downloaded':0,'updated':0,'refreshed':0,'suspended':0}
         report['boards'] = spec.get('boards',[])
         suspended = set()
@@ -143,7 +171,7 @@ class Service:
         halt = threading.Event()
         def waiting(code, operation, seconds):
             self.progress(job,processed,len(codes),f'{code} 等待行情响应 {seconds} 秒，超时将结束请求')
-        workers = 2 if 'boards' in spec else 1
+        workers = 1  # BaoStock public rules prohibit concurrent connections.
         report['connections'] = workers
         self.progress(job,processed,len(codes),f'使用 {workers} 条独立连接补齐行情；已保存数据继续复用')
         results = sync_results(self.store, BaoStock, [c for c in codes if c not in suspended], start, end,
@@ -157,15 +185,22 @@ class Service:
                     report[outcome] += 1
                     report['datasets'].append(did)
                     report['success'] += 1
-                    failures = 0
+                    if outcome!='skipped':
+                        failures = 0
                 else:
                     failures += 1
-                    report['errors'].append({'code':code,'error':str(exc)})
-                    self.store.event(job,'股票同步失败',code=code,error=str(exc))
-                    if '黑名单' in str(exc) or 'blacklist' in str(exc).lower():
+                    detail=dict(code=code,**error_detail(exc,source))
+                    report['errors'].append(detail)
+                    self.store.event(job,'股票同步失败',**detail)
+                    recent=0
+                    if isinstance(exc,(ProviderError,TimeoutError)):
+                        state=ProviderGuard(self.store,source).failure(exc)
+                        recent=len(state['failures'])
+                        report['cooldown']=state
+                    if restricted(exc):
                         report['stop_reason'] = '数据源限制访问，已停止整批同步，请稍后再试'
                         halt.set()
-                    elif failures >= 3:
+                    elif failures >= 3 or recent>=3:
                         report['stop_reason'] = '连续三只股票下载失败，已停止，避免反复请求'
                         halt.set()
                 self.progress(job,processed,len(codes),f"已处理 {processed}/{len(codes)} · 跳过 {report['skipped']} · "
@@ -175,19 +210,23 @@ class Service:
             results.close()
         report['remaining'] = len(codes)-report['success']-len(report['errors'])
         if 'boards' in spec:
-            audit = audit_scope(self.store, spec['boards'], end)
+            audit = audit_scope(self.store, spec['boards'], end, source=source)
             report['coverage'] = audit
             if not audit['complete']:
-                report['stop_reason'] = f"已处理不等于数据已齐：应有 {audit['expected']} 只，就绪 {audit['ready']} 只，确认停牌 {audit['suspended']} 只；请查看缺口"
+                report.setdefault('stop_reason',f"已处理不等于数据已齐：应有 {audit['expected']} 只，就绪 {audit['ready']} 只，确认停牌 {audit['suspended']} 只；请查看缺口")
                 existing = {e['code'] for e in report['errors']}
                 report['errors'].extend(g for g in audit['gaps'] if g['code'] not in existing)
         return report
+
+    def _sync_tickflow(self, job, spec):
+        from .tickflow_service import sync_tickflow
+        return sync_tickflow(self, job, spec)
 
     def _scan(self, job,spec):
         if 'timeframes' not in spec:
             return self._scan_one(job,spec)
         periods = spec['timeframes']
-        if periods not in [['daily'], ['daily','weekly']]:
+        if periods not in [['daily'], ['weekly'], ['daily','weekly']]:
             raise ValueError('请选择日线，或日线加周线')
         entries = catalog(self.store)
         if not spec['strategies']:
@@ -196,34 +235,54 @@ class Service:
         if any(not group for group in groups.values()):
             raise ValueError('所选周期没有可用策略，请检查勾选')
         total = len(spec['datasets']) * sum(len(v) for v in groups.values())
-        if spec.get('source') == 'baostock':
-            coverage = audit_scope(self.store,spec['boards'],min(spec['asof'],completed_date()),spec['datasets'])
-            if coverage['complete']:
-                total = len(coverage['eligible_ids']) * sum(len(v) for v in groups.values())
+        audits = {}
+        if spec.get('source') in SOURCES:
+            total = 0
+            for tf, keys in groups.items():
+                self.check_stop(job)
+                self.progress(job,0,0,f'扫描前核验 {tf} 行情完整性；不联网补拉')
+                audits[tf] = audit_scope(self.store,spec['boards'],min(spec['asof'],completed_date()),
+                    spec['datasets'],source=spec['source'],timeframe=tf,
+                    verify_files=spec['source'] in FALLBACK_SOURCES,check_stop=lambda:self.check_stop(job),
+                    progress=lambda n,count,code:self.progress(job,n,count,f'扫描前核验 {tf} · {code}'))
+                total += len(audits[tf]['eligible_ids']) * len(keys)
+            if spec['source'] in FALLBACK_SOURCES:
+                self.check_stop(job)
+                from .history_quality import save_cached_quality
+                save_cached_quality(self.store,spec['datasets'],min(spec['asof'],completed_date()))
         aggregate = {}
         for tf, keys in groups.items():
             self.check_stop(job)
-            report = self._scan_one(job,dict(spec,timeframe=tf,strategies=keys),aggregate,total)
+            report = self._scan_one(job,dict(spec,timeframe=tf,strategies=keys),aggregate,total,
+                                    coverage=audits.get(tf))
             aggregate = merge_scan_reports(aggregate,report)
-            if report.get('coverage') and not report['coverage']['complete']:
-                break
+            if report.get('coverage') and not report['coverage']['scan_allowed']:
+                if spec.get('source') not in FALLBACK_SOURCES or not report['coverage']['scope_valid']:
+                    break
         aggregate['timeframes'] = periods
         return aggregate
 
-    def _scan_one(self, job,spec,previous=None,overall_total=None):
+    def _scan_one(self, job,spec,previous=None,overall_total=None,coverage=None):
         previous = previous or {}
-        coverage = None
         # Daily market scans must not silently shrink the universe to downloaded files.
-        if spec.get('source') == 'baostock' or ('boards' in spec and any(
-                r['source'] == 'baostock' for did in spec['datasets']
+        if spec.get('source') in SOURCES or ('boards' in spec and any(
+                r['source'] in SOURCES for did in spec['datasets']
                 for r in self.store.rows('SELECT source FROM datasets WHERE id=?', (did,)))):
-            coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'])
-            if not coverage['complete']:
+            if coverage is None:
+                self.progress(job,0,0,'扫描前核验行情完整性；不联网补拉')
+                coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'],
+                                       source=spec.get('source'),timeframe=spec['timeframe'],
+                                       verify_files=spec.get('source') in FALLBACK_SOURCES,
+                                       check_stop=lambda:self.check_stop(job),
+                                       progress=lambda n,count,code:self.progress(job,n,count,f'扫描前核验 · {code}'))
+            if not coverage['scan_allowed']:
                 return {'success': 0, 'signals': 0, 'errors': coverage['gaps'], 'coverage': coverage,
+                        'timeframe': spec['timeframe'],
                         'observation_ids': [], 'stop_reason': '行情范围或日期未齐，已拦截扫描；先到市场数据补齐缺口'}
             spec = dict(spec, datasets=coverage['eligible_ids'])
             if not spec['datasets']:
                 return {'success': 0, 'signals': 0, 'errors': [], 'coverage': coverage,
+                        'timeframe': spec['timeframe'],
                         'observation_ids': [], 'note': '所选范围当日全部停牌，没有可扫描股票'}
         entries = catalog(self.store)
         strategies = [entries[k] for k in spec['strategies']]
@@ -233,9 +292,14 @@ class Service:
         if any(s.state!='active' or timeframe not in s.timeframes for s in strategies):
             raise ValueError('日常扫描只能使用已启用且支持所选周期的策略')
         report = {'success':0,'signals':0,'errors':[], 'no_signal':0,'observation_ids':[], 'datasets':spec['datasets'],
+                  'timeframe':timeframe,
                   'strategy_versions':{s.id:s.version for s in strategies},'reused':0,'calculated':0}
         if coverage is not None:
             report['coverage'] = coverage
+            if not coverage['complete']:
+                report['errors'].extend(dict(g, timeframe=timeframe) for g in coverage['gaps'])
+                report['stop_reason'] = (f"本周期可扫描 {coverage['ready']}/{coverage['expected']} 只；"
+                                         f"排除 {len(coverage['gaps'])} 只，详情见回执；不是全范围扫描完成")
         total = len(spec['datasets'])*len(strategies)
         done = 0
         asof = min(spec['asof'],completed_date())
@@ -282,7 +346,10 @@ class Service:
                     prepared = prepare_indicators(data)
                 except Exception as exc:
                     prepare_error = str(exc)
+            stock_done = 0
             for strategy in strategies:
+                if self.cancel_flags[job].is_set():
+                    break  # Commit finished judgments before honouring stop.
                 try:
                     if data_error:
                         raise ValueError(data_error)
@@ -318,7 +385,8 @@ class Service:
                 except Exception as exc:
                     report['errors'].append({'code':record['code'],'strategy':strategy.id,'timeframe':timeframe,'error':str(exc)})
                     queue_event('策略计算失败',strategy.file,code=record['code'],strategy=strategy.id,error=str(exc))
-            done += len(strategies)
+                stock_done += 1
+            done += stock_done
             # One durable checkpoint per stock replaces dozens of tiny SQLite
             # connections/commits while preserving the same cache, observation
             # and audit records.
@@ -333,9 +401,14 @@ class Service:
                 db.execute('UPDATE jobs SET progress=?,total=?,result=?,message=? WHERE id=?',
                     (previous.get('total',0)+done,overall_total or total,dumps(merge_scan_reports(previous,report)),
                      f"{timeframe} 已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
+            self.check_stop(job)
         return report
 
     def _backtest(self, job,spec):
+        historical_sources={r['source'] for did in spec.get('datasets',[]) for r in
+            self.store.rows('SELECT source FROM datasets WHERE id=?',(did,)) if r['source'] in SOURCES}
+        if len(historical_sources)>1:
+            raise ValueError('一次回测只能使用一个行情来源；三源快照和报告独立，不混合比较收益')
         if spec.get('execution_model') == 'gap-h2-stop-comparison-v1':
             from .stop_research_service import execute_experiment
             return execute_experiment(self, job, spec)
@@ -356,6 +429,8 @@ class Service:
             try:
                 data,record = load_dataset(self.store,did,job)
                 snapshots.append(record)
+                from .history_quality import require_research_history
+                require_research_history(self.store, record, min(spec['end'], completed_date()),spec['start'])
                 data = prepare(data,tf,min(spec['end'],completed_date()))
                 if len(data)<125:
                     raise ValueError('不足 125 根已完成 K 线')
@@ -375,7 +450,7 @@ class Service:
                       datasets=snapshots, real_data=bool(snapshots) and all(r['source']!='demo' for r in snapshots),
                       engine_version=digest(b''.join((ROOT/'workbench'/f).read_bytes() for f in ['backtest.py','strategies.py','market.py'])),
                       execution_model='signal-study-v1-fixed-next-bar',timeframe=tf,
-                      limitations=['不是组合收益；不模拟仓位资金约束','前复权历史快照不是严格的当时数据版本',
+                      limitations=['不是组合收益；不模拟仓位资金约束','历史快照不是严格的当时数据版本；腾讯不复权回测不包含分红及除权股数调整',
                                    '不保证涨跌停、停牌、流动性及排队成交；单一价格 K 线不成交',
                                    '每个形态只研究首次观察时的固定入场/止损/第一目标；不复刻动态挂单',
                                    '同根止盈止损按止损；最早下一根退出，周/月线因此更保守',

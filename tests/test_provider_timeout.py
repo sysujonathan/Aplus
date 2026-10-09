@@ -11,6 +11,12 @@ from workbench.service import Service
 import json
 
 
+@pytest.fixture(autouse=True)
+def isolated_connection_lease(tmp_path,monkeypatch):
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path))
+    monkeypatch.setattr('workbench.provider_process.baostock_connection_active',lambda:False)
+
+
 def fake_worker(monkeypatch, hang):
     real_popen = subprocess.Popen
     processes = []

@@ -74,6 +74,39 @@ def report(store, aid):
     return management_report(store, aid, price_map={CODE: quote()})
 
 
+def test_opening_capital_display_retains_independent_reverse_calculation(tmp_path):
+    from types import SimpleNamespace
+    from gui.trade_management import TradeManagementFrame
+    store,aid,_=ledger(tmp_path)
+    store.execute('UPDATE accounts SET current_total_assets=10200 WHERE id=?',(aid,))
+    page=SimpleNamespace(_show_fund_values=True,return_calendar=Mock(),fund_total=Mock(),
+        fund_position=Mock(),funds_reconciliation=Mock(),fund_metrics={
+            k:(Mock(),Mock()) for k in ('market_value','floating_pnl','daily_pnl',
+                                     'withdrawable_cash','available_cash','asset_pnl')})
+    for price,implied in ((11,10002),(12,9802),(9,10402)):
+        page._report=management_report(store,aid,{CODE:quote(price)})
+        TradeManagementFrame._fill_funds(page,update_calendar=False)
+        assert page.funds_reconciliation.set.call_args.args==(f'初始资金（推算） {implied:,.2f} 元',)
+    store.save_closed_trade(aid,CODE,'测试','2026-09-28',2,100,1)
+    store.save_cash_flow(aid,'2026-09-28','利息',50)
+    page._report=management_report(store,aid,{CODE:quote(11)})
+    TradeManagementFrame._fill_funds(page,update_calendar=False)
+    assert page.funds_reconciliation.set.call_args.args==('初始资金（推算） 9,852.00 元',)
+    historical_initial=page._report['summary']['implied_initial_equity']
+    live=value_holdings(page._report,{CODE:quote(15)},fills(store,aid),NOW)
+    assert live['summary']['implied_initial_equity']==historical_initial
+    assert live['summary']['floating_pnl'] != page._report['summary']['floating_pnl']
+    page._show_fund_values=False
+    TradeManagementFrame._fill_funds(page,update_calendar=False)
+    assert page.funds_reconciliation.set.call_args.args==('初始资金（推算） •••••• 元',)
+    page._show_fund_values=True
+    store.execute('UPDATE accounts SET current_total_assets=0 WHERE id=?',(aid,))
+    page._report=management_report(store,aid,{CODE:quote(11)})
+    TradeManagementFrame._fill_funds(page,update_calendar=False)
+    assert page.funds_reconciliation.set.call_args.args==('初始资金（推算） —',)
+    assert store.rows('SELECT initial_equity FROM accounts WHERE id=?',(aid,))[0]['initial_equity']==10000
+
+
 def fills(store, aid):
     return store.rows("SELECT f.*,p.code FROM position_fills f JOIN positions p ON p.id=f.position_id "
                       "WHERE p.account_id=?", (aid,))
