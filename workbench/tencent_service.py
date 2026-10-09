@@ -6,6 +6,8 @@ from .store import dumps
 from .sync import sync_stock
 from .provider_guard import ProviderGuard, ProviderError, error_detail, restricted
 from .tencent import Tencent
+from .sync_progress import sync_progress
+import time
 
 
 def local_public_catalog(store,day):
@@ -62,8 +64,9 @@ def sync_tencent(service, job, spec):
     extend_exchange_calendar(service.store,start,end,job,source='tencent')
     end=expected_day(service.store,end,'tencent')
     provider=Tencent(); provider.cancel_event=service.cancel_flags[job]
-    provider.on_wait=lambda op,n:service.progress(job,0,0,
-        f'腾讯路线核验公共证券目录 {n} 只' if op=='directory' else f'腾讯 {op} 等待响应 {n} 秒')
+    current_request=['腾讯 · 准备行情']
+    provider.on_wait=lambda op,n:service.progress(job,report['processed'],report['requested'],
+        f'腾讯 · 核验目录 · {n}只' if op=='directory' else f'{current_request[0]} · 等待响应 {n}秒')
     report=dict(source='tencent',adjustment='不复权',requested=0,success=0,errors=[],datasets=[],
         skipped=0,downloaded=0,updated=0,refreshed=0,suspended=0,connections=1,
         end_requested=end,boards=spec.get('boards',[]),processed=0,
@@ -123,18 +126,24 @@ def sync_tencent(service, job, spec):
         codes=[c for c in codes if c not in halts and (not repair or c in repair)]
         report['requested']=len(codes)
         consecutive_failures = network_failures = 0
+        report['timings']=dict(stock_processing_seconds=0)
         for code in codes:
             service.check_stop(job)
-            service.progress(job,report['processed'],len(codes),f'腾讯独立历史 {code} · {start}～{end}')
+            def requesting(operation, a, b):
+                current_request[0]=sync_progress('tencent',operation,code,a,b)
+                service.progress(job,report['processed'],len(codes),
+                                 current_request[0])
+            stock_started=time.monotonic()
             try:
                 if code in repair:
                     from .tickflow_repair import restore_corrupt_snapshot
                     states=coverage_state(service.store,code,'tencent')
                     left=min(start,states[0]['start']) if states else start
                     right=max(end,states[0]['end']) if states else end
+                    requesting('repair',left,right)
                     restore_corrupt_snapshot(service.store,provider,code,left,right,job,source='tencent')
                 did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
-                    force=spec.get('force',False) or code in repair,source='tencent')
+                    force=spec.get('force',False) or code in repair,source='tencent',on_request=requesting)
                 report['datasets'].append(did); report[outcome]+=1; report['success']+=1
                 if outcome != 'skipped':
                     consecutive_failures = 0
@@ -157,6 +166,11 @@ def sync_tencent(service, job, spec):
                                     consecutive=consecutive_failures,total_failures=network_failures)
             except (ValueError,OSError) as exc:
                 report['errors'].append(dict(code=code,error=str(exc)))
+            finally:
+                # Total per-stock wall time includes requests, decoding, quality
+                # and durable saving. Do not call this pure local IO time.
+                report['timings']['stock_processing_seconds']+=round(time.monotonic()-stock_started,3)
+                report['timings'].update(getattr(provider,'history_timings',{}))
             report['processed']+=1
             service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
     report['remaining']=len(codes)-report['processed']

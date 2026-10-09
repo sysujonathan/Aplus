@@ -155,6 +155,12 @@ class Service:
             codes = select_board_codes(universe,spec['boards'])
         else:
             codes = list(dict.fromkeys(spec['codes']))
+        if spec.get('repair_codes'):
+            # Explicit UI selection only; provider connection/protection unchanged.
+            requested = set(spec['repair_codes'])
+            if not requested.issubset(codes):
+                raise ValueError('所选补拉股票不属于当前来源／板块目录')
+            codes = [code for code in codes if code in requested]
         if not codes:
             raise ValueError('请先选择股票范围')
         report = {'source':source,'requested':len(codes),'success':0,'errors':[], 'datasets':[], 'end_requested':end,
@@ -169,13 +175,19 @@ class Service:
         report['suspended'] = report['success'] = len(suspended)
         failures, processed = 0, len(suspended)
         halt = threading.Event()
+        current_request = ['BaoStock · 准备行情']
         def waiting(code, operation, seconds):
-            self.progress(job,processed,len(codes),f'{code} 等待行情响应 {seconds} 秒，超时将结束请求')
+            self.progress(job,processed,len(codes),f'{current_request[0]} · 等待响应 {seconds}秒')
         workers = 1  # BaoStock public rules prohibit concurrent connections.
         report['connections'] = workers
-        self.progress(job,processed,len(codes),f'使用 {workers} 条独立连接补齐行情；已保存数据继续复用')
+        from .sync_progress import sync_progress
+        def requesting(code, operation, a, b):
+            current_request[0]=sync_progress(source,operation,code,a,b)
+            self.progress(job,processed,len(codes),current_request[0])
+        self.progress(job,processed,len(codes),'BaoStock · 准备行情；复用已有缓存')
         results = sync_results(self.store, BaoStock, [c for c in codes if c not in suspended], start, end,
-                               job, spec.get('force',False), self.cancel_flags[job], halt, workers, waiting)
+                               job, bool(spec.get('force') or spec.get('repair_codes')), self.cancel_flags[job], halt, workers, waiting,
+                               on_request=requesting)
         try:
             for code,did,outcome,exc in results:
                 if isinstance(exc, InterruptedError):
@@ -203,8 +215,7 @@ class Service:
                     elif failures >= 3 or recent>=3:
                         report['stop_reason'] = '连续三只股票下载失败，已停止，避免反复请求'
                         halt.set()
-                self.progress(job,processed,len(codes),f"已处理 {processed}/{len(codes)} · 跳过 {report['skipped']} · "
-                              f"补齐 {report['updated']} · 失败 {len(report['errors'])}")
+                self.progress(job,processed,len(codes),current_request[0])
                 self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
         finally:
             results.close()

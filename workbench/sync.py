@@ -38,13 +38,16 @@ def local_history(store, code, job, coverage=None, source='baostock'):
     return frame, state
 
 
-def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock', batch_writes=False):
+def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock', batch_writes=False,
+               on_request=None):
     """provider is lazy: a fully cached request makes no network connection."""
     coverage = coverage_state(store,code,source)
     state = coverage[0] if coverage else None
+    notify = on_request or (lambda operation, a, b: None)
     if state and not force and state['start'] <= start and end <= state['end']:
         # Preserve the tamper gate while avoiding pandas CSV parsing and the
         # full OHLCV validation pass for every unchanged stock.
+        notify('cached', None, None)
         verify_dataset(store, state['dataset_id'], job)
         if source in FALLBACK_SOURCES:
             from .history_quality import quality_for, save_quality
@@ -57,6 +60,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     # A v1 runtime has no sync_coverage row.  Its last successful immutable
     # snapshot is recovered above once, then future runs use the fast path.
     if state and not force and state['start'] <= start and end <= state['end']:
+        notify('cached', None, None)
         save_coverage(store,code,state['dataset_id'],state['start'],state['end'],source)
         if source in FALLBACK_SOURCES:
             from .history_quality import describe_history, save_quality
@@ -66,7 +70,8 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     left = min(start, state['start']) if state else start
     right = max(end, state['end']) if state else end
 
-    def fetch(a, b):
+    def fetch(a, b, operation):
+        notify(operation, a, b)
         store.event(job, '请求行情区间', code=code, start=a, end=b)
         result = provider().fetch(code, a, b)
         if result.attrs.get('suspension_evidence'):
@@ -83,7 +88,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
 
     action = 'downloaded' if state is None else 'updated'
     if state is None or force:
-        frame = fetch(left, right)
+        frame = fetch(left, right, 'repair' if force else 'history')
         if frame.empty:
             raise ValueError('所选范围无可用行情；未标记为已完成，可稍后重试')
         if old is not None and not set(old.date).issubset(set(frame.date)):
@@ -92,9 +97,9 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     else:
         pieces = []
         if start < state['start']:
-            pieces.append(fetch(left, old.date.iloc[0]))
+            pieces.append(fetch(left, old.date.iloc[0], 'prefix'))
         if end > state['end']:
-            pieces.append(fetch(old.date.iloc[-1], right))
+            pieces.append(fetch(old.date.iloc[-1], right, 'tail'))
         changed = False
         for part in pieces:
             overlap = old.merge(part, on='date', suffixes=('_old', '_new'))
@@ -105,7 +110,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
                     changed = True
         if changed:
             store.event(job, '历史价格变化，刷新该股票', code=code, start=left, end=right)
-            frame = fetch(left, right)
+            frame = fetch(left, right, 'refresh')
             # A truncated provider response must not replace usable history.
             if not set(old.date).issubset(set(frame.date)):
                 raise ValueError('历史刷新返回不完整，保留原快照，未推进同步进度')

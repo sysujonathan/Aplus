@@ -288,7 +288,7 @@ def check_native_integrity():
                 yield from descendants(child)
         widgets=list(descendants(window))
         combo=next(w for w in widgets if isinstance(w,ttk.Combobox))
-        button=next(w for w in widgets if isinstance(w,ttk.Button) and str(w.cget('text')).startswith('仅补拉'))
+        button=next(w for w in widgets if isinstance(w,ttk.Button) and str(w.cget('text')).startswith('继续补拉'))
         root.update()
         assert button.instate(['disabled'])
         combo.set('周线'); root.update()
