@@ -106,6 +106,9 @@ def test_source_switch_full_history_and_separate_coverage(store,frame):
             self.calls.append((start,end))
             return frame[frame.date.between(start,end)].copy()
     p=P(); start,end=frame.date.iloc[0],frame.date.iloc[-1]
+    dates = pd.date_range(start, end)
+    save_calendar(store, pd.DataFrame(dict(calendar_date=dates.strftime('%Y-%m-%d'),
+        is_trading_day=[str(int(d.weekday()<5)) for d in dates])), start, end)
     old,_=sync_stock(store,lambda:p,'sh.600000',start,end)
     set_market_source(store,'tickflow')
     new,action=sync_stock(store,lambda:p,'sh.600000',start,end,source='tickflow')

@@ -85,6 +85,8 @@ def execute_replay(service, job, spec):
                 raise ValueError('合成演示行情不能进入此真实行情回放入口')
             if snapshot['timeframe'] != 'daily':
                 raise ValueError('需要日线行情快照')
+            from .history_quality import require_research_history
+            require_research_history(service.store, snapshot, end)
             frame = prepare(frame, 'daily', end)
             frame.attrs['code'] = snapshot['code']
             # ETF settlement and tick require explicit instrument metadata. CSV

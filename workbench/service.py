@@ -206,85 +206,15 @@ class Service:
                 report['errors'].extend(g for g in audit['gaps'] if g['code'] not in existing)
         return report
 
-    def _sync_tickflow(self,job,spec):
-        from .tickflow import TickFlow
-        from .readiness import extend_exchange_calendar
-        from .sync import local_history
-        start=spec['start']
-        end=min(spec.get('end') or completed_date(),completed_date())
-        if start>end:
-            raise ValueError('同步开始日期不能晚于已完成行情日期')
-        extend_exchange_calendar(self.store,start,end,job)
-        end=expected_day(self.store,end)
-        provider=TickFlow(); provider.cancel_event=self.cancel_flags[job]
-        with provider:
-            if 'boards' in spec:
-                if not spec['boards']:
-                    raise ValueError('请至少勾选一个板块')
-                self.progress(job,0,1,'TickFlow 核对股票目录；不访问 BaoStock')
-                directory=provider.universe(end)
-                save_directory(self.store,directory,end,job)
-                codes=select_board_codes(directory,spec['boards'])
-            else:
-                codes=list(dict.fromkeys(spec['codes']))
-            report=dict(source='tickflow',requested=len(codes),success=0,errors=[],datasets=[],connections=1,
-                end_requested=end,skipped=0,downloaded=0,updated=0,refreshed=0,suspended=0,boards=spec.get('boards',[]))
-            groups={}
-            for code in codes:
-                self.check_stop(job)
-                states=coverage_state(self.store,code,'tickflow')
-                state=states[0] if states else local_history(self.store,code,job,source='tickflow')[1]
-                if state and not spec.get('force') and state['start']<=start and end<=state['end']:
-                    did,outcome=sync_stock(self.store,lambda:provider,code,start,end,job,source='tickflow')
-                    report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
-                    continue
-                # First source switch takes a full same-source history, never a BaoStock tail.
-                left=min(start,state['start']) if state else start
-                right=max(end,state['end']) if state else end
-                if state and not spec.get('force') and start>=state['start']:
-                    left=state['end']
-                groups.setdefault((left,right),[]).append(code)
-            stopped=False
-            for (left,right),group in groups.items():
-                for offset in range(0,len(group),100):
-                    self.check_stop(job)
-                    batch=group[offset:offset+100]
-                    self.progress(job,report['success'],len(codes),f'TickFlow 批量获取 {len(batch)} 只 · {left}～{right}')
-                    provider.preload(batch,left,right)
-                    for code in batch:
-                        self.check_stop(job)
-                        try:
-                            did,outcome=sync_stock(self.store,lambda:provider,code,start,end,job,spec.get('force',False),source='tickflow')
-                            report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
-                        except (ProviderError,TimeoutError) as exc:
-                            state=ProviderGuard(self.store,'tickflow').failure(exc)
-                            report['cooldown']=state; report['stop_reason']=str(exc); stopped=True
-                            report['errors'].append(dict(code=code,**error_detail(exc,'tickflow')))
-                            break
-                        except ValueError as exc:
-                            report['errors'].append(dict(code=code,error=str(exc)))
-                        self.progress(job,report['success']+len(report['errors']),len(codes),
-                                      f"TickFlow 已保存 {report['success']}/{len(codes)} · 缺口 {len(report['errors'])}")
-                        self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
-                    if stopped: break
-                if stopped: break
-        report['remaining']=len(codes)-report['success']-len(report['errors'])
-        if report['errors']:
-            report.setdefault('stop_reason',report['errors'][0]['error'])
-        if 'boards' in spec:
-            audit=audit_scope(self.store,spec['boards'],end,source='tickflow')
-            report['coverage']=audit
-            if not audit['complete']:
-                report.setdefault('stop_reason','TickFlow 行情未齐；未知停牌或缺失日期不会记为成功')
-                known={e['code'] for e in report['errors']}
-                report['errors'].extend(g for g in audit['gaps'] if g['code'] not in known)
-        return report
+    def _sync_tickflow(self, job, spec):
+        from .tickflow_service import sync_tickflow
+        return sync_tickflow(self, job, spec)
 
     def _scan(self, job,spec):
         if 'timeframes' not in spec:
             return self._scan_one(job,spec)
         periods = spec['timeframes']
-        if periods not in [['daily'], ['daily','weekly']]:
+        if periods not in [['daily'], ['weekly'], ['daily','weekly']]:
             raise ValueError('请选择日线，或日线加周线')
         entries = catalog(self.store)
         if not spec['strategies']:
@@ -294,16 +224,17 @@ class Service:
             raise ValueError('所选周期没有可用策略，请检查勾选')
         total = len(spec['datasets']) * sum(len(v) for v in groups.values())
         if spec.get('source') in SOURCES:
-            coverage = audit_scope(self.store,spec['boards'],min(spec['asof'],completed_date()),spec['datasets'],source=spec['source'])
-            if coverage['complete']:
-                total = len(coverage['eligible_ids']) * sum(len(v) for v in groups.values())
+            total = sum(len(audit_scope(self.store,spec['boards'],min(spec['asof'],completed_date()),
+                spec['datasets'],source=spec['source'],timeframe=tf)['eligible_ids']) * len(keys)
+                for tf, keys in groups.items())
         aggregate = {}
         for tf, keys in groups.items():
             self.check_stop(job)
             report = self._scan_one(job,dict(spec,timeframe=tf,strategies=keys),aggregate,total)
             aggregate = merge_scan_reports(aggregate,report)
-            if report.get('coverage') and not report['coverage']['complete']:
-                break
+            if report.get('coverage') and not report['coverage']['scan_allowed']:
+                if spec.get('source') != 'tickflow' or not report['coverage']['scope_valid']:
+                    break
         aggregate['timeframes'] = periods
         return aggregate
 
@@ -314,8 +245,9 @@ class Service:
         if spec.get('source') in SOURCES or ('boards' in spec and any(
                 r['source'] in SOURCES for did in spec['datasets']
                 for r in self.store.rows('SELECT source FROM datasets WHERE id=?', (did,)))):
-            coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'],source=spec.get('source'))
-            if not coverage['complete']:
+            coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'],
+                                   source=spec.get('source'),timeframe=spec['timeframe'])
+            if not coverage['scan_allowed']:
                 return {'success': 0, 'signals': 0, 'errors': coverage['gaps'], 'coverage': coverage,
                         'observation_ids': [], 'stop_reason': '行情范围或日期未齐，已拦截扫描；先到市场数据补齐缺口'}
             spec = dict(spec, datasets=coverage['eligible_ids'])
@@ -333,6 +265,10 @@ class Service:
                   'strategy_versions':{s.id:s.version for s in strategies},'reused':0,'calculated':0}
         if coverage is not None:
             report['coverage'] = coverage
+            if not coverage['complete']:
+                report['errors'].extend(dict(g, timeframe=timeframe) for g in coverage['gaps'])
+                report['stop_reason'] = (f"本周期可扫描 {coverage['ready']}/{coverage['expected']} 只；"
+                                         f"排除 {len(coverage['gaps'])} 只，详情见回执；不是全范围扫描完成")
         total = len(spec['datasets'])*len(strategies)
         done = 0
         asof = min(spec['asof'],completed_date())
@@ -453,6 +389,8 @@ class Service:
             try:
                 data,record = load_dataset(self.store,did,job)
                 snapshots.append(record)
+                from .history_quality import require_research_history
+                require_research_history(self.store, record, min(spec['end'], completed_date()))
                 data = prepare(data,tf,min(spec['end'],completed_date()))
                 if len(data)<125:
                     raise ValueError('不足 125 根已完成 K 线')

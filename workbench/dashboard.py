@@ -25,7 +25,8 @@ def names(store):
                 basic=pd.read_csv(path,dtype=str).fillna('')
                 if 'code_name' in basic:
                     result.update(zip(basic.code,basic.code_name))
-        frame = pd.read_csv(store.root/'universe.csv',dtype=str)
+        from .sources import directory_file
+        frame = pd.read_csv(directory_file(store, market_source(store)),dtype=str)
         result.update(zip(frame.code,frame.code_name))
         return result
     except (OSError, AttributeError, ValueError):
@@ -67,7 +68,8 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         strategies = [key for i,(key,s) in enumerate(active.items())
                       if columns[i % len(columns)].checkbox(s.name,value=True,key='desk_strategy_'+key,disabled=busy)]
         ids = [r['id'] for r in scan_datasets(store,source)]
-        audit = audit_scope(store,boards,str(end),ids)
+        audits = [audit_scope(store,boards,str(end),ids,timeframe=tf,history_cache_only=True) for tf in periods]
+        audit = audits[0]
         a,b,c = st.columns([1,1,3])
         if a.button('同步市场数据',type='primary',disabled=busy):
             if not boards:
@@ -76,7 +78,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
                 st.error('历史起点不能晚于行情日期')
             else:
                 start(service,'sync',{'source':source,'boards':boards,'start':str(begin),'end':str(end),'force':False})
-        if b.button('匹配策略',type='primary',disabled=busy or not audit['complete'] or not strategies):
+        if b.button('匹配策略',type='primary',disabled=busy or not any(a['scan_allowed'] for a in audits) or not strategies):
             start(service,'scan',{'source':source,'boards':boards,'datasets':ids,
                                  'strategies':strategies,'timeframes':periods,'asof':str(end)})
         c.caption(f"应有 {audit['expected']} 只 · 日期就绪 {audit['ready']} 只 · 停牌 {audit['suspended']} 只 · "
@@ -84,6 +86,19 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         if not audit['complete']:
             with st.expander('数据尚未就绪 · 查看原因'):
                 coverage_panel(audit)
+        if source=='tickflow':
+            rows=store.rows("SELECT value FROM meta WHERE key='tickflow_integrity'")
+            if rows:
+                integrity=json.loads(rows[0]['value'])
+                if set(integrity.get('boards',[]))==set(boards):
+                    with st.expander('TickFlow 完整性 / 定向补拉'):
+                        st.caption(f"回执日期 {integrity['asof']} · 历史待核验 {len(integrity['unknown_history'])} 只；已证明停牌不用补拉")
+                        st.json(integrity)
+                        historical=st.checkbox('同时补拉扫描区间外历史缺口',key='tf_repair_history',disabled=busy)
+                        repair=integrity['repair_codes'] if historical else integrity['scan_repair_codes']
+                        if st.button(f'仅补拉缺口（{len(repair)} 只）',disabled=busy or not repair):
+                            start(service,'sync',dict(source='tickflow',boards=boards,start=str(begin),end=str(end),
+                                force=False,repair_codes=repair,scan_timeframe='daily'))
         st.caption('北交所仍受当前数据源覆盖限制，不能用沪深数据代替；研究、维护入口留在侧栏。')
     with st.expander('运行进度与回执',expanded=busy):
         current_job()

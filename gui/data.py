@@ -122,7 +122,8 @@ def code_names(store):
                 basic = pd.read_csv(path, dtype=str).fillna("")
                 if "code_name" in basic:
                     result.update(zip(basic.code, basic.code_name))
-        frame = pd.read_csv(store.root / "universe.csv", dtype=str)
+        from workbench.sources import directory_file
+        frame = pd.read_csv(directory_file(store, market_source(store)), dtype=str)
         result.update(zip(frame.code, frame.code_name))
         return result
     except Exception:

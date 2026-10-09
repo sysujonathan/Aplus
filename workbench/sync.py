@@ -46,6 +46,10 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         # Preserve the tamper gate while avoiding pandas CSV parsing and the
         # full OHLCV validation pass for every unchanged stock.
         verify_dataset(store, state['dataset_id'], job)
+        if source == 'tickflow':
+            from .history_quality import quality_for, save_quality
+            record = store.rows('SELECT * FROM datasets WHERE id=?', (state['dataset_id'],))[0]
+            save_quality(store, record['id'], quality_for(store, record))
         store.event(job, '跳过已有行情', code=code, start=start, end=end,
                     dataset=state['dataset_id'], integrity='sha256')
         return state['dataset_id'], 'skipped'
@@ -54,6 +58,9 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     # snapshot is recovered above once, then future runs use the fast path.
     if state and not force and state['start'] <= start and end <= state['end']:
         save_coverage(store,code,state['dataset_id'],state['start'],state['end'],source)
+        if source == 'tickflow':
+            from .history_quality import describe_history, save_quality
+            save_quality(store, state['dataset_id'], describe_history(store, code, old, state['start'], state['end']))
         store.event(job, '跳过已有行情', code=code, start=start, end=end, dataset=state['dataset_id'])
         return state['dataset_id'], 'skipped'
     left = min(start, state['start']) if state else start
@@ -65,7 +72,8 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         if result.attrs.get('suspension_evidence'):
             store.event(job,'核对公开停牌证据',code=code,source=source,
                         evidence=result.attrs['suspension_evidence'])
-        check_response_dates(store, result, a, b)
+        if source != 'tickflow':
+            check_response_dates(store, result, a, b)
         if result.empty:
             return pd.DataFrame(columns=FIELDS)
         result = validate_bars(result)
@@ -104,7 +112,16 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
             action = 'refreshed'
         else:
             frame = pd.concat([old, *pieces], ignore_index=True).drop_duplicates('date', keep='last')
+    quality = None
+    if source == 'tickflow':
+        from .history_quality import describe_history, save_quality
+        quality = describe_history(store, code, frame, left, right)
     did = save_dataset(store, code, frame, source, '前复权', job)
+    if quality is not None:
+        save_quality(store, did, quality)
+        if quality['missing_dates']:
+            store.event(job, '保存真实行情，历史缺口未认证', code=code, dataset=did,
+                        missing_dates=quality['missing_dates'], count=len(quality['missing_dates']))
     # Do not permanently cache an unpublished trading day as an empty success.
     # A holiday/suspension may therefore recheck only the tail, never full history.
     right = min(right, frame.date.max())

@@ -4,10 +4,20 @@ This small evidence catalogue is deliberately NOT a whole-market halt service.
 Unknown gaps continue to fail validation. Dates use [halt, resume) semantics.
 """
 from datetime import date, timedelta
+import hashlib
+import json
 
 CNINFO = 'https://static.cninfo.com.cn/finalpage/'
 ZMD = 'https://www.zmd.com.cn/mtsc/uploads/StockExchangeFile/'
 PUBLIC_HALTS = {
+    'sh.603920': [
+        ('2023-11-16','2023-11-21',[
+            'https://epaper.stcn.com/con/202311/21/content_2557440.html',
+            'https://epaper.stcn.com/att/202311/21/68835331-3e57-483b-928c-5ab791f3ee22.pdf']),
+    ],
+    'sh.601198': [
+        ('2025-11-20','2025-12-18',[CNINFO+'2025-12-18/1224883494.PDF']),
+    ],
     'sz.000906': [
         ('2017-11-10','2017-11-14',[ZMD+'20240112164816888.PDF']),
         ('2019-10-14','2019-10-28',[CNINFO+'2019-10-26/1207022236.PDF']),
@@ -26,6 +36,11 @@ PUBLIC_HALTS = {
     ],
 }
 
+# The issuer explicitly states no resumption before delisting, not a guessed
+# open-ended interval. Do not extend an ordinary temporary halt this way.
+NO_RESUMPTION = {'sh.601198': ('2026-09-15', CNINFO+'2026-09-08/1225552616.PDF')}
+EVIDENCE_VERSION = hashlib.sha256(json.dumps([PUBLIC_HALTS,NO_RESUMPTION],sort_keys=True).encode()).hexdigest()[:16]
+
 
 def announcement_evidence(code, start, end):
     days, receipts = set(), []
@@ -38,4 +53,13 @@ def announcement_evidence(code, start, end):
             days.add(current.isoformat())
             current += timedelta(days=1)
         receipts.append(dict(halt=halt,resume=resume,urls=list(urls),verified='2026-10-09'))
+    if code in NO_RESUMPTION:
+        halt, url = NO_RESUMPTION[code]
+        if halt <= end:
+            current = date.fromisoformat(max(halt,start))
+            while current <= date.fromisoformat(end):
+                days.add(current.isoformat())
+                current += timedelta(days=1)
+            receipts.append(dict(halt=halt,resume=None,urls=[url],verified='2026-10-09',
+                                 no_resumption=True))
     return sorted(days), receipts

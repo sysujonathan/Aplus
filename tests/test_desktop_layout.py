@@ -126,6 +126,23 @@ def test_incomplete_market_update_never_chains_strategy_scan():
         assert toolbar._auto_scan_after_sync is False
 
 
+def test_partial_tickflow_auto_update_chains_only_explicitly_ready_scope():
+    import json
+    for allowed in (False, True):
+        toolbar = Mock()
+        toolbar._job_id = 'job-sync'
+        toolbar._job_kind = '更新行情'
+        toolbar._auto_scan_after_sync = True
+        toolbar._auto_chain_cancelled = False
+        toolbar._on_job_finished = None
+        ToolBar._finish_job(toolbar, 'partial', result_json=json.dumps(
+            dict(source='tickflow', scan_readiness=dict(scan_allowed=allowed))))
+        if allowed:
+            toolbar.after_idle.assert_called_once_with(toolbar._start_auto_scan)
+        else:
+            toolbar.after_idle.assert_not_called()
+
+
 def test_stop_cancels_auto_scan_handoff_even_when_market_job_just_completed():
     toolbar = Mock()
     toolbar._job_id = "job-sync"
