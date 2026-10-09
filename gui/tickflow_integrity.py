@@ -1,7 +1,7 @@
 """Read-only quality receipt; repair goes through the normal background queue."""
 import tkinter as tk
 import ttkbootstrap as ttk
-from workbench.tickflow_integrity import integrity_view
+from workbench.tickflow_integrity import integrity_view, integrity_summary
 
 
 def show_integrity(parent,report,on_repair):
@@ -48,10 +48,7 @@ def show_integrity(parent,report,on_repair):
     def selection_changed(*args):
         view=selected_report(); scan=view['scan']
         counts=view.get('counts',{})
-        summary.set(f"应有 {scan['expected']} · 可扫描 {scan['ready']} · 已确认当日停牌 {scan['suspended']} · 数据未齐 {len(scan['gaps'])}\n"
-                    f"K 线根数不足 {counts.get('insufficient_bars',0)} 只（不要求补造）；"
-                    f"当前输入未知缺口 {counts.get('input_gap_stocks',0)} 只。\n"
-                    '区间外历史另列，不作为当前扫描补拉完成的前置条件；未知缺口不当作停牌。')
+        summary.set(integrity_summary(view))
         if 'counts' not in view:
             summary.set(f"应有 {scan['expected']} · 可扫描 {scan['ready']} · 停牌 {scan['suspended']} · 排除 {len(scan['gaps'])}\n"
                         '旧版回执尚未细分输入与区间外缺口；请更新一次以生成双周期核验。')
@@ -60,7 +57,7 @@ def show_integrity(parent,report,on_repair):
             lines.append('公共目录板块身份待适配（保留记录，未纳入当前范围）：')
             lines.extend(f"{g['code']} {g.get('name','')}" for g in view['unsupported_directory'])
         if view.get('retry_codes'):
-            lines.append(f"已补拉但数据未变化 {len(view['retry_codes'])} 只：需核对停牌公告或供应商缺数；默认不重复下载，不视为停牌。")
+            lines.append(f"已补拉无改善 {len(view['retry_codes'])} 只：需查证，默认不重复下载。")
         lines.append('数据未齐，暂不参与当前扫描（不是策略筛选未命中）：')
         lines.extend(f"{g['code']}：{g['error']}" for g in view['excluded'])
         if not view['excluded']:

@@ -38,7 +38,7 @@ def local_history(store, code, job, coverage=None, source='baostock'):
     return frame, state
 
 
-def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock'):
+def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock', batch_writes=False):
     """provider is lazy: a fully cached request makes no network connection."""
     coverage = coverage_state(store,code,source)
     state = coverage[0] if coverage else None
@@ -116,16 +116,18 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     if source in FALLBACK_SOURCES:
         from .history_quality import describe_history, save_quality
         quality = describe_history(store, code, frame, left, right, source=source)
-    did = save_dataset(store, code, frame, source, ADJUSTMENTS[source], job)
-    if quality is not None:
-        save_quality(store, did, quality)
-        if quality['missing_dates']:
-            store.event(job, '保存真实行情，历史缺口未认证', code=code, dataset=did,
-                        missing_dates=quality['missing_dates'], count=len(quality['missing_dates']))
-    # Do not permanently cache an unpublished trading day as an empty success.
-    # A holiday/suspension may therefore recheck only the tail, never full history.
-    right = min(right, frame.date.max())
-    # Save progress only after the complete snapshot is durable. Never replace old files.
-    save_coverage(store,code,did,left,right,source)
-    store.event(job, '保存同步进度', code=code, start=left, end=right, dataset=did, outcome=action)
+    import contextlib
+    # Network and quality checks are complete before entering this short unit.
+    # BaoStock retains its original behavior. TickFlow explicitly opts in.
+    with store.atomic_write() if batch_writes else contextlib.nullcontext():
+        did = save_dataset(store, code, frame, source, ADJUSTMENTS[source], job)
+        if quality is not None:
+            save_quality(store, did, quality)
+            if quality['missing_dates']:
+                store.event(job, '保存真实行情，历史缺口未认证', code=code, dataset=did,
+                            missing_dates=quality['missing_dates'], count=len(quality['missing_dates']))
+        # Never cache an unpublished day as an empty success.
+        right = min(right, frame.date.max())
+        save_coverage(store,code,did,left,right,source)
+        store.event(job, '保存同步进度', code=code, start=left, end=right, dataset=did, outcome=action)
     return did, action

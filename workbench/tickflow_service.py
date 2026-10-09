@@ -1,5 +1,6 @@
 """Independent TickFlow sync and integrity receipts; no BaoStock network calls."""
 import json
+import time
 
 from .market import completed_date, select_board_codes
 from .readiness import audit_scope, expected_day, save_directory
@@ -45,7 +46,8 @@ def sync_tickflow(service, job, spec):
         report=dict(source='tickflow',requested=len(codes),success=0,errors=[],datasets=[],connections=1,
             end_requested=end,skipped=0,downloaded=0,updated=0,refreshed=0,suspended=0,boards=spec.get('boards',[]),
             excluded_retired=excluded if 'boards' in spec else [], history_warnings=[],
-            confirmed_halts=proven_halts, repair_codes=sorted(repair), processed=0)
+            confirmed_halts=proven_halts, repair_codes=sorted(repair), processed=0,
+            timings=dict(planned_batch_requests=0,planned_batch_seconds=0,stock_processing_seconds=0))
         groups={}
         for code in codes:
             service.check_stop(job)
@@ -90,13 +92,17 @@ def sync_tickflow(service, job, spec):
                 batch=group[offset:offset+100]
                 service.progress(job,report['success'],len(codes),f'TickFlow 批量获取 {len(batch)} 只 · {left}～{right}')
                 try:
+                    batch_started=time.monotonic()
                     provider.preload(batch,left,right)
+                    report['timings']['planned_batch_requests']+=1
+                    report['timings']['planned_batch_seconds']+=round(time.monotonic()-batch_started,3)
                 except (ProviderError,TimeoutError) as exc:
                     report['cooldown']=ProviderGuard(service.store,'tickflow').failure(exc)
                     report['stop_reason']=str(exc); stopped=True
                     report['errors'].extend(dict(code=code,**error_detail(exc,'tickflow')) for code in batch)
                     report['processed'] += len(batch)
                     break  # One bounded request; never restart a failed batch automatically.
+                save_started=time.monotonic()
                 for code in batch:
                     service.check_stop(job)
                     try:
@@ -104,7 +110,7 @@ def sync_tickflow(service, job, spec):
                             from .tickflow_repair import restore_corrupt_snapshot
                             restore_corrupt_snapshot(service.store,provider,code,left,right,job)
                         did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
-                                              spec.get('force',False) or code in repair,source='tickflow')
+                                              spec.get('force',False) or code in repair,source='tickflow',batch_writes=True)
                         report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
                     except (ProviderError,TimeoutError) as exc:
                         state=ProviderGuard(service.store,'tickflow').failure(exc)
@@ -118,6 +124,9 @@ def sync_tickflow(service, job, spec):
                     service.progress(job,report['success']+len(report['errors']),len(codes),
                                   f"TickFlow 已保存 {report['success']}/{len(codes)} · 缺口 {len(report['errors'])}")
                     service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+                # Includes any same-source full-history refresh triggered by a
+                # changed overlap; do not mislabel all of this as pure disk IO.
+                report['timings']['stock_processing_seconds']+=round(time.monotonic()-save_started,3)
                 if stopped: break
             if stopped: break
     report['remaining']=max(0,len(codes)-report['processed'])

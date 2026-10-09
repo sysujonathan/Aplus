@@ -179,6 +179,12 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             raise ValueError(f'股票目录日期为 {directory_day or "未核验"}，应为 {day}；请同步该日期行情，避免遗漏新股或误判停牌')
         directory = directory.drop_duplicates('code').set_index('code')
         report['scope_valid'] = True
+        pending_members=set()
+        if source=='tencent':
+            rows=store.rows('SELECT value FROM meta WHERE key=?',('tencent_directory_pending',))
+            pending=json.loads(rows[0]['value']) if rows else {}
+            if pending.get('day')==day:
+                pending_members=set(pending.get('codes',[]))
         if source in FALLBACK_SOURCES:
             from .history_quality import calendar_of, quality_for, scan_window_issue
             calendar = calendar_of(store, source)
@@ -213,6 +219,10 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
                 check_stop()
             if progress and index % 10 == 0:
                 progress(index, len(codes), code)
+            if code in pending_members:
+                report['gaps'].append(dict(code=code,category='directory_pending',
+                    error='本次公共目录未返回此身份；保留原范围，需核对目录，不自动认作退市或停牌'))
+                continue
             if source in FALLBACK_SOURCES:
                 from .suspensions import announcement_evidence
                 if day in announcement_evidence(code, day, day)[0]:

@@ -54,6 +54,7 @@ def digest(data: bytes):
 class Store:
     def __init__(self, root=None):
         self._files_lock = threading.RLock()
+        self._atomic_local = threading.local()
         self.root = resolve_runtime_root(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "workbench.sqlite3"
@@ -165,6 +166,10 @@ class Store:
 
     @contextlib.contextmanager
     def connect(self):
+        active=getattr(self._atomic_local,'connection',None)
+        if active is not None:
+            yield active
+            return
         db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=30000")
@@ -176,6 +181,26 @@ class Store:
             raise
         finally:
             db.close()
+
+    @contextlib.contextmanager
+    def atomic_write(self):
+        """Opt-in short metadata unit, one durable commit, thread-isolated.
+
+        Finish network requests before entering. Immutable files may outlive a
+        rollback, but are not registered as usable without quality and coverage.
+        No schema/pragma changes; existing callers keep their commit behavior.
+        """
+        if getattr(self._atomic_local,'connection',None) is not None:
+            raise ValueError('不能嵌套行情元数据事务')
+        # Artifact writers acquire this lock before recording DB events too.
+        # Preserve that lock order to avoid cross-thread file/DB inversion.
+        with self._files_lock:
+            with self.connect() as db:
+                self._atomic_local.connection=db
+                try:
+                    yield
+                finally:
+                    del self._atomic_local.connection
 
     def rows(self, sql, args=()):
         with self.connect() as db:

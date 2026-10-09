@@ -15,6 +15,7 @@ def local_public_catalog(store,day):
     inventory. Stale catalogs are not silently stamped as current membership.
     """
     import pandas as pd
+    candidates=[]
     for source in SOURCES:
         if source=='tencent' or directory_date(store,source)!=day:
             continue
@@ -26,8 +27,33 @@ def local_public_catalog(store,day):
         if any(code_of(c)!=c for c in frame.code):continue
         columns=['code']+(['code_name'] if 'code_name' in frame else [])
         catalog=frame[columns].copy(); catalog['tradeStatus']='unknown'
-        return catalog,source
-    return None,None
+        candidates.append((catalog,source))
+    # Do not prefer a narrower upstream inventory simply because it is first.
+    return max(candidates,key=lambda item:len(item[0])) if candidates else (None,None)
+
+
+def retain_unconfirmed_members(store, directory, retired, day, job=None):
+    """Retain small roster omissions as excluded identities, never retirement."""
+    import pandas as pd
+    from .market import code_of
+    path=directory_file(store,'tencent')
+    if directory.empty or 'code' not in directory or directory.code.duplicated().any():
+        raise ValueError('腾讯公共目录为空或身份重复，未开始下载')
+    if any(code_of(c)!=c for c in directory.code):
+        raise ValueError('腾讯公共目录身份格式不正确，未开始下载')
+    missing=[]
+    if path.exists():
+        old=pd.read_csv(path,dtype=str).fillna('')
+        missing=sorted(set(old.code)-set(directory.code)-set(retired))
+        # Major truncation still blocks, rather than certifying an entire board.
+        if len(missing)>max(1,int(len(old)*0.01)):
+            raise ValueError(f'腾讯公共目录大量缺失 {len(missing)} 只，停止更新；原目录保留')
+        if missing:
+            retained=old[old.code.isin(missing)].copy()
+            retained['tradeStatus']='unknown'
+            directory=pd.concat([directory,retained],ignore_index=True).fillna('')
+            store.event(job,'腾讯目录少数成员待核对，保留范围',day=day,codes=missing)
+    return directory,dict(day=day,codes=missing)
 
 
 def sync_tencent(service, job, spec):
@@ -70,8 +96,23 @@ def sync_tencent(service, job, spec):
                 report['limitations'].append(f"公共目录有 {len(report['unsupported_directory'])} 只板块身份尚未适配；保留目录记录，不纳入扫描范围")
             from .readiness import filter_tickflow_directory
             directory,retired,excluded=filter_tickflow_directory(service.store,directory,end,job)
-            save_directory(service.store,directory,end,job,retired_codes=retired,source='tencent')
+            if report['catalog_reused']:
+                import json
+                rows=service.store.rows('SELECT value FROM meta WHERE key=?',('tencent_directory_pending',))
+                old_pending=json.loads(rows[0]['value']) if rows else {}
+                if old_pending.get('day')==end and old_pending.get('codes'):
+                    directory=provider.universe(end)
+                    directory,retired,excluded=filter_tickflow_directory(service.store,directory,end,job)
+            directory,pending=retain_unconfirmed_members(service.store,directory,retired,end,job)
+            with service.store.atomic_write():
+                save_directory(service.store,directory,end,job,retired_codes=retired,source='tencent')
+                service.store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    ('tencent_directory_pending',dumps(pending)))
+            report['directory_pending']=pending['codes']
+            if pending['codes']:
+                report['limitations'].append(f"目录有 {len(pending['codes'])} 只身份待核对：保留总数，暂不下载或扫描这些股票；其他股票继续更新")
             codes=select_board_codes(directory,spec['boards'])
+            codes=[c for c in codes if c not in pending['codes']]
         else:
             codes=list(dict.fromkeys(spec['codes']))
         if repair and ('boards' not in spec or not repair.issubset(set(codes))):

@@ -734,6 +734,10 @@ class ToolBar(ttk.Frame):
         """刷新右上角计时，不让底部临时消息覆盖已经完成的分项用时。"""
         sync_elapsed = getattr(self, "_sync_elapsed", None)
         scan_elapsed = getattr(self, "_scan_elapsed", None)
+        if getattr(self,'_job_kind','')=='更新行情' and isinstance(running_elapsed,(int,float)):
+            base=getattr(self,'_job_sync_base',0)
+            if isinstance(base,(int,float)):
+                running_elapsed += base
         self._timing_var.set(format_task_timings(
             sync_elapsed if isinstance(sync_elapsed, (int, float)) else None,
             scan_elapsed if isinstance(scan_elapsed, (int, float)) else None,
@@ -798,6 +802,8 @@ class ToolBar(ttk.Frame):
         source=next(k for k,v in SOURCES.items() if v==self.source_var.get())
         try:
             set_market_source(self.store,source)
+            self._sync_elapsed = self._scan_elapsed = None
+            self._refresh_timing_status()
             # Date choices are source-owned too; changing only the selected
             # variables leaves the Combobox inventories on the previous source.
             self._load_date_options()
@@ -907,7 +913,14 @@ class ToolBar(ttk.Frame):
         self._job_id, self._job_kind = job, label
         self._job_started_at = time.monotonic()
         if label == "更新行情":
-            self._sync_elapsed = None
+            from workbench.market import completed_date
+            self._job_sync_context=(spec.get('source','baostock'),tuple(spec.get('boards',[])),
+                                    spec.get('end') or completed_date())
+            totals=getattr(self,'_sync_totals',None)
+            self._sync_totals=totals if isinstance(totals,dict) else {}
+            self._job_sync_base=(self._sync_totals.get(self._job_sync_context,0)
+                                 if spec.get('repair_codes') else 0)
+            self._sync_elapsed = self._job_sync_base or None
         elif label == "扫描策略":
             self._scan_elapsed = None
         self._refresh_timing_status(running_elapsed=0)
@@ -970,7 +983,13 @@ class ToolBar(ttk.Frame):
         started = getattr(self, "_job_started_at", None)
         elapsed = max(0, finished_at - started) if isinstance(started, (int, float)) else None
         if kind == "更新行情":
-            self._sync_elapsed = elapsed
+            base=getattr(self,'_job_sync_base',0)
+            base=base if isinstance(base,(int,float)) else 0
+            self._sync_elapsed = base+elapsed if elapsed is not None else None
+            totals=getattr(self,'_sync_totals',None)
+            context=getattr(self,'_job_sync_context',None)
+            if isinstance(totals,dict) and isinstance(context,tuple):
+                totals[context]=self._sync_elapsed or 0
         elif kind == "扫描策略":
             self._scan_elapsed = elapsed
         chain_scan = False
