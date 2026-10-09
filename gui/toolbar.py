@@ -798,8 +798,11 @@ class ToolBar(ttk.Frame):
         source=next(k for k,v in SOURCES.items() if v==self.source_var.get())
         try:
             set_market_source(self.store,source)
-            self._load_market_status()
+            # Date choices are source-owned too; changing only the selected
+            # variables leaves the Combobox inventories on the previous source.
+            self._load_date_options()
             self._select_latest_date()
+            self._load_market_status()
             self._fire_date()
             risk='；不复权，跨除权扫描／回测受影响' if source=='tencent' else ''
             self.set_status(f'日 K 来源已切换为 {SOURCES[source]}；独立缓存，旧快照与旧回测保留'+risk)

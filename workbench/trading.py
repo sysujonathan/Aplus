@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from .sources import market_source
 
 
@@ -352,11 +354,10 @@ def trading_dates(store, code=None, limit=180, today=None):
     price file must never decide which dates a real fill can be recorded on.
     Covered public calendars take precedence over published annual schedules.
     """
-    from datetime import date, timedelta
     from .exchange_calendar import is_trading_day
     from .sources import calendar_file
 
-    today = today or date.today()
+    today = today or datetime.now(ZoneInfo('Asia/Shanghai')).date()
     if limit <= 0:
         return []
     try:

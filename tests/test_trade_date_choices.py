@@ -1,7 +1,7 @@
 """Actual fill date choices must not depend on downloading current prices."""
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import subprocess
 import sys
@@ -14,7 +14,7 @@ from workbench.sources import set_market_source, calendar_file
 from workbench.trading import trading_dates
 
 
-@pytest.mark.parametrize('source', ['baostock', 'tickflow'])
+@pytest.mark.parametrize('source', ['baostock', 'tickflow', 'tencent'])
 @pytest.mark.parametrize('cache', ['empty', 'stale', 'broken'])
 def test_today_is_selectable_without_current_price_files(tmp_path, monkeypatch, source, cache):
     store=Store(tmp_path/'ledger')
@@ -50,6 +50,32 @@ def test_holidays_weekends_and_future_are_not_offered(tmp_path, today, latest):
     assert choices[0]==latest and len(choices)==10
     assert all(date.fromisoformat(day)<=today for day in choices)
     assert all(date.fromisoformat(day).weekday()<5 for day in choices)
+
+
+@pytest.mark.parametrize('instant, zone, expected', [
+    ('2026-10-08T15:59:00+00:00', 'UTC', '2026-10-08'),
+    ('2026-10-08T16:01:00+00:00', 'UTC', '2026-10-09'),
+    ('2026-10-08T17:30:00-07:00', 'America/Los_Angeles', '2026-10-09'),
+    ('2026-10-09T17:30:00-07:00', 'America/Los_Angeles', '2026-10-09'),
+])
+def test_default_today_uses_exchange_timezone_without_prices(tmp_path, monkeypatch, instant, zone, expected):
+    from zoneinfo import ZoneInfo
+    current = datetime.fromisoformat(instant).astimezone(ZoneInfo(zone))
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # A no-argument now() would return the foreign computer's date.
+            assert str(tz) == 'Asia/Shanghai'
+            return current.astimezone(tz)
+
+    monkeypatch.setattr('workbench.trading.datetime', Clock)
+    monkeypatch.setattr('workbench.market.load_dataset', lambda *a, **kw: pytest.fail('No price loading'))
+    store = Store(tmp_path/'ledger')
+    assert trading_dates(store, limit=2)[0] == expected  # production default, no today=
+    assert not store.rows('SELECT * FROM datasets')
+    # Explicit dates stay injectable, independently of the current clock.
+    assert trading_dates(store, limit=1, today=date(2026,10,8)) == ['2026-10-08']
 
 
 def test_source_calendar_can_be_old_or_invalid_without_blocking_today(tmp_path):
