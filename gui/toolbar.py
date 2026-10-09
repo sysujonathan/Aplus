@@ -7,7 +7,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 
 from .theme import MUTED
-from workbench.sources import market_source, set_market_source, SOURCES
+from workbench.sources import market_source, set_market_source, SOURCES, FALLBACK_SOURCES
 
 _LABEL_FG = MUTED
 _ALL = "全部"
@@ -110,8 +110,11 @@ def format_header_data_status(market_date, signal_date, boards, audit):
     expected = int((audit or {}).get("expected") or 0)
     ready = int((audit or {}).get("ready") or 0)
     coverage = f"{scope} {ready}/{expected}" if expected > 0 else f"{scope} 待核验"
-    if (audit or {}).get('source') == 'tickflow' and (audit or {}).get('gaps'):
-        coverage += f" · 排除 {len(audit['gaps'])}"
+    if (audit or {}).get('source') in FALLBACK_SOURCES and (audit or {}).get('gaps'):
+        pending = sum(g.get('category') == 'quality_pending' for g in audit['gaps'])
+        coverage += f" · 排除 {len(audit['gaps'])-pending}"
+        if pending:
+            coverage += f" · 待核验 {pending}"
     return f"行情最新 {market} {market_mark} · 信号最新 {signal} {scan_mark} · {coverage}"
 
 
@@ -141,12 +144,15 @@ def _two_years_ago():
         return d.replace(year=d.year - 2, day=28).isoformat()
 
 
-def sync_start_date(store, full_history=False):
-    """First use builds full history; later runs reuse coverage incrementally."""
+def sync_start_date(store, full_history=False, timeframe='daily'):
+    """Fallback current scans bootstrap only their actual day/week input window."""
     if full_history:
         return "2016-01-01"
-    if market_source(store)=='tickflow':
-        return '2016-01-01'  # Source switch builds complete same-source history.
+    if market_source(store) in FALLBACK_SOURCES:
+        # Daily needs <=300 bars; weekly needs <=300 completed weeks. Historical
+        # research is explicit and cannot block the first current daily update.
+        start=_two_years_ago()
+        return f'{date.fromisoformat(start).year-5}-01-01' if timeframe=='weekly' else start
     try:
         state = store.rows(
             "SELECT COUNT(*) AS count, MAX(start) AS latest_start FROM sync_coverage"
@@ -394,7 +400,8 @@ class ToolBar(ttk.Frame):
             foreground=_LABEL_FG,
             anchor=tk.E,
         )
-        self.status_label.pack(anchor=tk.E)
+        self.status_label.configure(justify=tk.RIGHT)
+        self.status_label.pack(anchor=tk.E, fill=tk.X)
         self.timing_label = ttk.Label(
             self.status_panel,
             textvariable=self._timing_var,
@@ -402,34 +409,71 @@ class ToolBar(ttk.Frame):
             foreground=_LABEL_FG,
             anchor=tk.E,
         )
-        self.timing_label.pack(anchor=tk.E)
+        self.timing_label.configure(justify=tk.RIGHT)
+        self.timing_label.pack(anchor=tk.E, fill=tk.X)
+        self._layout_traces = [
+            (value, value.trace_add("write", self._queue_responsive))
+            for value in (self._header_data_var, self._timing_var)
+        ]
+        for frame in (self.header, self.actions, self.filters):
+            frame.bind("<Configure>", self._queue_responsive)
         self.bind("<Configure>", self._responsive)
+        self.bind("<Destroy>", self._cancel_responsive)
+        self._queue_responsive()
         self._select_latest_date()
 
-    def _responsive(self, event):
+    def _queue_responsive(self, *_):
+        # Text/source/repair-button changes can grow without resizing the window.
+        if self.winfo_exists():
+            self._responsive()
+
+    def _cancel_responsive(self, event):
         if event.widget is not self:
             return
+        for value, trace in self._layout_traces:
+            value.trace_remove("write", trace)
+        self._layout_traces = []
+
+    def _status_required_width(self):
+        # Measure unwrapped text; a previous narrow layout must not certify fit.
+        return max(
+            int(self.tk.call("font", "measure", label.cget("font"),
+                             "-displayof", self._w, line))
+            for label, value in ((self.status_label, self._header_data_var),
+                                 (self.timing_label, self._timing_var))
+            for line in value.get().split("\n")
+        ) + 8
+
+    def _responsive(self, event=None):
+        if event is not None and event.widget is not self:
+            return
+        width = event.width if event is not None else self.winfo_width()
         header_width = self.header.winfo_reqwidth()
         actions_width = self.actions.winfo_reqwidth()
         filters_width = self.filters.winfo_reqwidth()
         needed = header_width + actions_width + filters_width + 40
-        status_width = self.status_panel.winfo_reqwidth()
-        if event.width >= needed + status_width:
+        status_width = self._status_required_width()
+        # All controls and status fit on one row, otherwise status owns a full row.
+        # Never place a long status beside the timeframe buttons in a narrow row.
+        wrap = max(1, width - 40)
+        self.status_label.configure(wraplength=wrap)
+        self.timing_label.configure(wraplength=wrap)
+        if width >= needed + status_width:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
             self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
             self.status_panel.grid(row=0, column=3, columnspan=1, sticky=tk.E, pady=0)
-        elif event.width >= needed:
+        elif width >= needed:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
             self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
-            self.status_panel.grid(row=1, column=0, columnspan=4, sticky=tk.E, pady=(4, 0))
-        elif event.width >= actions_width + filters_width + 40:
+            self.status_panel.grid(row=1, column=0, columnspan=4, sticky=tk.EW, pady=(4, 0))
+        elif width >= actions_width + filters_width + 40:
             self.actions.grid(row=1, column=0, columnspan=1, sticky=tk.W, pady=(6, 0))
             self.filters.grid(row=1, column=1, columnspan=3, sticky=tk.W, pady=(6, 0))
-            self.status_panel.grid(row=0, column=1, columnspan=3, sticky=tk.E, pady=0)
+            self.status_panel.grid(row=2, column=0, columnspan=4, sticky=tk.EW, pady=(4, 0))
         else:
             self.actions.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(6, 0))
             self.filters.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
-            self.status_panel.grid(row=0, column=1, columnspan=3, sticky=tk.E, pady=0)
+            self.status_panel.grid(row=3, column=0, columnspan=4, sticky=tk.EW, pady=(4, 0))
 
     def _explain_ai(self):
         from tkinter import messagebox
@@ -671,9 +715,11 @@ class ToolBar(ttk.Frame):
         text = format_data_chain_status(market, signal, readiness)
         self._tickflow_audit = audit
         if hasattr(self,'btn_integrity'):
-            if market_source(self.store) == 'tickflow':
-                count=len(audit.get('gaps',[]))+len(audit.get('warnings',[]))
-                self.btn_integrity.configure(text=f'⚠ 核验 {count} / 补拉' if count else '完整性 / 补拉')
+            if market_source(self.store) in FALLBACK_SOURCES:
+                pending=sum(g.get('category') == 'quality_pending' for g in audit.get('gaps',[]))
+                count=len(audit.get('gaps',[]))-pending
+                self.btn_integrity.configure(text=(f'⚠ 待核验 {pending} / 排除 {count}' if pending else
+                    f'⚠ 扫描排除 {count} / 补拉' if count else '完整性 / 补拉'))
                 self.btn_integrity.pack(side=tk.LEFT,padx=3,after=self.btn_sync)
             else:
                 self.btn_integrity.pack_forget()
@@ -706,27 +752,37 @@ class ToolBar(ttk.Frame):
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _show_tickflow_integrity(self):
-        if self.store is None or market_source(self.store) != 'tickflow':
+        if self.store is None or market_source(self.store) not in FALLBACK_SOURCES:
             return
         import json
-        rows=self.store.rows("SELECT value FROM meta WHERE key='tickflow_integrity'")
+        source=market_source(self.store)
+        rows=self.store.rows('SELECT value FROM meta WHERE key=?',(source+'_integrity',))
         if not rows:
-            self.set_status('请先更新 TickFlow 行情，结束后会生成完整性回执与补拉列表')
+            self.set_status('请先更新所选来源行情，结束后会生成完整性回执与补拉列表')
             return
         report=json.loads(rows[0]['value'])
-        if set(report.get('boards',[])) != set(self._selected_boards()) or report.get('timeframe') != self._tf_var.get():
-            self.set_status('完整性回执对应其他范围或周期；请先更新当前所选范围')
+        from workbench.tickflow_integrity import integrity_view
+        from workbench.readiness import expected_day
+        from workbench.market import completed_date
+        try:
+            day=expected_day(self.store,completed_date(),source)
+            report=integrity_view(report,self._tf_var.get(),self._selected_boards(),day)
+        except ValueError as exc:
+            self.set_status(str(exc))
             return
         from .tickflow_integrity import show_integrity
         show_integrity(self,report,self._repair_tickflow)
 
-    def _repair_tickflow(self,codes):
-        if self._job_id or not codes or market_source(self.store) != 'tickflow':
-            self.set_status('补拉未开始：请等待当前任务结束，并保持 TickFlow 数据源')
+    def _repair_tickflow(self,codes,timeframe=None,include_history=False):
+        if self._job_id or not codes or market_source(self.store) not in FALLBACK_SOURCES:
+            self.set_status('补拉未开始：请等待当前任务结束，并保持所选备用源')
             return
         self._auto_scan_after_sync=False
-        self._submit_job('sync','更新行情',dict(source='tickflow',boards=self._selected_boards(),
-            start='2016-01-01',end=None,force=False,repair_codes=codes,scan_timeframe=self._tf_var.get()))
+        source=market_source(self.store)
+        tf=timeframe or self._tf_var.get()
+        self._submit_job('sync','更新行情',dict(source=source,boards=self._selected_boards(),
+            start=sync_start_date(self.store,include_history,tf),end=None,force=False,repair_codes=codes,
+            scan_timeframe=tf,repair_scope='history' if include_history else 'scan'))
 
     def _source_changed(self,event=None):
         if self.store is None:
@@ -737,7 +793,8 @@ class ToolBar(ttk.Frame):
             self._load_market_status()
             self._select_latest_date()
             self._fire_date()
-            self.set_status(f'日 K 来源已切换为 {SOURCES[source]}；旧快照与旧回测保留，首次更新建立该来源完整历史')
+            risk='；不复权，跨除权扫描／回测受影响' if source=='tencent' else ''
+            self.set_status(f'日 K 来源已切换为 {SOURCES[source]}；独立缓存，旧快照与旧回测保留'+risk)
         except Exception as exc:
             self.source_var.set(SOURCES[market_source(self.store)])
             self.set_status(str(exc))
@@ -779,8 +836,8 @@ class ToolBar(ttk.Frame):
         except Exception as exc:
             self.set_status(f"行情范围保存失败：{exc}")
             return
-        # 空仓首次更新自动建立完整历史；已有覆盖后仍由同步器只补缺口。
-        start = sync_start_date(self.store, self.full_history_var.get())
+        # 备用源先准备当前周期所需区间；更早研究历史是显式操作。
+        start = sync_start_date(self.store, self.full_history_var.get(),self._tf_var.get())
         spec = {
             "source":market_source(self.store),
             "boards": boards,
@@ -887,7 +944,8 @@ class ToolBar(ttk.Frame):
             if total:
                 self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:56]}{elapsed}")
             else:
-                self.set_status(f"⏳ {self._job_kind}：{msg[:64] or '排队中…'}{elapsed}")
+                fallback = '排队中…' if status == 'queued' else '运行中，准备核验…'
+                self.set_status(f"⏳ {self._job_kind}：{msg[:64] or fallback}{elapsed}")
             self.after(800, self._poll_job)
             return
         self._finish_job(status, j["message"] or "", j["result"] or "")
@@ -925,7 +983,7 @@ class ToolBar(ttk.Frame):
             r = {}
         chain_scan = (
             self._auto_scan_after_sync and not self._auto_chain_cancelled and kind == '更新行情'
-            and (status == 'completed' or (status == 'partial' and r.get('source') == 'tickflow'
+            and (status == 'completed' or (status == 'partial' and r.get('source') in FALLBACK_SOURCES
                  and r.get('scan_readiness', {}).get('scan_allowed')))
         )
         if kind == '更新行情' and not chain_scan and status != 'completed':
@@ -941,7 +999,7 @@ class ToolBar(ttk.Frame):
             head = (f"命中 {r.get('signals', 0)} 个信号" if kind == "扫描策略"
                     else f"补齐 {r.get('updated', 0)} · 失败 {len(r.get('errors', []))} 项")
             text = f"⚠ {kind}部分完成：{head} —— {str(r.get('stop_reason', ''))[:44]}"
-            if kind == '扫描策略' and r.get('coverage', {}).get('source') == 'tickflow':
+            if kind == '扫描策略' and r.get('coverage', {}).get('source') in FALLBACK_SOURCES:
                 c = r['coverage']
                 text = (f"⚠ 扫描部分完成：可扫描 {c['ready']}/{c['expected']} 只 · "
                         f"排除 {len(c['gaps'])} 只 · 命中 {r.get('signals', 0)} 个信号（详情见回执）")

@@ -577,12 +577,14 @@ class TradeManagementFrame(ttk.Frame):
         if self.position_tree.exists("__summary__"):
             self.position_tree.item("__summary__", values=self._position_summary())
         self._fill_funds(update_calendar=False)
-        times = [q.get("quote_time", "") for q in quotes.values() if q.get("source") == "sina"]
+        times = [q.get("quote_time", "") for q in quotes.values() if q.get("source") in ("sina", "tencent")]
         dates = [q.get("date", "") for q in quotes.values() if q.get("source") == "history"]
         missing = len(self._quote_codes - quotes.keys())
         stale = any(q.get("state") in ("更新失败", "行情滞后") for q in quotes.values())
         if times:
             text = "报价 " + min(times).replace("T", " ")[:19]
+            if any(q.get('source') == 'tencent' for q in quotes.values()):
+                text += ' · 腾讯' + ('／新浪' if any(q.get('source') == 'sina' for q in quotes.values()) else '')
         else:
             text = "历史收盘 " + min(dates) if dates else ("缺少行情" if self._quote_codes else "暂无持仓")
         if self._cash_reference is None and self._report["account"].get("accounting_mode") == "snapshot":

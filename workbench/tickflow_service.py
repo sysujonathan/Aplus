@@ -14,6 +14,9 @@ def sync_tickflow(service, job, spec):
     from .readiness import extend_exchange_calendar, filter_tickflow_directory
     from .sync import local_history
     start=spec['start']
+    repair_scope = spec.get('repair_scope', 'history')
+    if repair_scope not in ('scan', 'history'):
+        raise ValueError('补拉范围必须为当前扫描或历史核对')
     end=min(spec.get('end') or completed_date(),completed_date())
     if start>end:
         raise ValueError('同步开始日期不能晚于已完成行情日期')
@@ -45,7 +48,22 @@ def sync_tickflow(service, job, spec):
         for code in codes:
             service.check_stop(job)
             states=coverage_state(service.store,code,'tickflow')
-            state=states[0] if states else local_history(service.store,code,job,source='tickflow')[1]
+            try:
+                if states:
+                    state=states[0]
+                elif code in repair:
+                    # Repair can recover a PR27 snapshot without loading its
+                    # possibly missing/corrupt file during request planning.
+                    rows=service.store.rows("SELECT * FROM datasets WHERE source='tickflow' AND code=? "
+                        "AND adjustment='前复权' AND timeframe='daily' "
+                        "ORDER BY end DESC,created DESC,rowid DESC LIMIT 1",(code,))
+                    state=dict(dataset_id=rows[0]['id'],start=rows[0]['start'],end=rows[0]['end']) if rows else None
+                else:
+                    state=local_history(service.store,code,job,source='tickflow')[1]
+            except (OSError,ValueError) as exc:
+                report['errors'].append(dict(code=code,error=str(exc)))
+                report['processed'] += 1
+                continue  # One broken cache does not discard the other stocks.
             if state and not spec.get('force') and code not in repair and state['start']<=start and end<=state['end']:
                 try:
                     did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,source='tickflow')
@@ -80,6 +98,9 @@ def sync_tickflow(service, job, spec):
                 for code in batch:
                     service.check_stop(job)
                     try:
+                        if code in repair:
+                            from .tickflow_repair import restore_corrupt_snapshot
+                            restore_corrupt_snapshot(service.store,provider,code,left,right,job)
                         did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
                                               spec.get('force',False) or code in repair,source='tickflow')
                         report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
@@ -110,10 +131,11 @@ def sync_tickflow(service, job, spec):
     if 'boards' in spec:
         audit=audit_scope(service.store,spec['boards'],end,source='tickflow')
         report['coverage']=audit
-        report['scan_readiness']=audit_scope(service.store,spec['boards'],end,source='tickflow',timeframe=spec.get('scan_timeframe','daily'))
         from .tickflow_integrity import integrity_report
         report['integrity']=integrity_report(service.store,spec['boards'],end,report['errors'],
                                              timeframe=spec.get('scan_timeframe','daily'))
+        report['scan_readiness']=report['integrity']['scan']
+        report['scan_periods']=report['integrity']['periods']
         service.store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                               ('tickflow_integrity',dumps(report['integrity'])))
         service.store.write_artifact(f'reports/{job}-tickflow-integrity.json',dumps(report['integrity']).encode(),job)
@@ -125,11 +147,17 @@ def sync_tickflow(service, job, spec):
                 if g['code'] not in known:
                     report['errors'].append(g); known.add(g['code'])
         if repair:
-            remaining=sorted(repair & set(report['integrity']['repair_codes']))
+            pending = ({g['code'] for g in report['integrity']['scan']['gaps']} if repair_scope == 'scan'
+                       else set(report['integrity']['repair_codes']))
+            remaining=sorted(repair & pending)
+            report['repair_scope']=repair_scope
             report['repair_remaining']=remaining
+            report['repair_resolved']=sorted(repair - set(remaining))
+            report['repair_history_pending']=sorted(repair & {g['code'] for g in report['integrity']['unknown_history']})
             if remaining:
                 known={e['code'] for e in report['errors']}
                 report['errors'].extend(dict(code=c,error='补拉后仍有未知缺口；已保留真实数据，需查公告或稍后再试')
                                         for c in remaining if c not in known)
-                report['stop_reason']=f'定向补拉后仍有 {len(remaining)} 只未齐；没有自动再次请求'
+                target='当前扫描' if repair_scope == 'scan' else '历史核对'
+                report['stop_reason']=f'定向补拉后仍有 {len(remaining)} 只{target}未齐；没有自动再次请求'
     return report

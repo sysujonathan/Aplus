@@ -90,9 +90,31 @@ def fetch_quotes(codes):
     return quotes, QuoteFailures(failed,details)
 
 
+def fetch_holding_quotes(codes):
+    """Tencent first; Sina only for missing/stale snapshots. History stays separate."""
+    from .tencent_quotes import fetch_tencent_quotes
+    codes = sorted({code_of(c) for c in codes})
+    quotes, details = fetch_tencent_quotes(codes)
+    quotes = dict(quotes)
+    moment = china_now()
+    trading = session_status(moment, None) == '交易中'
+    retry = [c for c in codes if c not in quotes or (trading and
+        (moment-datetime.fromisoformat(quotes[c]['quote_time'])).total_seconds() > 45)]
+    if retry:
+        fallback, failed = fetch_quotes(retry)
+        for code, quote in fallback.items():
+            if code not in quotes or quote['quote_time'] > quotes[code]['quote_time']:
+                quotes[code] = quote
+        for code in retry:
+            if code not in quotes:
+                details[code] = details.get(code,'腾讯无有效报价')+'；新浪：'+failed.details.get(code,'无有效报价')
+    failed = set(codes)-quotes.keys()
+    return quotes, QuoteFailures(failed,{c:details.get(c,'无有效报价') for c in failed})
+
+
 class QuotePoller:
     """One daemon worker; invalidation rejects late results without killing threads."""
-    def __init__(self, fetch=fetch_quotes):
+    def __init__(self, fetch=fetch_holding_quotes):
         self.fetch = fetch
         self.results = queue.Queue()
         self.busy = False
@@ -211,7 +233,7 @@ def value_holdings(base, quotes, fills, moment, reference=None):
         row["has_quote"] = price is not None
         row["quote_state"] = quote.get("state", "缺少行情")
         row["quote_label"] = (quote.get("quote_time", "")[11:19]
-                              if quote.get("source") == "sina" else quote.get("date", ""))
+                              if quote.get("source") in ("sina", "tencent") else quote.get("date", ""))
         row["current_price"] = price
         if price is None:
             complete = False

@@ -78,6 +78,9 @@ def fetch_holding_reference(data, cancel_event):
     if data.get('dataset',{}).get('source')=='tickflow':
         from .tickflow import TickFlow
         provider = TickFlow()
+    elif data.get('dataset',{}).get('source')=='tencent':
+        from .tencent import Tencent
+        provider = Tencent()
     else:
         provider = BaoStock()
     provider.cancel_event = cancel_event

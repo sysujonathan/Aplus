@@ -10,7 +10,7 @@ from .readiness import audit_scope
 from .scope import selected_boards, save_boards, scan_datasets
 from .strategies import prepare
 from .store import dumps
-from .sources import SOURCES,market_source,set_market_source
+from .sources import SOURCES,market_source,set_market_source,FALLBACK_SOURCES
 
 TF = {'daily':'日线', 'weekly':'周线'}
 
@@ -86,19 +86,34 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         if not audit['complete']:
             with st.expander('数据尚未就绪 · 查看原因'):
                 coverage_panel(audit)
-        if source=='tickflow':
-            rows=store.rows("SELECT value FROM meta WHERE key='tickflow_integrity'")
+        if source in FALLBACK_SOURCES:
+            rows=store.rows('SELECT value FROM meta WHERE key=?',(source+'_integrity',))
             if rows:
                 integrity=json.loads(rows[0]['value'])
-                if set(integrity.get('boards',[]))==set(boards):
-                    with st.expander('TickFlow 完整性 / 定向补拉'):
-                        st.caption(f"回执日期 {integrity['asof']} · 历史待核验 {len(integrity['unknown_history'])} 只；已证明停牌不用补拉")
-                        st.json(integrity)
+                from .tickflow_integrity import integrity_view
+                from .readiness import expected_day
+                try:
+                    receipt_day=expected_day(store,str(end),source)
+                    integrity=integrity_view(integrity,'daily',boards,receipt_day)
+                except ValueError:
+                    integrity=None
+                if integrity is not None:
+                    with st.expander(SOURCES[source]+' 完整性 / 定向补拉'):
+                        period=st.selectbox('补拉复检周期',periods,format_func=TF.get,key='tf_repair_period',disabled=busy)
+                        try:
+                            integrity=integrity_view(integrity,period)
+                        except ValueError as exc:
+                            st.warning(str(exc))
+                            integrity=None
+                        if integrity is not None:
+                            st.caption(f"回执日期 {integrity['asof']} · 当前扫描排除 {len(integrity['scan']['gaps'])} 只；区间外历史单独核对")
+                            st.json(integrity)
                         historical=st.checkbox('同时补拉扫描区间外历史缺口',key='tf_repair_history',disabled=busy)
-                        repair=integrity['repair_codes'] if historical else integrity['scan_repair_codes']
+                        repair=(integrity['repair_codes'] if historical else integrity['scan_repair_codes']) if integrity else []
                         if st.button(f'仅补拉缺口（{len(repair)} 只）',disabled=busy or not repair):
-                            start(service,'sync',dict(source='tickflow',boards=boards,start=str(begin),end=str(end),
-                                force=False,repair_codes=repair,scan_timeframe='daily'))
+                            start(service,'sync',dict(source=source,boards=boards,start=str(begin),end=str(end),
+                                force=False,repair_codes=repair,scan_timeframe=period,
+                                repair_scope='history' if historical else 'scan'))
         st.caption('北交所仍受当前数据源覆盖限制，不能用沪深数据代替；研究、维护入口留在侧栏。')
     with st.expander('运行进度与回执',expanded=busy):
         current_job()

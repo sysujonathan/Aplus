@@ -202,7 +202,7 @@ def test_integrity_window_repair_selection_is_explicit_and_read_only(store):
     before=store.rows('SELECT count(*) AS n FROM datasets')[0]['n']
     calls=[]
     try:
-        show_integrity(root,report,lambda codes:calls.append(codes))
+        show_integrity(root,report,lambda codes,tf,historical:calls.append((codes,tf,historical)))
         root.update()
         def descendants(widget):
             for child in widget.winfo_children():
@@ -215,6 +215,6 @@ def test_integrity_window_repair_selection_is_explicit_and_read_only(store):
         checkbox.invoke(); root.update()
         assert not repair.instate(['disabled']) and '1 只' in repair.cget('text')
         repair.invoke(); root.update()
-        assert calls==[['sh.600000']] and store.rows('SELECT count(*) AS n FROM datasets')[0]['n']==before
+        assert calls==[(['sh.600000'],'daily',True)] and store.rows('SELECT count(*) AS n FROM datasets')[0]['n']==before
     finally:
         root.destroy()

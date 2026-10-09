@@ -5,7 +5,7 @@ import pandas as pd
 
 from .market import latest_datasets, select_board_codes, board_of
 from .store import dumps
-from .sources import market_source, source_file, directory_file, directory_date, calendar_file
+from .sources import market_source, source_file, directory_file, directory_date, calendar_file, FALLBACK_SOURCES
 
 
 def save_directory(store, directory, day, job=None, basics=None, retired_codes=None, source='baostock'):
@@ -52,7 +52,7 @@ def save_directory(store, directory, day, job=None, basics=None, retired_codes=N
     for name in (f'directories/{day}.csv', 'universe.csv'):
         store.write_artifact(str(source_file(store, name, source).relative_to(store.root)),
                              directory.to_csv(index=False).encode('utf-8-sig'), job)
-    key = 'universe_date:tickflow' if source == 'tickflow' else 'universe_date'
+    key = 'universe_date:'+source if source in FALLBACK_SOURCES else 'universe_date'
     store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, day))
 
 
@@ -138,7 +138,8 @@ def check_response_dates(store, frame, start, end):
                          + '、'.join(missing[:5]) + '；保留原快照，请重试')
 
 
-def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=None, history_cache_only=False):
+def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=None, history_cache_only=False,
+                verify_files=False, check_stop=None, progress=None):
     """Cheap UI check; actual files still hash-validated before strategy execution.
 
     Suspension is excused only by the directory for this exact trading day.
@@ -161,13 +162,13 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             raise ValueError(f'股票目录日期为 {directory_day or "未核验"}，应为 {day}；请同步该日期行情，避免遗漏新股或误判停牌')
         directory = directory.drop_duplicates('code').set_index('code')
         report['scope_valid'] = True
-        if source == 'tickflow':
-            from .history_quality import calendar_of, quality_for, scan_window_error
-            calendar = calendar_of(store)
+        if source in FALLBACK_SOURCES:
+            from .history_quality import calendar_of, quality_for, scan_window_issue
+            calendar = calendar_of(store, source)
             if timeframe is not None and timeframe not in ('daily', 'weekly'):
-                raise ValueError('TickFlow 日常扫描只支持日线或周线')
+                raise ValueError('备用源日常扫描只支持日线或周线')
         required_day = day
-        if source == 'tickflow' and timeframe == 'weekly':
+        if source in FALLBACK_SOURCES and timeframe == 'weekly':
             from datetime import date, timedelta
             current = date.fromisoformat(day)
             friday = (current-timedelta(days=(current.weekday()-4)%7)).isoformat()
@@ -182,7 +183,7 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             records = [r for r in records if r['id'] in ids]
         records = {r['code']: r for r in records if r['timeframe'] == 'daily'}
         qualities = None
-        if source == 'tickflow' and timeframe is not None:
+        if source in FALLBACK_SOURCES and timeframe is not None:
             # UI refresh must not open one SQLite connection per stock.
             keys = ['market_quality:'+r['id'] for r in records.values()]
             qualities = {}
@@ -190,8 +191,12 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
                 chunk=keys[offset:offset+500]
                 qualities.update((r['key'],r['value']) for r in store.rows(
                     'SELECT key,value FROM meta WHERE key IN ('+','.join('?' for _ in chunk)+')',chunk))
-        for code in codes:
-            if source == 'tickflow':
+        for index, code in enumerate(codes):
+            if check_stop:
+                check_stop()
+            if progress and index % 10 == 0:
+                progress(index, len(codes), code)
+            if source in FALLBACK_SOURCES:
                 from .suspensions import announcement_evidence
                 if day in announcement_evidence(code, day, day)[0]:
                     report['suspended'] += 1
@@ -201,36 +206,56 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
                 continue
             r = records.get(code)
             reason = None
+            issue = {}
             if r is None:
                 reason = '本地缺少行情'
+                issue['category'] = 'missing_dataset'
             elif not (store.root/r['path']).is_file():
                 reason = '行情文件缺失'
+                issue['category'] = 'invalid_file'
             elif r['end'] < required_day:
                 reason = f"行情只到 {r['end']}，应到 {required_day}（不能自动假定停牌）"
+                issue['category'] = 'stale_tail'
             elif r['start'] > day:
                 reason = '所选日期尚无本地行情'
-            if reason is None and source == 'tickflow' and timeframe is not None:
+                issue['category'] = 'missing_dataset'
+            if reason is None and source in FALLBACK_SOURCES and verify_files:
+                try:
+                    from .market import verify_dataset
+                    verify_dataset(store, r['id'], record=r)
+                except (OSError, ValueError) as exc:
+                    reason = str(exc)
+                    issue['category'] = 'invalid_file'
+            if reason is None and source in FALLBACK_SOURCES and timeframe is not None:
                 try:
                     quality = quality_for(store, r, day, calendar, cache_only=history_cache_only,prefetched=qualities)
-                    reason = scan_window_error(quality, timeframe)
+                    issue = scan_window_issue(quality, timeframe) or {}
+                    reason = issue.get('error')
                     if quality['missing_dates']:
                         report['warnings'].append(dict(code=code, dataset=r['id'],
                             history_gaps=len(quality['missing_dates']), input_start=quality['windows'][timeframe]['start'],
                             error='历史有未认证缺口；不等于停牌，历史研究仍须核对'))
                 except (OSError, ValueError, KeyError) as exc:
                     reason = str(exc)
+                    issue['category'] = 'quality_pending'
             if reason:
-                report['gaps'].append({'code': code, 'error': reason})
+                report['gaps'].append(dict(code=code, error=reason,
+                                          **{k:v for k,v in issue.items() if k != 'error'})
+                                      if source in FALLBACK_SOURCES else {'code': code, 'error': reason})
             else:
                 report['ready'] += 1
                 report['eligible_ids'].append(r['id'])
+        if progress:
+            progress(len(codes), len(codes), '')
+    except InterruptedError:
+        raise  # Cancellation is not a coverage gap; never continue the batch.
     except (OSError, ValueError, KeyError) as exc:
         report['scope_valid'] = False
         report['gaps'].append({'code': '范围核验', 'error': str(exc)})
     report['complete'] = not report['gaps'] and report['expected'] > 0
     # Only the independent fallback permits explicitly reported stock exclusions.
     # A bad/stale directory or calendar still blocks the whole task.
-    report['scan_allowed'] = report['complete'] if source != 'tickflow' else (
+    report['scan_allowed'] = report['complete'] if source not in FALLBACK_SOURCES else (
         report['scope_valid'] and report['ready'] > 0)
     return report
 

@@ -1,12 +1,14 @@
 """Explicit daily data routing; changing a source never rewrites old snapshots."""
-SOURCES = {'baostock': 'BaoStock', 'tickflow': 'TickFlow'}
+SOURCES = {'baostock': 'BaoStock', 'tickflow': 'TickFlow', 'tencent': '腾讯'}
+FALLBACK_SOURCES = ('tickflow', 'tencent')
+ADJUSTMENTS = {'baostock':'前复权', 'tickflow':'前复权', 'tencent':'不复权'}
 
 
 def source_file(store, name, source='baostock'):
     """BaoStock paths remain unchanged; fallback owns its mutable inventories."""
     if source not in SOURCES:
         raise ValueError('未知行情来源')
-    return store.root / (('sources/tickflow/' + name) if source == 'tickflow' else name)
+    return store.root / ((f'sources/{source}/' + name) if source in FALLBACK_SOURCES else name)
 
 
 def directory_file(store, source):
@@ -24,7 +26,7 @@ def directory_file(store, source):
 
 
 def directory_date(store, source):
-    key = 'universe_date:tickflow' if source == 'tickflow' else 'universe_date'
+    key = 'universe_date:'+source if source in FALLBACK_SOURCES else 'universe_date'
     if source == 'tickflow' and directory_file(store, source) == store.root/'universe.csv':
         key = 'universe_date'  # legacy TickFlow directory only
     rows = store.rows('SELECT value FROM meta WHERE key=?', (key,))
@@ -35,7 +37,7 @@ def calendar_file(store, source='baostock'):
     path = source_file(store, 'trading_calendar.json', source)
     # The exchange calendar is public, source-neutral evidence. Copy-on-write
     # migration may read the old calendar, but TickFlow never modifies it.
-    if source == 'tickflow' and not path.exists():
+    if source in FALLBACK_SOURCES and not path.exists():
         return store.root/'trading_calendar.json'
     return path
 

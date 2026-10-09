@@ -10,6 +10,9 @@ def main():
     if vendor == 'tickflow':
         from .tickflow import TickFlowHTTP
         provider = TickFlowHTTP()
+    elif vendor == 'tencent':
+        from .tencent import TencentHTTP
+        provider = TencentHTTP()
     else:
         provider = DirectBaoStock()
     for line in sys.stdin:
@@ -24,6 +27,8 @@ def main():
                     provider.__exit__()
                     result = None
                 elif vendor == 'tickflow' and operation in {'batch','instruments'}:
+                    result = getattr(provider,operation)(*request['args'])
+                elif vendor == 'tencent' and operation in {'history_page','directory_count','directory_page'}:
                     result = getattr(provider,operation)(*request['args'])
                 elif operation in {'fetch','universe','calendar','basics'}:
                     frame = getattr(provider,operation)(*request['args'])

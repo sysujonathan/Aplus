@@ -8,12 +8,13 @@ import json
 import re
 
 import pandas as pd
-from workbench.sources import market_source
+from workbench.sources import market_source, FALLBACK_SOURCES
 
 
 REALTIME_MARKET_SOURCE = "baostock"
 LEGACY_MARKET_SOURCE = "legacy-engine-a"
-LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, 'tickflow', LEGACY_MARKET_SOURCE)
+LOCAL_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, 'tickflow', 'tencent', LEGACY_MARKET_SOURCE)
+LEGACY_CANDIDATE_SOURCES = (REALTIME_MARKET_SOURCE, LEGACY_MARKET_SOURCE)
 
 _pinyin = None
 _pinyin_style = None
@@ -193,16 +194,17 @@ def candidate_dates(store, timeframe="daily", source=None):
             (source, timeframe),
         )
     else:
+        allowed=(market_source(store),) if market_source(store) in FALLBACK_SOURCES else LEGACY_CANDIDATE_SOURCES
         rows = store.rows(
             "SELECT day FROM ("
             "SELECT substr(o.asof,1,10) AS day FROM observations o "
             "JOIN datasets d ON d.id=o.dataset_id "
-            "WHERE d.source IN (?,?,?) AND o.timeframe=? "
+            'WHERE d.source IN ('+','.join('?' for _ in allowed)+') AND o.timeframe=? '
             "UNION "
             "SELECT d.end AS day FROM datasets d "
             "WHERE d.source=? AND d.timeframe=?"
             ") WHERE day IS NOT NULL AND day<>'' ORDER BY day DESC",
-            (*LOCAL_CANDIDATE_SOURCES, timeframe, market_source(store), timeframe),
+            (*allowed, timeframe, market_source(store), timeframe),
         )
     return [row["day"] for row in rows if row.get("day")]
 
@@ -234,11 +236,12 @@ def latest_observation_date(store, timeframe="daily", source=None):
 
 def latest_scan_date(store, timeframe="daily"):
     """返回本地已保存的最近扫描日，包含已迁入 Aplus 的历史成果。"""
+    allowed=(market_source(store),) if market_source(store) in FALLBACK_SOURCES else LEGACY_CANDIDATE_SOURCES
     rows = store.rows(
         "SELECT MAX(o.asof) AS day FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source IN (?,?,?) AND o.timeframe=?",
-        (*LOCAL_CANDIDATE_SOURCES, timeframe),
+        'WHERE d.source IN ('+','.join('?' for _ in allowed)+') AND o.timeframe=?',
+        (*allowed, timeframe),
     )
     return rows[0]["day"] if rows and rows[0].get("day") else None
 
@@ -256,12 +259,14 @@ def latest_market_dataset(store, code, timeframe="daily", source=None):
 def candidate_source_for_date(store, timeframe="daily", asof_filter=None):
     """为一个日期筛选选择单一来源；同日优先当前 Aplus 正式扫描。"""
     pattern = _build_asof_pattern(asof_filter)
+    if market_source(store) in FALLBACK_SOURCES:
+        return market_source(store)
     sql = (
         "SELECT d.source, MAX(o.asof) AS latest FROM observations o "
         "JOIN datasets d ON d.id=o.dataset_id "
-        "WHERE d.source IN (?,?,?) AND o.timeframe=?"
+        "WHERE d.source IN (?,?) AND o.timeframe=?"
     )
-    params = [*LOCAL_CANDIDATE_SOURCES, timeframe]
+    params = [*LEGACY_CANDIDATE_SOURCES, timeframe]
     if pattern is not None:
         sql += " AND o.asof LIKE ?"
         params.append(pattern)

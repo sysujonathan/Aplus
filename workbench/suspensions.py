@@ -10,6 +10,33 @@ import json
 CNINFO = 'https://static.cninfo.com.cn/finalpage/'
 ZMD = 'https://www.zmd.com.cn/mtsc/uploads/StockExchangeFile/'
 PUBLIC_HALTS = {
+    'sh.688981': [
+        ('2025-09-01','2025-09-09',[
+            'https://www.hkexnews.hk/listedco/listconews/sehk/2025/0829/2025082902470_c.pdf',
+            CNINFO+'2025-09-09/1224645443.PDF']),
+    ],
+    'sh.600058': [
+        ('2025-12-30','2026-01-15',[
+            'https://epaper.stcn.com/att/202601/15/ZQ15B012-CR_eBook.pdf']),
+    ],
+    'sh.600707': [
+        ('2016-03-22','2016-04-13',[
+            'https://epaper.stcn.com/paper/zqsb/page/1/2016-04/13/B035/20160413B035_pdf.pdf']),
+    ],
+    'sh.603029': [
+        ('2017-08-28','2017-10-30',[
+            'https://epaper.stcn.com/paper/zqsb/page/1/2017-10/28/B263/20171028B263_pdf.pdf']),
+        ('2022-11-14','2022-11-21',[
+            'https://epaper.stcn.com/att/202211/19/12b7d791-a801-478b-a026-1097b5655f48.pdf']),
+        ('2022-12-23','2022-12-30',[
+            'https://www.sdmj.com.cn/Upload/天鹅股份：山东天鹅棉业机械股份有限公司关于股票交易停牌核查结果暨复牌以及风险提示的公告_20221230-09112591039.pdf']),
+    ],
+    'sh.603822': [
+        ('2016-11-21','2016-11-30',[
+            'https://epaper.cs.com.cn/zgzqb/images/2016-11/30/A16/AGG0161130C.pdf']),
+        ('2018-01-08','2018-05-10',[CNINFO+'2018-08-22/1205314321.PDF']),
+        ('2025-12-10','2025-12-11',[CNINFO+'2025-12-10/1224863205.PDF']),
+    ],
     'sh.603920': [
         ('2023-11-16','2023-11-21',[
             'https://epaper.stcn.com/con/202311/21/content_2557440.html',
