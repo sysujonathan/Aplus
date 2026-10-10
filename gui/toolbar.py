@@ -974,6 +974,14 @@ class ToolBar(ttk.Frame):
             self.source_combo.state(['disabled'])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
+        # Successful submission first: version networking never delays or
+        # invalidates a market/strategy task. One-click premarket uses this too.
+        hint = getattr(self, '_on_scan_started', None)
+        if kind == 'scan' and callable(hint):
+            try:
+                hint()
+            except Exception:
+                pass
 
     def _poll_job(self):
         """每 800ms 查一次 jobs 表，把进度滚到状态栏；终态时出简报并恢复按钮。"""

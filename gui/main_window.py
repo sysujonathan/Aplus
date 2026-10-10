@@ -90,6 +90,9 @@ class AplusMainWindow(ttk.Window):
         self._candidate_source = REALTIME_MARKET_SOURCE
         self._build_ui()
         self._load_strategies()
+        from .version_update import VersionController
+        self.version_controller = VersionController(self, self.section_nav)
+        self.toolbar._on_scan_started = self.version_controller.scan_hint
         if enable_tray:
             self._setup_tray()
 
@@ -281,6 +284,8 @@ class AplusMainWindow(ttk.Window):
         self.withdraw()
 
     def _show_from_tray(self):
+        if getattr(self, "_update_pending", False):
+            return
         self.deiconify()
         self.state("normal")
         self.lift()
@@ -303,7 +308,7 @@ class AplusMainWindow(ttk.Window):
 
     def _exit_from_tray(self):
         """托盘“退出”才是真正关闭；运行任务先请求安全停止。"""
-        if self._closing:
+        if self._closing or getattr(self, "_update_pending", False):
             return
         self._closing = True
         if self.toolbar._job_id and self.service is not None:
@@ -311,6 +316,17 @@ class AplusMainWindow(ttk.Window):
                 self.service.cancel(self.toolbar._job_id)
             except Exception:
                 pass
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+        self.destroy()
+
+    def _close_for_version_update(self):
+        """Only called after Service has atomically reserved an idle update."""
+        self._closing = True
+        self.service.pool.shutdown(wait=True)
         if self._tray_icon is not None:
             try:
                 self._tray_icon.stop()
