@@ -14,8 +14,8 @@ import ttkbootstrap as ttk
 from gui.toolbar import ToolBar
 
 
-@pytest.mark.parametrize("width,row", [(2200, 0), (1280, 1), (1150, 2), (860, 3)])
-def test_long_status_has_its_own_row_when_controls_do_not_fit(width, row):
+@pytest.mark.parametrize("width,row", [(2200, 0), (1600, 0), (1280, 1), (1150, 2), (860, 3)])
+def test_status_shares_controls_row_when_compact_panel_fits(width, row):
     toolbar = object.__new__(ToolBar)
     for name, size in (("header", 100), ("actions", 700), ("filters", 400)):
         frame = Mock()
@@ -24,13 +24,16 @@ def test_long_status_has_its_own_row_when_controls_do_not_fit(width, row):
     toolbar.status_panel = Mock()
     toolbar.status_label = Mock()
     toolbar.timing_label = Mock()
-    toolbar._status_required_width = Mock(return_value=900)
+    toolbar._status_required_width = Mock(return_value=320)
     toolbar._fit_status = Mock()
     ToolBar._responsive(toolbar, SimpleNamespace(widget=toolbar, width=width))
     assert toolbar.status_panel.grid.call_args.kwargs["row"] == row
     if row:
         assert toolbar.status_panel.grid.call_args.kwargs["column"] == 0
         assert toolbar.status_panel.grid.call_args.kwargs["columnspan"] == 4
+    else:
+        assert toolbar.status_panel.grid.call_args.kwargs["column"] == 3
+        assert toolbar._fit_status.call_args.args == (width - 1240 - 18,)
     toolbar._fit_status.assert_called_once()
 
 
@@ -51,8 +54,8 @@ def check_native_status_window():
     root = ttk.Window(themename="darkly")
     root.withdraw()
     try:
-        for width, scaling in ((1280, 1.33), (1600, 1.33), (2560, 1.33),
-                               (1280, 2.0), (1600, 2.0), (2560, 2.0)):
+        for width, scaling in ((1280, 1.33), (1600, 1.33), (2560, 1.33), (3180, 1.33),
+                               (1280, 2.0), (1600, 2.0), (2560, 2.0), (3180, 2.0)):
             check_native_status(root, width, scaling)
     finally:
         root.destroy()
@@ -104,6 +107,14 @@ def check_native_status(root, width, scaling):
                      (toolbar.header, toolbar.actions, toolbar.filters)) + 40
         if width < needed + toolbar._status_required_width():
             assert int(toolbar.status_panel.grid_info()["row"]) > 0
+        else:
+            assert int(toolbar.status_panel.grid_info()["row"]) == 0
+            # Content has one row; the theme's outer frame padding is separate.
+            assert toolbar.grid_bbox()[3] <= max(toolbar.header.winfo_reqheight(),
+                toolbar.actions.winfo_reqheight(), toolbar.filters.winfo_reqheight(),
+                toolbar.status_panel.winfo_reqheight()), (width, scaling, geometry)
+            # Last action and status share a row without overlapping.
+            assert toolbar.filters.winfo_rootx() + toolbar.filters.winfo_width() <= toolbar.status_panel.winfo_rootx()
         # Neither shorter text nor exceptionally long details alter geometry.
         toolbar._header_data_var.set("主板 3459/3459")
         root.update()

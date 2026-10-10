@@ -443,15 +443,12 @@ class ToolBar(ttk.Frame):
             tip.leave()
 
     def _status_required_width(self):
-        # Fixed font-aware budget: source, dates, counts and task state never
-        # change the breakpoint (and therefore the chart's available height).
-        return max(
-            int(self.tk.call("font", "measure", label.cget("font"),
-                             "-displayof", self._w, line))
-            for label, line in (
-                (self.status_label, 'BaoStock · 行情 2099-12-31 ✓ · 信号 2099-12-31 ⚠待扫描 · 主板 9999/9999'),
-                (self.timing_label, '行情用时 进行中 999分59秒 · 扫描用时 进行中 999分59秒'))
-        ) + 8
+        # A fixed, font-aware minimum for sharing the controls row, not the
+        # worst-case full receipt width. Longer text is fitted to the remaining
+        # space without adding a blank row or changing the chart's height.
+        return int(self.tk.call("font", "measure", self.status_label.cget("font"),
+                                "-displayof", self._w,
+                                '行情 2099-12-31 · 信号 2099-12-31')) + 8
 
     def _fit_status(self, budget):
         for label, value, tip in zip((self.status_label, self.timing_label),
@@ -459,7 +456,7 @@ class ToolBar(ttk.Frame):
             raw = value.get()
             text = raw.replace('\n', ' · ')
             measure = lambda s: int(self.tk.call('font', 'measure', label.cget('font'), '-displayof', self._w, s))
-            # Only exceptionally narrow windows elide; keep the source and final
+            # Share the available right-hand space; keep the source and final
             # counts visible. Hover always shows the complete, unchanged receipt.
             if measure(text) > budget:
                 low, high = 0, len(text)
@@ -483,8 +480,8 @@ class ToolBar(ttk.Frame):
         filters_width = self.filters.winfo_reqwidth()
         needed = header_width + actions_width + filters_width + 40
         status_width = self._status_required_width()
-        # All controls and status fit on one row, otherwise status owns a full row.
-        # Never place a long status beside the timeframe buttons in a narrow row.
+        # Prefer the controls row even if the full receipt needs middle elision.
+        # Fall back only when a useful minimum status panel cannot fit beside it.
         budget = max(1, width - 40)
         if width >= needed + status_width:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)

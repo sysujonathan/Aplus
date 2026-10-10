@@ -207,6 +207,8 @@ def test_history_mode_manual_close_reconciliation_edit_and_delete(tmp_path):
     account_id = store.save_account(
         "历史账户", 100000, accounting_mode="history", current_total_assets=100550
     )
+    from workbench.account_reconciliation import capture_reference
+    store.save_account_reconciliation(account_id, capture_reference(store,account_id,100550,'2026-09-30'))
     closed_id = store.save_closed_trade(
         account_id, "sz.000001", "平安银行", "2026-09-30", 20, 500, 5.0
     )
@@ -245,6 +247,8 @@ def test_cash_adjustments_are_part_of_reconciliation_and_can_be_managed(tmp_path
     account_id = store.save_account(
         "历史账户", 50000, accounting_mode="history", current_total_assets=50001.53
     )
+    from workbench.account_reconciliation import capture_reference
+    store.save_account_reconciliation(account_id, capture_reference(store,account_id,50001.53,'2026-09-30'))
     flow_id = store.save_cash_flow(account_id, "2026-09-21", "利息归本", 1.53, "季度结息")
     report = management_report(store, account_id, {})
     assert report["summary"]["cash_adjustments"] == pytest.approx(1.53)
