@@ -227,7 +227,7 @@ def test_integrity_window_repair_selection_is_explicit_and_read_only(store):
                 yield child
                 yield from descendants(child)
         widgets=list(descendants(root))
-        repair=next(w for w in widgets if isinstance(w,ttk.Button) and str(w.cget('text')).startswith('仅补拉'))
+        repair=next(w for w in widgets if isinstance(w,ttk.Button) and str(w.cget('text')).startswith('继续补拉'))
         assert repair.instate(['disabled']) and '0 只' in repair.cget('text')
         checkbox=next(w for w in widgets if isinstance(w,ttk.Checkbutton))
         checkbox.invoke(); root.update()

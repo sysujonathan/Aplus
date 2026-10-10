@@ -214,6 +214,30 @@ class Store:
         self.execute("INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)",
                      (now(), job, action, str(path), dumps(detail)))
 
+    def gap_review_decisions(self, source):
+        from .sources import SOURCES
+        if source not in SOURCES:
+            raise ValueError('未知行情来源')
+        rows = self.rows('SELECT value FROM meta WHERE key=?', ('gap_review:'+source,))
+        return json.loads(rows[0]['value']) if rows else {}
+
+    def set_gap_review_decisions(self, source, issues, state):
+        """UI preferences only; never update market quality, coverage or datasets."""
+        from .gap_review import STATES
+        if state not in STATES:
+            raise ValueError('未知缺口处理方式')
+        with self.atomic_write():
+            values = self.gap_review_decisions(source)
+            for issue in issues:
+                key = issue['key']
+                if len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
+                    raise ValueError('缺口身份无效')
+                values[key] = dict(state=state, code=issue['code'], time=now())
+            self.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                         ('gap_review:'+source, dumps(values)))
+            self.event(None, '缺口处理方式', source=source, state=state,
+                       issues=[dict(key=i['key'],code=i['code']) for i in issues])
+
     def backtest_history(self, execution_model, *, include_deleted=False):
         """Stable display identities in existing meta; reports remain immutable."""
         with self.connect() as db:

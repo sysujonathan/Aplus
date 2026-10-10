@@ -106,13 +106,24 @@ class Tencent(BaoStock):
     vendor = 'tencent'
     query_timeout = 15
 
+    def __init__(self):
+        super().__init__()
+        self.history_timings = dict(history_page_requests=0, history_request_seconds=0)
+
     def fetch(self, code, start, end):
         date.fromisoformat(start); date.fromisoformat(end)
         if start>end: raise ValueError('腾讯请求区间无效')
         chunks=[]; right=end
         # Each IPC operation is separately cancellable; never one ten-year wait.
         for _ in range(32):
-            raw=self._query('history_page',[code,right])
+            started=time.monotonic()
+            self.history_timings['history_page_requests']+=1
+            try:
+                raw=self._query('history_page',[code,right])
+            finally:
+                # Includes the existing protective pause and worker IPC, not
+                # just remote server latency. Failed pages are counted too.
+                self.history_timings['history_request_seconds']+=round(time.monotonic()-started,3)
             frame=decode_history(code,raw,start,right)
             if chunks:
                 # Endpoint must move backwards; overlapping or repeated pages

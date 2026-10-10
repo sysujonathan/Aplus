@@ -23,7 +23,8 @@ class CancelToken:
         return True
 
 
-def sync_results(store, factory, codes, start, end, job, force, cancel, halt, workers, on_wait):
+def sync_results(store, factory, codes, start, end, job, force, cancel, halt, workers, on_wait,
+                 on_request=None):
     """Bound submission as well as concurrency; never queue the entire market.
 
     BaoStock itself remains inside each adapter's killable subprocess. Threads
@@ -48,7 +49,8 @@ def sync_results(store, factory, codes, start, end, job, force, cancel, halt, wo
         if token.is_set():
             return code, None, None, InterruptedError('已停止')
         try:
-            did, outcome = sync_stock(store, provider, code, start, end, job, force)
+            notify = (lambda op, a, b: on_request(code, op, a, b)) if on_request else None
+            did, outcome = sync_stock(store, provider, code, start, end, job, force, on_request=notify)
             return code, did, outcome, None
         except Exception as exc:
             return code, None, None, exc

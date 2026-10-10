@@ -716,11 +716,10 @@ class ToolBar(ttk.Frame):
         text = format_data_chain_status(market, signal, readiness)
         self._tickflow_audit = audit
         if hasattr(self,'btn_integrity'):
-            if market_source(self.store) in FALLBACK_SOURCES:
-                pending=sum(g.get('category') == 'quality_pending' for g in audit.get('gaps',[]))
-                count=len(audit.get('gaps',[]))-pending
-                self.btn_integrity.configure(text=(f'⚠ 待核验 {pending} / 补拉' if pending else
-                    f'⚠ 数据未齐 {count} / 补拉' if count else '完整性 / 补拉'))
+            if market_source(self.store) in SOURCES:
+                from workbench.gap_review import pending_count
+                count=pending_count(self.store,audit,self._tf_var.get())
+                self.btn_integrity.configure(text=f'缺口处理 {count}' if count else '缺口分类')
                 self.btn_integrity.pack(side=tk.LEFT,padx=3,after=self.btn_sync)
             else:
                 self.btn_integrity.pack_forget()
@@ -757,44 +756,44 @@ class ToolBar(ttk.Frame):
 
     # ---- 动作（提交 service 任务 + 状态栏实时反馈）----
     def _show_tickflow_integrity(self):
-        if self.store is None or market_source(self.store) not in FALLBACK_SOURCES:
+        if self.store is None or market_source(self.store) not in SOURCES:
             return
-        import json
         source=market_source(self.store)
-        rows=self.store.rows('SELECT value FROM meta WHERE key=?',(source+'_integrity',))
-        if not rows:
-            self.set_status('请先更新所选来源行情，结束后会生成完整性回执与补拉列表')
-            return
-        report=json.loads(rows[0]['value'])
-        if 'unchanged_repair_codes' not in report:
-            # Upgrade an old receipt read-only; do not force another bulk pull
-            # just to explain the user's previous unchanged repair operation.
-            from workbench.market import latest_datasets
-            from workbench.repair_outcomes import unchanged_repairs
-            records={r['code']:r for r in latest_datasets(self.store,source)}
-            report['unchanged_repair_codes']=unchanged_repairs(self.store,source,report['asof'],records)
-        from workbench.tickflow_integrity import integrity_view
+        from workbench.gap_review import review_receipt
         from workbench.readiness import expected_day
         from workbench.market import completed_date
         try:
             day=expected_day(self.store,completed_date(),source)
-            report=integrity_view(report,self._tf_var.get(),self._selected_boards(),day)
+            report=review_receipt(self.store,source,self._selected_boards(),day,self._tf_var.get())
         except ValueError as exc:
             self.set_status(str(exc))
             return
         from .tickflow_integrity import show_integrity
-        show_integrity(self,report,self._repair_tickflow)
+        def repair_selected(codes,timeframe,include_history):
+            if market_source(self.store)!=source:
+                raise ValueError('数据源已切换，请重新打开当前来源的缺口分类')
+            return self._repair_tickflow(codes,timeframe,include_history)
+        show_integrity(self,report,repair_selected,store=self.store,on_changed=self._gap_decisions_changed)
+
+    def _gap_decisions_changed(self):
+        self._load_market_status()
+        from workbench.gap_review import pending_count
+        audit=self._tickflow_audit
+        count=pending_count(self.store,audit,self._tf_var.get())
+        ignored=len(audit.get('gaps',[]))-count
+        self.set_status(f"缺口处理已保存：待处理 {count} 只 · 已忽略 {ignored} 只 · 可扫描 {audit.get('ready',0)} 只；仍只扫描数据合格股票")
 
     def _repair_tickflow(self,codes,timeframe=None,include_history=False):
-        if self._job_id or not codes or market_source(self.store) not in FALLBACK_SOURCES:
-            self.set_status('补拉未开始：请等待当前任务结束，并保持所选备用源')
-            return
+        if self._job_id or not codes or market_source(self.store) not in SOURCES:
+            self.set_status('补拉未开始：请等待当前任务结束，并保持所选数据源')
+            return False
         self._auto_scan_after_sync=False
         source=market_source(self.store)
         tf=timeframe or self._tf_var.get()
         self._submit_job('sync','更新行情',dict(source=source,boards=self._selected_boards(),
             start=sync_start_date(self.store,include_history,tf),end=None,force=False,repair_codes=codes,
             scan_timeframe=tf,repair_scope='history' if include_history else 'scan'))
+        return bool(self._job_id)
 
     def _source_changed(self,event=None):
         if self.store is None:
@@ -1064,7 +1063,9 @@ class ToolBar(ttk.Frame):
         self.set_status(text)
         if kind == '更新行情' and r.get('integrity'):
             i=r['integrity']
-            self.set_status(text+f"；可扫描 {i['scan']['ready']}/{i['scan']['expected']} · 数据未齐 {len(i['scan']['gaps'])} 只暂不扫描，点击「完整性 / 补拉」")
+            from workbench.gap_review import pending_count
+            count=pending_count(self.store,i['scan'],self._tf_var.get())
+            self.set_status(text+f"；可扫描 {i['scan']['ready']}/{i['scan']['expected']} · 待处理 {count} 只，点击「缺口分类」")
         if self._on_job_finished:
             try:
                 self._on_job_finished(kind, status)

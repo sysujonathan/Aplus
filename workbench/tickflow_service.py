@@ -8,6 +8,7 @@ from .sources import coverage_state
 from .store import dumps
 from .sync import sync_stock
 from .provider_guard import ProviderGuard, ProviderError, error_detail
+from .sync_progress import sync_progress
 
 
 def sync_tickflow(service, job, spec):
@@ -76,7 +77,7 @@ def sync_tickflow(service, job, spec):
                     report['errors'].append(dict(code=code,error=str(exc)))
                 report['processed'] += 1
                 if report['processed'] % 10 == 0:
-                    service.progress(job,report['processed'],len(codes),'TickFlow 后台核验已有快照与历史缺口')
+                    service.progress(job,report['processed'],len(codes),sync_progress('tickflow','cached',code))
                     service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
                 continue
             # First source switch takes a full same-source history, never a BaoStock tail.
@@ -84,13 +85,16 @@ def sync_tickflow(service, job, spec):
             right=max(end,state['end']) if state else end
             if state and not spec.get('force') and code not in repair and start>=state['start']:
                 left=state['end']
-            groups.setdefault((left,right),[]).append(code)
+            operation=('repair' if spec.get('force') or code in repair else
+                       'history' if not state else 'tail' if left==state['end'] else 'prefix')
+            groups.setdefault((left,right,operation),[]).append(code)
         stopped=False
-        for (left,right),group in groups.items():
+        for (left,right,operation),group in groups.items():
             for offset in range(0,len(group),100):
                 service.check_stop(job)
                 batch=group[offset:offset+100]
-                service.progress(job,report['success'],len(codes),f'TickFlow 批量获取 {len(batch)} 只 · {left}～{right}')
+                service.progress(job,report['processed'],len(codes),
+                                 sync_progress('tickflow',operation,f'{len(batch)}只',left,right))
                 try:
                     batch_started=time.monotonic()
                     provider.preload(batch,left,right)
@@ -109,8 +113,11 @@ def sync_tickflow(service, job, spec):
                         if code in repair:
                             from .tickflow_repair import restore_corrupt_snapshot
                             restore_corrupt_snapshot(service.store,provider,code,left,right,job)
+                        def requesting(op,a,b):
+                            service.progress(job,report['processed'],len(codes),sync_progress('tickflow',op,code,a,b))
                         did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
-                                              spec.get('force',False) or code in repair,source='tickflow',batch_writes=True)
+                                              spec.get('force',False) or code in repair,source='tickflow',batch_writes=True,
+                                              on_request=requesting)
                         report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
                     except (ProviderError,TimeoutError) as exc:
                         state=ProviderGuard(service.store,'tickflow').failure(exc)
@@ -121,8 +128,8 @@ def sync_tickflow(service, job, spec):
                     except (ValueError,OSError) as exc:
                         report['errors'].append(dict(code=code,error=str(exc)))
                     report['processed'] += 1
-                    service.progress(job,report['success']+len(report['errors']),len(codes),
-                                  f"TickFlow 已保存 {report['success']}/{len(codes)} · 缺口 {len(report['errors'])}")
+                    # Keep the actual operation/range visible while saving,
+                    # rather than replacing it with a generic target range.
                     service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
                 # Includes any same-source full-history refresh triggered by a
                 # changed overlap; do not mislabel all of this as pure disk IO.
