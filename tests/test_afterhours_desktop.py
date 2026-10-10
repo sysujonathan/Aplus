@@ -1,6 +1,7 @@
 """Real Tk layout and interaction on Windows; Linux CI runs pure engine tests."""
 import os
 import gc
+import time
 import tkinter as tk
 from unittest.mock import Mock, patch
 
@@ -147,6 +148,13 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         assert page.list_host.winfo_width() / page.review.winfo_width() > .95
         page._toggle_list()
         window.update()
+        # Windows MapNotify can arrive after the first update following a grid
+        # rearrangement. Await the real mapping, not an arbitrary long sleep;
+        # keep the original mapping/size assertions and a bounded failure.
+        deadline = time.monotonic() + 2
+        while not page.preview_host.winfo_ismapped() and time.monotonic() < deadline:
+            window.after(10)
+            window.update()
         assert page.preview_host.winfo_ismapped()
         assert .25 < page.list_host.winfo_width() / page.review.winfo_width() < .65
         from copy import deepcopy

@@ -25,12 +25,13 @@ def test_long_status_has_its_own_row_when_controls_do_not_fit(width, row):
     toolbar.status_label = Mock()
     toolbar.timing_label = Mock()
     toolbar._status_required_width = Mock(return_value=900)
+    toolbar._fit_status = Mock()
     ToolBar._responsive(toolbar, SimpleNamespace(widget=toolbar, width=width))
     assert toolbar.status_panel.grid.call_args.kwargs["row"] == row
     if row:
         assert toolbar.status_panel.grid.call_args.kwargs["column"] == 0
         assert toolbar.status_panel.grid.call_args.kwargs["columnspan"] == 4
-    toolbar.status_label.configure.assert_called_once_with(wraplength=width-40)
+    toolbar._fit_status.assert_called_once()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows native Tk layout")
@@ -72,17 +73,28 @@ def check_native_status(root, width, scaling):
         root.deiconify()
         for _ in range(3):
             root.update()
-        # No root resize: only the quote/status content and repair button change.
-        text = ("TickFlow · 行情最新 2026-10-08 ✓ · 信号最新 2026-09-30 ⚠待扫描"
-                " · 主板 1275/3459 · 排除 2184")
-        toolbar._header_data_var.set(text)
-        toolbar._timing_var.set("行情用时 31分24秒 · 扫描用时 进行中 8分56秒")
-        toolbar.btn_integrity.configure(text="⚠ 核验 2184 / 补拉")
         toolbar.btn_integrity.pack(side=tk.LEFT, padx=3, after=toolbar.btn_sync)
-        for _ in range(3):
-            root.update()
+        geometry = []
+        chart = ttk.Frame(root)
+        chart.pack(fill=tk.BOTH, expand=True)
+        for source, count, running in (('腾讯', 0, False), ('TickFlow', 352, False),
+                                        ('BaoStock', 9999, True), ('腾讯', 0, False)):
+            text = f'{source} · 行情 2026-10-09 ✓ · 信号 2026-09-30 ⚠待扫描 · 主板 {count}/9999'
+            toolbar._header_data_var.set(text)
+            toolbar._timing_var.set('行情用时 进行中 999分59秒 · 扫描用时 8分56秒' if running else
+                                    '行情用时 — · 扫描用时 —')
+            toolbar.btn_integrity.configure(text=f'缺口处理 {count}' if count else '缺口分类')
+            toolbar.btn_stop.configure(state=tk.NORMAL if running else tk.DISABLED)
+            for _ in range(3):
+                root.update()
+            geometry.append((toolbar.winfo_height(), int(toolbar.status_panel.grid_info()['row']), chart.winfo_height()))
+            assert toolbar._status_tips[0].text == text
+            assert toolbar.status_label.cget('wraplength') == 0
+            assert toolbar.timing_label.cget('wraplength') == 0
+        assert len(set(geometry)) == 1, (width, scaling, geometry)
         label = toolbar.status_label
-        assert label.cget("text") == text  # No truncation or changed count semantics.
+        assert label.cget('text') == text or '…' in label.cget('text')
+        assert toolbar._header_data_var.get() == text  # Original counts retained.
         for widget in (toolbar.status_panel, label, toolbar.timing_label):
             left = widget.winfo_rootx() - toolbar.winfo_rootx()
             assert left >= 0 and left + widget.winfo_width() <= toolbar.winfo_width()
@@ -92,9 +104,15 @@ def check_native_status(root, width, scaling):
                      (toolbar.header, toolbar.actions, toolbar.filters)) + 40
         if width < needed + toolbar._status_required_width():
             assert int(toolbar.status_panel.grid_info()["row"]) > 0
-        # Short text can move back; wrapping must not permanently force extra rows.
+        # Neither shorter text nor exceptionally long details alter geometry.
         toolbar._header_data_var.set("主板 3459/3459")
         root.update()
+        assert toolbar.winfo_height() == geometry[-1][0]
+        toolbar._header_data_var.set('BaoStock · ' + '完整状态说明 ' * 100 + '主板 3459/3459')
+        root.update()
+        assert toolbar.winfo_height() == geometry[-1][0]
+        assert toolbar.status_label.cget('text').endswith('主板 3459/3459')
+        chart.destroy()
     finally:
         if toolbar is not None:
             toolbar.destroy()

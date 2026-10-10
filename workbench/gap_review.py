@@ -1,10 +1,9 @@
 """Source-neutral gap presentation. Decisions never certify or alter prices/gates."""
-import csv
 import json
-from pathlib import Path
 
 from .sources import SOURCES, FALLBACK_SOURCES, directory_file, calendar_file
 from .store import digest, dumps
+from .security_evidence import csv_rows, load_identity_facts, read_baostock_dated_directory
 
 GROUPS = {
     'history': '历史缺日待核验',
@@ -16,28 +15,14 @@ GROUPS = {
     'outside': '更早历史（不影响当前扫描）',
 }
 STATES = {'pending': '待定', 'ignored': '已忽略统计', 'repair': '继续补拉'}
-IDENTITIES = {
-    'sh.601313': ('2018-02-28', '旧代码，已变更为601360（三六零）',
-                 'https://static.cninfo.com.cn/finalpage/2018-04-27/1204804713.PDF'),
-    'sz.002525': ('2011-04-11', '首次公开发行许可被撤销，非当前在市证券',
-                 'https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=694972&stockid=002525'),
-}
-
-
-def csv_rows(path):
-    try:
-        with Path(path).open(encoding='utf-8-sig', newline='') as stream:
-            return {r['code']: r for r in csv.DictReader(stream)}
-    except (OSError, ValueError, KeyError):
-        return {}
+IDENTITIES = load_identity_facts()
 
 
 def review_evidence(store, day, source):
     """Only dated security/status facts are shared, never OHLCV or coverage."""
     own = csv_rows(directory_file(store, source))
     # Exact-day files, not a mutable latest catalog with an unrelated date.
-    dated = store.root / f'directories/{day}.csv'
-    statuses = csv_rows(dated)
+    statuses, dated = read_baostock_dated_directory(store, day)
     basics_files = sorted(p for p in (store.root/'directories').glob('*-basics.csv')
                           if p.name[:10] <= day)
     basics_path = basics_files[-1] if basics_files else None

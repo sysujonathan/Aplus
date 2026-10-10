@@ -389,6 +389,7 @@ def test_toolbar_status_panel_is_not_hidden_by_responsive_layout():
     toolbar.status_label = Mock()
     toolbar.timing_label = Mock()
     toolbar._status_required_width = Mock(return_value=500)
+    toolbar._fit_status = Mock()
     toolbar.header.winfo_reqwidth.return_value = 100
     toolbar.actions.winfo_reqwidth.return_value = 700
     toolbar.filters.winfo_reqwidth.return_value = 400

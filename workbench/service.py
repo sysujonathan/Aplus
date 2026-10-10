@@ -131,27 +131,35 @@ class Service:
         start = spec['start']
         if start > end:
             raise ValueError('同步开始日期不能晚于已完成行情日期')
+        scope_reused = False
         if 'boards' in spec:
             if not spec['boards']:
                 raise ValueError('请至少勾选一个板块')
-            self.progress(job,0,1,'核对交易日历和当日股票目录')
-            candidate = BaoStock()
-            candidate.cancel_event = self.cancel_flags[job]
-            with candidate:
-                # Public dates already certified locally need no repeat 36-year
-                # network query. The source's prices/connection remain isolated.
-                try:
-                    expected_day(self.store, end)
-                except ValueError:
-                    save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
-                end = expected_day(self.store, end)
-                directory = candidate.universe(end)
-                if directory.empty:
-                    raise ValueError('应有交易日股票目录为空，未开始下载')
-                self.progress(job,0,1,'自动核对新增上市、退市与停牌状态')
-                basics = candidate.basics()
-                save_directory(self.store, directory, end, job, basics=basics)
-            universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
+            from .repair_scope import cached_baostock_repair_scope
+            cached = cached_baostock_repair_scope(self.store, end) if spec.get('repair_codes') else None
+            if cached is not None:
+                end, universe = cached
+                scope_reused = True
+                self.progress(job,0,len(spec['repair_codes']),'复用已核验日历与目录，直接补拉所选股票')
+            else:
+                self.progress(job,0,1,'核对交易日历和当日股票目录')
+                candidate = BaoStock()
+                candidate.cancel_event = self.cancel_flags[job]
+                with candidate:
+                    # Public dates already certified locally need no repeat
+                    # 36-year query. Prices/connection remain isolated.
+                    try:
+                        expected_day(self.store, end)
+                    except ValueError:
+                        save_calendar(self.store, candidate.calendar('1990-12-19', end), '1990-12-19', end, job)
+                    end = expected_day(self.store, end)
+                    directory = candidate.universe(end)
+                    if directory.empty:
+                        raise ValueError('应有交易日股票目录为空，未开始下载')
+                    self.progress(job,0,1,'自动核对新增上市、退市与停牌状态')
+                    basics = candidate.basics()
+                    save_directory(self.store, directory, end, job, basics=basics)
+                universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
             codes = select_board_codes(universe,spec['boards'])
         else:
             codes = list(dict.fromkeys(spec['codes']))
@@ -166,6 +174,7 @@ class Service:
         report = {'source':source,'requested':len(codes),'success':0,'errors':[], 'datasets':[], 'end_requested':end,
                   'skipped':0,'downloaded':0,'updated':0,'refreshed':0,'suspended':0}
         report['boards'] = spec.get('boards',[])
+        report['scope_reused'] = scope_reused
         suspended = set()
         if 'boards' in spec and 'tradeStatus' in universe.columns:
             suspended = set(universe.loc[universe.tradeStatus.astype(str) == '0', 'code'])

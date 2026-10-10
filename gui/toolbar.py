@@ -5,6 +5,7 @@ from datetime import date
 import time
 import tkinter as tk
 import ttkbootstrap as ttk
+from ttkbootstrap.widgets import ToolTip
 
 from .theme import MUTED
 from workbench.sources import market_source, set_market_source, SOURCES, FALLBACK_SOURCES
@@ -278,9 +279,9 @@ class ToolBar(ttk.Frame):
             actions, text="更新行情", command=self._on_sync, bootstyle="primary", cursor="hand2"
         )
         self.btn_sync.pack(side=tk.LEFT, padx=5)
-        self.btn_integrity = ttk.Button(actions, text='完整性 / 补拉', command=self._show_tickflow_integrity,
+        self.btn_integrity = ttk.Button(actions, text='完整性 / 补拉', width=12, command=self._show_tickflow_integrity,
                                         bootstyle='warning-outline', cursor='hand2')
-        # Only shown for TickFlow, leaving the original source's workflow intact.
+        # Shared integrity entry; only UI preferences vary by source.
         ttk.Separator(actions, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=(8, 8), pady=3
         )
@@ -316,6 +317,8 @@ class ToolBar(ttk.Frame):
         )
         self.btn_scan.pack(side=tk.LEFT, padx=5)
         self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, bootstyle="danger")
+        self.btn_stop.pack(side=tk.LEFT, padx=5)
+        self.btn_stop.configure(state=tk.DISABLED)
         sync_menu = tk.Menu(self, tearoff=0)
         sync_menu.add_checkbutton(label="完整历史（2016 年起）", variable=self.full_history_var)
         self.btn_sync.bind("<Button-3>", lambda e: sync_menu.tk_popup(e.x_root, e.y_root))
@@ -396,7 +399,7 @@ class ToolBar(ttk.Frame):
         self.status_panel.grid(row=0, column=3, sticky=tk.E, padx=(12, 6))
         self.status_label = ttk.Label(
             self.status_panel,
-            textvariable=self._header_data_var,
+            width=1,
             font=("Microsoft YaHei UI", 9),
             foreground=_LABEL_FG,
             anchor=tk.E,
@@ -405,13 +408,15 @@ class ToolBar(ttk.Frame):
         self.status_label.pack(anchor=tk.E, fill=tk.X)
         self.timing_label = ttk.Label(
             self.status_panel,
-            textvariable=self._timing_var,
+            width=1,
             font=("Consolas", 9),
             foreground=_LABEL_FG,
             anchor=tk.E,
         )
         self.timing_label.configure(justify=tk.RIGHT)
         self.timing_label.pack(anchor=tk.E, fill=tk.X)
+        self._status_tips = [ToolTip(label, text='', wraplength=900) for label in
+                             (self.status_label, self.timing_label)]
         self._layout_traces = [
             (value, value.trace_add("write", self._queue_responsive))
             for value in (self._header_data_var, self._timing_var)
@@ -434,16 +439,40 @@ class ToolBar(ttk.Frame):
         for value, trace in self._layout_traces:
             value.trace_remove("write", trace)
         self._layout_traces = []
+        for tip in self._status_tips:
+            tip.leave()
 
     def _status_required_width(self):
-        # Measure unwrapped text; a previous narrow layout must not certify fit.
+        # Fixed font-aware budget: source, dates, counts and task state never
+        # change the breakpoint (and therefore the chart's available height).
         return max(
             int(self.tk.call("font", "measure", label.cget("font"),
                              "-displayof", self._w, line))
-            for label, value in ((self.status_label, self._header_data_var),
-                                 (self.timing_label, self._timing_var))
-            for line in value.get().split("\n")
+            for label, line in (
+                (self.status_label, 'BaoStock · 行情 2099-12-31 ✓ · 信号 2099-12-31 ⚠待扫描 · 主板 9999/9999'),
+                (self.timing_label, '行情用时 进行中 999分59秒 · 扫描用时 进行中 999分59秒'))
         ) + 8
+
+    def _fit_status(self, budget):
+        for label, value, tip in zip((self.status_label, self.timing_label),
+                                     (self._header_data_var, self._timing_var), self._status_tips):
+            raw = value.get()
+            text = raw.replace('\n', ' · ')
+            measure = lambda s: int(self.tk.call('font', 'measure', label.cget('font'), '-displayof', self._w, s))
+            # Only exceptionally narrow windows elide; keep the source and final
+            # counts visible. Hover always shows the complete, unchanged receipt.
+            if measure(text) > budget:
+                low, high = 0, len(text)
+                while low < high:
+                    n = (low + high + 1) // 2
+                    candidate = text[:(n+1)//2] + '…' + (text[-(n//2):] if n//2 else '')
+                    if measure(candidate) <= budget:
+                        low = n
+                    else:
+                        high = n - 1
+                text = text[:(low+1)//2] + '…' + (text[-(low//2):] if low//2 else '')
+            label.configure(text=text, wraplength=0)
+            tip.text = raw
 
     def _responsive(self, event=None):
         if event is not None and event.widget is not self:
@@ -456,13 +485,12 @@ class ToolBar(ttk.Frame):
         status_width = self._status_required_width()
         # All controls and status fit on one row, otherwise status owns a full row.
         # Never place a long status beside the timeframe buttons in a narrow row.
-        wrap = max(1, width - 40)
-        self.status_label.configure(wraplength=wrap)
-        self.timing_label.configure(wraplength=wrap)
+        budget = max(1, width - 40)
         if width >= needed + status_width:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
             self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
-            self.status_panel.grid(row=0, column=3, columnspan=1, sticky=tk.E, pady=0)
+            self.status_panel.grid(row=0, column=3, columnspan=1, sticky=tk.EW, pady=0)
+            budget = max(1, width - needed - 18)
         elif width >= needed:
             self.actions.grid(row=0, column=1, columnspan=1, sticky=tk.W, pady=0)
             self.filters.grid(row=0, column=2, columnspan=1, sticky=tk.W, pady=0)
@@ -475,6 +503,7 @@ class ToolBar(ttk.Frame):
             self.actions.grid(row=1, column=0, columnspan=4, sticky=tk.W, pady=(6, 0))
             self.filters.grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=(5, 0))
             self.status_panel.grid(row=3, column=0, columnspan=4, sticky=tk.EW, pady=(4, 0))
+        self._fit_status(budget)
 
     def _explain_ai(self):
         from tkinter import messagebox
@@ -924,6 +953,7 @@ class ToolBar(ttk.Frame):
             self._scan_elapsed = None
         self._refresh_timing_status(running_elapsed=0)
         self.btn_stop.pack(side=tk.LEFT, padx=5, after=self.btn_scan)
+        self.btn_stop.configure(state=tk.NORMAL)
         for button in (
             self.btn_auto,
             self.btn_sync,
@@ -995,7 +1025,7 @@ class ToolBar(ttk.Frame):
         self._job_id = None
         self._job_kind = ""
         self._job_started_at = None
-        self.btn_stop.pack_forget()
+        self.btn_stop.configure(state=tk.DISABLED)
         for btn in (
             self.btn_auto,
             self.btn_sync,
