@@ -94,9 +94,9 @@ def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='
     from .repair_outcomes import unchanged_repairs
     result['unchanged_repair_codes']=unchanged_repairs(store,source,asof,records)
     calendar = calendar_of(store,source)
-    from .suspensions import announcement_evidence
+    from .trading_status import halt_evidence
     for code in sorted(codes):
-        days,proof=announcement_evidence(code,asof,asof)
+        days,proof=halt_evidence(store,code,asof,asof)
         if days:
             result['current_halts'].append(dict(code=code,evidence=proof))
     for code, record in records.items():
@@ -116,7 +116,7 @@ def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='
     candidates = {g['code'] for g in result['excluded'] if g['code'] in codes}
     candidates.update(g['code'] for g in result['unknown_history'])
     candidates.update(g.get('code') for g in errors if g.get('code') in codes)
-    result['repair_codes'] = sorted(c for c in candidates if asof not in announcement_evidence(c,asof,asof)[0])
+    result['repair_codes'] = sorted(c for c in candidates if asof not in halt_evidence(store,c,asof,asof)[0])
     # Too few bars is not a missing-price problem; redownloading a new listing
     # cannot manufacture the 125 bars required by the unchanged strategy engine.
     immature = {g['code'] for g in audit['gaps'] if g.get('category') == 'insufficient_bars'}

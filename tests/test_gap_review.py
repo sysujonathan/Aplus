@@ -172,7 +172,8 @@ def test_baostock_targeted_repair_keeps_original_single_connection(store,monkeyp
         calls.append((list(args[2]),args[6],args[9]))
         yield from ()
     monkeypatch.setattr('workbench.service.sync_results',fake_results)
-    service=SimpleNamespace(store=store,cancel_flags={'test':Event()},progress=lambda *a:None)
+    service=SimpleNamespace(store=store,cancel_flags={'test':Event()},progress=lambda *a:None,
+                            check_stop=lambda *a:None)
     report=Service._sync(service,'test',dict(source='baostock',boards=['沪深主板'],start=first,end=last,
                                            repair_codes=['sh.600000'],force=False))
     assert calls==[(['sh.600000'],True,1)] and report['requested']==1
@@ -237,16 +238,16 @@ def check_native_review():
         buttons={str(w.cget('text')):w for w in widgets if isinstance(w,ttk.Button)}
         root.update(); assert all(not tree.item(iid,'open') for iid in tree.get_children())
         assert not any(isinstance(w,tk.Text) for w in widgets)
-        tree.selection_set('group:history'); root.update(); buttons['忽略统计'].invoke(); root.update()
+        tree.selection_set('group:history'); root.update(); buttons['忽略提醒'].invoke(); root.update()
         assert tree.item('group:history','values')[1]=='0'
         buttons['待定／恢复统计'].invoke(); root.update(); assert tree.item('group:history','values')[1]=='1'
         tree.selection_set('group:identity'); root.update()
         repair=next(w for w in buttons.values() if str(w.cget('text')).startswith('继续补拉'))
         assert repair.instate(['disabled']) and calls==[]
-        buttons['忽略统计'].invoke(); root.update(); window.destroy()
+        buttons['忽略提醒'].invoke(); root.update(); window.destroy()
         window=show_integrity(root,view,lambda *a:calls.append(a),store=st); root.update()
         tree=next(w for w in descendants(window) if isinstance(w,ttk.Treeview))
-        assert tree.item('group:identity','values')[2]=='已忽略统计'
+        assert tree.item('group:identity','values')[2]=='已忽略提醒'
         for width in (650,1000):
             window.geometry(f'{width}x590'); root.update()
             for widget in descendants(window):

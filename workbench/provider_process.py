@@ -142,6 +142,9 @@ class BaoStock:
     def basics(self):
         return self._query('basics',[])
 
+    def trading_status(self, code, start, end):
+        return self._query('trading_status', [code, start, end])
+
     def __exit__(self,*exc):
         try:
             if self.process is not None and not self.cancel_event.is_set():

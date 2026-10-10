@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .backtest import Assumptions, run_study, summarize
-from .market import BaoStock, completed_date, load_dataset, save_dataset, validate_bars, select_board_codes
+from .market import BaoStock, completed_date, load_dataset, save_dataset, validate_bars, select_board_codes, latest_datasets
 from .store import ROOT, digest, dumps, now
 from .strategies import (calculate, catalog, prepare, prepare_indicators, scan_engine_version,
                          signal_at_end, verify_frozen)
@@ -32,7 +32,7 @@ def merge_scan_reports(previous, current):
         merged[key] = previous.get(key,[]) + current.get(key,[])
     merged['strategy_versions'] = dict(previous.get('strategy_versions',{}), **current.get('strategy_versions',{}))
     coverage = current.get('coverage')
-    if coverage and coverage.get('source') in FALLBACK_SOURCES and current.get('timeframe'):
+    if coverage and coverage.get('source') in SOURCES and current.get('timeframe'):
         merged['coverage_by_timeframe'] = dict(previous.get('coverage_by_timeframe',{}),
                                                **{current['timeframe']:coverage})
     return merged
@@ -48,7 +48,7 @@ class Service:
                       "WHERE status IN ('queued','running')", (now(),))
 
     def submit(self, kind, spec):
-        if kind not in {'sync','scan','backtest','validate','universe'}:
+        if kind not in {'sync','scan','backtest','validate','universe','verify_status'}:
             raise ValueError('未知任务类型')
         if kind in {'scan','backtest','validate'}:
             verify_frozen()
@@ -90,7 +90,9 @@ class Service:
         except Exception as exc:
             source=spec.get('source','baostock')
             detail=error_detail(exc,source)
-            if kind=='sync' and isinstance(exc,(ProviderError,TimeoutError)):
+            if kind in ('sync','verify_status') and isinstance(exc,(ProviderError,TimeoutError)):
+                if kind == 'verify_status':
+                    source = 'baostock'
                 detail['cooldown']=ProviderGuard(self.store,source).failure(exc)
             self.store.event(job,'任务异常',**detail,traceback=traceback.format_exc())
             self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps({'errors':[detail],'stop_reason':str(exc),'source':source}),job))
@@ -102,6 +104,10 @@ class Service:
     def check_stop(self, job):
         if self.cancel_flags[job].is_set():
             raise InterruptedError('任务已停止；已保存的记录保留，但不宣称全部完成')
+
+    def _verify_status(self, job, spec):
+        from .status_review import review_job
+        return review_job(self, job, spec)
 
     def _universe(self, job,spec):
         provider = BaoStock()
@@ -232,6 +238,15 @@ class Service:
         if 'boards' in spec:
             audit = audit_scope(self.store, spec['boards'], end, source=source)
             report['coverage'] = audit
+            scan_audit = audit_scope(self.store, spec['boards'], end, source=source,
+                timeframe=spec.get('scan_timeframe','daily'), verify_files=True,
+                check_stop=lambda:self.check_stop(job))
+            report['scan_readiness'] = scan_audit
+            from .history_quality import save_cached_quality
+            save_cached_quality(self.store, [r['id'] for r in latest_datasets(self.store,source)], end)
+            if not scan_audit['complete']:
+                known = {e['code'] for e in report['errors']}
+                report['errors'].extend(g for g in scan_audit['gaps'] if g['code'] not in known)
             if not audit['complete']:
                 report.setdefault('stop_reason',f"已处理不等于数据已齐：应有 {audit['expected']} 只，就绪 {audit['ready']} 只，确认停牌 {audit['suspended']} 只；请查看缺口")
                 existing = {e['code'] for e in report['errors']}
@@ -263,10 +278,10 @@ class Service:
                 self.progress(job,0,0,f'扫描前核验 {tf} 行情完整性；不联网补拉')
                 audits[tf] = audit_scope(self.store,spec['boards'],min(spec['asof'],completed_date()),
                     spec['datasets'],source=spec['source'],timeframe=tf,
-                    verify_files=spec['source'] in FALLBACK_SOURCES,check_stop=lambda:self.check_stop(job),
+                    verify_files=True,check_stop=lambda:self.check_stop(job),
                     progress=lambda n,count,code:self.progress(job,n,count,f'扫描前核验 {tf} · {code}'))
                 total += len(audits[tf]['eligible_ids']) * len(keys)
-            if spec['source'] in FALLBACK_SOURCES:
+            if spec['source'] in SOURCES:
                 self.check_stop(job)
                 from .history_quality import save_cached_quality
                 save_cached_quality(self.store,spec['datasets'],min(spec['asof'],completed_date()))
@@ -277,7 +292,7 @@ class Service:
                                     coverage=audits.get(tf))
             aggregate = merge_scan_reports(aggregate,report)
             if report.get('coverage') and not report['coverage']['scan_allowed']:
-                if spec.get('source') not in FALLBACK_SOURCES or not report['coverage']['scope_valid']:
+                if not report['coverage']['scope_valid']:
                     break
         aggregate['timeframes'] = periods
         return aggregate
@@ -292,13 +307,15 @@ class Service:
                 self.progress(job,0,0,'扫描前核验行情完整性；不联网补拉')
                 coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'],
                                        source=spec.get('source'),timeframe=spec['timeframe'],
-                                       verify_files=spec.get('source') in FALLBACK_SOURCES,
+                                       verify_files=True,
                                        check_stop=lambda:self.check_stop(job),
                                        progress=lambda n,count,code:self.progress(job,n,count,f'扫描前核验 · {code}'))
             if not coverage['scan_allowed']:
                 return {'success': 0, 'signals': 0, 'errors': coverage['gaps'], 'coverage': coverage,
                         'timeframe': spec['timeframe'],
                         'observation_ids': [], 'stop_reason': '行情范围或日期未齐，已拦截扫描；先到市场数据补齐缺口'}
+            from .history_quality import save_cached_quality
+            save_cached_quality(self.store,spec['datasets'],min(spec['asof'], completed_date()))
             spec = dict(spec, datasets=coverage['eligible_ids'])
             if not spec['datasets']:
                 return {'success': 0, 'signals': 0, 'errors': [], 'coverage': coverage,

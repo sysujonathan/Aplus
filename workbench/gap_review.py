@@ -14,7 +14,7 @@ GROUPS = {
     'other': '其他核验问题',
     'outside': '更早历史（不影响当前扫描）',
 }
-STATES = {'pending': '待定', 'ignored': '已忽略统计', 'repair': '继续补拉'}
+STATES = {'pending': '待定', 'ignored': '已忽略提醒', 'repair': '继续补拉'}
 IDENTITIES = load_identity_facts()
 
 
@@ -137,8 +137,15 @@ def pending_count(store, audit, timeframe):
 
 def review_summary(review):
     action = '可直接扫描已齐标的' if review['scan_allowed'] else '扫描前仍需通过原完整性检查'
-    return (f"可扫描 {review['ready']} 只 · 待处理 {review['pending']} 只 · 已忽略 {review['ignored']} 只\n"
-            + action + '；忽略仅移出待处理统计，缺口股票仍不参与扫描。')
+    return (f"可扫描 {review['ready']} 只 · 暂不扫描 {review['excluded']} 只 · 待处理 {review['pending']} 只 · 已忽略提醒 {review['ignored']} 只\n"
+            + action + '；忽略仅移出待处理统计，不改变扫描资格。')
+
+
+def status_review_selection(review, selections):
+    return sorted({r['code'] for r in review_selection(review, selections)
+                   if r['blocked'] and r['raw'].get('category') in ('input_gap','stale_tail')
+                   and r['code'].startswith(('sh.','sz.'))
+                   and r['group'] not in ('halt','identity','short')})
 
 
 def review_selection(review, selections):

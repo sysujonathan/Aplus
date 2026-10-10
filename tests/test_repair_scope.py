@@ -82,7 +82,8 @@ def test_service_repair_reuses_certified_scope_only_and_preserves_gate(store, mo
     monkeypatch.setattr('workbench.service.BaoStock', Fake)
     monkeypatch.setattr('workbench.service.sync_results', results)
     monkeypatch.setattr('workbench.service.completed_date', lambda: DAY)
-    service = SimpleNamespace(store=store, cancel_flags={'repair': Event()}, progress=lambda *a: progress.append(a))
+    service = SimpleNamespace(store=store, cancel_flags={'repair': Event()},
+                              progress=lambda *a: progress.append(a), check_stop=lambda *a:None)
     spec = dict(source='baostock', boards=['沪深主板'], start='2026-10-08', end=DAY)
     if repair is not None: spec['repair_codes'] = repair
     if repair == ['sh.600999']:

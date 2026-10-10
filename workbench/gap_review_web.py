@@ -1,7 +1,7 @@
 """Web uses the same classifications, issue keys and decisions as desktop."""
 import streamlit as st
 from .gap_review import (classify_review, review_receipt, review_evidence, review_summary,
-                         review_selection, repair_selection)
+                         review_selection, repair_selection, status_review_selection)
 from .readiness import expected_day
 from .sources import SOURCES
 
@@ -32,7 +32,7 @@ def render_gap_review(store, service, source, boards, day, periods, begin, busy)
                 key=f'gap_stocks_{source}_{tf}', disabled=busy)
         issues = review_selection(review, selection)
         a, b, c = st.columns(3)
-        for column, label, action in ((a, '忽略统计', 'ignored'), (b, '待定／恢复统计', 'pending')):
+        for column, label, action in ((a, '忽略提醒', 'ignored'), (b, '待定／恢复统计', 'pending')):
             if column.button(label, disabled=busy or not issues, key='gap_'+action):
                 store.set_gap_review_decisions(source, issues, action); st.rerun()
         repair = repair_selection(review, selection)
@@ -44,6 +44,16 @@ def render_gap_review(store, service, source, boards, day, periods, begin, busy)
             try:
                 service.submit('sync', spec)
                 store.set_gap_review_decisions(source, [r for r in issues if r['code'] in repair and r['repairable'] and r['state'] != 'ignored'], 'repair')
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+        status_codes = status_review_selection(review, selection)
+        consent = st.checkbox('确认只查询BaoStock交易状态，不下载价格，证据供三源复用', key='gap_status_consent', disabled=busy)
+        retry_status = st.checkbox('重查上次未返回明确状态的缺日', key='gap_status_retry', disabled=busy)
+        if st.button(f'核验缺日（{len(status_codes)} 只）', key='gap_verify_status', disabled=busy or not status_codes or not consent):
+            try:
+                service.submit('verify_status', dict(source=source, boards=boards, asof=stamp,
+                    timeframe=tf, codes=status_codes, retry=retry_status))
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))

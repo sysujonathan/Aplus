@@ -111,7 +111,7 @@ def format_header_data_status(market_date, signal_date, boards, audit):
     expected = int((audit or {}).get("expected") or 0)
     ready = int((audit or {}).get("ready") or 0)
     coverage = f"{scope} {ready}/{expected}" if expected > 0 else f"{scope} 待核验"
-    if (audit or {}).get('source') in FALLBACK_SOURCES and (audit or {}).get('gaps'):
+    if (audit or {}).get('source') in SOURCES and (audit or {}).get('gaps'):
         pending = sum(g.get('category') == 'quality_pending' for g in audit['gaps'])
         # The count already expresses usable/total. Details belong in the repair
         # entry; repeating exclusions here makes the persistent header wrap.
@@ -802,7 +802,15 @@ class ToolBar(ttk.Frame):
             if market_source(self.store)!=source:
                 raise ValueError('数据源已切换，请重新打开当前来源的缺口分类')
             return self._repair_tickflow(codes,timeframe,include_history)
-        show_integrity(self,report,repair_selected,store=self.store,on_changed=self._gap_decisions_changed)
+        def verify_selected(codes, timeframe, retry):
+            if self._job_id or market_source(self.store) != source:
+                return False
+            self._auto_scan_after_sync = False
+            self._submit_job('verify_status','核验缺日',dict(source=source,boards=self._selected_boards(),
+                codes=codes,timeframe=timeframe,asof=day,retry=retry))
+            return bool(self._job_id)
+        show_integrity(self,report,repair_selected,store=self.store,on_changed=self._gap_decisions_changed,
+                       on_verify=verify_selected)
 
     def _gap_decisions_changed(self):
         self._load_market_status()
@@ -1042,12 +1050,20 @@ class ToolBar(ttk.Frame):
             r = {}
         chain_scan = (
             self._auto_scan_after_sync and not self._auto_chain_cancelled and kind == '更新行情'
-            and (status == 'completed' or (status == 'partial' and r.get('source') in FALLBACK_SOURCES
+            and (status == 'completed' or (status == 'partial' and r.get('source') in SOURCES
                  and r.get('scan_readiness', {}).get('scan_allowed')))
         )
         if kind == '更新行情' and not chain_scan and status != 'completed':
             self._auto_scan_after_sync = False
-        if status == "completed" and kind == "扫描策略":
+        if kind == '核验缺日' and status in ('completed','partial'):
+            c = r.get('coverage', {})
+            marker = '✓' if status == 'completed' else '⚠'
+            text = (f"{marker} 缺日核验：确认停牌 {len(r.get('confirmed_halt', []))} 天 · "
+                    f"确认有交易 {len(r.get('traded', []))} 天 · 待定 {len(r.get('unknown', []))} 天；"
+                    f"可扫描 {c.get('ready',0)}/{c.get('expected',0)} 只，不下载价格")
+            if r.get('errors') or r.get('remaining'):
+                text += '；部分未核验，请查看回执'
+        elif status == "completed" and kind == "扫描策略":
             text = (f"✓ 扫描完成：命中 {r.get('signals', 0)} 个信号 · "
                     f"检查 {r.get('success', 0)} 项 · 复用 {r.get('reused', 0)}")
         elif status == "completed":
@@ -1058,7 +1074,7 @@ class ToolBar(ttk.Frame):
             head = (f"命中 {r.get('signals', 0)} 个信号" if kind == "扫描策略"
                     else f"已保存 {r.get('success', 0)} · 未下载 {r.get('remaining', 0)} · 数据未齐 {len(r.get('errors', []))}")
             text = f"⚠ {kind}部分完成：{head} —— {str(r.get('stop_reason', ''))[:44]}"
-            if kind == '扫描策略' and r.get('coverage', {}).get('source') in FALLBACK_SOURCES:
+            if kind == '扫描策略' and r.get('coverage', {}).get('source') in SOURCES:
                 c = r['coverage']
                 text = (f"⚠ 扫描部分完成：可扫描 {c['ready']}/{c['expected']} 只 · "
                         f"数据未齐 {len(c['gaps'])} 只暂不扫描 · 命中 {r.get('signals', 0)} 个信号（详情见回执）")

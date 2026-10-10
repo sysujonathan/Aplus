@@ -679,11 +679,11 @@ def test_raw_reference_provider_is_bounded_cancelable_and_never_changes_default_
         assert query.call_args.args == ("fetch", [CODE, "2026-09-29", "2026-09-30", "3"])
     direct = DirectBaoStock()
     direct.bs = Mock()
-    frame = bars().assign(tradestatus="1", code=CODE, adjustflag="3")
+    frame = bars().loc[lambda d:d.date.between('2026-09-29','2026-09-30')].assign(tradestatus="1", code=CODE, adjustflag="3")
     with patch.object(direct, "collect", return_value=frame):
         direct.fetch(CODE, "2026-09-29", "2026-09-30")
         assert direct.bs.query_history_k_data_plus.call_args.kwargs["adjustflag"] == "2"
-        assert direct.bs.query_history_k_data_plus.call_args.args[1] == "date,open,high,low,close,volume,tradestatus"
+        assert direct.bs.query_history_k_data_plus.call_args.args[1] == "date,open,high,low,close,volume,tradestatus,code"
         direct.fetch(CODE, "2026-09-29", "2026-09-30", "3")
         assert direct.bs.query_history_k_data_plus.call_args.kwargs["adjustflag"] == "3"
     for invalid in (frame.assign(code="sz.000001"), frame.assign(adjustflag="2")):

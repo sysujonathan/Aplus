@@ -30,7 +30,7 @@ def main():
                     result = getattr(provider,operation)(*request['args'])
                 elif vendor == 'tencent' and operation in {'history_page','directory_count','directory_page'}:
                     result = getattr(provider,operation)(*request['args'])
-                elif operation in {'fetch','universe','calendar','basics'}:
+                elif operation in {'fetch','universe','calendar','basics'} or (vendor == 'baostock' and operation == 'trading_status'):
                     frame = getattr(provider,operation)(*request['args'])
                     result = frame.to_dict(orient='records')
                     if operation == 'fetch':
