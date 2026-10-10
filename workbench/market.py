@@ -187,22 +187,33 @@ class DirectBaoStock:
     def basics(self):
         return self.collect(self.bs.query_stock_basic())
 
+    def trading_status(self, code, start, end):
+        from .trading_status import validate_status_rows
+        frame = self.collect(self.bs.query_history_k_data_plus(
+            code, 'date,code,tradestatus,volume', start_date=start, end_date=end,
+            frequency='d', adjustflag='3'), 'trading_status')
+        rows = validate_status_rows(code, start, end, frame.to_dict(orient='records'))
+        return pd.DataFrame(rows, columns=['date','code','tradestatus','volume'])
+
     def fetch(self, code, start, end, adjustflag='2'):
         # Research/sync keep their existing default. Holding charts explicitly
         # request raw prices in an isolated provider process, without saving them.
         if adjustflag not in ('2', '3'):
             raise ValueError('Unsupported adjustment')
-        fields = 'date,open,high,low,close,volume,tradestatus'
+        fields = 'date,open,high,low,close,volume,tradestatus,code'
         if adjustflag == '3':
-            fields += ',code,adjustflag'
+            fields += ',adjustflag'
         result = self.collect(self.bs.query_history_k_data_plus(
             code, fields, start_date=start,
             end_date=end, frequency='d', adjustflag=adjustflag))
         if adjustflag == '3' and not result.empty:
             if not result.code.eq(code).all() or not result.adjustflag.eq('3').all():
                 raise ValueError('不复权行情身份或复权口径不符')
+        from .trading_status import validate_status_rows
+        statuses = validate_status_rows(code, start, end, result.to_dict(orient='records'))
         evidence = {'returned_dates': result.date.tolist() if not result.empty else [],
-                    'suspended_dates': result.loc[result.tradestatus == '0', 'date'].tolist() if not result.empty else []}
+                    'suspended_dates': result.loc[result.tradestatus == '0', 'date'].tolist() if not result.empty else [],
+                    'trading_status_rows': statuses}
         if not result.empty:
             if not result.tradestatus.isin(['0', '1']).all():
                 raise ValueError('行情交易状态不明，拒绝静默丢弃 K 线')

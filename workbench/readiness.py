@@ -5,7 +5,7 @@ import pandas as pd
 
 from .market import latest_datasets, select_board_codes, board_of
 from .store import dumps
-from .sources import market_source, source_file, directory_file, directory_date, calendar_file, FALLBACK_SOURCES
+from .sources import market_source, source_file, directory_file, directory_date, calendar_file, FALLBACK_SOURCES, SOURCES
 
 
 def save_directory(store, directory, day, job=None, basics=None, retired_codes=None, source='baostock'):
@@ -159,8 +159,9 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
                 verify_files=False, check_stop=None, progress=None):
     """Cheap UI check; actual files still hash-validated before strategy execution.
 
-    Suspension is excused only by the directory for this exact trading day.
-    This gate establishes stock coverage and freshness, NOT every historical bar.
+    Current halts require this day's directory or explicit dated evidence.
+    A period scan checks the same real 300-bar input and 125-bar minimum for
+    all three sources. Unknown per-stock holes exclude only that stock.
     """
     source=source or market_source(store)
     report = {'expected': 0, 'ready': 0, 'suspended': 0, 'gaps': [], 'source':source,
@@ -185,13 +186,15 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             pending=json.loads(rows[0]['value']) if rows else {}
             if pending.get('day')==day:
                 pending_members=set(pending.get('codes',[]))
-        if source in FALLBACK_SOURCES:
+        if source in SOURCES:
             from .history_quality import calendar_of, quality_for, scan_window_issue
+            from .trading_status import refresh_status_index, halt_evidence
+            refresh_status_index(store, verify_files=verify_files)
             calendar = calendar_of(store, source)
             if timeframe is not None and timeframe not in ('daily', 'weekly'):
-                raise ValueError('备用源日常扫描只支持日线或周线')
+                raise ValueError('日常扫描只支持日线或周线')
         required_day = day
-        if source in FALLBACK_SOURCES and timeframe == 'weekly':
+        if source in SOURCES and timeframe == 'weekly':
             from datetime import date, timedelta
             current = date.fromisoformat(day)
             friday = (current-timedelta(days=(current.weekday()-4)%7)).isoformat()
@@ -206,7 +209,7 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             records = [r for r in records if r['id'] in ids]
         records = {r['code']: r for r in records if r['timeframe'] == 'daily'}
         qualities = None
-        if source in FALLBACK_SOURCES and timeframe is not None:
+        if source in SOURCES and timeframe is not None:
             # UI refresh must not open one SQLite connection per stock.
             keys = ['market_quality:'+r['id'] for r in records.values()]
             qualities = {}
@@ -223,9 +226,8 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
                 report['gaps'].append(dict(code=code,category='directory_pending',
                     error='本次公共目录未返回此身份；保留原范围，需核对目录，不自动认作退市或停牌'))
                 continue
-            if source in FALLBACK_SOURCES:
-                from .suspensions import announcement_evidence
-                if day in announcement_evidence(code, day, day)[0]:
+            if source in SOURCES:
+                if day in halt_evidence(store, code, day, day)[0]:
                     report['suspended'] += 1
                     continue
             if 'tradeStatus' in directory.columns and directory.loc[code, 'tradeStatus'] == '0':
@@ -246,14 +248,14 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             elif r['start'] > day:
                 reason = '所选日期尚无本地行情'
                 issue['category'] = 'missing_dataset'
-            if reason is None and source in FALLBACK_SOURCES and verify_files:
+            if reason is None and source in SOURCES and verify_files:
                 try:
                     from .market import verify_dataset
                     verify_dataset(store, r['id'], record=r)
                 except (OSError, ValueError) as exc:
                     reason = str(exc)
                     issue['category'] = 'invalid_file'
-            if reason is None and source in FALLBACK_SOURCES and timeframe is not None:
+            if reason is None and source in SOURCES and timeframe is not None:
                 try:
                     quality = quality_for(store, r, day, calendar, cache_only=history_cache_only,prefetched=qualities)
                     issue = scan_window_issue(quality, timeframe) or {}
@@ -268,7 +270,7 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
             if reason:
                 report['gaps'].append(dict(code=code, error=reason,
                                           **{k:v for k,v in issue.items() if k != 'error'})
-                                      if source in FALLBACK_SOURCES else {'code': code, 'error': reason})
+                                      if source in SOURCES else {'code': code, 'error': reason})
             else:
                 report['ready'] += 1
                 report['eligible_ids'].append(r['id'])
@@ -280,10 +282,10 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
         report['scope_valid'] = False
         report['gaps'].append({'code': '范围核验', 'error': str(exc)})
     report['complete'] = not report['gaps'] and report['expected'] > 0
-    # Only the independent fallback permits explicitly reported stock exclusions.
-    # A bad/stale directory or calendar still blocks the whole task.
-    report['scan_allowed'] = report['complete'] if source not in FALLBACK_SOURCES else (
-        report['scope_valid'] and report['ready'] > 0)
+    # All three scan sources use one stock-level rule. Coverage-only legacy
+    # callers still use strict completeness; invalid scopes always fail closed.
+    report['scan_allowed'] = (report['scope_valid'] and (report['ready'] > 0 or report['complete'])) if (
+        source in FALLBACK_SOURCES or timeframe is not None) else report['complete']
     return report
 
 

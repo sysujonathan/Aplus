@@ -4,10 +4,10 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 from workbench.tickflow_integrity import integrity_view
 from workbench.gap_review import (GROUPS, STATES, classify_review, review_summary,
-                                 review_selection, repair_selection, review_evidence)
+                                 review_selection, repair_selection, review_evidence, status_review_selection)
 
 
-def show_integrity(parent, report, on_repair, store=None, on_changed=None):
+def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_verify=None):
     from workbench.sources import SOURCES
     window = ttk.Toplevel(parent)
     window.title(SOURCES.get(report.get('source'), '行情')+' 缺口分类处理')
@@ -56,6 +56,9 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None):
         repair_button.state(['!disabled'] if codes else ['disabled'])
         for button in (ignore_button, pending_button, details_button):
             button.state(['!disabled'] if rows_selected() else ['disabled'])
+        codes = status_review_selection(state['review'], selections())
+        verify_button.configure(text=f'核验缺日（{len(codes)} 只）')
+        verify_button.state(['!disabled'] if codes and on_verify else ['disabled'])
 
     def refresh(*_):
         old = list(tree.selection())
@@ -121,11 +124,26 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None):
             messagebox.showerror('补拉未开始', str(exc), parent=window)
 
     details_button = ttk.Button(buttons, text='查看详情', command=details); details_button.pack(side=tk.LEFT)
-    ignore_button = ttk.Button(buttons, text='忽略统计', command=lambda: decide('ignored')); ignore_button.pack(side=tk.LEFT, padx=5)
+    ignore_button = ttk.Button(buttons, text='忽略提醒', command=lambda: decide('ignored')); ignore_button.pack(side=tk.LEFT, padx=5)
     pending_button = ttk.Button(buttons, text='待定／恢复统计', command=lambda: decide('pending')); pending_button.pack(side=tk.LEFT)
     ttk.Button(buttons, text='关闭', command=window.destroy).pack(side=tk.RIGHT)
     repair_button = ttk.Button(buttons, text='继续补拉', command=repair, bootstyle='warning'); repair_button.pack(side=tk.RIGHT, padx=5)
-    footer = ttk.Label(window, text='忽略不等于数据已齐。补拉仅使用当前来源；停牌、新股根数不足和身份问题无需重复下载。', wraplength=890, justify=tk.LEFT)
+    verify_controls = ttk.Frame(controls); verify_controls.pack(fill=tk.X, pady=(6,0))
+    retry_status = tk.BooleanVar(value=False)
+    ttk.Checkbutton(verify_controls, text='重查上次未返回明确状态的缺日', variable=retry_status).pack(side=tk.LEFT)
+    def verify():
+        codes = status_review_selection(state['review'], selections())
+        if not codes or not on_verify: return
+        if not messagebox.askyesno('核验缺日',
+                '只查询BaoStock明确的逐日交易状态，不下载价格。核验后停牌证据供三源复用；未知仍待定。是否继续？', parent=window): return
+        try:
+            if on_verify(codes, state['view']['timeframe'], retry_status.get()) is False:
+                raise ValueError('核验未提交，请等待当前任务结束')
+            window.destroy()
+        except Exception as exc:
+            messagebox.showerror('核验未开始', str(exc), parent=window)
+    verify_button = ttk.Button(verify_controls, text='核验缺日', command=verify); verify_button.pack(side=tk.RIGHT)
+    footer = ttk.Label(window, text='忽略提醒不改变扫描资格。补拉只用当前来源价格；核验只查交易状态，已确认停牌不补造K线。', wraplength=890, justify=tk.LEFT)
     footer.grid(row=4, column=0, sticky='ew', padx=12, pady=(0, 10))
     tree.bind('<<TreeviewSelect>>', selection_changed)
     tree.bind('<Double-1>', lambda _: details() if rows_selected() and not str(tree.focus()).startswith('group:') else None)
@@ -134,7 +152,7 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None):
 
     def resized(event):
         if event.widget is window:
-            for label in (summary_label, footer, help_label): label.configure(wraplength=max(1, event.width-24))
+            for label in (summary_label, footer, help_label): label.configure(wraplength=max(1, event.width-32))
 
     def destroyed(event):
         if event.widget is window:

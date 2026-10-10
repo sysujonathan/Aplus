@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "facts": [
+    {
+      "code": "sh.601313",
+      "effective_from": "2018-02-28",
+      "reason": "旧代码，已变更为601360（三六零）",
+      "evidence": "https://static.cninfo.com.cn/finalpage/2018-04-27/1204804713.PDF"
+    },
+    {
+      "code": "sz.002525",
+      "effective_from": "2011-04-11",
+      "reason": "首次公开发行许可被撤销，非当前在市证券",
+      "evidence": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=694972&stockid=002525"
+    }
+  ]
+}

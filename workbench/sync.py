@@ -7,7 +7,7 @@ import pandas as pd
 
 from .market import FIELDS, load_dataset, save_dataset, validate_bars, verify_dataset
 from .readiness import check_response_dates
-from .sources import coverage_state, save_coverage, FALLBACK_SOURCES, ADJUSTMENTS
+from .sources import coverage_state, save_coverage, FALLBACK_SOURCES, ADJUSTMENTS, calendar_file
 
 
 def local_history(store, code, job, coverage=None, source='baostock'):
@@ -42,6 +42,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
                on_request=None):
     """provider is lazy: a fully cached request makes no network connection."""
     coverage = coverage_state(store,code,source)
+    track_quality = source in FALLBACK_SOURCES or calendar_file(store, source).is_file()
     state = coverage[0] if coverage else None
     notify = on_request or (lambda operation, a, b: None)
     if state and not force and state['start'] <= start and end <= state['end']:
@@ -49,7 +50,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         # full OHLCV validation pass for every unchanged stock.
         notify('cached', None, None)
         verify_dataset(store, state['dataset_id'], job)
-        if source in FALLBACK_SOURCES:
+        if track_quality:
             from .history_quality import quality_for, save_quality
             record = store.rows('SELECT * FROM datasets WHERE id=?', (state['dataset_id'],))[0]
             save_quality(store, record['id'], quality_for(store, record))
@@ -62,7 +63,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     if state and not force and state['start'] <= start and end <= state['end']:
         notify('cached', None, None)
         save_coverage(store,code,state['dataset_id'],state['start'],state['end'],source)
-        if source in FALLBACK_SOURCES:
+        if track_quality:
             from .history_quality import describe_history, save_quality
             save_quality(store, state['dataset_id'], describe_history(store, code, old, state['start'], state['end'], source=source))
         store.event(job, '跳过已有行情', code=code, start=start, end=end, dataset=state['dataset_id'])
@@ -79,6 +80,9 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
                         evidence=result.attrs['suspension_evidence'])
         if source not in FALLBACK_SOURCES:
             check_response_dates(store, result, a, b)
+        if source == 'baostock' and result.attrs.get('trading_status_rows'):
+            from .trading_status import save_status_rows
+            save_status_rows(store, code, a, b, result.attrs['trading_status_rows'], job)
         if result.empty:
             return pd.DataFrame(columns=FIELDS)
         result = validate_bars(result)
@@ -118,7 +122,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         else:
             frame = pd.concat([old, *pieces], ignore_index=True).drop_duplicates('date', keep='last')
     quality = None
-    if source in FALLBACK_SOURCES:
+    if track_quality:
         from .history_quality import describe_history, save_quality
         quality = describe_history(store, code, frame, left, right, source=source)
     import contextlib

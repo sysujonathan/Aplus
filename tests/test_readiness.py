@@ -83,19 +83,18 @@ def test_incomplete_update_preserves_old_snapshot(store, frame):
     assert store.rows('SELECT dataset_id FROM sync_coverage')[0]['dataset_id'] == first
 
 
-def test_backend_blocks_incomplete_scan_without_calling_strategy(store, frame, monkeypatch):
+def test_backend_scans_only_eligible_stock_and_reports_incomplete_scope(store, frame, monkeypatch):
     end = frame.date.iloc[-1]
     setup_scope(store, ['sh.600000','sh.600001'], frame.date.iloc[0], end)
     did = save_dataset(store, 'sh.600000', frame, 'baostock', '前复权')
-    def forbidden(*args):
-        raise AssertionError('Must not call strategy on an incomplete universe')
-    monkeypatch.setattr('workbench.service.signal_at_end', forbidden)
+    calls = []
+    monkeypatch.setattr('workbench.service.signal_at_end', lambda *args, **kw:calls.append(args[1].attrs['code']) or None)
     service = Service(store)
     row = wait_for(store, service.submit('scan', {'datasets':[did], 'source':'baostock', 'boards':['沪深主板'],
                          'strategies':['MTR_MASTER'], 'timeframe':'daily', 'asof':end}))
     service.pool.shutdown()
     report = json.loads(row['result'])
-    assert row['status'] == 'partial' and report['success'] == 0
+    assert row['status'] == 'partial' and report['success'] == 1 and calls == ['sh.600000']
     assert report['coverage']['expected'] == 2 and not store.rows('SELECT * FROM observations')
 
 
