@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.11.31",
-    "pr": 31,
+    "version": "2026.10.11.32",
+    "pr": 32,
     "date": "2026-10-11"
   },
   "history": [
@@ -372,13 +372,26 @@
       "pr": 31,
       "version": "2026.10.11.31",
       "date": "2026-10-11",
-      "status": "preview",
+      "status": "released",
       "title": "扫描低频版本提醒与安全更新",
       "notes": [
         "软件版本检查与可选更新重启，新增离线使用说明。",
         "修复休市日缺口检查；提供易懂版本信息及逐PR更新日志。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/31"
+      "url": "https://github.com/sysujonathan/Aplus/pull/31",
+      "commit": "1f6538ee3c462e753d5516fd5890fb19a69b8fe9"
+    },
+    {
+      "pr": 32,
+      "version": "2026.10.11.32",
+      "date": "2026-10-11",
+      "status": "preview",
+      "title": "统一三源盘前必要历史起点",
+      "notes": [
+        "盘前日线默认最近两年，周线约七年，三源使用相同必要起点。",
+        "不再自动要求2016年早期历史，已有长历史和研究结果保留。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/32"
     }
   ]
 }
