@@ -90,6 +90,9 @@ class AplusMainWindow(ttk.Window):
         self._candidate_source = REALTIME_MARKET_SOURCE
         self._build_ui()
         self._load_strategies()
+        from .version_update import VersionController
+        self.version_controller = VersionController(self, self.section_nav)
+        self.toolbar._on_scan_started = self.version_controller.scan_hint
         if enable_tray:
             self._setup_tray()
 
@@ -100,6 +103,10 @@ class AplusMainWindow(ttk.Window):
         # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
         self.section_nav = ttk.Frame(self, padding=(8, 6))
         self.section_nav.grid(row=0, column=0, sticky=tk.EW)
+        from .usage_help import show_usage
+        self.usage_button = ttk.Button(self.section_nav, text="使用说明", bootstyle="secondary",
+                                      command=lambda: show_usage(self))
+        self.usage_button.pack(side=tk.RIGHT, padx=(8, 0), ipady=2)
         self._section_buttons = {}
         self._pages = {}
         section_names = (
@@ -281,6 +288,8 @@ class AplusMainWindow(ttk.Window):
         self.withdraw()
 
     def _show_from_tray(self):
+        if getattr(self, "_update_pending", False):
+            return
         self.deiconify()
         self.state("normal")
         self.lift()
@@ -296,14 +305,17 @@ class AplusMainWindow(ttk.Window):
                     self._show_from_tray()
                 elif action == "quit":
                     self._exit_from_tray()
-                    return
+                    # Preparation may refuse the exit. Keep listening so a
+                    # failed update can restore a fully usable tray.
+                    if self._closing:
+                        return
         except queue.Empty:
             pass
         self.after(200, self._poll_tray_actions)
 
     def _exit_from_tray(self):
         """托盘“退出”才是真正关闭；运行任务先请求安全停止。"""
-        if self._closing:
+        if self._closing or getattr(self, "_update_pending", False):
             return
         self._closing = True
         if self.toolbar._job_id and self.service is not None:
@@ -311,6 +323,17 @@ class AplusMainWindow(ttk.Window):
                 self.service.cancel(self.toolbar._job_id)
             except Exception:
                 pass
+        if self._tray_icon is not None:
+            try:
+                self._tray_icon.stop()
+            except Exception:
+                pass
+        self.destroy()
+
+    def _close_for_version_update(self):
+        """Only called after Service has atomically reserved an idle update."""
+        self._closing = True
+        self.service.pool.shutdown(wait=True)
         if self._tray_icon is not None:
             try:
                 self._tray_icon.stop()

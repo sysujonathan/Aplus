@@ -1,0 +1,384 @@
+{
+  "schema": 1,
+  "build": {
+    "version": "2026.10.11.31",
+    "pr": 31,
+    "date": "2026-10-11"
+  },
+  "history": [
+    {
+      "pr": 1,
+      "version": null,
+      "date": "2026-10-01",
+      "status": "not_released",
+      "title": "无害测试 GitHub 协作保护机制",
+      "notes": [
+        "仅测试协作审批保护，未合并，不作为软件版本。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/1"
+    },
+    {
+      "pr": 2,
+      "version": "2026.10.01.2",
+      "date": "2026-10-01",
+      "status": "released",
+      "title": "恢复工程 A 主界面布局与样式",
+      "notes": [
+        "恢复桌面操盘台布局、候选列表及K线查看。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/2",
+      "commit": "671d33b6be9e5da3f8fa427cbdecea6557f9fc1c"
+    },
+    {
+      "pr": 3,
+      "version": "2026.10.01.3",
+      "date": "2026-10-01",
+      "status": "released",
+      "title": "Codex/premarket workspace layout",
+      "notes": [
+        "调整盘前多图工作区布局。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/3",
+      "commit": "37e81de1596ab45892f0b62d97676dd9546d3f62"
+    },
+    {
+      "pr": 4,
+      "version": "2026.10.01.4",
+      "date": "2026-10-01",
+      "status": "released",
+      "title": "接入历史数据并完善盯盘与本地数据仓",
+      "notes": [
+        "接入历史结果与关注浏览，升级代码时继续使用原本机数据仓。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/4",
+      "commit": "5f88017162fb6ad1e1e36d2ab4c80818c70e8e2d"
+    },
+    {
+      "pr": 5,
+      "version": "2026.10.02.5",
+      "date": "2026-10-02",
+      "status": "released",
+      "title": "对齐行情信号日期与关注行情",
+      "notes": [
+        "分别展示行情与信号日期；关注图推进行情但保留原信号。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/5",
+      "commit": "7c22781ad8bd59a4fdac05e7ed959c75f002e0a9"
+    },
+    {
+      "pr": 6,
+      "version": "2026.10.02.6",
+      "date": "2026-10-02",
+      "status": "released",
+      "title": "Codex/right list workspace",
+      "notes": [
+        "调整右侧清单与图表工作区。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/6",
+      "commit": "d6bdd97b50ebab326d4b144d35838e0a047d8053"
+    },
+    {
+      "pr": 7,
+      "version": "2026.10.02.7",
+      "date": "2026-10-02",
+      "status": "released",
+      "title": "恢复策略专属K线标注",
+      "notes": [
+        "恢复六类策略各自的K线结构与计划价标注。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/7",
+      "commit": "8ae224f7b9390a45b8b56160607e53fdf656052e"
+    },
+    {
+      "pr": 8,
+      "version": "2026.10.02.8",
+      "date": "2026-10-02",
+      "status": "released",
+      "title": "GAP H2每日挂单计划、风险收益卡与居中标注",
+      "notes": [
+        "GAP H2显示次日挂单价、止损、风险及收益，不代表实际成交。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/8",
+      "commit": "0933c338d2c5c11445b47220bba38a4c530294e4"
+    },
+    {
+      "pr": 9,
+      "version": "2026.10.03.9",
+      "date": "2026-10-03",
+      "status": "released",
+      "title": "新增交易管理与持仓风控工作台",
+      "notes": [
+        "新增持仓、分批成交、清仓和账户风险管理。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/9",
+      "commit": "1478bc33e7d9925d2d65efd2114826d4893c2e28"
+    },
+    {
+      "pr": 10,
+      "version": "2026.10.03.10",
+      "date": "2026-10-03",
+      "status": "released",
+      "title": "GAP H2 盘后执行回放与逐笔 K 线复盘",
+      "notes": [
+        "新增GAP H2盘后回放与逐笔复盘，区分触发与模拟成交。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/10",
+      "commit": "dbc69e3e644937088e2e6304213fb83665344aaf"
+    },
+    {
+      "pr": 11,
+      "version": "2026.10.03.11",
+      "date": "2026-10-03",
+      "status": "released",
+      "title": "加速 GAP H2 盘后回测并复用已完成标的",
+      "notes": [
+        "盘后研究复用已完成标的；同时纳入PR12、13的布局及UX规范。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/11",
+      "commit": "9d4530295d6546cae68fe543136acf023ddd32a3"
+    },
+    {
+      "pr": 12,
+      "version": "2026.10.03.12",
+      "date": "2026-10-03",
+      "status": "included",
+      "title": "重设计盘后回测界面、四板块范围与铺满复盘图",
+      "notes": [
+        "盘后四板块范围、铺满复盘图；随PR11进入主线。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/12",
+      "commit": "3af6df9f97dbd19779d8e3dbd3990800195f5626",
+      "included_in": 11
+    },
+    {
+      "pr": 13,
+      "version": "2026.10.03.13",
+      "date": "2026-10-03",
+      "status": "included",
+      "title": "统一UX规范V1与项目设计skill",
+      "notes": [
+        "建立统一交互与验收规范；随PR11进入主线。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/13",
+      "commit": "7f498f93bb5202616a3bc8f5bf9001d286cc9110",
+      "included_in": 11
+    },
+    {
+      "pr": 14,
+      "version": "2026.10.03.14",
+      "date": "2026-10-03",
+      "status": "released",
+      "title": "提速盘前行情与策略扫描",
+      "notes": [
+        "减少盘前行情核验及策略扫描的重复工作。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/14",
+      "commit": "ad6a7ad2c6b2fd0e2fa3ed82a09e5f212fecdf1c"
+    },
+    {
+      "pr": 15,
+      "version": "2026.10.03.15",
+      "date": "2026-10-03",
+      "status": "released",
+      "title": "修整盘后回测对齐、留白与换行",
+      "notes": [
+        "修整盘后表格对齐、换行和小窗口留白。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/15",
+      "commit": "411450f1b44f171744e299bd9155001bf91e100a"
+    },
+    {
+      "pr": 16,
+      "version": "2026.10.04.16",
+      "date": "2026-10-04",
+      "status": "released",
+      "title": "升级交易账本与资金总览",
+      "notes": [
+        "增加清仓截图识别、资金总览及资金流水；保留既有账本。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/16",
+      "commit": "4c63a8222753323740faae791461aa70ce941dfc"
+    },
+    {
+      "pr": 17,
+      "version": "2026.10.04.17",
+      "date": "2026-10-04",
+      "status": "released",
+      "title": "按桌面原型重建盘后研究工作区",
+      "notes": [
+        "重建盘后研究工作区，支持历史对比与逐笔并排查看。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/17",
+      "commit": "4c1d87cb4979afab6f0c037e1ed095b8b248c898"
+    },
+    {
+      "pr": 18,
+      "version": "2026.10.04.18",
+      "date": "2026-10-04",
+      "status": "released",
+      "title": "修正复盘缩放、清单宽度与历史对比入口",
+      "notes": [
+        "复盘支持缩放拖动，改进历史对比与清单宽度。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/18",
+      "commit": "ca1cb0a77f331b42b6792bb83436fd92f68eb52c"
+    },
+    {
+      "pr": 19,
+      "version": "2026.10.06.19",
+      "date": "2026-10-06",
+      "status": "released",
+      "title": "TradingView默认使用简体中文",
+      "notes": [
+        "TradingView默认简体中文。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/19",
+      "commit": "4bf9aabd8110d986721d6160f865b18febd1ae4a"
+    },
+    {
+      "pr": 20,
+      "version": "2026.10.06.20",
+      "date": "2026-10-06",
+      "status": "released",
+      "title": "修复旧关注结构标注并压缩成交量图",
+      "notes": [
+        "修复旧关注结构标注，收紧成交量区域。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/20",
+      "commit": "1d54c56a882d635ef00be871e94e73327ac051e4"
+    },
+    {
+      "pr": 21,
+      "version": "2026.10.06.21",
+      "date": "2026-10-06",
+      "status": "released",
+      "title": "统一 K 线读数与标注，简化回测历史管理",
+      "notes": [
+        "统一逐根开高低收读数、中性色标注及历史管理。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/21",
+      "commit": "76abfeb817d9d081cd2b4dd9d41e0ad4a8ab5bc7"
+    },
+    {
+      "pr": 22,
+      "version": "2026.10.06.22",
+      "date": "2026-10-06",
+      "status": "released",
+      "title": "策略迭代 V1 初始止损对照研究",
+      "notes": [
+        "增加GAP H2初始止损对照研究，同时纳入PR23详情布局。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/22",
+      "commit": "3f9e5d555fea34ec542619787c784ae706feba3a"
+    },
+    {
+      "pr": 23,
+      "version": "2026.10.06.23",
+      "date": "2026-10-06",
+      "status": "included",
+      "title": "补齐复盘股票名称并优化详情图表布局",
+      "notes": [
+        "复盘补股票名称、压缩事件栏、扩大图区；随PR22进入主线。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/23",
+      "included_in": 22
+    },
+    {
+      "pr": 24,
+      "version": "2026.10.07.24",
+      "date": "2026-10-07",
+      "status": "released",
+      "title": "交易管理逐日盈亏日历与连续截图导入",
+      "notes": [
+        "逐日账户盈亏日历，支持连续截图预览与导入。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/24",
+      "commit": "d6ff436ac2aa35bb70bc07d9bdb6432f8f716a9f"
+    },
+    {
+      "pr": 25,
+      "version": "2026.10.08.25",
+      "date": "2026-10-08",
+      "status": "released",
+      "title": "已清仓 K 线买卖点与自适应查看窗口",
+      "notes": [
+        "已清仓可查看实际买卖点，图窗口可缩放。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/25",
+      "commit": "e652aa02e7b663f8dd9cc75fe3375f50f8f2048d"
+    },
+    {
+      "pr": 26,
+      "version": "2026.10.08.26",
+      "date": "2026-10-08",
+      "status": "released",
+      "title": "持仓自动行情、隐私隐藏与持仓图",
+      "notes": [
+        "持仓即时行情、隐私隐藏及买点/成本/风控线查看。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/26",
+      "commit": "622d5602f577b33e48cb277f6974c1f215f43a4b"
+    },
+    {
+      "pr": 27,
+      "version": "2026.10.09.27",
+      "date": "2026-10-09",
+      "status": "released",
+      "title": "三源独立行情、备用扫描完整性与交易管理修复",
+      "notes": [
+        "接入腾讯独立历史，三源缓存隔离；修复切源日期与同步回执。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/27",
+      "commit": "4fb2efd27b159de01547203fbf4cfb5e9f89314c"
+    },
+    {
+      "pr": 28,
+      "version": "2026.10.10.28",
+      "date": "2026-10-10",
+      "status": "released",
+      "title": "统一三源缺口分类处理与实际下载进度",
+      "notes": [
+        "三源统一缺口分类、定向补拉及实际下载区间提示。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/28",
+      "commit": "70b0c71b0f8982015bde0448e1d63705680e6cb2"
+    },
+    {
+      "pr": 29,
+      "version": "2026.10.10.29",
+      "date": "2026-10-10",
+      "status": "released",
+      "title": "统一三源扫描资格与逐日停牌核验",
+      "notes": [
+        "逐日核验明确停牌状态，统一三源扫描资格；补拉复用有效目录。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/29",
+      "commit": "18670c8904768927f2bc37c317fee27a73a011df"
+    },
+    {
+      "pr": 30,
+      "version": "2026.10.11.30",
+      "date": "2026-10-11",
+      "status": "released",
+      "title": "修正初始资金反推并优化盘前布局与持仓提示",
+      "notes": [
+        "同日对账修复初始资金反推，不能用最新股价扣旧资产。",
+        "盘前状态上移；实际成交漏填时给出清楚的中文提示。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/30",
+      "commit": "e4d5f6553de053b2b423297f27d3964c2e7f236b"
+    },
+    {
+      "pr": 31,
+      "version": "2026.10.11.31",
+      "date": "2026-10-11",
+      "status": "preview",
+      "title": "扫描低频版本提醒与安全更新",
+      "notes": [
+        "软件版本检查与可选更新重启，新增离线使用说明。",
+        "修复休市日缺口检查；提供易懂版本信息及逐PR更新日志。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/31"
+    }
+  ]
+}
