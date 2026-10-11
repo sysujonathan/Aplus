@@ -77,6 +77,16 @@ def main():
 
         service, store = build_backend()
         app = AplusMainWindow(service=service, store=store, enable_tray=True)
+        ack = os.environ.pop("APLUS_UPDATE_ACK", None)
+        if ack and service is not None and store is not None:
+            # A spawn is not startup success. The helper waits for the actual
+            # backend and native window, not merely a newly created process.
+            from pathlib import Path
+            from workbench.version_update import metadata_dir, write_json
+            ack_path = Path(ack).resolve()
+            base = metadata_dir(ROOT).resolve()
+            if ack_path.name == "started.json" and ack_path.parent.parent == base:
+                app.after_idle(lambda: write_json(ack_path, {"started": True}))
         app.mainloop()
     except Exception:
         logging.getLogger(__name__).exception("桌面工作台启动或运行失败")

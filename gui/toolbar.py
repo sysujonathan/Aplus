@@ -390,6 +390,7 @@ class ToolBar(ttk.Frame):
 
         # 依赖 store 的真实信号日填充下拉
         self._load_date_options()
+        self._select_latest_date()
         # 常驻行情健康状态（只读，不依赖任务）
         self._load_market_status()
 
@@ -426,7 +427,6 @@ class ToolBar(ttk.Frame):
         self.bind("<Configure>", self._responsive)
         self.bind("<Destroy>", self._cancel_responsive)
         self._queue_responsive()
-        self._select_latest_date()
 
     def _queue_responsive(self, *_):
         # Text/source/repair-button changes can grow without resizing the window.
@@ -514,6 +514,12 @@ class ToolBar(ttk.Frame):
         return tuple(v.get() if v.get() != _ALL else None
                      for v in (self.year_var, self.month_var, self.day_var))
 
+    def _integrity_asof(self):
+        """Review the selected full day; broad filters use daily readiness."""
+        from workbench.market import completed_date
+        parts = self.selected_date()
+        return date(*(int(v) for v in parts)).isoformat() if all(parts) else completed_date()
+
     def _selected_boards(self):
         """按固定市场顺序返回当前勾选范围。"""
         from workbench.market import BOARDS
@@ -580,6 +586,7 @@ class ToolBar(ttk.Frame):
     def _fire_tf(self):
         self._load_date_options()
         self._select_latest_date()
+        self._load_market_status()
         if self._on_tf:
             self._on_tf(self._tf_var.get())
 
@@ -721,6 +728,7 @@ class ToolBar(ttk.Frame):
         d = None if d == _ALL else d
         if self._on_date:
             self._on_date(y, m, d)
+        self._load_market_status()
 
     # ---- 行情健康状态（常驻，只读现有表）----
     def _load_market_status(self):
@@ -735,10 +743,9 @@ class ToolBar(ttk.Frame):
         boards = self._selected_boards()
         audit = {}
         try:
-            from workbench.market import completed_date
             from workbench.readiness import audit_scope
 
-            audit = audit_scope(self.store, boards, completed_date(), timeframe=self._tf_var.get(),history_cache_only=True)
+            audit = audit_scope(self.store, boards, self._integrity_asof(), timeframe=self._tf_var.get(),history_cache_only=True)
             readiness = format_scope_readiness(boards, audit)
         except Exception:
             readiness = format_scope_readiness(boards, {})
@@ -747,8 +754,9 @@ class ToolBar(ttk.Frame):
         if hasattr(self,'btn_integrity'):
             if market_source(self.store) in SOURCES:
                 from workbench.gap_review import pending_count
-                count=pending_count(self.store,audit,self._tf_var.get())
-                self.btn_integrity.configure(text=f'缺口处理 {count}' if count else '缺口分类')
+                count=pending_count(self.store,audit,self._tf_var.get()) if audit.get('scope_valid') else 0
+                label=(f'缺口处理 {count}' if count else '缺口分类') if audit.get('scope_valid') else '范围待核验'
+                self.btn_integrity.configure(text=label)
                 self.btn_integrity.pack(side=tk.LEFT,padx=3,after=self.btn_sync)
             else:
                 self.btn_integrity.pack_forget()
@@ -792,7 +800,7 @@ class ToolBar(ttk.Frame):
         from workbench.readiness import expected_day
         from workbench.market import completed_date
         try:
-            day=expected_day(self.store,completed_date(),source)
+            day=expected_day(self.store,self._integrity_asof(),source)
             report=review_receipt(self.store,source,self._selected_boards(),day,self._tf_var.get())
         except ValueError as exc:
             self.set_status(str(exc))
@@ -801,6 +809,8 @@ class ToolBar(ttk.Frame):
         def repair_selected(codes,timeframe,include_history):
             if market_source(self.store)!=source:
                 raise ValueError('数据源已切换，请重新打开当前来源的缺口分类')
+            if day != expected_day(self.store,completed_date(),source):
+                raise ValueError('当前查看的是历史日期；请切回最近交易日后补拉，避免按旧回执更新新行情')
             return self._repair_tickflow(codes,timeframe,include_history)
         def verify_selected(codes, timeframe, retry):
             if self._job_id or market_source(self.store) != source:
@@ -974,6 +984,14 @@ class ToolBar(ttk.Frame):
             self.source_combo.state(['disabled'])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
+        # Successful submission first: version networking never delays or
+        # invalidates a market/strategy task. One-click premarket uses this too.
+        hint = getattr(self, '_on_scan_started', None)
+        if kind == 'scan' and callable(hint):
+            try:
+                hint()
+            except Exception:
+                pass
 
     def _poll_job(self):
         """每 800ms 查一次 jobs 表，把进度滚到状态栏；终态时出简报并恢复按钮。"""
