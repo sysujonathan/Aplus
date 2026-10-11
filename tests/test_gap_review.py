@@ -152,7 +152,10 @@ def test_baostock_receipt_uses_same_entry_without_network(store):
     assert not review['scan_allowed'] and repair_selection(review,['download'])==['sh.600000']
 
 
-def test_baostock_targeted_repair_keeps_original_single_connection(store,monkeypatch):
+@pytest.mark.parametrize('settings,forced,timeframe', [({},False,'daily'),
+    ({'scan_timeframe':'weekly','repair_scope':'scan'},False,'weekly'),
+    ({'repair_scope':'history'},True,None), ({'force':True},True,None)])
+def test_baostock_targeted_repair_keeps_original_single_connection(store,monkeypatch,settings,forced,timeframe):
     from types import SimpleNamespace
     from threading import Event
     from tests.test_tickflow_scan_readiness import bars, scope
@@ -169,14 +172,16 @@ def test_baostock_targeted_repair_keeps_original_single_connection(store,monkeyp
     monkeypatch.setattr('workbench.service.completed_date',lambda:last)
     calls=[]
     def fake_results(*args,**kwargs):
-        calls.append((list(args[2]),args[6],args[9]))
+        calls.append((list(args[2]),args[6],args[9],kwargs['repair_timeframe']))
         yield from ()
     monkeypatch.setattr('workbench.service.sync_results',fake_results)
     service=SimpleNamespace(store=store,cancel_flags={'test':Event()},progress=lambda *a:None,
                             check_stop=lambda *a:None)
-    report=Service._sync(service,'test',dict(source='baostock',boards=['沪深主板'],start=first,end=last,
-                                           repair_codes=['sh.600000'],force=False))
-    assert calls==[(['sh.600000'],True,1)] and report['requested']==1
+    spec=dict(source='baostock',boards=['沪深主板'],start=first,end=last,
+              repair_codes=['sh.600000'],force=False)
+    spec.update(settings)
+    report=Service._sync(service,'test',spec)
+    assert calls==[(['sh.600000'],forced,1,timeframe)] and report['requested']==1
 
 
 def test_web_classification_uses_same_decisions_and_explicit_repair(tmp_path):

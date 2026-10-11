@@ -24,7 +24,7 @@ class CancelToken:
 
 
 def sync_results(store, factory, codes, start, end, job, force, cancel, halt, workers, on_wait,
-                 on_request=None):
+                 on_request=None, repair_timeframe=None, on_timing=None):
     """Bound submission as well as concurrency; never queue the entire market.
 
     BaoStock itself remains inside each adapter's killable subprocess. Threads
@@ -36,6 +36,17 @@ def sync_results(store, factory, codes, start, end, job, force, cancel, halt, wo
     token = CancelToken(cancel, halt)
 
     def one(code):
+        elapsed = {'history_requests':0, 'history_request_seconds':0.0}
+        begun = time.monotonic()
+        class Measured:
+            def fetch(self, *args):
+                connection = provider()
+                stamp = time.monotonic()
+                elapsed['history_requests'] += 1
+                try:
+                    return connection.fetch(*args)
+                finally:
+                    elapsed['history_request_seconds'] += time.monotonic()-stamp
         def provider():
             if not hasattr(local, 'connection'):
                 candidate = factory()
@@ -50,10 +61,15 @@ def sync_results(store, factory, codes, start, end, job, force, cancel, halt, wo
             return code, None, None, InterruptedError('已停止')
         try:
             notify = (lambda op, a, b: on_request(code, op, a, b)) if on_request else None
-            did, outcome = sync_stock(store, provider, code, start, end, job, force, on_request=notify)
+            did, outcome = sync_stock(store, lambda:Measured(), code, start, end, job, force,
+                                      on_request=notify, repair_timeframe=repair_timeframe, batch_writes=True)
             return code, did, outcome, None
         except Exception as exc:
             return code, None, None, exc
+        finally:
+            elapsed['stock_processing_seconds'] = time.monotonic()-begun
+            if on_timing:
+                on_timing(code, elapsed)
 
     pool = ThreadPoolExecutor(max_workers=max(1, min(2, workers)), thread_name_prefix='market-sync')
     pending = set()

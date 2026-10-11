@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.11.32",
-    "pr": 32,
+    "version": "2026.10.11.33",
+    "pr": 33,
     "date": "2026-10-11"
   },
   "history": [
@@ -392,6 +392,18 @@
         "不再自动要求2016年早期历史，已有长历史和研究结果保留。"
       ],
       "url": "https://github.com/sysujonathan/Aplus/pull/32"
+    },
+    {
+      "pr": 33,
+      "version": "2026.10.11.33",
+      "date": "2026-10-11",
+      "status": "preview",
+      "title": "减少BaoStock盘前补拉与本地保存开销",
+      "notes": [
+        "当前缺口按所选周期局部补拉，逐股先保存最新尾部，后续失败或停止时明确提示。",
+        "减少本地提交开销并记录请求耗时，保留单连接及限制访问停止机制。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/33"
     }
   ]
 }
