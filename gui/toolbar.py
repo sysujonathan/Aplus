@@ -8,7 +8,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.widgets import ToolTip
 
 from .theme import MUTED
-from workbench.sources import market_source, set_market_source, SOURCES, FALLBACK_SOURCES
+from workbench.sources import market_source, set_market_source, SOURCES
 
 _LABEL_FG = MUTED
 _ALL = "全部"
@@ -134,7 +134,7 @@ def format_data_chain_status(market_date, signal_date, readiness=None):
 
 
 def _two_years_ago():
-    """已有本地历史时，日常更新只要求最近两年的覆盖。"""
+    """当前日线扫描默认准备最近两年的覆盖。"""
     from datetime import date
 
     from workbench.market import completed_date
@@ -147,24 +147,13 @@ def _two_years_ago():
 
 
 def sync_start_date(store, full_history=False, timeframe='daily'):
-    """Fallback current scans bootstrap only their actual day/week input window."""
+    """All sources prepare the same current day/week input, regardless of coverage."""
     if full_history:
         return "2016-01-01"
-    if market_source(store) in FALLBACK_SOURCES:
-        # Daily needs <=300 bars; weekly needs <=300 completed weeks. Historical
-        # research is explicit and cannot block the first current daily update.
-        start=_two_years_ago()
-        return f'{date.fromisoformat(start).year-5}-01-01' if timeframe=='weekly' else start
-    try:
-        state = store.rows(
-            "SELECT COUNT(*) AS count, MAX(start) AS latest_start FROM sync_coverage"
-        )[0]
-        covered = state["count"]
-        latest_start = state["latest_start"]
-    except (IndexError, KeyError, TypeError):
-        covered, latest_start = 0, None
-    full_history_ready = covered and latest_start and latest_start <= "2016-01-01"
-    return _two_years_ago() if full_history_ready else "2016-01-01"
+    # Daily needs <=300 bars; weekly needs <=300 completed weeks. Existing
+    # long histories remain available, but cannot trigger an earlier bootstrap.
+    start = _two_years_ago()
+    return f'{date.fromisoformat(start).year-5}-01-01' if timeframe == 'weekly' else start
 
 
 class ToolBar(ttk.Frame):
@@ -192,7 +181,7 @@ class ToolBar(ttk.Frame):
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
         self._header_data_var = tk.StringVar(value="行情 连接中… · 信号 连接中…")
         self._timing_var = tk.StringVar(value=format_task_timings())
-        self.full_history_var = tk.BooleanVar(value=False)    # 首次自动完整历史；也可手动要求重新核对
+        self.full_history_var = tk.BooleanVar(value=False)    # 更早研究历史须显式选择
         try:
             from workbench.scope import selected_boards
 
@@ -886,7 +875,7 @@ class ToolBar(ttk.Frame):
         except Exception as exc:
             self.set_status(f"行情范围保存失败：{exc}")
             return
-        # 备用源先准备当前周期所需区间；更早研究历史是显式操作。
+        # 三源先准备当前周期所需区间；更早研究历史是显式操作。
         start = sync_start_date(self.store, self.full_history_var.get(),self._tf_var.get())
         spec = {
             "source":market_source(self.store),

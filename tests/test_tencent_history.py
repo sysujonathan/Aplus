@@ -179,7 +179,7 @@ def test_tencent_cache_hits_do_not_reset_network_failure_budget(store,monkeypatc
     finally:service.pool.shutdown()
 
 
-@pytest.mark.parametrize('source',['tickflow','tencent'])
+@pytest.mark.parametrize('source',['baostock','tickflow','tencent'])
 def test_current_day_week_bootstrap_is_not_ten_year_history(store,monkeypatch,source):
     from gui.toolbar import sync_start_date
     set_market_source(store,source)

@@ -422,19 +422,20 @@ def test_finished_job_writes_elapsed_time_to_bottom_status():
     toolbar._refresh_timing_status.assert_called_once_with()
 
 
-def test_first_market_update_builds_full_history_then_uses_incremental_window():
+def test_current_market_update_does_not_bootstrap_early_history_from_coverage():
     empty = Mock()
     empty.rows.return_value = [{"count": 0, "latest_start": None}]
-    assert sync_start_date(empty) == "2016-01-01"
 
     partial = Mock()
     partial.rows.return_value = [{"count": 5211, "latest_start": "2024-10-01"}]
-    assert sync_start_date(partial) == "2016-01-01"
 
     existing = Mock()
     existing.rows.return_value = [{"count": 5211, "latest_start": "2016-01-01"}]
     with patch("gui.toolbar._two_years_ago", return_value="2024-10-01"):
-        assert sync_start_date(existing) == "2024-10-01"
+        for store in (empty, partial, existing):
+            assert sync_start_date(store) == "2024-10-01"
+            assert sync_start_date(store, timeframe='weekly') == "2019-01-01"
+            assert sync_start_date(store, full_history=True) == "2016-01-01"
 
 
 def test_chart_items_keep_mode_and_source_explicit():
