@@ -44,6 +44,7 @@ class Service:
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='a-workbench')
         self.cancel_flags = {}
         self.lock = threading.Lock()
+        self._code_update_reserved = False
         store.execute("UPDATE jobs SET status='interrupted',finished=?,message='程序重启；任务未完成，可重新发起' "
                       "WHERE status IN ('queued','running')", (now(),))
 
@@ -58,6 +59,8 @@ class Service:
                 raise ValueError('未知日 K 数据源')
             ProviderGuard(self.store,spec['source']).check()
         with self.lock:
+            if self._code_update_reserved:
+                raise ValueError('正在准备版本更新，请完成更新或取消后再开始任务')
             if self.store.rows("SELECT id FROM jobs WHERE status IN ('running','queued')"):
                 raise ValueError('已有任务正在运行。请等待结束或停止后再开始，避免争用行情连接')
             job = uuid.uuid4().hex[:16]
@@ -66,6 +69,18 @@ class Service:
             self.cancel_flags[job] = threading.Event()
             self.pool.submit(self._execute, job,kind,spec)
         return job
+
+    def reserve_code_update(self):
+        """No job can enter between the idle check and code-update reservation."""
+        with self.lock:
+            if self._code_update_reserved or self.cancel_flags or self.store.rows(
+                    "SELECT id FROM jobs WHERE status IN ('queued','running')"):
+                raise ValueError('行情、扫描或研究任务尚未结束，请等待后再更新版本')
+            self._code_update_reserved = True
+
+    def release_code_update(self):
+        with self.lock:
+            self._code_update_reserved = False
 
     def cancel(self, job):
         if job in self.cancel_flags:
@@ -99,7 +114,8 @@ class Service:
             self.store.execute("UPDATE jobs SET status='failed',finished=?,message=? WHERE id=?", (now(),str(exc),job))
         finally:
             self.store.event(job,'任务结束',self.store.path)
-            self.cancel_flags.pop(job,None)
+            with self.lock:
+                self.cancel_flags.pop(job,None)
 
     def check_stop(self, job):
         if self.cancel_flags[job].is_set():
