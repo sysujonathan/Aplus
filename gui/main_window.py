@@ -103,6 +103,10 @@ class AplusMainWindow(ttk.Window):
         # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
         self.section_nav = ttk.Frame(self, padding=(8, 6))
         self.section_nav.grid(row=0, column=0, sticky=tk.EW)
+        from .usage_help import show_usage
+        self.usage_button = ttk.Button(self.section_nav, text="使用说明", bootstyle="secondary",
+                                      command=lambda: show_usage(self))
+        self.usage_button.pack(side=tk.RIGHT, padx=(8, 0), ipady=2)
         self._section_buttons = {}
         self._pages = {}
         section_names = (

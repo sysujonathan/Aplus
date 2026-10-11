@@ -36,6 +36,9 @@ class VersionController:
         self.latest = None
         self.waiting = None
         self.reserved = False
+        self.pending_notice = None
+        self.notice = None
+        self.notified_targets = set()
         self.button = ttk.Button(parent, text="版本更新", width=14, bootstyle="secondary",
                                  command=self.manual_check)
         self.button.pack(side=tk.RIGHT, padx=(8, 0), ipady=2)
@@ -47,6 +50,9 @@ class VersionController:
 
     def manual_check(self):
         if not self.waiting:
+            if self.notice is not None:
+                self.notice.destroy()
+                self.notice = None
             self.start_check(manual=True)
 
     def start_check(self, manual):
@@ -82,7 +88,13 @@ class VersionController:
             self.button.configure(text="有新版 · 查看" if available else "版本更新",
                                   bootstyle="warning" if available else "secondary")
             if self.show_result:
+                self.pending_notice = None
                 self.show_details(result)
+            elif available and result.get("target"):
+                self.pending_notice = result
+            else:
+                self.pending_notice = None
+        self.maybe_show_notice()
         if self.waiting:
             folder, deadline = self.waiting
             if (folder / "ready.json").exists() and not (folder / 'receipt.json').exists():
@@ -100,6 +112,76 @@ class VersionController:
                 messagebox.showerror("未更新", "更新保护进程未就绪，当前版本继续使用。\n可查看.git/aplus-update中的更新回执。",
                                      parent=self.window)
         self.poll_id = self.window.after(200, self.poll)
+
+    def maybe_show_notice(self):
+        """Offer a release once, only after work/editing finishes; never auto-update."""
+        result = getattr(self, "pending_notice", None)
+        if not result or self.waiting or self.busy or getattr(self, "notice", None):
+            return
+        target = result.get("target", "")
+        if target in self.notified_targets:
+            self.pending_notice = None
+            return
+        try:
+            path = metadata_dir(self.root) / "notice.json"
+            if json.loads(path.read_text(encoding="utf-8")).get("target") == target:
+                self.notified_targets.add(target)
+                self.pending_notice = None
+                return
+        except (OSError, ValueError):
+            pass
+        try:
+            service = self.window.service
+            if (self.window.state() != "normal" and self.window.state() != "zoomed") or open_forms(self.window):
+                return
+            if service is None or self.window.store is None:
+                return
+            # This is a read-only hint check, not the atomic update reservation.
+            # begin_update still rechecks and reserves before any code replacement.
+            if service.cancel_flags or service._code_update_reserved or service.store.rows(
+                    "SELECT id FROM jobs WHERE status IN ('queued','running')"):
+                return
+            self.show_notice(result)
+        except (tk.TclError, OSError, ValueError):
+            return  # A version reminder must not break the trading UI.
+        self.notified_targets.add(target)
+        self.pending_notice = None
+        try:
+            write_json(path, {"target": target})
+        except OSError:
+            pass  # Still suppressed for this session if metadata is unwritable.
+
+    def show_notice(self, result):
+        dialog = self.notice = tk.Toplevel(self.window)
+        dialog.title("软件更新")
+        dialog.transient(self.window)
+        dialog.resizable(False, False)
+        body = ttk.Frame(dialog, padding=20)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text="发现已通过验收的新版", font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W)
+        local = result.get("local", {})
+        text = (f"本地提交 {local.get('head', '未确认')[:7]} → 主线 {result['target'][:7]}\n"
+                "只更新软件，保留行情和交易记录。\n"
+                "稍后更新也可以继续使用当前版本。")
+        if not result.get("can_update"):
+            text += "\n\n" + result.get("message", "请先查看更新条件。")
+        ttk.Label(body, text=text, wraplength=460, justify=tk.LEFT).pack(anchor=tk.W, pady=12)
+        actions = ttk.Frame(body)
+        actions.pack(fill=tk.X)
+
+        def close():
+            dialog.destroy()
+            self.notice = None
+
+        def accept():
+            close()  # Don't mistake this prompt for an unsaved editing form.
+            self.show_details(result)  # Explicit confirmation + existing safety checks.
+
+        ttk.Button(actions, text="更新并重启" if result.get("can_update") else "查看更新条件",
+                   command=accept, bootstyle="primary").pack(side=tk.RIGHT)
+        ttk.Button(actions, text="稍后", command=close, bootstyle="secondary").pack(side=tk.RIGHT, padx=8)
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        # No grab_set / focus_force: this optional prompt must not hijack editing.
 
     def show_details(self, result):
         local = result.get("local", {})
