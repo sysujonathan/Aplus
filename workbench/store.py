@@ -378,7 +378,7 @@ class Store:
                      per_trade_risk_pct=1.0, max_position_pct=30.0,
                      cash_reserve_pct=10.0, account_id=None, active=True,
                      accounting_mode="snapshot", current_total_assets=None,
-                     broker_account_no="", snapshot_reference=None):
+                     broker_account_no="", snapshot_reference=None, reconciliation_reference=None):
         """Create or update a local manual-trading account profile."""
         name = str(name or "").strip()
         values = (initial_equity, risk_limit_pct, per_trade_risk_pct,
@@ -412,9 +412,14 @@ class Store:
             ):
                 raise ValueError("快照现金基准无效")
         stamp = now()
+        from .account_reconciliation import PREFIX, validate_reference
+        if reconciliation_reference is not None:
+            validate_reference(reconciliation_reference)
+            if accounting_mode != 'history' or reconciliation_reference['broker_total_assets'] != current_total_assets:
+                raise ValueError('对账基准必须与历史账户的券商资产一致')
         account_id = account_id or uuid.uuid4().hex[:16]
         with self.connect() as db:
-            existing = db.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+            existing = db.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
             if existing:
                 db.execute(
                     "UPDATE accounts SET name=?,initial_equity=?,risk_limit_pct=?,"
@@ -435,8 +440,27 @@ class Store:
             if accounting_mode == "snapshot" and snapshot_reference is not None:
                 db.execute("INSERT INTO meta VALUES(?,?)",
                            ("holding_cash_reference:" + account_id, dumps(snapshot_reference)))
+            if reconciliation_reference is not None:
+                db.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           (PREFIX+account_id, dumps(reconciliation_reference)))
+            elif (accounting_mode != 'history' or (existing and
+                    existing['current_total_assets'] != current_total_assets)):
+                db.execute('DELETE FROM meta WHERE key=?', (PREFIX+account_id,))
         self.event(None, "保存交易账户", self.path, account_id=account_id, name=name)
         return account_id
+
+    def save_account_reconciliation(self, account_id, reference):
+        """Only the independent dated check; never edit accounts or trading books."""
+        from .account_reconciliation import PREFIX, validate_reference
+        validate_reference(reference)
+        with self.connect() as db:
+            account = db.execute('SELECT * FROM accounts WHERE id=?', (account_id,)).fetchone()
+            if (not account or account['accounting_mode'] != 'history' or
+                    account['current_total_assets'] != reference['broker_total_assets']):
+                raise ValueError('对账基准与账户券商资产不一致')
+            db.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       (PREFIX+account_id, dumps(reference)))
+        self.event(None, '确认账户对账基准', self.path, account_id=account_id, asof=reference['asof'])
 
     def holding_auto_quotes(self, enabled=None):
         """Local UI preference only; no migration and no trading/audit writes."""

@@ -79,11 +79,14 @@ def test_opening_capital_display_retains_independent_reverse_calculation(tmp_pat
     from gui.trade_management import TradeManagementFrame
     store,aid,_=ledger(tmp_path)
     store.execute('UPDATE accounts SET current_total_assets=10200 WHERE id=?',(aid,))
+    from workbench.account_reconciliation import capture_reference
+    store.save_account_reconciliation(aid, capture_reference(store,aid,10200,'2026-09-30',
+        {CODE:{**quote(11), 'adjusted':False}}))
     page=SimpleNamespace(_show_fund_values=True,return_calendar=Mock(),fund_total=Mock(),
         fund_position=Mock(),funds_reconciliation=Mock(),fund_metrics={
             k:(Mock(),Mock()) for k in ('market_value','floating_pnl','daily_pnl',
                                      'withdrawable_cash','available_cash','asset_pnl')})
-    for price,implied in ((11,10002),(12,9802),(9,10402)):
+    for price,implied in ((11,10002),(12,10002),(9,10002)):
         page._report=management_report(store,aid,{CODE:quote(price)})
         TradeManagementFrame._fill_funds(page,update_calendar=False)
         assert page.funds_reconciliation.set.call_args.args==(f'初始资金（推算） {implied:,.2f} 元',)
@@ -105,6 +108,36 @@ def test_opening_capital_display_retains_independent_reverse_calculation(tmp_pat
     TradeManagementFrame._fill_funds(page,update_calendar=False)
     assert page.funds_reconciliation.set.call_args.args==('初始资金（推算） —',)
     assert store.rows('SELECT initial_equity FROM accounts WHERE id=?',(aid,))[0]['initial_equity']==10000
+
+
+def test_history_account_dialog_uses_dated_check_not_live_floating(tmp_path, quote_window):
+    from gui.trade_management import _AccountDialog
+    from workbench.account_reconciliation import capture_reference, reconcile_reference
+    store,aid,_=ledger(tmp_path)
+    store.execute('UPDATE accounts SET current_total_assets=10200 WHERE id=?',(aid,))
+    ref=capture_reference(store,aid,10200,'2026-09-30',{CODE:{**quote(11),'adjusted':False}})
+    store.save_account_reconciliation(aid,ref)
+    base=management_report(store,aid,{CODE:quote(99)})
+    def builder(day,broker):
+        candidate={**ref,'broker_total_assets':broker}
+        assert day=='2026-09-30'
+        check=reconcile_reference(store,{**base['account'],'current_total_assets':broker},candidate)
+        return candidate,check['reconciliation_components']
+    dialog=_AccountDialog(quote_window,base['account'],summary=base['summary'],
+        check_builder=builder,check_dates=['2026-09-30'])
+    try:
+        assert dialog.reverse_initial.get()=='10002.00'
+        assert float(dialog.system_total.get())==pytest.approx(27798)
+        dialog.initial.set('12345')
+        assert dialog.reverse_initial.get()=='10002.00'
+        dialog.total.set('10300')
+        assert dialog.reverse_initial.get()=='10102.00'
+        dialog._ok()
+        assert dialog.confirmed
+        assert dialog.check_reference['broker_total_assets']==10300
+        assert dialog.values['initial_equity']==12345
+    finally:
+        if dialog.top.winfo_exists():dialog.top.destroy()
 
 
 def fills(store, aid):
