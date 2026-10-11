@@ -39,7 +39,10 @@ class UpdateError(ValueError):
 def require_web_closed(port=8517):
     """Conservatively reject the normal local Web entry before replacing code."""
     try:
-        connection = socket.create_connection(('127.0.0.1', port), timeout=.3)
+        # Windows may take ~2s to report WSAECONNREFUSED on a closed loopback
+        # port. A subsecond timeout mistakes this for an uncertain live service.
+        # Only an explicit refusal allows updating; timeout/other errors reject.
+        connection = socket.create_connection(('127.0.0.1', port), timeout=3)
     except ConnectionRefusedError:
         return
     except OSError:

@@ -522,6 +522,16 @@ def test_closed_web_port_allows_update(monkeypatch):
     v.require_web_closed()
 
 
+def test_real_closed_loopback_port_is_not_mistaken_for_uncertain_service():
+    import socket
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        port = listener.getsockname()[1]
+    # On this Windows host refusal arrives in ~2 seconds, not 0.3 seconds.
+    # A real listening port and uncertain timeout remain rejected by other tests.
+    v.require_web_closed(port)
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Windows native desktop')
 def test_native_button_and_background_check_do_not_change_chart_height(tmp_path):
     script = r'''
