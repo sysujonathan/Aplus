@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.11.32",
-    "pr": 32,
+    "version": "2026.10.11.34",
+    "pr": 34,
     "date": "2026-10-11"
   },
   "history": [
@@ -385,13 +385,37 @@
       "pr": 32,
       "version": "2026.10.11.32",
       "date": "2026-10-11",
-      "status": "preview",
+      "status": "released",
       "title": "统一三源盘前必要历史起点",
       "notes": [
         "盘前日线默认最近两年，周线约七年，三源使用相同必要起点。",
         "不再自动要求2016年早期历史，已有长历史和研究结果保留。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/32"
+      "url": "https://github.com/sysujonathan/Aplus/pull/32",
+      "commit": "e0fbe49033a9ffd4da83d94825f26d79158cc0e5"
+    },
+    {
+      "pr": 33,
+      "version": "2026.10.11.33",
+      "date": "2026-10-11",
+      "status": "preview",
+      "title": "优化BaoStock当前缺口补拉与逐股保存",
+      "notes": [
+        "优化BaoStock当前缺口补拉与逐股保存；当前仅合入PR32特性分支，尚未进入main。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/33"
+    },
+    {
+      "pr": 34,
+      "version": "2026.10.11.34",
+      "date": "2026-10-11",
+      "status": "preview",
+      "title": "一键迁移本机发行版并安全更新",
+      "notes": [
+        "已知本机发行版可一键更新并重启，后台自动迁移到验收通过的正式main。",
+        "更新时自动保留push.cmd、行情与交易记录；未吸收代码、依赖或数据库变化仍停止并提示。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/34"
     }
   ]
 }

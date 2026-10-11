@@ -195,7 +195,8 @@ class VersionController:
         local = result.get("local", {})
         technical.insert("1.0", f"启动时提交：{getattr(self, 'running', {}).get('head', '未确认')}\n"
                          f"磁盘分支：{local.get('branch', '未确认')}\n磁盘提交：{local.get('head', '未确认')}\n"
-                         f"本机保留改动：{'有' if local.get('dirty') else '无'}\n"
+                         f"受保护的本机文件：{'有（更新时自动保留）' if local.get('preserved') else '无'}\n"
+                         f"其他代码改动：{'有' if local.get('dirty') else '无'}\n"
                          f"主线提交：{result.get('target', '未确认')}\n{result.get('message', '')}")
         technical.configure(state=tk.DISABLED)
         from gui.usage_help import show_usage
