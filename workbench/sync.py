@@ -40,6 +40,30 @@ def local_history(store, code, job, coverage=None, source='baostock'):
     return frame, state
 
 
+def tail_pending(store, code, last, end):
+    """Only explicit dated halts or verified closed sessions excuse absent bars."""
+    if last >= end:
+        return False
+    try:
+        calendar = json.loads(calendar_file(store, 'baostock').read_text(encoding='utf-8'))
+        if (not isinstance(calendar, dict) or
+                not calendar['start'] <= last <= end <= calendar['end']):
+            return True
+        days = calendar['trading_days']
+        if not isinstance(days, list) or any(not isinstance(day, str) for day in days):
+            return True
+        needed = {day for day in days if last < day <= end}
+    except (OSError, KeyError, TypeError, json.JSONDecodeError, UnicodeError):
+        return True
+    if not needed:
+        return False
+    from .trading_status import halt_evidence
+    # Corrupt/conflicting status evidence fails closed BEFORE another request.
+    # Do not turn an evidence error into the calendar's conservative fallback.
+    halted, _ = halt_evidence(store, code, last, end)
+    return bool(needed - set(halted))
+
+
 def repair_intervals(store, code, old, start, end, timeframe):
     """Unknown holes in the selected scan input, bounded by real price anchors."""
     from .history_quality import describe_history
@@ -109,8 +133,9 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     left = min(start, state['start']) if state else start
     right = max(end, state['end']) if state else end
 
-    if (source == 'baostock' and state and not force and end > state['end']
-            and (start < state['start'] or repair_timeframe is not None)):
+    if (source == 'baostock' and state and not force
+            and (start < state['start'] or repair_timeframe is not None)
+            and tail_pending(store, code, state['end'], end)):
         # Commit usable latest bars before attempting the earlier extension.
         # A failed prefix cannot roll back a successfully verified new tail.
         from .readiness import expected_day
@@ -118,7 +143,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         tail_id, tail_action = sync_stock(store, provider, code, state['start'], target_end, job,
             source=source, batch_writes=batch_writes, on_request=on_request)
         updated = coverage_state(store, code, source)[0]
-        if updated['end'] < target_end:
+        if tail_pending(store, code, updated['end'], target_end):
             exc = ValueError('最新尾部尚未完整返回，保留已保存行情；未开始补齐早期历史或历史缺口')
             if updated['end'] > state['end']:
                 exc.latest_dataset_id = tail_id
@@ -161,7 +186,7 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         action = 'refreshed' if force else action
     else:
         pieces = []
-        if source == 'baostock' and end > state['end']:
+        if source == 'baostock' and tail_pending(store, code, state['end'], end):
             pieces.append(fetch(old.date.iloc[-1], right, 'tail'))
         if start < state['start']:
             pieces.append(fetch(left, old.date.iloc[0], 'prefix'))

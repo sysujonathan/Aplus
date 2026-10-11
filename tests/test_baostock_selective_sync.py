@@ -240,13 +240,78 @@ def test_weekend_end_does_not_repeat_tail_or_block_earlier_extension(store):
     assert coverage_state(store, CODE)[0]['end'] == last
 
 
-def test_user_stop_after_tail_preserves_cancelled_receipt(store, monkeypatch):
+@pytest.mark.parametrize('repair_timeframe', [None, 'daily'])
+def test_reported_terminal_halt_keeps_tail_then_prefix_without_retry(store, repair_timeframe):
+    data = bars()
+    old, first, last = seed(store, data, start=data.date.iloc[50], end=data.date.iloc[-3])
+    class TerminalHalt(Provider):
+        def fetch(self, code, a, b):
+            self.calls.append((a, b))
+            raw = self.frame.loc[self.frame.date.between(a, b)].copy()
+            out = raw.loc[raw.date != last].copy()
+            # Shape produced by DirectBaoStock: the raw halted date is present
+            # in the response evidence but never appears as a fabricated bar.
+            out.attrs.update(
+                returned_dates=raw.date.tolist(),
+                suspended_dates=[last] if last in set(raw.date) else [],
+                trading_status_rows=[dict(date=row.date, code=code,
+                    tradestatus='0' if row.date == last else '1',
+                    volume='' if row.date == last else str(row.volume))
+                    for row in raw.itertuples(index=False)])
+            return out
+    provider = TerminalHalt(data)
+    did, action = sync_stock(store, lambda:provider, CODE, first, last,
+                             repair_timeframe=repair_timeframe, batch_writes=True)
+    assert action == 'updated'
+    assert provider.calls == [(data.date.iloc[-3], last), (first, data.date.iloc[50])]
+    saved, record = load_dataset(store, did)
+    pd.testing.assert_frame_equal(saved, data.iloc[:-1].reset_index(drop=True), check_exact=False)
+    assert len(load_dataset(store, old)[0]) == 348
+    state = coverage_state(store, CODE)[0]
+    assert state['start'] == first and state['end'] == data.date.iloc[-2]
+    quality = quality_for(store, record, last)
+    assert not quality['missing_dates'] and last in quality['suspended_dates']
+    def offline(): raise AssertionError('A certified terminal halt must not reconnect')
+    assert sync_stock(store, offline, CODE, first, last,
+                      repair_timeframe=repair_timeframe, batch_writes=True) == (did, 'skipped')
+
+
+def test_last_day_halt_does_not_excuse_another_unknown_tail_day(store):
+    data = bars()
+    old, first, last = seed(store, data, start=data.date.iloc[50], end=data.date.iloc[-3])
+    unknown = data.date.iloc[-2]
+    save_status_rows(store, CODE, last, last,
+                     [dict(date=last, code=CODE, tradestatus='0', volume='')])
+    class Incomplete(Provider):
+        def fetch(self, code, a, b):
+            self.calls.append((a, b))
+            raw = self.frame[self.frame.date.between(a, b) & (self.frame.date != unknown)]
+            out = raw[raw.date != last].copy()
+            out.attrs.update(returned_dates=raw.date.tolist(), suspended_dates=[last])
+            return out
+    provider = Incomplete(data)
+    with pytest.raises(ValueError, match='未获停牌证明'):
+        sync_stock(store, lambda:provider, CODE, first, last, batch_writes=True)
+    assert provider.calls == [(data.date.iloc[-3], last)]
+    assert coverage_state(store, CODE)[0]['dataset_id'] == old
+    assert coverage_state(store, CODE)[0]['end'] == data.date.iloc[-3]
+
+
+@pytest.mark.parametrize('board_scope', [False, True])
+def test_user_stop_after_tail_preserves_cancelled_receipt(store, monkeypatch, board_scope):
     data = bars()
     old, first, last = seed(store, data, start=data.date.iloc[50], end=data.date.iloc[-2])
     calls = []
     class Connection:
         def __enter__(self): return self
         def __exit__(self, *args): pass
+        def universe(self, day):
+            assert day == last
+            return pd.DataFrame(dict(code=[CODE, 'sh.600001'], code_name=['A', 'B'],
+                                     tradeStatus=['1', '1']))
+        def basics(self):
+            return pd.DataFrame(dict(code=[CODE, 'sh.600001'], ipoDate=[first]*2,
+                                     outDate=['']*2, type=['1']*2, status=['1']*2))
         def fetch(self, code, a, b):
             calls.append((code, a, b))
             if a == first:
@@ -256,12 +321,28 @@ def test_user_stop_after_tail_preserves_cancelled_receipt(store, monkeypatch):
     monkeypatch.setattr('workbench.service.BaoStock', Connection)
     service = Service(store)
     try:
-        row = wait_for(store, service.submit('sync', dict(source='baostock', codes=[CODE, 'sh.600001'],
+        selection = dict(boards=['沪深主板']) if board_scope else dict(codes=[CODE, 'sh.600001'])
+        row = wait_for(store, service.submit('sync', dict(source='baostock', **selection,
                                                          start=first, end=last)))
         report = json.loads(row['result'])
-        assert row['status'] == 'cancelled' and '最新尾部已保存' in row['message']
+        assert row['status'] == 'cancelled', row['message']
+        assert '最新尾部已保存' in report['stop_reason']
         assert report['partial_saved'] == 1 and not report['errors'] and report['success'] == 0
         assert report['datasets'] == [coverage_state(store, CODE)[0]['dataset_id']]
         assert len(calls) == 2 and all(c[0] == CODE for c in calls)
+        if board_scope:
+            # Final board audit observes the stop and retains the checkpoint;
+            # its generic cancellation message must not hide saved latest bars.
+            from unittest.mock import Mock
+            from gui.toolbar import ToolBar
+            toolbar = Mock()
+            toolbar._job_kind = '更新行情'
+            toolbar._job_started_at = toolbar._auto_started_at = None
+            toolbar._auto_scan_after_sync = True
+            toolbar._auto_chain_cancelled = True
+            toolbar._on_job_finished = None
+            ToolBar._finish_job(toolbar, row['status'], row['message'], row['result'])
+            assert '最新尾部保留 1 只' in toolbar.set_status.call_args.args[0]
+            toolbar.after_idle.assert_not_called()
     finally:
         service.pool.shutdown()

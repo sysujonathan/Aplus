@@ -91,6 +91,17 @@ def save_calendar(store, frame, start, end, job=None):
 def expected_day(store, asof, source='baostock'):
     try:
         calendar = json.loads(calendar_file(store, source).read_text(encoding='utf-8'))
+        # A Friday calendar remains valid over a confirmed closed weekend.
+        # Never clamp across an uncovered open/unknown day: that would hide
+        # a genuinely stale calendar and silently scan old prices.
+        if asof > calendar['end']:
+            from datetime import date, timedelta
+            from .exchange_calendar import is_trading_day
+            cursor = date.fromisoformat(asof)
+            last = date.fromisoformat(calendar['end'])
+            while cursor > last and is_trading_day(cursor) is False:
+                cursor -= timedelta(days=1)
+            asof = cursor.isoformat()
         if not calendar['start'] <= asof <= calendar['end']:
             raise ValueError('交易日历尚未覆盖所选日期，请先同步市场数据')
         days = [d for d in calendar['trading_days'] if d <= asof]
