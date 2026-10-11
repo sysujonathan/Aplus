@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.11.34",
-    "pr": 34,
+    "version": "2026.10.11.35",
+    "pr": 35,
     "date": "2026-10-11"
   },
   "history": [
@@ -410,12 +410,24 @@
       "version": "2026.10.11.34",
       "date": "2026-10-11",
       "status": "preview",
+      "title": "将BaoStock同步提速合入主线",
+      "notes": [
+        "将PR33已验收的BaoStock同步提速改动转向main；当前仍待合入。",
+        "保持单连接、请求间隔、黑名单停止和持久冷却，不改变TickFlow或腾讯路线。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/34"
+    },
+    {
+      "pr": 35,
+      "version": "2026.10.11.35",
+      "date": "2026-10-11",
+      "status": "preview",
       "title": "一键迁移本机发行版并安全更新",
       "notes": [
         "已知本机发行版可一键更新并重启，后台自动迁移到验收通过的正式main。",
         "更新时自动保留push.cmd、行情与交易记录；未吸收代码、依赖或数据库变化仍停止并提示。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/34"
+      "url": "https://github.com/sysujonathan/Aplus/pull/35"
     }
   ]
 }
