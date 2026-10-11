@@ -305,7 +305,10 @@ class AplusMainWindow(ttk.Window):
                     self._show_from_tray()
                 elif action == "quit":
                     self._exit_from_tray()
-                    return
+                    # Preparation may refuse the exit. Keep listening so a
+                    # failed update can restore a fully usable tray.
+                    if self._closing:
+                        return
         except queue.Empty:
             pass
         self.after(200, self._poll_tray_actions)

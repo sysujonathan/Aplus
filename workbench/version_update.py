@@ -141,10 +141,12 @@ def compatible_target(root, current, target):
     tree = run_git(root, "ls-tree", "-r", target)
     if any(line.startswith("120000 ") or line.startswith("160000 ") for line in tree.splitlines()):
         raise UpdateError("新版包含链接或子模块，请人工更新。")
-    # Even ignored local files must not be overwritten by new tracked files.
-    added = run_git(root, "-c", "core.quotepath=false", "diff", "--name-only", "--diff-filter=A", current, target).splitlines()
-    for name in added:
-        if (Path(root) / name).exists():
+    # Compare tracked paths, not diff's A/R/C labels: a rename/copy destination
+    # is also newly tracked and Git can overwrite an ignored local file there.
+    tracked = set(run_git(root, "-c", "core.quotepath=false", "ls-tree", "-r",
+                          "--name-only", current).splitlines())
+    for name in files:
+        if name not in tracked and (Path(root) / name).exists():
             raise UpdateError("新版文件与本地保留文件重名，未覆盖。")
 
 
