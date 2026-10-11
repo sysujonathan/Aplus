@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import threading
+import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -178,7 +179,7 @@ class Service:
         if not codes:
             raise ValueError('请先选择股票范围')
         report = {'source':source,'requested':len(codes),'success':0,'errors':[], 'datasets':[], 'end_requested':end,
-                  'skipped':0,'downloaded':0,'updated':0,'refreshed':0,'suspended':0}
+                  'skipped':0,'downloaded':0,'updated':0,'refreshed':0,'suspended':0,'partial_saved':0}
         report['boards'] = spec.get('boards',[])
         report['scope_reused'] = scope_reused
         suspended = set()
@@ -195,17 +196,32 @@ class Service:
             self.progress(job,processed,len(codes),f'{current_request[0]} · 等待响应 {seconds}秒')
         workers = 1  # BaoStock public rules prohibit concurrent connections.
         report['connections'] = workers
+        report['timings'] = dict(history_requests=0, history_request_seconds=0.0, stock_processing_seconds=0.0)
+        def timing(code, elapsed):
+            for key, value in elapsed.items():
+                report['timings'][key] += value
         from .sync_progress import sync_progress
         def requesting(code, operation, a, b):
             current_request[0]=sync_progress(source,operation,code,a,b)
             self.progress(job,processed,len(codes),current_request[0])
         self.progress(job,processed,len(codes),'BaoStock · 准备行情；复用已有缓存')
+        selective_repair = bool(spec.get('repair_codes') and spec.get('repair_scope') != 'history'
+                                and not spec.get('force'))
+        repair_timeframe = spec.get('scan_timeframe', 'daily') if selective_repair else None
+        report['repair_timeframe'] = repair_timeframe
         results = sync_results(self.store, BaoStock, [c for c in codes if c not in suspended], start, end,
-                               job, bool(spec.get('force') or spec.get('repair_codes')), self.cancel_flags[job], halt, workers, waiting,
-                               on_request=requesting)
+                               job, bool(spec.get('force') or (spec.get('repair_codes') and not selective_repair)),
+                               self.cancel_flags[job], halt, workers, waiting,
+                               on_request=requesting, repair_timeframe=repair_timeframe, on_timing=timing)
+        last_checkpoint = 0.0
         try:
             for code,did,outcome,exc in results:
+                if getattr(exc, 'latest_dataset_id', None):
+                    report['datasets'].append(exc.latest_dataset_id)
+                    report['partial_saved'] += 1
                 if isinstance(exc, InterruptedError):
+                    if getattr(exc, 'latest_dataset_id', None):
+                        report['stop_reason'] = '任务已停止；最新尾部已保存，历史扩展／缺口补拉未完成'
                     continue
                 processed += 1
                 if exc is None:
@@ -217,6 +233,10 @@ class Service:
                 else:
                     failures += 1
                     detail=dict(code=code,**error_detail(exc,source))
+                    if getattr(exc, 'latest_dataset_id', None):
+                        detail['latest_dataset_id'] = exc.latest_dataset_id
+                        detail['latest_saved'] = True
+                        detail['error'] += '；最新尾部已保存，历史扩展／缺口补拉未完成'
                     report['errors'].append(detail)
                     self.store.event(job,'股票同步失败',**detail)
                     recent=0
@@ -231,9 +251,15 @@ class Service:
                         report['stop_reason'] = '连续三只股票下载失败，已停止，避免反复请求'
                         halt.set()
                 self.progress(job,processed,len(codes),current_request[0])
-                self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+                # Snapshots/coverage remain durable per stock; only the growing
+                # UI report is checkpointed less often for fast cache batches.
+                stamp = time.monotonic()
+                if exc is not None or stamp-last_checkpoint >= 1.0:
+                    self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+                    last_checkpoint = stamp
         finally:
             results.close()
+            self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
         report['remaining'] = len(codes)-report['success']-len(report['errors'])
         if 'boards' in spec:
             audit = audit_scope(self.store, spec['boards'], end, source=source)

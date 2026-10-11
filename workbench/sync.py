@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
+import contextlib
 import numpy as np
 import pandas as pd
 
@@ -38,38 +40,97 @@ def local_history(store, code, job, coverage=None, source='baostock'):
     return frame, state
 
 
+def repair_intervals(store, code, old, start, end, timeframe):
+    """Unknown holes in the selected scan input, bounded by real price anchors."""
+    from .history_quality import describe_history
+    quality = describe_history(store, code, old, start, end, source='baostock')
+    window = quality['windows'][timeframe]
+    dates = old.date.tolist()
+    intervals = []
+    for day in quality['missing_dates']:
+        if not window['start'] <= day <= window['end']:
+            continue
+        i = bisect_left(dates, day)
+        # Prefix/tail are handled separately. Missing dates before the first
+        # real bar do not prove an IPO date, nor have two price anchors.
+        if i == 0 or i == len(dates):
+            continue
+        a, b = dates[i-1], dates[i]
+        if intervals and a <= intervals[-1][1]:
+            intervals[-1] = (intervals[-1][0], max(b, intervals[-1][1]))
+        else:
+            intervals.append((a, b))
+    # Fragmented legacy gaps must not turn one stock into hundreds of calls.
+    if len(intervals) > 4:
+        intervals = [(intervals[0][0], intervals[-1][1])]
+    return intervals
+
+
 def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock', batch_writes=False,
-               on_request=None):
+               on_request=None, repair_timeframe=None):
     """provider is lazy: a fully cached request makes no network connection."""
+    if repair_timeframe is not None and (source != 'baostock' or repair_timeframe not in ('daily', 'weekly')):
+        raise ValueError('定向缺口补拉须选择 BaoStock 日线或周线')
     coverage = coverage_state(store,code,source)
     track_quality = source in FALLBACK_SOURCES or calendar_file(store, source).is_file()
     state = coverage[0] if coverage else None
     notify = on_request or (lambda operation, a, b: None)
-    if state and not force and state['start'] <= start and end <= state['end']:
+    if state and not force and repair_timeframe is None and state['start'] <= start and end <= state['end']:
         # Preserve the tamper gate while avoiding pandas CSV parsing and the
         # full OHLCV validation pass for every unchanged stock.
         notify('cached', None, None)
         verify_dataset(store, state['dataset_id'], job)
+        quality = None
         if track_quality:
             from .history_quality import quality_for, save_quality
             record = store.rows('SELECT * FROM datasets WHERE id=?', (state['dataset_id'],))[0]
-            save_quality(store, record['id'], quality_for(store, record))
-        store.event(job, '跳过已有行情', code=code, start=start, end=end,
-                    dataset=state['dataset_id'], integrity='sha256')
+            quality = quality_for(store, record)
+        with store.atomic_write() if batch_writes else contextlib.nullcontext():
+            if quality is not None:
+                save_quality(store, state['dataset_id'], quality)
+            store.event(job, '跳过已有行情', code=code, start=start, end=end,
+                        dataset=state['dataset_id'], integrity='sha256')
         return state['dataset_id'], 'skipped'
     old, state = local_history(store, code, job, coverage,source)
     # A v1 runtime has no sync_coverage row.  Its last successful immutable
     # snapshot is recovered above once, then future runs use the fast path.
-    if state and not force and state['start'] <= start and end <= state['end']:
+    if state and not force and repair_timeframe is None and state['start'] <= start and end <= state['end']:
         notify('cached', None, None)
-        save_coverage(store,code,state['dataset_id'],state['start'],state['end'],source)
+        quality = None
         if track_quality:
             from .history_quality import describe_history, save_quality
-            save_quality(store, state['dataset_id'], describe_history(store, code, old, state['start'], state['end'], source=source))
-        store.event(job, '跳过已有行情', code=code, start=start, end=end, dataset=state['dataset_id'])
+            quality = describe_history(store, code, old, state['start'], state['end'], source=source)
+        with store.atomic_write() if batch_writes else contextlib.nullcontext():
+            save_coverage(store,code,state['dataset_id'],state['start'],state['end'],source)
+            if quality is not None:
+                save_quality(store, state['dataset_id'], quality)
+            store.event(job, '跳过已有行情', code=code, start=start, end=end, dataset=state['dataset_id'])
         return state['dataset_id'], 'skipped'
     left = min(start, state['start']) if state else start
     right = max(end, state['end']) if state else end
+
+    if (source == 'baostock' and state and not force and end > state['end']
+            and (start < state['start'] or repair_timeframe is not None)):
+        # Commit usable latest bars before attempting the earlier extension.
+        # A failed prefix cannot roll back a successfully verified new tail.
+        from .readiness import expected_day
+        target_end = expected_day(store, end, source) if calendar_file(store, source).is_file() else end
+        tail_id, tail_action = sync_stock(store, provider, code, state['start'], target_end, job,
+            source=source, batch_writes=batch_writes, on_request=on_request)
+        updated = coverage_state(store, code, source)[0]
+        if updated['end'] < target_end:
+            exc = ValueError('最新尾部尚未完整返回，保留已保存行情；未开始补齐早期历史或历史缺口')
+            if updated['end'] > state['end']:
+                exc.latest_dataset_id = tail_id
+            raise exc
+        try:
+            did, action = sync_stock(store, provider, code, start, target_end, job,
+                source=source, batch_writes=batch_writes, on_request=on_request,
+                repair_timeframe=repair_timeframe)
+        except Exception as exc:
+            exc.latest_dataset_id = tail_id
+            raise
+        return did, 'refreshed' if tail_action == 'refreshed' else (tail_action if action == 'skipped' else action)
 
     def fetch(a, b, operation):
         notify(operation, a, b)
@@ -100,10 +161,28 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
         action = 'refreshed' if force else action
     else:
         pieces = []
+        if source == 'baostock' and end > state['end']:
+            pieces.append(fetch(old.date.iloc[-1], right, 'tail'))
         if start < state['start']:
             pieces.append(fetch(left, old.date.iloc[0], 'prefix'))
-        if end > state['end']:
+        if source != 'baostock' and end > state['end']:
             pieces.append(fetch(old.date.iloc[-1], right, 'tail'))
+        if repair_timeframe is not None:
+            for a, b in repair_intervals(store, code, old, left, end, repair_timeframe):
+                part = fetch(a, b, 'repair')
+                if not set(old.loc[old.date.between(a, b), 'date']).issubset(set(part.date)):
+                    raise ValueError('局部补拉返回不完整，保留原快照，未推进同步进度')
+                pieces.append(part)
+        if not pieces:
+            notify('cached', None, None)
+            from .history_quality import describe_history, save_quality
+            quality = describe_history(store, code, old, left, right, source=source)
+            with store.atomic_write() if batch_writes else contextlib.nullcontext():
+                save_quality(store, state['dataset_id'], quality)
+                save_coverage(store, code, state['dataset_id'], left, min(right, old.date.max()), source)
+                store.event(job, '跳过已有行情', code=code, start=start, end=end,
+                            dataset=state['dataset_id'], repair_timeframe=repair_timeframe)
+            return state['dataset_id'], 'skipped'
         changed = False
         for part in pieces:
             overlap = old.merge(part, on='date', suffixes=('_old', '_new'))
@@ -125,9 +204,8 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
     if track_quality:
         from .history_quality import describe_history, save_quality
         quality = describe_history(store, code, frame, left, right, source=source)
-    import contextlib
     # Network and quality checks are complete before entering this short unit.
-    # BaoStock retains its original behavior. TickFlow explicitly opts in.
+    # Each opting-in caller commits one stock, never a whole market batch.
     with store.atomic_write() if batch_writes else contextlib.nullcontext():
         did = save_dataset(store, code, frame, source, ADJUSTMENTS[source], job)
         if quality is not None:
