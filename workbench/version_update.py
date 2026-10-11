@@ -23,6 +23,7 @@ from urllib.request import Request, urlopen
 import uuid
 import zipfile
 
+
 REPOSITORY = "sysujonathan/Aplus"
 REMOTE = f"https://github.com/{REPOSITORY}.git"
 API = f"https://api.github.com/repos/{REPOSITORY}"
@@ -153,7 +154,14 @@ def check_version(root, force=False, api=github_json, fetch=None):
     Cache lives in git metadata, not in the trading database. Every cache hit
     rechecks local identity; a local edit never inherits an old safe-update flag.
     """
+    # UI metadata must not make the copied update worker depend on live code.
+    from workbench.releases import identity
     local = local_version(root)
+    def decorate(result):
+        result["local_release"] = identity(root, local)
+        result["target_release"] = identity(root, target=result.get("target", ""),
+            git_reader=lambda sha, name: run_git(root, "show", f"{sha}:{name}")) if result.get("target") else {}
+        return result
     cache = metadata_dir(root) / "check.json"
     day = shanghai_day()
     previous = {}
@@ -164,10 +172,11 @@ def check_version(root, force=False, api=github_json, fetch=None):
     if not force and previous.get("day") == day:
         result = dict(previous, local=local)
         result["can_update"] = False  # Requires a fresh explicit check/CI verification.
+        result["block_reason"] = "cached"
         if result.get("target") == local["head"]:
             result.update(state="current", message="已是主线当前提交。" if not local["dirty"] else
                           "提交号与主线相同，但本地有修改；不能按提交号认定代码一致。")
-        return result
+        return decorate(result)
     result = {"day": day, "local": local, "state": "unavailable", "can_update": False,
               "message": "版本检查未完成，不影响行情更新。"}
     # Persist the attempt before networking so a failed/offline check won't loop.
@@ -199,25 +208,29 @@ def check_version(root, force=False, api=github_json, fetch=None):
                 except UpdateError:
                     result.update(state="diverged", message="本地与主线各有不同提交，请人工核对；不能直接PULL。")
                     write_json(cache, result)
-                    return result
+                    return decorate(result)
             else:
                 result.update(state="ahead", message="本地包含尚未进入主线的提交；不会退回较旧主线。")
                 write_json(cache, result)
-                return result
+                return decorate(result)
             result.update(state="available", message="有验收通过的主线版本，可查看更新。")
             if local["dirty"]:
+                result["block_reason"] = "modified"
                 raise UpdateError("本地有修改／新增文件，需先保留并人工核对；不能直接PULL。")
             if local["branch"] != "main":
+                result["block_reason"] = "development"
                 raise UpdateError("当前不是main日常使用分支，请先人工对齐；不会切分支覆盖修复。")
+            result["block_reason"] = "manual"
             compatible_target(root, local["head"], target)
             result["summary"] = run_git(root, "log", "--format=%h %s", "-8", f'{local["head"]}..{target}')
             result["can_update"] = True
+            result.pop("block_reason", None)
     except Exception as exc:
         result["message"] = str(exc) if isinstance(exc, UpdateError) else "版本检查暂不可用（网络或GitHub限制），不影响行情更新。"
     if local["dirty"] and result["state"] == "current":
         result["message"] = "提交号与主线相同，但本地有修改；不能按提交号认定代码一致。"
     write_json(cache, result)
-    return result
+    return decorate(result)
 
 
 def validate_plan(root, plan, api=github_json):

@@ -12,6 +12,8 @@ import ttkbootstrap as ttk
 
 from workbench.version_update import check_version, metadata_dir, prepare_worker, require_web_closed
 from workbench.version_update import write_json
+from workbench.version_update import local_version
+from workbench.releases import identity, presentation
 
 
 def open_forms(window):
@@ -30,6 +32,10 @@ class VersionController:
     def __init__(self, window, parent, root=None, checker=check_version):
         self.window = window
         self.root = Path(root or Path(__file__).resolve().parents[1]).resolve()
+        try:
+            self.running = identity(self.root, local_version(self.root))
+        except (OSError, ValueError):
+            self.running = identity(self.root)
         self.checker = checker
         self.results = queue.SimpleQueue()
         self.busy = False
@@ -152,20 +158,51 @@ class VersionController:
             pass  # Still suppressed for this session if metadata is unwritable.
 
     def show_notice(self, result):
+        if self.notice is not None:
+            self.notice.destroy()
+        view = presentation(result, getattr(self, "running", None))
+        editing = open_forms(self.window)
+        service = self.window.service
+        active = bool(service and (service.cancel_flags or service._code_update_reserved or
+                      service.store.rows("SELECT id FROM jobs WHERE status IN ('queued','running')")))
         dialog = self.notice = tk.Toplevel(self.window)
         dialog.title("软件更新")
         dialog.transient(self.window)
-        dialog.resizable(False, False)
+        dialog.resizable(True, True)
+        dialog.minsize(520, 340)
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(body, text="发现已通过验收的新版", font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W)
+        ttk.Label(body, text=view["title"], font=("Microsoft YaHei", 12, "bold")).pack(anchor=tk.W)
+        text = f"正在运行：{view['current']}\n正式版：{view['target']}"
+        if result.get("day"):
+            text += f"\n检查日期：{result['day']}"
+        text += "\n\n" + view["message"]
+        if editing:
+            text += "\n请先保存并关闭编辑/预览窗口，再重新检查。"
+        elif active:
+            text += "\n请等待行情、扫描或研究任务结束，再重新检查。"
+        if view["notes"]:
+            text += "\n\n正式版更新摘要：\n" + "\n".join("• " + n for n in view["notes"])
+        ttk.Label(body, text=text, wraplength=540, justify=tk.LEFT).pack(anchor=tk.W, pady=12)
+        details = ttk.Frame(body)
+        def toggle_details():
+            if details.winfo_manager():
+                details.pack_forget()
+            else:
+                details.pack(fill=tk.BOTH, expand=True, before=actions, pady=8)
+        technical = tk.Text(details, height=7, width=64, wrap=tk.WORD)
+        technical.pack(fill=tk.BOTH, expand=True)
         local = result.get("local", {})
-        text = (f"本地提交 {local.get('head', '未确认')[:7]} → 主线 {result['target'][:7]}\n"
-                "只更新软件，保留行情和交易记录。\n"
-                "稍后更新也可以继续使用当前版本。")
-        if not result.get("can_update"):
-            text += "\n\n" + result.get("message", "请先查看更新条件。")
-        ttk.Label(body, text=text, wraplength=460, justify=tk.LEFT).pack(anchor=tk.W, pady=12)
+        technical.insert("1.0", f"启动时提交：{getattr(self, 'running', {}).get('head', '未确认')}\n"
+                         f"磁盘分支：{local.get('branch', '未确认')}\n磁盘提交：{local.get('head', '未确认')}\n"
+                         f"本机保留改动：{'有' if local.get('dirty') else '无'}\n"
+                         f"主线提交：{result.get('target', '未确认')}\n{result.get('message', '')}")
+        technical.configure(state=tk.DISABLED)
+        from gui.usage_help import show_usage
+        links = ttk.Frame(body)
+        links.pack(fill=tk.X, pady=(0, 12))
+        ttk.Button(links, text="更新日志", command=lambda: show_usage(self.window, tab="更新日志")).pack(side=tk.LEFT)
+        ttk.Button(links, text="技术详情", command=toggle_details).pack(side=tk.LEFT, padx=8)
         actions = ttk.Frame(body)
         actions.pack(fill=tk.X)
 
@@ -174,36 +211,23 @@ class VersionController:
             self.notice = None
 
         def accept():
+            if not view["can_update"] or editing or active:
+                return
             close()  # Don't mistake this prompt for an unsaved editing form.
-            self.show_details(result)  # Explicit confirmation + existing safety checks.
+            if messagebox.askyesno("更新并重启", "请确认已保存编辑内容。\n只更新软件，保留行情和交易记录。\n现在更新并重启？", parent=self.window):
+                self.begin_update(result)  # Existing fresh revalidation and reservation.
 
-        ttk.Button(actions, text="更新并重启" if result.get("can_update") else "查看更新条件",
-                   command=accept, bootstyle="primary").pack(side=tk.RIGHT)
-        ttk.Button(actions, text="稍后", command=close, bootstyle="secondary").pack(side=tk.RIGHT, padx=8)
+        if result.get("state") == "available":
+            ttk.Button(actions, text="更新并重启", command=accept, bootstyle="primary",
+                       state=tk.NORMAL if view["can_update"] and not editing and not active else tk.DISABLED).pack(side=tk.RIGHT)
+        ttk.Button(actions, text="稍后" if result.get("state") == "available" else "关闭",
+                   command=close, bootstyle="secondary").pack(side=tk.RIGHT, padx=8)
+        ttk.Button(actions, text="重新检查", command=lambda: (close(), self.manual_check())).pack(side=tk.LEFT)
         dialog.protocol("WM_DELETE_WINDOW", close)
         # No grab_set / focus_force: this optional prompt must not hijack editing.
 
     def show_details(self, result):
-        local = result.get("local", {})
-        lines = [f"本地：{local.get('branch', '未确认')} · {local.get('head', '')[:7]}",
-                 "本地有修改（提交号不代表完整代码）" if local.get("dirty") else "",
-                 f"主线：{result.get('target', '未确认')[:7]}", result.get("message", ""),
-                 result.get("summary", "")]
-        text = "\n".join(line for line in lines if line)
-        try:
-            base = metadata_dir(self.root)
-            receipts = sorted(base.glob("*/receipt.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if receipts:
-                previous = json.loads(receipts[0].read_text(encoding="utf-8"))
-                text += "\n上次更新：" + previous.get("message", "待核对")
-        except (OSError, ValueError):
-            pass
-        if not result.get("can_update"):
-            messagebox.showinfo("版本检查", text, parent=self.window)
-            return
-        if messagebox.askyesno("版本更新", text + "\n\n请先保存编辑并关闭弹窗。\n只更新代码，保留行情与交易记录。\n现在更新并重启？",
-                               parent=self.window):
-            self.begin_update(result)
+        self.show_notice(result)
 
     def begin_update(self, result):
         service = self.window.service
