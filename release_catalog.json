@@ -357,16 +357,16 @@
     },
     {
       "pr": 30,
-      "version": "2026.10.10.30",
-      "date": "2026-10-10",
-      "status": "preview",
+      "version": "2026.10.11.30",
+      "date": "2026-10-11",
+      "status": "released",
       "title": "修正初始资金反推并优化盘前布局与持仓提示",
       "notes": [
         "同日对账修复初始资金反推，不能用最新股价扣旧资产。",
         "盘前状态上移；实际成交漏填时给出清楚的中文提示。"
       ],
       "url": "https://github.com/sysujonathan/Aplus/pull/30",
-      "commit": "1ead423b5090217e4eb6cedc280efd89030da1ae"
+      "commit": "e4d5f6553de053b2b423297f27d3964c2e7f236b"
     },
     {
       "pr": 31,

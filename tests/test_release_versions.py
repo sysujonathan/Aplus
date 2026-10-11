@@ -23,7 +23,9 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[23]['included_in'] == 22
     assert by_pr[23]['date'] == '2026-10-06'
     assert by_pr[23]['version'] == '2026.10.06.23'
-    assert by_pr[30]['status'] == by_pr[31]['status'] == 'preview'
+    assert by_pr[30]['status'] == 'released' and by_pr[31]['status'] == 'preview'
+    assert by_pr[30]['version'] == '2026.10.11.30'
+    assert by_pr[30]['commit'] == 'e4d5f6553de053b2b423297f27d3964c2e7f236b'
     assert by_pr[29]['version'] == '2026.10.10.29'
     assert by_pr[29]['commit'] == '18670c8904768927f2bc37c317fee27a73a011df'
 
@@ -31,7 +33,7 @@ def test_catalog_covers_each_pr_without_inventing_publications():
 def test_generated_document_and_offline_catalog_are_one_source():
     text = r.changelog_text(r.read_catalog(ROOT))
     assert text.rstrip() == (ROOT / 'docs/更新日志.md').read_text(encoding='utf-8').rstrip()
-    assert 'v2026.10.10.30-preview' in text
+    assert 'v2026.10.11.30' in text and 'v2026.10.11.30-preview' not in text
     assert '随PR11' in text and '随PR22' in text
 
 
@@ -62,6 +64,10 @@ def test_missing_or_oversized_catalog_has_no_fake_version(tmp_path):
 def test_exact_historical_main_and_current_preview_are_distinct():
     historical = r.identity(ROOT, target='18670c8904768927f2bc37c317fee27a73a011df')
     assert r.version_label(historical) == 'v2026.10.10.29'
+    merged = r.identity(ROOT, target='e4d5f6553de053b2b423297f27d3964c2e7f236b',
+                        git_reader=lambda *args: '{}')  # PR30 predates the manifest.
+    assert r.version_label(merged) == 'v2026.10.11.30'
+    assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
     assert r.version_label(preview) == 'v2026.10.11.31 · 预览版'
     # A short hash and an unrelated revision must not be called PR29.

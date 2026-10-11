@@ -302,16 +302,14 @@ def management_report(store, account_id, price_map=None):
         floating_total,
         cash_adjustments,
     )
+    from .account_reconciliation import reconcile_account
+    independent_check = reconcile_account(store, account)
     historical_equity = history["system_total_assets"]
     if account.get("accounting_mode") == "snapshot":
         total_assets = snapshot or historical_equity
     else:
         total_assets = historical_equity
     available_cash = total_assets - market_value
-    reconciliation = (
-        history["reconciliation"]
-        if account.get("accounting_mode") == "history" else None
-    )
     for row in open_rows:
         row["allocation_pct"] = row["market_value"] / total_assets * 100 if total_assets else 0.0
         row["account_risk_pct"] = row["risk_amount"] / total_assets * 100 if total_assets else 0.0
@@ -338,8 +336,7 @@ def management_report(store, account_id, price_map=None):
             "quote_date": max(quote_dates) if quote_dates else "",
             "historical_equity": historical_equity,
             "broker_total_assets": snapshot or None,
-            "implied_initial_equity": history["implied_initial_equity"],
-            "reconciliation": reconciliation,
+            **independent_check,
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": len(wins) / len(closed) * 100 if closed else 0.0,

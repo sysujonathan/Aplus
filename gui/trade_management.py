@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import math
 import queue
 import threading
 import time
@@ -29,6 +30,7 @@ from workbench.trading import (
     proposed_quantity,
     trading_dates,
 )
+from workbench.account_reconciliation import capture_reference, reconcile_reference
 
 from .data import StockNameLookup, code_names
 from .theme import APP_BG, DOWN, MUTED, PANEL_BG, REPEAT, TEXT, UP
@@ -321,10 +323,10 @@ class TradeManagementFrame(ttk.Frame):
                       row=3, column=0, sticky=tk.EW, pady=(4, 0)
                   )
         from ttkbootstrap.widgets import ToolTip
-        ToolTip(reconciliation_label, text="反推初始资金＝券商资产快照－清仓盈亏－持仓浮盈亏－资金净变动。\n"
+        ToolTip(reconciliation_label, text="反推初始资金＝已确认基准日的券商资产－同日清仓盈亏－同日持仓浮盈亏－同日资金净变动。\n"
                 "用于核对补录，不是已登记初始资金，也不会自动覆盖它。\n"
-                "按历史估值核对；资产快照、估值与记录应对应同一时点。\n"
-                "切换历史来源可能改变估值日期或复权口径，差额不一定是漏记。")
+                "当前行情与扫描来源切换不改变对账基准。\n"
+                "显示 — 时，请在账户设置确认券商快照日期及同日估值依据。")
 
         closed = self._panel(2, 0, "已清仓", self._show_closed_add_menu)
         closed.rowconfigure(0, weight=1)
@@ -769,8 +771,19 @@ class TradeManagementFrame(ttk.Frame):
         summary = {} if create_new else (self._report["summary"] if self._report else {})
         if account and account.get("accounting_mode") == "history" and self._base_report:
             summary = self._base_report["summary"]
+        captured = {}
+        def build_check(day, broker):
+            old = summary.get('reconciliation_reference')
+            if day not in captured:
+                captured[day] = capture_reference(self.store, aid, broker, day,
+                    previous_reference=old if old and old['asof'] == day else None)
+            reference = {**captured[day], 'broker_total_assets': broker}
+            check = reconcile_reference(self.store, dict(id=aid, initial_equity=0,
+                current_total_assets=broker), reference)
+            return reference, check['reconciliation_components']
         dialog = _AccountDialog(self, account, market_value=market_value,
-                                summary=summary, create_new=create_new)
+                                summary=summary, create_new=create_new, check_builder=build_check,
+                                check_dates=trading_dates(self.store, limit=1000))
         self.wait_window(dialog.top)
         if not dialog.confirmed:
             return
@@ -784,7 +797,8 @@ class TradeManagementFrame(ttk.Frame):
                              "invested": net_invested(self._holding_fills) if not create_new and self._report else 0,
                              "adjustments": summary.get("cash_adjustments", 0)}
             saved = self.store.save_account(**dialog.values, account_id=account_id,
-                                            snapshot_reference=reference)
+                                            snapshot_reference=reference,
+                                            reconciliation_reference=dialog.check_reference)
         except Exception as exc:
             messagebox.showerror("账户保存失败", str(exc), parent=self)
             return
@@ -1348,7 +1362,8 @@ class _CashFlowManagerDialog(_BaseDialog):
 
 
 class _AccountDialog(_BaseDialog):
-    def __init__(self, parent, account=None, market_value=0.0, summary=None, create_new=False):
+    def __init__(self, parent, account=None, market_value=0.0, summary=None, create_new=False,
+                 check_builder=None, check_dates=()):
         super().__init__(parent, "新增账户" if create_new else "账户设置")
         account = account or {}
         summary = summary or {}
@@ -1358,6 +1373,10 @@ class _AccountDialog(_BaseDialog):
         self.floating_pnl = float(summary.get("floating_pnl") or 0)
         self.cash_adjustments = float(summary.get("cash_adjustments") or 0)
         self._implied_initial = None
+        self.check_builder = check_builder
+        self.check_reference = None
+        self._original_broker = account.get('current_total_assets')
+        self._original_check_day = summary.get('reconciliation_asof') or ''
         self.mode = tk.StringVar(value=account.get("accounting_mode", "snapshot"))
         ttk.Label(self.form, text="建账方式").grid(row=0, column=0, sticky=tk.W, pady=4)
         ttk.Radiobutton(self.form, text="当前资产快照", variable=self.mode,
@@ -1420,13 +1439,21 @@ class _AccountDialog(_BaseDialog):
         self.trade_risk = self.entry(5, "单笔风险 %", account.get("per_trade_risk_pct", 1), column=1)
         self.max_position = self.entry(6, "单票仓位上限 %", account.get("max_position_pct", 30))
         self.cash_reserve = self.entry(6, "最低现金 %", account.get("cash_reserve_pct", 10), column=1)
+        self.check_date_label = ttk.Label(self.form, text='券商收盘快照日期')
+        self.check_date_label.grid(row=7, column=0, sticky=tk.W, pady=4)
+        self.check_day = tk.StringVar(value=self._original_check_day)
+        dates = sorted(set(check_dates) | ({self._original_check_day} if self._original_check_day else set()), reverse=True)
+        self.check_date_entry = ttk.Combobox(self.form, textvariable=self.check_day,
+                                            values=dates, state='readonly', width=20)
+        self.check_date_entry.grid(row=7, column=1, sticky=tk.EW, padx=(0,12))
         self.hint = tk.StringVar()
         ttk.Label(self.form, textvariable=self.hint, foreground=MUTED, wraplength=600).grid(
-            row=7, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
+            row=8, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
         )
-        self.buttons(8, self._ok)
+        self.buttons(9, self._ok)
         self.initial.trace_add("write", lambda *_args: self._recalculate_account())
         self.total.trace_add("write", lambda *_args: self._recalculate_account())
+        self.check_day.trace_add('write', lambda *_args: self._recalculate_account())
         self._mode_changed()
 
     def _update_available(self):
@@ -1463,9 +1490,23 @@ class _AccountDialog(_BaseDialog):
             self.reconciliation_label.configure(foreground=DOWN)
             self.use_reverse_button.state(["disabled"])
             return
-        result = history_reconciliation(
-            initial, broker, self.closed_pnl, self.floating_pnl, self.cash_adjustments
-        )
+        self.check_reference = None
+        if broker is not None:
+            try:
+                if not self.check_day.get() or self.check_builder is None:
+                    raise ValueError('请确认券商快照日期；不能用旧资产减最新浮盈')
+                self.check_reference, components = self.check_builder(self.check_day.get(), broker)
+                result = history_reconciliation(initial, broker, components['closed_pnl'],
+                    components['floating_pnl'], components['cash_adjustments'])
+            except (ValueError, OSError) as exc:
+                self.reverse_initial.set('—')
+                self._implied_initial = None
+                self.reconciliation.set(str(exc))
+                self.reconciliation_label.configure(foreground=MUTED)
+                self.use_reverse_button.state(['disabled'])
+                return
+        else:
+            result = history_reconciliation(initial)
         self._implied_initial = result["implied_initial_equity"]
         if self._implied_initial is None:
             self.reverse_initial.set("—")
@@ -1504,6 +1545,8 @@ class _AccountDialog(_BaseDialog):
 
     def _mode_changed(self):
         if self.mode.get() == "snapshot":
+            self.check_date_label.grid_remove()
+            self.check_date_entry.grid_remove()
             self.initial_label.configure(text="当前总资产")
             self.available_label.grid()
             self.available_entry.grid()
@@ -1518,6 +1561,8 @@ class _AccountDialog(_BaseDialog):
             self._update_available()
             self.hint.set("核对证券 App 当前总资产与可用资金；确认时保存现金基准，之后现金只随成交及资金调整变化。")
         else:
+            self.check_date_label.grid()
+            self.check_date_entry.grid()
             self.initial_label.configure(text="开户初始资金")
             self.available_label.grid_remove()
             self.available_entry.grid_remove()
@@ -1534,6 +1579,8 @@ class _AccountDialog(_BaseDialog):
             self.hint.set(
                 "开户初始资金是固定基准；系统账面总资产 = 初始资金＋已清仓净盈亏＋当前持仓浮盈亏"
                 "＋资金调整。券商资产快照只用于独立对账，不会自动覆盖初始资金。"
+                "券商资产须填写所选日收盘值，不能混用今日盘中值。"
+                "反推使用该日估值；当前行情及扫描来源切换不改变它。"
             )
 
     def _ok(self):
@@ -1546,6 +1593,12 @@ class _AccountDialog(_BaseDialog):
                     raise ValueError("可用资金不能小于零")
                 current = self.market_value + available
                 initial = current
+                self.check_reference = None
+            else:
+                self._recalculate_account()
+                if current is not None and self.check_reference is None and (
+                        current != self._original_broker or self.check_day.get() != self._original_check_day):
+                    raise ValueError('请先确认有效的券商快照日期及同日估值')
             self.values = {
                 "name": self.name.get().strip(), "initial_equity": initial,
                 "accounting_mode": self.mode.get(), "current_total_assets": current,
@@ -1685,7 +1738,7 @@ class _PositionDialog(_IdentityDialog):
         self.batches = _BatchEditor(
             batch_frame, 0, dates, position.get("buy_batches"), include_fees=True
         )
-        self.hint = tk.StringVar(value="输入代码后可自动带入名称，并识别最新策略结果或关注信号。")
+        self.hint = tk.StringVar(value="上方填写交易计划；下方必须填写实际买入日期、成交价格和手数。")
         ttk.Label(self.form, textvariable=self.hint, foreground=MUTED).grid(
             row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 0)
         )
@@ -1733,7 +1786,38 @@ class _PositionDialog(_IdentityDialog):
             self.tp1.set(str(target))
         self.plan_id = row.get("plan_id")
         self.observation_id = row.get("observation_id")
-        self.hint.set(f"已带入 {row['strategy']} 的最新计划；请按券商实际成交修正买入批次。")
+        self.hint.set(f"已带入 {row['strategy']} 的计划；下方仍需填写实际买入日期、成交价格和手数。")
+
+    @staticmethod
+    def _number(variable, label, integer=False, optional=False):
+        text = variable.get().strip()
+        if not text:
+            if optional:
+                return None
+            raise ValueError(f"请填写{label}。")
+        try:
+            value = int(text) if integer else float(text)
+        except ValueError:
+            kind = "整数手数" if integer else "有效数字"
+            raise ValueError(f"{label}请填写{kind}。") from None
+        if not integer and not math.isfinite(value):
+            raise ValueError(f"{label}请填写有效数字。")
+        return value
+
+    def _buy_values(self):
+        if not self.batches.rows:
+            raise ValueError("请在下方填写至少一笔实际买入：日期、成交价格和手数。")
+        result = []
+        for index, row in enumerate(self.batches.rows, 1):
+            if any(not row[field].get().strip() for field in ("date", "price", "hands")):
+                raise ValueError(f"请补全下方第{index}笔实际买入的日期、成交价格和手数。上方交易计划不能代替实际成交。")
+            result.append({
+                "date": row["date"].get().strip(),
+                "price": self._number(row["price"], f"第{index}笔买入的成交价格"),
+                "hands": self._number(row["hands"], f"第{index}笔买入的手数", integer=True),
+                "fees": self._number(row["fees"], f"第{index}笔买入的税费", optional=True) or 0,
+            })
+        return result
 
     def _ok(self):
         try:
@@ -1742,15 +1826,16 @@ class _PositionDialog(_IdentityDialog):
                 raise ValueError("无法识别股票代码")
             self.values = {
                 "code": code, "name": self.name.get().strip(),
-                "entry": float(self.entry_price.get()), "stop": float(self.stop.get()),
-                "tp1": float(self.tp1.get()),
-                "tp2": float(self.tp2.get()) if self.tp2.get().strip() else None,
-                "tp3": float(self.tp3.get()) if self.tp3.get().strip() else None,
-                "buy_batches": self.batches.values(), "plan_id": self.plan_id,
+                "entry": self._number(self.entry_price, "买点 Entry"),
+                "stop": self._number(self.stop, "止损 SL1"),
+                "tp1": self._number(self.tp1, "TP1 / MM"),
+                "tp2": self._number(self.tp2, "TP2", optional=True),
+                "tp3": self._number(self.tp3, "TP3", optional=True),
+                "buy_batches": self._buy_values(), "plan_id": self.plan_id,
                 "observation_id": self.observation_id,
             }
         except ValueError as exc:
-            messagebox.showerror("输入无效", f"请核对交易计划和买入批次：{exc}", parent=self.top)
+            messagebox.showerror("请补全持仓信息", str(exc), parent=self.top)
             return
         self.confirmed = True
         self.top.destroy()
