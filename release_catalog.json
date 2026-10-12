@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.12.34",
-    "pr": 34,
+    "version": "2026.10.12.36",
+    "pr": 36,
     "date": "2026-10-12"
   },
   "history": [
@@ -432,6 +432,18 @@
       ],
       "url": "https://github.com/sysujonathan/Aplus/pull/35",
       "commit": "18c29fe185f5a17df5e536e81664abd73ed1fb52"
+    },
+    {
+      "pr": 36,
+      "version": "2026.10.12.36",
+      "date": "2026-10-12",
+      "status": "preview",
+      "title": "突出一键更新并自动确认新版",
+      "notes": [
+        "软件发现缓存中的新版线索后自动后台重新确认，不再要求用户额外点击重新检查。",
+        "确认可安全更新时显示整行高亮的立即更新并重启主按钮，更新保护与失败回退保持不变。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/36"
     }
   ]
 }

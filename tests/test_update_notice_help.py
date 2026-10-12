@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -104,6 +105,27 @@ def test_manual_check_closes_own_notice_before_details(controller):
     c.start_check.assert_called_once_with(manual=True)
 
 
+def test_cached_release_is_freshly_confirmed_without_another_user_click():
+    c = object.__new__(ui.VersionController)
+    c.window = Mock(_closing=False)
+    c.window.after.return_value = 'next-poll'
+    c.results = queue.SimpleQueue()
+    c.results.put(dict(state='available', target='a' * 40, can_update=False,
+                       block_reason='cached'))
+    c.busy = True
+    c.latest = None
+    c.pending_notice = dict(state='available')
+    c.waiting = None
+    c.button = Mock()
+    c.start_check = Mock()
+    c.maybe_show_notice = Mock()
+    c.poll()
+    c.start_check.assert_called_once_with(manual=True, show_result=False)
+    assert c.pending_notice is None
+    c.button.configure.assert_called_with(text='正在确认新版…', bootstyle='warning')
+    c.maybe_show_notice.assert_not_called()
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Windows native controls')
 def test_native_prompt_and_help_buttons_are_optional_and_leave_chart_height(tmp_path):
     script = r'''
@@ -147,11 +169,11 @@ c.pending_notice=release; c.maybe_show_notice(); assert c.notice is None
 release=dict(release,target='c'*40)
 c.pending_notice=release; c.maybe_show_notice()
 c.begin_update=Mock()
-find_button(c.notice,'更新并重启').invoke()
+find_button(c.notice,'立即更新并重启').invoke()
 assert c.notice is None; c.begin_update.assert_called_once_with(release)
 release=dict(release,target='d'*40,can_update=False,message='开发分支需人工核对')
 c.pending_notice=release; c.maybe_show_notice()
-assert str(find_button(c.notice,'更新并重启').cget('state')) == 'disabled'
+assert str(find_button(c.notice,'立即更新并重启').cget('state')) == 'disabled'
 find_button(c.notice,'稍后').invoke()
 assert w.chart.winfo_height()==height
 assert not s.rows('SELECT id FROM jobs')
