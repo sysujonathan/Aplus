@@ -77,7 +77,7 @@ def test_service_repair_reuses_certified_scope_only_and_preserves_gate(store, mo
             preflight.append('basics')
             return pd.read_csv(store.root/f'directories/{DAY}-basics.csv', dtype=str, keep_default_na=False)
     def results(*args, **kwargs):
-        calls.append((args[2], args[6], args[9]))
+        calls.append((args[2], args[6], args[9], kwargs['repair_timeframe']))
         yield from ()
     monkeypatch.setattr('workbench.service.BaoStock', Fake)
     monkeypatch.setattr('workbench.service.sync_results', results)
@@ -96,7 +96,8 @@ def test_service_repair_reuses_certified_scope_only_and_preserves_gate(store, mo
     assert report['scope_reused'] == (repair is not None)
     assert bool(preflight) == (repair is None)  # Normal update refreshes identities.
     assert report['suspended'] == int(repair != CODES[:1])
-    assert calls == [([] if repair == CODES[1:] else CODES[:1], repair is not None, 1)]
+    assert calls == [([] if repair == CODES[1:] else CODES[:1], False, 1,
+                     'daily' if repair is not None else None)]
     if repair:
         assert '直接补拉' in progress[0][-1]
 

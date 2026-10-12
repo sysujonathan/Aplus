@@ -1077,6 +1077,8 @@ class ToolBar(ttk.Frame):
         elif status == "partial":
             head = (f"命中 {r.get('signals', 0)} 个信号" if kind == "扫描策略"
                     else f"已保存 {r.get('success', 0)} · 未下载 {r.get('remaining', 0)} · 数据未齐 {len(r.get('errors', []))}")
+            if kind == '更新行情' and r.get('partial_saved'):
+                head += f" · 最新尾部保留 {r['partial_saved']} 只"
             text = f"⚠ {kind}部分完成：{head} —— {str(r.get('stop_reason', ''))[:44]}"
             if kind == '扫描策略' and r.get('coverage', {}).get('source') in SOURCES:
                 c = r['coverage']
@@ -1084,6 +1086,8 @@ class ToolBar(ttk.Frame):
                         f"数据未齐 {len(c['gaps'])} 只暂不扫描 · 命中 {r.get('signals', 0)} 个信号（详情见回执）")
         elif status == "cancelled":
             text = f"⏹ {kind}已停止（已保存的记录保留）：{message[:48]}"
+            if kind == '更新行情' and r.get('partial_saved'):
+                text += f"；最新尾部保留 {r['partial_saved']} 只"
         elif status == "failed":
             text = f"✗ {kind}失败：{message[:64]}"
         else:

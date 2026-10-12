@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.11.35",
-    "pr": 35,
-    "date": "2026-10-11"
+    "version": "2026.10.12.34",
+    "pr": 34,
+    "date": "2026-10-12"
   },
   "history": [
     {
@@ -398,37 +398,40 @@
       "pr": 33,
       "version": "2026.10.11.33",
       "date": "2026-10-11",
-      "status": "preview",
+      "status": "included",
       "title": "优化BaoStock当前缺口补拉与逐股保存",
       "notes": [
-        "优化BaoStock当前缺口补拉与逐股保存；当前仅合入PR32特性分支，尚未进入main。"
+        "保留BaoStock提速的开发与验收历史；生产改动随PR34正式纳入主线。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/33"
+      "url": "https://github.com/sysujonathan/Aplus/pull/33",
+      "included_in": 34
     },
     {
       "pr": 34,
-      "version": "2026.10.11.34",
-      "date": "2026-10-11",
-      "status": "preview",
+      "version": "2026.10.12.34",
+      "date": "2026-10-12",
+      "status": "released",
       "title": "将BaoStock同步提速合入主线",
       "notes": [
-        "将PR33已验收的BaoStock同步提速改动转向main；当前仍待合入。",
-        "保持单连接、请求间隔、黑名单停止和持久冷却，不改变TickFlow或腾讯路线。"
+        "当前300根策略输入范围内只补未知缺日及必要价格锚点，逐股优先保存最新尾部。",
+        "早期补拉失败或停止时保留已取得的最新行情，并减少Store事务与回执开销。",
+        "保持单连接、请求间隔、黑名单停止、连续失败停止及持久冷却。"
       ],
       "url": "https://github.com/sysujonathan/Aplus/pull/34"
     },
     {
       "pr": 35,
-      "version": "2026.10.11.35",
-      "date": "2026-10-11",
-      "status": "preview",
+      "version": "2026.10.12.35",
+      "date": "2026-10-12",
+      "status": "released",
       "title": "一键迁移本机发行版并安全更新",
       "notes": [
         "已知本机发行版可一键更新并重启，后台自动迁移到验收通过的正式main。",
         "启动后后台检查可用正式版，同时保留手动检查；同一新版跨重启不重复提醒。",
         "更新时自动保留push.cmd、行情与交易记录；未吸收代码、依赖或数据库变化仍停止并提示。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/35"
+      "url": "https://github.com/sysujonathan/Aplus/pull/35",
+      "commit": "18c29fe185f5a17df5e536e81664abd73ed1fb52"
     }
   ]
 }

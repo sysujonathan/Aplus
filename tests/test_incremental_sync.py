@@ -87,7 +87,7 @@ def test_extend_both_ends_and_preserve_snapshot(store, frame):
     first, _ = sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[30], frame.date.iloc[80])
     did, action = sync_stock(store, lambda:p, 'sh.600000', frame.date.iloc[0], frame.date.iloc[-1])
     assert action=='updated'
-    assert p.calls[1:]==[(frame.date.iloc[0],frame.date.iloc[30]),(frame.date.iloc[80],frame.date.iloc[-1])]
+    assert p.calls[1:]==[(frame.date.iloc[80],frame.date.iloc[-1]),(frame.date.iloc[0],frame.date.iloc[30])]
     pd.testing.assert_frame_equal(load_dataset(store,did)[0],frame,check_exact=False)
     assert len(load_dataset(store,first)[0])==51
 
