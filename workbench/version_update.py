@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from datetime import datetime, timezone, timedelta
+import hashlib
 import io
 import json
 import os
@@ -31,6 +32,9 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 PROTECTED = {"runtime", "data", ".git", ".venv", "venv", ".workbuddy", "upgrade-backups"}
 MANUAL_FILES = {"workbench/store.py", "frozen_manifest.json", "requirements.txt",
                 "requirements-lock.txt", "setup.cmd"}
+PRESERVED_LOCAL_FILES = {"push.cmd"}
+MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
+DISCARDABLE_RELEASE_PATHS = {"README.md", "release_catalog.json"}
 
 
 class UpdateError(ValueError):
@@ -76,6 +80,26 @@ def metadata_dir(root):
     return root / ".git" / "aplus-update"
 
 
+def _changed_paths(root):
+    paths = set()
+    commands = (("diff", "--name-only", "-z"),
+                ("diff", "--cached", "--name-only", "-z"),
+                ("ls-files", "--others", "--exclude-standard", "-z"))
+    for args in commands:
+        raw = run_git(root, "-c", "core.quotepath=false", *args, binary=True)
+        paths.update(part.decode("utf-8", "surrogateescape")
+                     for part in raw.split(b"\0") if part)
+    return paths
+
+
+def _digest(path):
+    value = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
+
+
 def local_version(root):
     root = Path(root).resolve()
     metadata_dir(root)
@@ -84,10 +108,22 @@ def local_version(root):
     remote = run_git(root, "remote", "get-url", "origin")
     if remote not in {REMOTE, REMOTE[:-4], f"git@github.com:{REPOSITORY}.git"}:
         raise UpdateError("仓库不是约定的Aplus来源；不会自动更新。")
+    changes = _changed_paths(root)
+    preserved = {}
+    unsafe = []
+    for name in sorted(changes):
+        path = root / name
+        if (name in PRESERVED_LOCAL_FILES and path.is_file() and not path.is_symlink()
+                and not (hasattr(path, "is_junction") and path.is_junction())):
+            preserved[name] = _digest(path)
+        else:
+            unsafe.append(name)
     return {
         "head": run_git(root, "rev-parse", "HEAD"),
         "branch": run_git(root, "branch", "--show-current") or "游离版本",
-        "dirty": bool(run_git(root, "status", "--porcelain", "--untracked-files=all")),
+        "dirty": bool(unsafe),
+        "changes": unsafe,
+        "preserved": preserved,
     }
 
 
@@ -118,15 +154,70 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def compatible_target(root, current, target):
+def _discardable_release_path(name):
+    return (name in DISCARDABLE_RELEASE_PATHS
+            or name.startswith("docs/") or name.startswith("tests/"))
+
+
+def managed_release_absorbed(root, local, target):
+    """True only when main already contains all runtime code from our managed build.
+
+    A local release commit may have different merge ancestry even after the same
+    reviewed changes reached main.  We virtually merge it into target and allow
+    migration only when the result differs from target solely in documentation,
+    tests or display-only release metadata.  No working-tree file is changed.
+    """
+    if not MANAGED_RELEASE_BRANCH.fullmatch(local.get("branch", "")):
+        return False
+    current = local.get("head", "")
+    if not SHA.fullmatch(current) or not SHA.fullmatch(target):
+        return False
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="Never")
+    process = subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=", "-C", str(root),
+         "merge-tree", "--write-tree", target, current],
+        capture_output=True, timeout=35, env=env,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    lines = process.stdout.decode("utf-8", "replace").splitlines()
+    tree = lines[0].strip() if lines else ""
+    if process.returncode not in {0, 1} or not SHA.fullmatch(tree):
+        return False
+    changed = set(run_git(root, "-c", "core.quotepath=false", "diff", "--name-only",
+                          f"{target}^{{tree}}", tree).splitlines())
+    return all(_discardable_release_path(name) for name in changed)
+
+
+def _main_can_fast_forward(root, target):
+    try:
+        main = run_git(root, "rev-parse", "refs/heads/main")
+        run_git(root, "merge-base", "--is-ancestor", main, target)
+    except UpdateError:
+        raise UpdateError("本机main不能安全前进到正式版，请维护者核对。") from None
+    worktrees = run_git(root, "worktree", "list", "--porcelain").splitlines()
+    current_path = None
+    for line in worktrees:
+        if line.startswith("worktree "):
+            current_path = Path(line[9:]).resolve()
+        elif line == "branch refs/heads/main" and current_path != Path(root).resolve():
+            raise UpdateError("本机main正被其他工作目录使用，请维护者核对。")
+
+
+def compatible_target(root, current, target, local=None):
     if not SHA.fullmatch(current) or not SHA.fullmatch(target):
         raise UpdateError("版本编号无效，未更新。")
     # A fast forward cannot discard local commits or move back to an old main.
-    run_git(root, "merge-base", "--is-ancestor", current, target)
+    managed = bool(local and managed_release_absorbed(root, local, target))
+    if not managed:
+        run_git(root, "merge-base", "--is-ancestor", current, target)
+    else:
+        _main_can_fast_forward(root, target)
     changed = set(run_git(root, "diff", "--name-only", current, target).splitlines())
     if changed & MANUAL_FILES or any(p.startswith(("core/", "config/")) for p in changed):
         raise UpdateError("新版涉及依赖、数据库实现或冻结策略，请人工升级并验收。")
     files = run_git(root, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", target).splitlines()
+    if local and any(name not in files for name in local.get("preserved", {})):
+        raise UpdateError("新版不再包含本机受保护启动文件，请维护者核对。")
     for name in files:
         p = PurePosixPath(name)
         if p.parts[0].lower() in PROTECTED or name.lower().endswith((".db", ".sqlite3", ".key", ".pem")) or p.name.startswith(".env"):
@@ -148,6 +239,7 @@ def compatible_target(root, current, target):
     for name in files:
         if name not in tracked and (Path(root) / name).exists():
             raise UpdateError("新版文件与本地保留文件重名，未覆盖。")
+    return managed
 
 
 def check_version(root, force=False, api=github_json, fetch=None):
@@ -188,6 +280,15 @@ def check_version(root, force=False, api=github_json, fetch=None):
         if not SHA.fullmatch(target):
             raise UpdateError("GitHub版本编号无效。")
         result["target"] = target
+        # Read-only fetch: identify the candidate while CI is running, without
+        # changing application files or granting installation permission.
+        if fetch is None:
+            run_git(root, "fetch", "--no-tags", "--no-recurse-submodules", REMOTE,
+                    "main:refs/aplus-update/main")
+        else:
+            fetch(target)
+        if run_git(root, "rev-parse", "refs/aplus-update/main") != target:
+            raise UpdateError("主线在检查中发生变化，请重新检查。")
         passed = acceptance(target, api)
         result["ci_passed"] = passed
         if target == local["head"]:
@@ -195,35 +296,35 @@ def check_version(root, force=False, api=github_json, fetch=None):
         elif not passed:
             result.update(state="pending", message="主线有变化，但新版验收未通过或尚未完成；暂不更新。")
         else:
-            if fetch is None:
-                run_git(root, "fetch", "--no-tags", "--no-recurse-submodules", REMOTE,
-                        "main:refs/aplus-update/main")
-            else:
-                fetch(target)
-            if run_git(root, "rev-parse", "refs/aplus-update/main") != target:
-                raise UpdateError("主线在检查中发生变化，请重新检查后再确认。")
+            managed = False
             try:
                 run_git(root, "merge-base", "--is-ancestor", target, local['head'])
             except UpdateError:
                 try:
                     run_git(root, "merge-base", "--is-ancestor", local['head'], target)
                 except UpdateError:
-                    result.update(state="diverged", message="本地与主线各有不同提交，请人工核对；不能直接PULL。")
-                    write_json(cache, result)
-                    return decorate(result)
+                    managed = managed_release_absorbed(root, local, target)
+                    if not managed:
+                        result.update(state="diverged", message="本机与正式版各有未吸收的代码，请维护者核对。")
+                        write_json(cache, result)
+                        return decorate(result)
             else:
                 result.update(state="ahead", message="本地包含尚未进入主线的提交；不会退回较旧主线。")
                 write_json(cache, result)
                 return decorate(result)
+            if local["branch"] != "main" and not managed:
+                managed = managed_release_absorbed(root, local, target)
             result.update(state="available", message="有验收通过的主线版本，可查看更新。")
             if local["dirty"]:
                 result["block_reason"] = "modified"
                 raise UpdateError("本地有修改／新增文件，需先保留并人工核对；不能直接PULL。")
-            if local["branch"] != "main":
+            if local["branch"] != "main" and not managed:
                 result["block_reason"] = "development"
                 raise UpdateError("当前不是main日常使用分支，请先人工对齐；不会切分支覆盖修复。")
             result["block_reason"] = "manual"
-            compatible_target(root, local["head"], target)
+            managed = compatible_target(root, local["head"], target, local)
+            if managed:
+                result["migration"] = "managed_release"
             result["summary"] = run_git(root, "log", "--format=%h %s", "-8", f'{local["head"]}..{target}')
             result["can_update"] = True
             result.pop("block_reason", None)
@@ -239,11 +340,14 @@ def validate_plan(root, plan, api=github_json):
     local = local_version(root)
     if not plan.get("can_update") or not SHA.fullmatch(plan.get("target", "")):
         raise UpdateError("请先重新检查并确认可安全更新的版本。")
-    if local != plan.get("local") or local["dirty"] or local["branch"] != "main":
+    managed = plan.get("migration") == "managed_release"
+    if (local != plan.get("local") or local["dirty"]
+            or (local["branch"] != "main" and not managed)):
         raise UpdateError("本地版本或文件已经变化，未更新；请重新检查。")
     if api("/branches/main")["commit"]["sha"] != plan["target"] or not acceptance(plan["target"], api):
         raise UpdateError("目标版本或验收状态已经变化，请重新检查。")
-    compatible_target(root, local["head"], plan["target"])
+    if compatible_target(root, local["head"], plan["target"], local) != managed:
+        raise UpdateError("本机与正式版的安全关系已经变化，请重新检查。")
 
 
 def extract_archive(data, folder):
@@ -278,33 +382,119 @@ def probe(folder, python):
             raise UpdateError("新版启动检查失败；正式数据未打开，代码未更新。")
 
 
+def _preserved_payloads(root, local):
+    payloads = {}
+    for name, expected in local.get("preserved", {}).items():
+        if name not in PRESERVED_LOCAL_FILES:
+            raise UpdateError("本机保留文件超出安全范围，请维护者核对。")
+        path = Path(root) / name
+        if not path.is_file() or path.is_symlink() or _digest(path) != expected:
+            raise UpdateError("本机保留文件已经变化，请重新检查。")
+        payloads[name] = path.read_bytes()
+    return payloads
+
+
+def _replace_file(path, value):
+    path = Path(path)
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_bytes(value)
+        # A tracked launcher may inherit the Windows read-only attribute after a
+        # branch switch.  Clear only that attribute; never delete the original
+        # before the atomic replacement has succeeded.
+        if path.exists():
+            mode = path.stat().st_mode
+            os.chmod(path, mode | 0o200)
+            os.chmod(temporary, mode | 0o200)
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                # Virus scanners and indexers can briefly hold a newly switched
+                # launcher on Windows.  A bounded retry keeps rollback reliable.
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _clean_preserved(root, revision, payloads):
+    for name in payloads:
+        _replace_file(Path(root) / name, run_git(root, "show", f"{revision}:{name}", binary=True))
+
+
+def _restore_preserved(root, payloads):
+    for name, value in payloads.items():
+        _replace_file(Path(root) / name, value)
+
+
+def _append_preserved_backup(backup, payloads):
+    if not payloads:
+        return
+    with zipfile.ZipFile(backup, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, value in payloads.items():
+            archive.writestr("__aplus_local__/" + name, value)
+
+
+def _install_target(root, plan, payloads):
+    old, target = plan["local"]["head"], plan["target"]
+    _clean_preserved(root, old, payloads)
+    try:
+        if plan.get("migration") == "managed_release":
+            run_git(root, "switch", "main")
+        run_git(root, "merge", "--ff-only", "--no-edit", target)
+    except Exception:
+        try:
+            if plan.get("migration") == "managed_release":
+                run_git(root, "switch", plan["local"]["branch"])
+        finally:
+            _restore_preserved(root, payloads)
+        raise
+
+
 def apply_update(root, plan, backup, python, api=github_json, smoke=probe):
     """Called only after old process exits and the global application mutex is held."""
     validate_plan(root, plan, api)
     old, target = plan["local"]["head"], plan["target"]
+    payloads = _preserved_payloads(root, plan["local"])
     backup = Path(backup)
     backup.write_bytes(run_git(root, "archive", "--format=zip", old, binary=True))
+    _append_preserved_backup(backup, payloads)
     with tempfile.TemporaryDirectory(prefix="aplus-code-") as stage:
         extract_archive(run_git(root, "archive", "--format=zip", target, binary=True), stage)
         smoke(Path(stage), python)
     # Revalidate after the slow probe, including fresh CI and any local edits.
     validate_plan(root, plan, api)
-    run_git(root, "merge", "--ff-only", "--no-edit", target)
+    _install_target(root, plan, payloads)
     if run_git(root, "rev-parse", "HEAD") != target:
+        _restore_preserved(root, payloads)
         raise UpdateError("更新结果未能确认，请人工检查；代码备份已保留。")
     try:
         smoke(Path(root), python)
     except Exception:
         # No reset/stash/clean: refuse if someone edited code meanwhile.
-        rollback(root, target, old)
-        raise UpdateError("更新后启动检查失败，已回到旧代码（游离版本）；数据未回退，请人工核对分支。")
+        rollback(root, target, old, plan["local"].get("branch"), payloads)
+        raise UpdateError("更新后启动检查失败，已回到旧代码；数据未回退，请查看更新回执。")
+    _restore_preserved(root, payloads)
 
 
-def rollback(root, target, old):
+def rollback(root, target, old, old_branch=None, payloads=None):
     local = local_version(root)
     if local["head"] != target or local["dirty"]:
         raise UpdateError("代码在更新后被修改，不能安全回退；请用代码备份人工恢复。")
-    run_git(root, "switch", "--detach", old)
+    payloads = payloads if payloads is not None else _preserved_payloads(root, local)
+    _clean_preserved(root, target, payloads)
+    try:
+        if old_branch and MANAGED_RELEASE_BRANCH.fullmatch(old_branch):
+            run_git(root, "switch", old_branch)
+            if run_git(root, "rev-parse", "HEAD") != old:
+                raise UpdateError("旧发行分支位置已经变化，请用代码备份人工恢复。")
+        else:
+            run_git(root, "switch", "--detach", old)
+    finally:
+        _restore_preserved(root, payloads)
 
 
 def prepare_worker(root, plan, runtime, python=None, spawn=None):
@@ -366,6 +556,7 @@ def worker(request_path):
         raise UpdateError("更新回执目录无效。")
     receipt = folder / "receipt.json"
     result = {"state": "failed", "message": "未开始更新", "old": request["plan"]["local"]["head"],
+              "old_branch": request["plan"]["local"].get("branch"),
               "target": request["plan"]["target"]}
     exited = False
     restarted = False
@@ -397,10 +588,12 @@ def worker(request_path):
         while time.monotonic() < deadline and launched.poll() is None and not (folder / "started.json").exists():
             time.sleep(.2)
         if (folder / "started.json").exists():
-            result.update(state="completed", message="代码已更新，桌面启动已确认。")
+            version = request["plan"].get("target_release", {}).get("version")
+            label = f"v{version}" if version else "最新正式版"
+            result.update(state="completed", message=f"已更新到{label}并重新启动。\n行情和交易记录保持不变。")
         elif launched.poll() is not None:
             with application_mutex():
-                rollback(root, result["target"], result["old"])
+                rollback(root, result["target"], result["old"], result.get("old_branch"))
             env.pop("APLUS_UPDATE_ACK", None)
             subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
                              creationflags=subprocess.CREATE_NO_WINDOW)
@@ -423,11 +616,16 @@ def worker(request_path):
                     result['message'] += '；代码状态未确认，请人工检查后启动。'
             except Exception:
                 result["message"] += "；请手动重新启动。"
-        if os.name == "nt":
-            ctypes.windll.user32.MessageBoxW(0, result["message"] + "\n更新回执：" + str(folder), "Aplus版本更新", 0x30)
     finally:
         write_json(receipt, result)
         (metadata_dir(root) / "update.lock").unlink(missing_ok=True)
+    if os.name == "nt":
+        if result["state"] == "completed":
+            ctypes.windll.user32.MessageBoxW(0, result["message"], "Aplus更新完成", 0x40)
+        elif result["state"] != "unconfirmed":
+            ctypes.windll.user32.MessageBoxW(
+                0, result["message"] + "\n详细回执已保留；若重试仍失败，请联系维护者。",
+                "Aplus版本更新", 0x30)
 
 
 if __name__ == "__main__":

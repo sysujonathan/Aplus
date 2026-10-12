@@ -146,10 +146,9 @@ find_button(c.notice,'稍后').invoke(); assert c.notice is None
 c.pending_notice=release; c.maybe_show_notice(); assert c.notice is None
 release=dict(release,target='c'*40)
 c.pending_notice=release; c.maybe_show_notice()
-ui.messagebox.askyesno=Mock(return_value=False); c.begin_update=Mock()
+c.begin_update=Mock()
 find_button(c.notice,'更新并重启').invoke()
-assert c.notice is None; c.begin_update.assert_not_called()
-ui.messagebox.askyesno.assert_called_once()
+assert c.notice is None; c.begin_update.assert_called_once_with(release)
 release=dict(release,target='d'*40,can_update=False,message='开发分支需人工核对')
 c.pending_notice=release; c.maybe_show_notice()
 assert str(find_button(c.notice,'更新并重启').cget('state')) == 'disabled'
