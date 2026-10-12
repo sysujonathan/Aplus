@@ -176,12 +176,10 @@ assert tabs.tab(tabs.select(),'text')=='更新日志'
 assert show_usage(w,tab='快速上手') is w._usage_window
 assert tabs.tab(tabs.select(),'text')=='快速上手'
 w._usage_window.destroy()
-ui.messagebox.askyesno=Mock(return_value=True); c.begin_update=Mock()
+assert '自动完成备份、更新和重新打开' in labels
+c.begin_update=Mock()
 button('更新并重启').invoke(); c.begin_update.assert_called_once_with(release)
 assert c.notice is None
-# Explicit rejection by the user never starts an update.
-c.begin_update.reset_mock(); ui.messagebox.askyesno.return_value=False
-c.show_details(release); button('更新并重启').invoke(); c.begin_update.assert_not_called()
 # Disk code changed but the running window still has the old version.
 c.show_details(dict(release,local=dict(head='c'*40,branch='main'))); w.update()
 assert str(button('更新并重启').cget('state'))=='disabled'

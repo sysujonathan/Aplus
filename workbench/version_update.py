@@ -397,8 +397,27 @@ def _preserved_payloads(root, local):
 def _replace_file(path, value):
     path = Path(path)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    temporary.write_bytes(value)
-    os.replace(temporary, path)
+    try:
+        temporary.write_bytes(value)
+        # A tracked launcher may inherit the Windows read-only attribute after a
+        # branch switch.  Clear only that attribute; never delete the original
+        # before the atomic replacement has succeeded.
+        if path.exists():
+            mode = path.stat().st_mode
+            os.chmod(path, mode | 0o200)
+            os.chmod(temporary, mode | 0o200)
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                return
+            except PermissionError:
+                # Virus scanners and indexers can briefly hold a newly switched
+                # launcher on Windows.  A bounded retry keeps rollback reliable.
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _clean_preserved(root, revision, payloads):
@@ -569,7 +588,9 @@ def worker(request_path):
         while time.monotonic() < deadline and launched.poll() is None and not (folder / "started.json").exists():
             time.sleep(.2)
         if (folder / "started.json").exists():
-            result.update(state="completed", message="代码已更新，桌面启动已确认。")
+            version = request["plan"].get("target_release", {}).get("version")
+            label = f"v{version}" if version else "最新正式版"
+            result.update(state="completed", message=f"已更新到{label}并重新启动。\n行情和交易记录保持不变。")
         elif launched.poll() is not None:
             with application_mutex():
                 rollback(root, result["target"], result["old"], result.get("old_branch"))
@@ -595,11 +616,16 @@ def worker(request_path):
                     result['message'] += '；代码状态未确认，请人工检查后启动。'
             except Exception:
                 result["message"] += "；请手动重新启动。"
-        if os.name == "nt":
-            ctypes.windll.user32.MessageBoxW(0, result["message"] + "\n更新回执：" + str(folder), "Aplus版本更新", 0x30)
     finally:
         write_json(receipt, result)
         (metadata_dir(root) / "update.lock").unlink(missing_ok=True)
+    if os.name == "nt":
+        if result["state"] == "completed":
+            ctypes.windll.user32.MessageBoxW(0, result["message"], "Aplus更新完成", 0x40)
+        elif result["state"] != "unconfirmed":
+            ctypes.windll.user32.MessageBoxW(
+                0, result["message"] + "\n详细回执已保留；若重试仍失败，请联系维护者。",
+                "Aplus版本更新", 0x30)
 
 
 if __name__ == "__main__":

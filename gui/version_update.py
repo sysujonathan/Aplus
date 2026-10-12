@@ -49,7 +49,14 @@ class VersionController:
                                  command=self.manual_check)
         self.button.pack(side=tk.RIGHT, padx=(8, 0), ipady=2)
         self.poll_id = window.after(200, self.poll)
+        self.startup_check_id = window.after(4000, self.startup_check)
         self.window.bind("<Destroy>", self.destroyed, add="+")
+
+    def startup_check(self):
+        """Check quietly after the desktop is usable; never delay first paint."""
+        self.startup_check_id = None
+        if not getattr(self.window, "_closing", False):
+            self.start_check(manual=False)
 
     def scan_hint(self):
         self.start_check(manual=False)
@@ -115,7 +122,8 @@ class VersionController:
                 if self.reserved:
                     self.window.service.release_code_update()
                     self.reserved = False
-                messagebox.showerror("未更新", "更新保护进程未就绪，当前版本继续使用。\n可查看.git/aplus-update中的更新回执。",
+                messagebox.showerror("未更新", "更新没有开始，当前版本继续使用。\n"
+                                     "请重新打开“版本更新”后再试；若仍失败，请联系维护者。",
                                      parent=self.window)
         self.poll_id = self.window.after(200, self.poll)
 
@@ -177,6 +185,8 @@ class VersionController:
         if result.get("day"):
             text += f"\n检查日期：{result['day']}"
         text += "\n\n" + view["message"]
+        if view["can_update"]:
+            text += "\n点击“更新并重启”后将自动完成备份、更新和重新打开。"
         if editing:
             text += "\n请先保存并关闭编辑/预览窗口，再重新检查。"
         elif active:
@@ -215,8 +225,7 @@ class VersionController:
             if not view["can_update"] or editing or active:
                 return
             close()  # Don't mistake this prompt for an unsaved editing form.
-            if messagebox.askyesno("更新并重启", "请确认已保存编辑内容。\n只更新软件，保留行情和交易记录。\n现在更新并重启？", parent=self.window):
-                self.begin_update(result)  # Existing fresh revalidation and reservation.
+            self.begin_update(result)  # Existing fresh revalidation and reservation.
 
         if result.get("state") == "available":
             ttk.Button(actions, text="更新并重启", command=accept, bootstyle="primary",
@@ -264,3 +273,8 @@ class VersionController:
                 self.window.after_cancel(self.poll_id)
             except tk.TclError:
                 pass
+            if getattr(self, "startup_check_id", None) is not None:
+                try:
+                    self.window.after_cancel(self.startup_check_id)
+                except tk.TclError:
+                    pass

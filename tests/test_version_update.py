@@ -242,6 +242,16 @@ def test_managed_release_failed_postflight_restores_branch_and_launcher(repo, tm
     assert (root / 'push.cmd').read_text(encoding='utf-8') == 'private launcher kept locally\n'
 
 
+def test_atomic_launcher_restore_handles_windows_read_only_destination(tmp_path):
+    launcher = tmp_path / 'push.cmd'
+    launcher.write_bytes(b'old launcher\r\n')
+    os.chmod(launcher, launcher.stat().st_mode & ~0o222)
+
+    v._replace_file(launcher, b'restored launcher\r\n')
+
+    assert launcher.read_bytes() == b'restored launcher\r\n'
+
+
 @pytest.mark.parametrize('path', ['workbench/store.py', 'requirements-lock.txt', 'frozen_manifest.json',
                                 'core/new.py', 'runtime/private.txt', '.env', 'ignored.txt'])
 def test_sensitive_changes_require_manual_update(repo, path):
@@ -464,12 +474,13 @@ def test_worker_waits_for_old_process_and_confirms_actual_startup(repo, tmp_path
     if scenario == 'cancelled':
         v.write_json(folder/'cancelled.json', {'cancelled': True})
     order = []
+    message = Mock()
     k = SimpleNamespace(OpenProcess=Mock(return_value=111), CloseHandle=Mock(),
                         CreateMutexW=Mock(return_value=222),
                         GetLastError=Mock(return_value=183 if scenario == 'other_instance' else 0),
                         WaitForSingleObject=Mock(side_effect=lambda *args: order.append('wait') or
                                                 (258 if scenario == 'parent_running' else 0)))
-    monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(kernel32=k, user32=SimpleNamespace(MessageBoxW=Mock())))
+    monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(kernel32=k, user32=SimpleNamespace(MessageBoxW=message)))
     def apply(*args):
         order.append('apply')
         if scenario == 'preflight_failed':
@@ -499,6 +510,8 @@ def test_worker_waits_for_old_process_and_confirms_actual_startup(repo, tmp_path
     if scenario == 'success':
         assert order == ['wait', 'apply', 'launch']
         assert receipt['state'] == 'completed'
+        assert '重新启动' in receipt['message'] and '行情和交易记录保持不变' in receipt['message']
+        assert message.call_args.args[2:] == ('Aplus更新完成', 0x40)
         assert launched.call_args.kwargs['env']['A_WORKBENCH_HOME'] == str(tmp_path/'private-runtime')
     elif scenario in {'parent_running', 'cancelled', 'other_instance'}:
         applied.assert_not_called()
@@ -630,7 +643,8 @@ def checker(*args,**kwargs):
     started.set(); done.wait(3)
     return dict(state='available', can_update=False, message='synthetic')
 c.checker=checker
-before=time.monotonic(); c.scan_hint()
+w.after_cancel(c.startup_check_id)
+before=time.monotonic(); c.startup_check()
 assert time.monotonic()-before < .5
 assert started.wait(2)
 for _ in range(3): w.update(); time.sleep(.04)
