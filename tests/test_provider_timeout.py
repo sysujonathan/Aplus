@@ -65,6 +65,14 @@ def test_stop_interrupts_wait_without_waiting_for_timeout(monkeypatch):
     assert all(p.poll() is not None for p in processes)
 
 
+def test_full_security_archive_has_its_own_bounded_timeout(monkeypatch):
+    provider=BaoStock(); seen=[]
+    monkeypatch.setattr(provider,'_query',lambda operation,args,timeout=None:
+                        seen.append((operation,args,timeout)) or [])
+    provider.basics()
+    assert seen==[('basics',[],120)]
+
+
 @pytest.mark.parametrize('error,expected',[('请求超时',3),('黑名单封禁',1)])
 def test_batch_stops_without_claiming_completion(store,monkeypatch,error,expected):
     calls=[]

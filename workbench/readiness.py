@@ -8,6 +8,43 @@ from .store import dumps
 from .sources import market_source, source_file, directory_file, directory_date, calendar_file, FALLBACK_SOURCES, SOURCES
 
 
+def reusable_baostock_basics(store, directory, day):
+    """Return the latest same-source archive only when it proves today's roster.
+
+    BaoStock's dated directory is the current official membership/trading-status
+    response.  The larger security archive mostly contains stable IPO, type and
+    retirement facts.  Reuse is therefore safe only when those dated facts
+    independently produce the exact same active A-share code set.  Any corrupt,
+    stale or changed roster falls back to a fresh official archive request.
+    """
+    if directory.empty or 'code' not in directory or directory.code.duplicated().any():
+        return None
+    files = sorted((store.root/'directories').glob('*-basics.csv'))
+    files = [path for path in files if path.name[:10] <= day]
+    if not files:
+        return None
+    path = files[-1]
+    try:
+        basics = pd.read_csv(path, dtype=str, keep_default_na=False)
+        required = {'code','ipoDate','outDate','type','status'}
+        if not required.issubset(basics.columns) or basics.code.duplicated().any():
+            return None
+        basics = basics.fillna('').astype(str)
+        stocks = basics[(basics.type == '1') & basics.code.map(board_of).notna()]
+        for column in ('ipoDate','outDate'):
+            values = stocks.loc[stocks[column] != '', column]
+            if pd.to_datetime(values, format='%Y-%m-%d', errors='coerce').isna().any():
+                return None
+        eligible = stocks[(stocks.ipoDate != '') & (stocks.ipoDate <= day) &
+                          ((stocks.outDate == '') | (stocks.outDate > day))]
+        if set(eligible.code) != set(directory.code):
+            return None
+        basics.attrs['reused_from'] = str(path.relative_to(store.root))
+        return basics
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def save_directory(store, directory, day, job=None, basics=None, retired_codes=None, source='baostock'):
     """Never silently reduce an established universe after a short provider reply."""
     if directory.empty or 'code' not in directory or directory.code.duplicated().any():

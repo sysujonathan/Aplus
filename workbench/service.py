@@ -19,7 +19,8 @@ from .store import ROOT, digest, dumps, now
 from .strategies import (calculate, catalog, prepare, prepare_indicators, scan_engine_version,
                          signal_at_end, verify_frozen)
 from .sync import sync_stock
-from .readiness import audit_scope, expected_day, save_calendar, save_directory
+from .readiness import (audit_scope, expected_day, reusable_baostock_basics,
+                        save_calendar, save_directory)
 from .sync_batch import sync_results
 from .sources import market_source, SOURCES, coverage_state, FALLBACK_SOURCES
 from .provider_guard import ProviderGuard, ProviderError, restricted, error_detail
@@ -155,6 +156,7 @@ class Service:
         if start > end:
             raise ValueError('同步开始日期不能晚于已完成行情日期')
         scope_reused = False
+        basics_reused = False
         if 'boards' in spec:
             if not spec['boards']:
                 raise ValueError('请至少勾选一个板块')
@@ -180,7 +182,15 @@ class Service:
                     if directory.empty:
                         raise ValueError('应有交易日股票目录为空，未开始下载')
                     self.progress(job,0,1,'自动核对新增上市、退市与停牌状态')
-                    basics = candidate.basics()
+                    basics = reusable_baostock_basics(self.store, directory, end)
+                    basics_reused = basics is not None
+                    if basics is None:
+                        basics = candidate.basics()
+                    else:
+                        evidence = basics.attrs['reused_from']
+                        self.store.event(job, '复用同源证券档案；当日官方目录逐只验证一致',
+                                         date=end, evidence=evidence, count=len(directory))
+                        self.progress(job,0,1,'当日目录与同源证券档案完全一致，免除重复下载')
                     save_directory(self.store, directory, end, job, basics=basics)
                 universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
             codes = select_board_codes(universe,spec['boards'])
@@ -198,6 +208,7 @@ class Service:
                   'skipped':0,'downloaded':0,'updated':0,'refreshed':0,'suspended':0,'partial_saved':0}
         report['boards'] = spec.get('boards',[])
         report['scope_reused'] = scope_reused
+        report['basics_reused'] = basics_reused
         suspended = set()
         if 'boards' in spec and 'tradeStatus' in universe.columns:
             suspended = set(universe.loc[universe.tradeStatus.astype(str) == '0', 'code'])

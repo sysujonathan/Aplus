@@ -127,6 +127,7 @@ def sync_tencent(service, job, spec):
         report['requested']=len(codes)
         consecutive_failures = network_failures = 0
         report['timings']=dict(stock_processing_seconds=0)
+        last_checkpoint=0.0
         for code in codes:
             service.check_stop(job)
             def requesting(operation, a, b):
@@ -143,7 +144,8 @@ def sync_tencent(service, job, spec):
                     requesting('repair',left,right)
                     restore_corrupt_snapshot(service.store,provider,code,left,right,job,source='tencent')
                 did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
-                    force=spec.get('force',False) or code in repair,source='tencent',on_request=requesting)
+                    force=spec.get('force',False) or code in repair,source='tencent',on_request=requesting,
+                    batch_writes=True)
                 report['datasets'].append(did); report[outcome]+=1; report['success']+=1
                 if outcome != 'skipped':
                     consecutive_failures = 0
@@ -172,7 +174,14 @@ def sync_tencent(service, job, spec):
                 report['timings']['stock_processing_seconds']+=round(time.monotonic()-stock_started,3)
                 report['timings'].update(getattr(provider,'history_timings',{}))
             report['processed']+=1
-            service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+            # Price snapshots remain durable per stock.  The growing UI receipt
+            # may trail by at most one second, avoiding thousands of tiny report
+            # transactions during a full-market update.
+            stamp=time.monotonic()
+            if stamp-last_checkpoint >= 1.0:
+                service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+                last_checkpoint=stamp
+    service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
     report['remaining']=len(codes)-report['processed']
     report['network_failures']=network_failures
     remember_repairs(service.store,'tencent',end,repair_before,report['datasets'])
