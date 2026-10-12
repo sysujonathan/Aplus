@@ -34,6 +34,7 @@ def repo(tmp_path):
     git(root, 'remote', 'add', 'origin', v.REMOTE)
     (root / '.gitignore').write_text('runtime/\n.venv/\n*.log\nignored.txt\n', encoding='utf-8')
     (root / 'feature.py').write_text('value = 1\n', encoding='utf-8')
+    (root / 'push.cmd').write_text('official launcher\n', encoding='utf-8')
     git(root, 'add', '.')
     git(root, 'commit', '-m', 'old code')
     old = git(root, 'rev-parse', 'HEAD')
@@ -165,6 +166,90 @@ def test_cached_safe_result_cannot_authorize_after_local_edit(repo):
     (root / 'feature.py').write_text('local_edit = True\n')
     cached = v.check_version(root, api=Mock(side_effect=AssertionError('no network')))
     assert cached['local']['dirty'] and not cached['can_update']
+
+
+def managed_release(repo, value='value = 2\n'):
+    root, old, target = repo
+    git(root, 'switch', '-c', 'codex/local-release-20261011', old)
+    (root / 'feature.py').write_text(value, encoding='utf-8')
+    git(root, 'add', 'feature.py')
+    git(root, 'commit', '-m', 'Aplus managed local combination')
+    local = git(root, 'rev-parse', 'HEAD')
+    (root / 'push.cmd').write_text('private launcher kept locally\n', encoding='utf-8')
+    git(root, 'update-ref', 'refs/aplus-update/main', target)
+    return root, local, target
+
+
+def test_managed_release_and_preserved_launcher_update_with_one_button(repo, tmp_path):
+    root, local, target = managed_release(repo)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+    assert plan['state'] == 'available' and plan['can_update']
+    assert plan['migration'] == 'managed_release'
+    assert not plan['local']['dirty'] and 'push.cmd' in plan['local']['preserved']
+    backup = tmp_path / 'backup.zip'
+    v.apply_update(root, plan, backup, sys.executable, api=api_for(target), smoke=Mock())
+    assert git(root, 'branch', '--show-current') == 'main'
+    assert git(root, 'rev-parse', 'HEAD') == target
+    assert (root / 'push.cmd').read_text(encoding='utf-8') == 'private launcher kept locally\n'
+    assert not v.local_version(root)['dirty']
+    with zipfile.ZipFile(backup) as archive:
+        assert archive.read('__aplus_local__/push.cmd') == (root / 'push.cmd').read_bytes()
+
+
+def test_managed_release_with_unabsorbed_runtime_code_still_requires_maintainer(repo):
+    root, _, target = managed_release(repo, 'local-only behavior = 99\n')
+    result = v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+    assert result['state'] == 'diverged' and not result['can_update']
+
+
+def test_preserved_launcher_change_after_confirmation_is_rejected(repo, tmp_path):
+    root, local, target = managed_release(repo)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+    (root / 'push.cmd').write_text('changed after confirmation\n', encoding='utf-8')
+    with pytest.raises(v.UpdateError, match='重新检查'):
+        v.apply_update(root, plan, tmp_path/'backup.zip', sys.executable,
+                       api=api_for(target), smoke=Mock())
+    assert git(root, 'rev-parse', 'HEAD') == local
+
+
+def test_target_cannot_remove_preserved_launcher(repo):
+    root, _, _ = managed_release(repo)
+    (root / 'push.cmd').write_text(git(root, 'show', 'HEAD:push.cmd') + '\n', encoding='utf-8')
+    git(root, 'switch', 'server')
+    git(root, 'rm', 'push.cmd')
+    git(root, 'commit', '-m', 'remove official launcher')
+    target = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', 'codex/local-release-20261011')
+    (root / 'push.cmd').write_text('private launcher kept locally\n', encoding='utf-8')
+    git(root, 'update-ref', 'refs/aplus-update/main', target)
+
+    result = v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+
+    assert not result['can_update']
+    assert '受保护' in result['message']
+    assert (root / 'push.cmd').read_text(encoding='utf-8') == 'private launcher kept locally\n'
+
+
+def test_managed_release_failed_postflight_restores_branch_and_launcher(repo, tmp_path):
+    root, local, target = managed_release(repo)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+    smoke = Mock(side_effect=[None, RuntimeError('postflight failed')])
+    with pytest.raises(v.UpdateError, match='回到旧代码'):
+        v.apply_update(root, plan, tmp_path/'backup.zip', sys.executable,
+                       api=api_for(target), smoke=smoke)
+    assert git(root, 'branch', '--show-current') == 'codex/local-release-20261011'
+    assert git(root, 'rev-parse', 'HEAD') == local
+    assert (root / 'push.cmd').read_text(encoding='utf-8') == 'private launcher kept locally\n'
+
+
+def test_atomic_launcher_restore_handles_windows_read_only_destination(tmp_path):
+    launcher = tmp_path / 'push.cmd'
+    launcher.write_bytes(b'old launcher\r\n')
+    os.chmod(launcher, launcher.stat().st_mode & ~0o222)
+
+    v._replace_file(launcher, b'restored launcher\r\n')
+
+    assert launcher.read_bytes() == b'restored launcher\r\n'
 
 
 @pytest.mark.parametrize('path', ['workbench/store.py', 'requirements-lock.txt', 'frozen_manifest.json',
@@ -389,12 +474,13 @@ def test_worker_waits_for_old_process_and_confirms_actual_startup(repo, tmp_path
     if scenario == 'cancelled':
         v.write_json(folder/'cancelled.json', {'cancelled': True})
     order = []
+    message = Mock()
     k = SimpleNamespace(OpenProcess=Mock(return_value=111), CloseHandle=Mock(),
                         CreateMutexW=Mock(return_value=222),
                         GetLastError=Mock(return_value=183 if scenario == 'other_instance' else 0),
                         WaitForSingleObject=Mock(side_effect=lambda *args: order.append('wait') or
                                                 (258 if scenario == 'parent_running' else 0)))
-    monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(kernel32=k, user32=SimpleNamespace(MessageBoxW=Mock())))
+    monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(kernel32=k, user32=SimpleNamespace(MessageBoxW=message)))
     def apply(*args):
         order.append('apply')
         if scenario == 'preflight_failed':
@@ -424,13 +510,15 @@ def test_worker_waits_for_old_process_and_confirms_actual_startup(repo, tmp_path
     if scenario == 'success':
         assert order == ['wait', 'apply', 'launch']
         assert receipt['state'] == 'completed'
+        assert '重新启动' in receipt['message'] and '行情和交易记录保持不变' in receipt['message']
+        assert message.call_args.args[2:] == ('Aplus更新完成', 0x40)
         assert launched.call_args.kwargs['env']['A_WORKBENCH_HOME'] == str(tmp_path/'private-runtime')
     elif scenario in {'parent_running', 'cancelled', 'other_instance'}:
         applied.assert_not_called()
         assert receipt['state'] == 'failed'
         rolled_back.assert_not_called()
     elif scenario == 'startup_failed':
-        rolled_back.assert_called_once_with(root, target, old)
+        rolled_back.assert_called_once_with(root, target, old, 'main')
         assert launched.call_count == 2 and receipt['state'] == 'failed'
     elif scenario == 'startup_unconfirmed':
         assert receipt['state'] == 'unconfirmed'
@@ -555,7 +643,8 @@ def checker(*args,**kwargs):
     started.set(); done.wait(3)
     return dict(state='available', can_update=False, message='synthetic')
 c.checker=checker
-before=time.monotonic(); c.scan_hint()
+w.after_cancel(c.startup_check_id)
+before=time.monotonic(); c.startup_check()
 assert time.monotonic()-before < .5
 assert started.wait(2)
 for _ in range(3): w.update(); time.sleep(.04)

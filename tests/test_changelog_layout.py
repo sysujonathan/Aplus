@@ -31,8 +31,10 @@ page=dialog.nametowidget(tabs.select())
 text=next(x for x in page.winfo_children() if isinstance(x,tk.Text))
 body=text.get('1.0','end')
 assert '##' not in body and '[对应PR]' not in body and 'https://' not in body
-assert 'v2026.10.11.32' in body and 'PR32  ·  预览版 · 待合入主线' in body
-assert 'v2026.10.11.33' in body and 'PR33  ·  预览版 · 待合入主线' in body
+assert 'v2026.10.12.35' in body and 'PR35  ·  已合入主线' in body
+assert 'v2026.10.12.34' in body and 'PR34  ·  已合入主线' in body
+assert 'v2026.10.11.33' in body and 'PR33  ·  随 PR34 纳入主线' in body
+assert 'v2026.10.11.32' in body and 'PR32  ·  已合入主线' in body
 assert 'v2026.10.11.31' in body and 'PR31  ·  已合入主线' in body
 assert 'PR23' in body and '随 PR22 纳入主线' in body
 assert '流程测试（无发布编号）' in body and '未发布' in body
