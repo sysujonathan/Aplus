@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_catalog_covers_each_pr_without_inventing_publications():
     catalog = r.read_catalog(ROOT)
-    assert [x['pr'] for x in catalog['history']] == list(range(1, 36))
+    assert [x['pr'] for x in catalog['history']] == list(range(1, 37))
     by_pr = {x['pr']: x for x in catalog['history']}
     assert by_pr[1]['version'] is None and by_pr[1]['status'] == 'not_released'
     assert by_pr[12]['included_in'] == by_pr[13]['included_in'] == 11
@@ -29,6 +29,7 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[33]['status'] == 'included' and by_pr[33]['included_in'] == 34
     assert by_pr[34]['status'] == by_pr[35]['status'] == 'released'
     assert by_pr[35]['commit'] == '18c29fe185f5a17df5e536e81664abd73ed1fb52'
+    assert by_pr[36]['status'] == 'preview' and by_pr[36]['version'] == '2026.10.12.36'
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -44,6 +45,7 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.11.30' in text and 'v2026.10.11.30-preview' not in text
     assert '随PR11' in text and '随PR22' in text and '随PR34' in text
     assert 'v2026.10.12.34' in text and 'v2026.10.11.34-preview' not in text
+    assert 'v2026.10.12.36-preview' in text
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'version', 'date', 'duplicate', 'status', 'sha', 'notes', 'build_pr', 'date_version', 'row'])
@@ -78,7 +80,7 @@ def test_exact_historical_main_and_current_preview_are_distinct():
     assert r.version_label(merged) == 'v2026.10.11.30'
     assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
-    assert r.version_label(preview) == 'v2026.10.12.34 · 预览版'
+    assert r.version_label(preview) == 'v2026.10.12.36 · 预览版'
     # A short hash and an unrelated revision must not be called PR29.
     assert r.identity(ROOT, target='18670c8')['version'] is None
     assert r.identity(ROOT, target='b'*40)['version'] is None
@@ -113,7 +115,7 @@ def test_beginner_conclusions_and_permissions(state, phrase):
     assert view['current'].startswith('v2026')
 
 
-@pytest.mark.parametrize('reason,phrase', [('modified','修改'), ('development','预览'), ('manual','依赖'), ('cached','重新检查')])
+@pytest.mark.parametrize('reason,phrase', [('modified','修改'), ('development','预览'), ('manual','依赖'), ('cached','后台确认')])
 def test_blocked_update_has_next_step(reason, phrase):
     view = r.presentation(dict(state='available', can_update=False, block_reason=reason))
     assert not view['can_update'] and phrase in view['message']
@@ -181,18 +183,21 @@ assert tabs.tab(tabs.select(),'text')=='更新日志'
 assert show_usage(w,tab='快速上手') is w._usage_window
 assert tabs.tab(tabs.select(),'text')=='快速上手'
 w._usage_window.destroy()
-assert '自动完成备份、更新和重新打开' in labels
+assert '立即更新并重启' in labels and '自动完成备份、更新和重新打开' in labels
 c.begin_update=Mock()
-button('更新并重启').invoke(); c.begin_update.assert_called_once_with(release)
+update_button=button('立即更新并重启')
+assert 'success' in str(update_button.cget('style')).lower()
+assert update_button.winfo_height() > button('稍后').winfo_height()
+update_button.invoke(); c.begin_update.assert_called_once_with(release)
 assert c.notice is None
 # Disk code changed but the running window still has the old version.
 c.show_details(dict(release,local=dict(head='c'*40,branch='main'))); w.update()
-assert str(button('更新并重启').cget('state'))=='disabled'
+assert str(button('立即更新并重启').cget('state'))=='disabled'
 button('稍后').invoke()
 # Manual checks during work do not offer an actionable restart.
 service.cancel_flags['synthetic']=object()
 c.show_details(release); w.update()
-assert str(button('更新并重启').cget('state'))=='disabled'
+assert str(button('立即更新并重启').cget('state'))=='disabled'
 button('稍后').invoke(); service.cancel_flags.clear()
 assert w.chart.winfo_height()==height and not s.rows('SELECT id FROM jobs')
 w.destroy(); service.pool.shutdown(wait=True)

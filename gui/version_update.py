@@ -68,14 +68,14 @@ class VersionController:
                 self.notice = None
             self.start_check(manual=True)
 
-    def start_check(self, manual):
+    def start_check(self, manual, *, show_result=None):
         if self.busy:
             if manual:
                 # A click during the automatic request can opt into viewing its result.
                 self.show_result = True
             return
         self.busy = True
-        self.show_result = manual
+        self.show_result = manual if show_result is None else show_result
         self.button.configure(text="检查版本…")
 
         def work():
@@ -98,6 +98,16 @@ class VersionController:
             self.busy = False
             self.latest = result
             available = result.get("state") == "available"
+            if available and result.get("block_reason") == "cached":
+                # A same-day cache is useful for discovering a release, but it is
+                # deliberately never update permission.  Confirm it immediately
+                # in the background instead of making the user understand and
+                # perform this safety step.
+                self.pending_notice = None
+                self.button.configure(text="正在确认新版…", bootstyle="warning")
+                self.start_check(manual=True, show_result=False)
+                self.poll_id = self.window.after(200, self.poll)
+                return
             self.button.configure(text="有新版 · 查看" if available else "版本更新",
                                   bootstyle="warning" if available else "secondary")
             if self.show_result:
@@ -186,7 +196,7 @@ class VersionController:
             text += f"\n检查日期：{result['day']}"
         text += "\n\n" + view["message"]
         if view["can_update"]:
-            text += "\n点击“更新并重启”后将自动完成备份、更新和重新打开。"
+            text += "\n点击“立即更新并重启”后将自动完成备份、更新和重新打开。"
         if editing:
             text += "\n请先保存并关闭编辑/预览窗口，再重新检查。"
         elif active:
@@ -199,7 +209,7 @@ class VersionController:
             if details.winfo_manager():
                 details.pack_forget()
             else:
-                details.pack(fill=tk.BOTH, expand=True, before=actions, pady=8)
+                details.pack(fill=tk.BOTH, expand=True, before=primary_actions, pady=8)
         technical = tk.Text(details, height=7, width=64, wrap=tk.WORD)
         technical.pack(fill=tk.BOTH, expand=True)
         local = result.get("local", {})
@@ -214,9 +224,6 @@ class VersionController:
         links.pack(fill=tk.X, pady=(0, 12))
         ttk.Button(links, text="更新日志", command=lambda: show_usage(self.window, tab="更新日志")).pack(side=tk.LEFT)
         ttk.Button(links, text="技术详情", command=toggle_details).pack(side=tk.LEFT, padx=8)
-        actions = ttk.Frame(body)
-        actions.pack(fill=tk.X)
-
         def close():
             dialog.destroy()
             self.notice = None
@@ -227,9 +234,15 @@ class VersionController:
             close()  # Don't mistake this prompt for an unsaved editing form.
             self.begin_update(result)  # Existing fresh revalidation and reservation.
 
+        primary_actions = ttk.Frame(body)
+        primary_actions.pack(fill=tk.X, pady=(6, 12))
         if result.get("state") == "available":
-            ttk.Button(actions, text="更新并重启", command=accept, bootstyle="primary",
-                       state=tk.NORMAL if view["can_update"] and not editing and not active else tk.DISABLED).pack(side=tk.RIGHT)
+            ttk.Button(primary_actions, text="立即更新并重启", command=accept,
+                       bootstyle="success", width=24,
+                       state=tk.NORMAL if view["can_update"] and not editing and not active else tk.DISABLED
+                       ).pack(fill=tk.X, ipady=8)
+        actions = ttk.Frame(body)
+        actions.pack(fill=tk.X)
         ttk.Button(actions, text="稍后" if result.get("state") == "available" else "关闭",
                    command=close, bootstyle="secondary").pack(side=tk.RIGHT, padx=8)
         ttk.Button(actions, text="重新检查", command=lambda: (close(), self.manual_check())).pack(side=tk.LEFT)

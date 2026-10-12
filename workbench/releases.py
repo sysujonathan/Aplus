@@ -117,7 +117,7 @@ def presentation(result, running=None):
             "modified": "本机保留了修改或新增文件，请维护者先核对；不会自动覆盖。",
             "development": "当前是预览/开发安装，请维护者先对齐正式版，保留已有修复。",
             "manual": "新版涉及依赖、数据结构或受保护文件，需要维护者升级并验收。",
-            "cached": "这是之前的检查结果，请点击重新检查后再更新。",
+            "cached": "正在后台确认新版；确认通过后即可直接更新。",
         }.get(reason, "目前尚不满足安全更新条件，请重新检查或让维护者核对。")
     target = result.get("target_release", {})
     target_label = version_label(target) if target.get("version") else "版本号待确认"
