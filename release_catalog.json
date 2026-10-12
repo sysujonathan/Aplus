@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.12.36",
-    "pr": 36,
+    "version": "2026.10.12.37",
+    "pr": 37,
     "date": "2026-10-12"
   },
   "history": [
@@ -437,13 +437,27 @@
       "pr": 36,
       "version": "2026.10.12.36",
       "date": "2026-10-12",
-      "status": "preview",
+      "status": "released",
       "title": "突出一键更新并自动确认新版",
       "notes": [
         "软件发现缓存中的新版线索后自动后台重新确认，不再要求用户额外点击重新检查。",
         "确认可安全更新时显示整行高亮的立即更新并重启主按钮，更新保护与失败回退保持不变。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/36"
+      "url": "https://github.com/sysujonathan/Aplus/pull/36",
+      "commit": "3599dfbe9fe9211c5de3b37d64f92dc3f1a0e216"
+    },
+    {
+      "pr": 37,
+      "version": "2026.10.12.37",
+      "date": "2026-10-12",
+      "status": "preview",
+      "title": "精简腾讯尾部请求并修正扫描结果日期",
+      "notes": [
+        "腾讯日常尾部更新只请求实际需要的 K 线范围，减少固定取 640 根及频繁落库的浪费，官方单连接、间隔和停止保护不变。",
+        "BaoStock 当日目录与同源证券档案逐只一致时免除重复档案下载；不一致仍请求官方资料。",
+        "扫描完成后自动显示本次实际扫描日期的结果；行情更新仍保留用户正在复核的历史日期。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/37"
     }
   ]
 }

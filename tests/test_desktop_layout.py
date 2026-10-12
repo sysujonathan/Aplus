@@ -278,9 +278,7 @@ def test_toolbar_starts_from_latest_local_signal_date():
         ToolBar._select_latest_date(toolbar)
 
     latest.assert_called_once_with(toolbar.store, "daily")
-    toolbar.year_var.set.assert_called_once_with("2026")
-    toolbar.month_var.set.assert_called_once_with("09")
-    toolbar.day_var.set.assert_called_once_with("30")
+    toolbar._select_date.assert_called_once_with("2026-09-30")
 
 
 def test_date_options_stay_on_real_dates_for_selected_month():
@@ -334,6 +332,50 @@ def test_job_refresh_keeps_traders_selected_date():
         asof_filter=("2026", "09", "29"),
         source="legacy-engine-a",
     )
+
+
+def test_finished_scan_selects_and_displays_its_actual_date():
+    window = Mock(store=object())
+    window.toolbar.selected_date.side_effect = [
+        ("2026", "10", "09"),
+        ("2026", "10", "12"),
+    ]
+    window.toolbar._select_date.return_value = True
+    window._tf_var.get.return_value = "daily"
+    window._source_for_current_date.return_value = "tickflow"
+
+    AplusMainWindow._on_job_finished(
+        window, "扫描策略", "completed", {"asof": "2026-10-12"}
+    )
+
+    window.toolbar._load_date_options.assert_called_once_with()
+    window.toolbar._select_date.assert_called_once_with("2026-10-12")
+    assert window._cur_date == ("2026", "10", "12")
+    window.candidates.load_from_store.assert_called_once_with(
+        window.store,
+        timeframe="daily",
+        asof_filter=("2026", "10", "12"),
+        source="tickflow",
+    )
+
+
+def test_toolbar_select_date_rejects_missing_or_invalid_days():
+    toolbar = object.__new__(ToolBar)
+    toolbar._all_years = ["2026"]
+    toolbar._months_by_year = {"2026": ["10"]}
+    toolbar._days_by_ym = {("2026", "10"): ["09", "12"]}
+    toolbar.year_var = _ValueVar("全部")
+    toolbar.month_var = _ValueVar("全部")
+    toolbar.day_var = _ValueVar("全部")
+    toolbar._refresh_months = Mock()
+    toolbar._refresh_days = Mock()
+
+    assert ToolBar._select_date(toolbar, "2026-10-12")
+    assert (toolbar.year_var.get(), toolbar.month_var.get(), toolbar.day_var.get()) == (
+        "2026", "10", "12"
+    )
+    assert not ToolBar._select_date(toolbar, "2026-10-13")
+    assert not ToolBar._select_date(toolbar, "2026-02-30")
 
 
 def test_data_chain_status_marks_market_ahead_of_scan():
