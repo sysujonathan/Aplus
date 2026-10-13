@@ -1,4 +1,5 @@
 import json
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -7,8 +8,11 @@ from workbench.baostock_daily_batch import (
     apply_one_day_tail, one_day_tail_candidates, validate_daily_archive,
 )
 from workbench.market import load_dataset, save_dataset
+from workbench.provider_guard import ProviderError, ProviderGuard
+from workbench.service import Service
 from workbench.sources import coverage_state, save_coverage
 from workbench.store import Store
+from tests.test_workbench import wait_for
 
 
 DAY = '2026-10-12'
@@ -89,3 +93,74 @@ def test_process_adapter_exposes_bounded_bulk_operations():
         assert query.call_args.args == ('daily_astock', [DAY], provider.basics_timeout)
         provider.daily_adjust_factor(DAY)
         assert query.call_args.args == ('daily_adjust_factor', [DAY], provider.basics_timeout)
+
+
+@pytest.mark.parametrize(('failure_at', 'code'), [
+    ('daily_astock', '10001011'),
+    ('daily_adjust_factor', '429'),
+])
+def test_bulk_provider_restriction_stops_before_any_per_stock_request(
+        tmp_path, monkeypatch, failure_at, code):
+    codes = [f'sh.{600000 + index:06d}' for index in range(50)]
+    directory = pd.DataFrame({
+        'code': codes,
+        'code_name': [f'测试{index}' for index in range(50)],
+        'tradeStatus': ['1'] * 50,
+    })
+    basics = pd.DataFrame({
+        'code': codes, 'ipoDate': ['2000-01-01'] * 50,
+        'outDate': [''] * 50, 'type': ['1'] * 50, 'status': ['1'] * 50,
+    })
+    store = Store(tmp_path)
+    store.write_artifact('trading_calendar.json', json.dumps({
+        'start': '2026-10-08', 'end': DAY,
+        'trading_days': ['2026-10-08', PREVIOUS, DAY],
+    }).encode())
+    calls = []
+
+    class RestrictedBulkProvider:
+        def __enter__(self):
+            calls.append('connect')
+            return self
+
+        def __exit__(self, *_args):
+            calls.append('disconnect')
+
+        def universe(self, _day):
+            return directory.copy()
+
+        def basics(self):
+            return basics.copy()
+
+        def daily_astock(self, _day):
+            calls.append('daily_astock')
+            if failure_at == 'daily_astock':
+                raise ProviderError('baostock', 'daily_astock', '供应商限制访问', code)
+            return pd.DataFrame()
+
+        def daily_adjust_factor(self, _day):
+            calls.append('daily_adjust_factor')
+            raise ProviderError('baostock', 'daily_adjust_factor', 'Too Many Requests', code)
+
+    per_stock = Mock(side_effect=AssertionError('限制访问后不应进入逐股请求'))
+    monkeypatch.setattr('workbench.service.BaoStock', RestrictedBulkProvider)
+    monkeypatch.setattr('workbench.service.sync_results', per_stock)
+    monkeypatch.setattr('workbench.baostock_daily_batch.one_day_tail_candidates',
+                        lambda *_args, **_kwargs: codes)
+    service = Service(store)
+    try:
+        job = service.submit('sync', {
+            'boards': ['沪深主板'], 'start': '2026-10-08', 'end': DAY,
+        })
+        row = wait_for(store, job)
+        result = json.loads(row['result'])
+        assert row['status'] == 'failed'
+        assert result['errors'][0]['error_code'] == code
+        assert not per_stock.called
+        assert not any(call == 'fetch' for call in calls)
+        assert calls.count('connect') == 1
+        state = ProviderGuard(store, 'baostock').state()
+        assert state['last_error']['error_code'] == code
+        assert len(state['failures']) == 1  # outer job handler must not count it twice
+    finally:
+        service.pool.shutdown()

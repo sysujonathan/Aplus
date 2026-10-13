@@ -7,6 +7,7 @@ import threading
 from .closed_chart import _ReadOnlySnapshots, closed_chart_events
 from .market import BaoStock, completed_date, load_dataset, validate_bars
 from .holding_quotes import net_invested
+from .provider_guard import ProviderError, ProviderGuard
 from .sources import market_source
 
 
@@ -98,11 +99,20 @@ def fetch_missing_holding_chart(store, row, cancel_event, *, quote=None, provide
     if frame is None:
         if cancel_event.is_set():
             raise InterruptedError("已取消获取持仓图行情")
+        guard = ProviderGuard(store, 'baostock')
+        try:
+            guard.check()
+        except ValueError as exc:
+            raise ValueError("BaoStock 当前处于访问冷却，请稍后再查看持仓图。\n" + str(exc)) from exc
         provider = provider_factory()
         provider.cancel_event = cancel_event
         provider.login_timeout, provider.query_timeout = 8, 20
-        with provider:
-            frame = provider.fetch_unadjusted(positions[0]["code"], start, end)
+        try:
+            with provider:
+                frame = provider.fetch_unadjusted(positions[0]["code"], start, end)
+        except (ProviderError, TimeoutError) as exc:
+            guard.failure(exc)
+            raise
         frame = validate_bars(frame)
         if frame.empty:
             raise ValueError("数据源未返回该标的日K")

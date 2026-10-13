@@ -12,6 +12,7 @@ from workbench.holding_quotes import (CHINA, QuotePoller, parse_quotes, fetch_qu
 from workbench.holding_chart import (MissingHoldingHistory, fetch_missing_holding_chart,
                                      load_holding_chart)
 from workbench.market import save_dataset
+from workbench.provider_guard import ProviderError, ProviderGuard
 from workbench.store import Store
 from workbench.trading import management_report
 
@@ -360,6 +361,43 @@ def test_missing_etf_history_is_fetched_for_chart_without_touching_market_store(
     provider.fetch_unadjusted.assert_called_once()  # same-session cache, no repeated request
     assert database(store) == before
     assert store.rows('SELECT id FROM positions WHERE id=?', (pid,))
+
+
+def test_missing_etf_chart_obeys_existing_baostock_cooldown_without_connecting(tmp_path):
+    store = Store(tmp_path)
+    aid = store.save_account("测试", 10000, accounting_mode="history")
+    store.save_position(aid, "sh.513501", "测试ETF", 2.0, 1.8, 2.2,
+                        [{"date": "2026-08-17", "price": 2.0, "hands": 1, "fees": 0}])
+    row = management_report(store, aid, price_map={})["positions"][0]
+    ProviderGuard(store, 'baostock').failure(
+        ProviderError('baostock', 'fetch', 'Too Many Requests', '429'))
+    factory = Mock()
+    with pytest.raises(ValueError, match="BaoStock 当前处于访问冷却"):
+        fetch_missing_holding_chart(store, row, threading.Event(), provider_factory=factory)
+    factory.assert_not_called()
+
+
+def test_missing_etf_chart_failure_records_shared_cooldown_and_blocks_retry(tmp_path):
+    store = Store(tmp_path)
+    aid = store.save_account("测试", 10000, accounting_mode="history")
+    store.save_position(aid, "sh.513502", "测试ETF二号", 2.0, 1.8, 2.2,
+                        [{"date": "2026-08-17", "price": 2.0, "hands": 1, "fees": 0}])
+    row = management_report(store, aid, price_map={})["positions"][0]
+    provider = Mock()
+    provider.__enter__ = Mock(return_value=provider)
+    provider.__exit__ = Mock(return_value=False)
+    provider.fetch_unadjusted.side_effect = ProviderError(
+        'baostock', 'fetch', '供应商限制访问', '429')
+    with pytest.raises(ProviderError):
+        fetch_missing_holding_chart(store, row, threading.Event(),
+                                    provider_factory=lambda: provider)
+    state = ProviderGuard(store, 'baostock').state()
+    assert state['last_error']['error_code'] == '429'
+    retry_factory = Mock()
+    with pytest.raises(ValueError, match="BaoStock 当前处于访问冷却"):
+        fetch_missing_holding_chart(store, row, threading.Event(),
+                                    provider_factory=retry_factory)
+    retry_factory.assert_not_called()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")

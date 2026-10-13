@@ -23,7 +23,7 @@ from .readiness import (audit_scope, expected_day, reusable_baostock_basics,
                         save_calendar, save_directory)
 from .sync_batch import sync_results
 from .sources import market_source, SOURCES, coverage_state, FALLBACK_SOURCES
-from .provider_guard import ProviderGuard, ProviderError, restricted, error_detail
+from .provider_guard import ProviderGuard, ProviderError, access_limited, restricted, error_detail
 
 
 def merge_scan_reports(previous, current):
@@ -107,7 +107,10 @@ class Service:
         except Exception as exc:
             source=spec.get('source','baostock')
             detail=error_detail(exc,source)
-            if kind in ('sync','verify_status') and isinstance(exc,(ProviderError,TimeoutError)):
+            recorded_guard = getattr(exc, '_provider_guard_state', None)
+            if recorded_guard is not None:
+                detail['cooldown'] = recorded_guard
+            elif kind in ('sync','verify_status') and isinstance(exc,(ProviderError,TimeoutError)):
                 if kind == 'verify_status':
                     source = 'baostock'
                 detail['cooldown']=ProviderGuard(self.store,source).failure(exc)
@@ -215,6 +218,20 @@ class Service:
                                 daily_batch_request_count += 1
                                 daily_batch = (archive, factors)
                             except Exception as exc:
+                                # A malformed/empty bulk response is only an
+                                # optimization failure.  An explicit provider
+                                # restriction is different: do not reconnect
+                                # and issue even one more per-stock request.
+                                # Record the durable cooldown here; _execute
+                                # reuses it instead of counting the same refusal twice.
+                                if access_limited(exc):
+                                    state = ProviderGuard(self.store, source).failure(exc)
+                                    setattr(exc, '_provider_guard_state', state)
+                                    self.store.event(job, '整日行情遭供应商限制，立即停止整批同步',
+                                                     date=end, **error_detail(exc, source))
+                                    raise
+                                if isinstance(exc, (ProviderError, TimeoutError)):
+                                    ProviderGuard(self.store, source).failure(exc)
                                 daily_batch = None
                                 daily_batch_codes = []
                                 self.store.event(job, '整日行情不可用，自动改用逐股更新',
