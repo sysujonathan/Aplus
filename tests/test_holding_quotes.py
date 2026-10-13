@@ -9,8 +9,10 @@ import pytest
 
 from workbench.holding_quotes import (CHINA, QuotePoller, parse_quotes, fetch_quotes,
     session_status, select_quotes, saved_quotes, snapshot_reference, value_holdings)
-from workbench.holding_chart import load_holding_chart
+from workbench.holding_chart import (MissingHoldingHistory, fetch_missing_holding_chart,
+                                     load_holding_chart)
 from workbench.market import save_dataset
+from workbench.provider_guard import ProviderError, ProviderGuard
 from workbench.store import Store
 from workbench.trading import management_report
 
@@ -325,6 +327,88 @@ def test_holding_chart_one_cost_line_all_buy_arrows_plan_levels_read_only(tmp_pa
     assert database(store) == before
     with pytest.raises(ValueError, match="变化"):
         load_holding_chart(store, {**row, "account_id": "other"})
+
+
+def test_missing_etf_history_is_fetched_for_chart_without_touching_market_store(tmp_path):
+    store = Store(tmp_path)
+    aid = store.save_account("测试", 10000, accounting_mode="history")
+    pid = store.save_position(aid, "sh.513500", "博时标普500ETF(QDII)", 2.746, 2.451, 2.89,
+                              [{"date": "2026-08-17", "price": 2.746, "hands": 104, "fees": 6.72}])
+    row = management_report(store, aid, price_map={})["positions"][0]
+    with pytest.raises(MissingHoldingHistory):
+        load_holding_chart(store, row)
+    before = database(store)
+    provider = Mock()
+    provider.__enter__ = Mock(return_value=provider)
+    provider.__exit__ = Mock(return_value=False)
+    provider.fetch_unadjusted.return_value = pd.DataFrame({
+        'date': ['2026-08-14', '2026-08-17', '2026-10-12'],
+        'open': [2.7, 2.74, 2.8], 'high': [2.75, 2.78, 2.86],
+        'low': [2.68, 2.72, 2.78], 'close': [2.72, 2.746, 2.84],
+        'volume': [1000, 1200, 1400],
+    })
+    data = fetch_missing_holding_chart(store, row, threading.Event(),
+                                       provider_factory=lambda: provider)
+    assert data['code'] == 'sh.513500' and data['dataset']['adjustment'] == '不复权'
+    assert data['frame'].date.iloc[-1] == '2026-10-12'
+    assert not data['reference_needed']
+    assert '未写入或混入三套盘前数据源' in data['warnings'][0]
+    provider.fetch_unadjusted.assert_called_once()
+    assert provider.fetch_unadjusted.call_args.args[0] == 'sh.513500'
+    again = fetch_missing_holding_chart(store, row, threading.Event(),
+                                        provider_factory=lambda: provider)
+    assert again['frame'].equals(data['frame'])
+    provider.fetch_unadjusted.assert_called_once()  # same-session cache, no repeated request
+    assert database(store) == before
+    assert store.rows('SELECT id FROM positions WHERE id=?', (pid,))
+
+
+def test_missing_etf_chart_obeys_existing_baostock_cooldown_without_connecting(tmp_path):
+    store = Store(tmp_path)
+    aid = store.save_account("测试", 10000, accounting_mode="history")
+    store.save_position(aid, "sh.513501", "测试ETF", 2.0, 1.8, 2.2,
+                        [{"date": "2026-08-17", "price": 2.0, "hands": 1, "fees": 0}])
+    row = management_report(store, aid, price_map={})["positions"][0]
+    ProviderGuard(store, 'baostock').failure(
+        ProviderError('baostock', 'fetch', 'Too Many Requests', '429'))
+    factory = Mock()
+    with pytest.raises(ValueError, match="BaoStock 当前处于访问冷却"):
+        fetch_missing_holding_chart(store, row, threading.Event(), provider_factory=factory)
+    factory.assert_not_called()
+
+
+def test_missing_etf_chart_failure_records_shared_cooldown_and_blocks_retry(tmp_path):
+    store = Store(tmp_path)
+    aid = store.save_account("测试", 10000, accounting_mode="history")
+    store.save_position(aid, "sh.513502", "测试ETF二号", 2.0, 1.8, 2.2,
+                        [{"date": "2026-08-17", "price": 2.0, "hands": 1, "fees": 0}])
+    row = management_report(store, aid, price_map={})["positions"][0]
+    provider = Mock()
+    provider.__enter__ = Mock(return_value=provider)
+    provider.__exit__ = Mock(return_value=False)
+    provider.fetch_unadjusted.side_effect = ProviderError(
+        'baostock', 'fetch', '供应商限制访问', '429')
+    with pytest.raises(ProviderError):
+        fetch_missing_holding_chart(store, row, threading.Event(),
+                                    provider_factory=lambda: provider)
+    state = ProviderGuard(store, 'baostock').state()
+    assert state['last_error']['error_code'] == '429'
+    retry_factory = Mock()
+    with pytest.raises(ValueError, match="BaoStock 当前处于访问冷却"):
+        fetch_missing_holding_chart(store, row, threading.Event(),
+                                    provider_factory=retry_factory)
+    retry_factory.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_missing_history_loader_accepts_page_frame_as_parent(quote_window):
+    import ttkbootstrap as ttk
+    from gui.closed_trade_chart import fetch_missing_holding_chart_dialog
+    parent = ttk.Frame(quote_window)
+    expected = {"code": "sh.513500"}
+    with patch("workbench.holding_chart.fetch_missing_holding_chart", return_value=expected):
+        assert fetch_missing_holding_chart_dialog(parent, Mock(), Mock(), quote=None) is expected
+    parent.destroy()
 
 
 def test_holding_adjusted_axis_only_converts_with_same_date_raw_price(tmp_path):

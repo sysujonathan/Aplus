@@ -1,14 +1,26 @@
 """Read-only holding chart, real fills and explicitly converted price levels."""
 import math
-from datetime import datetime
+from collections import OrderedDict
+from datetime import datetime, timedelta
+import threading
 
 from .closed_chart import _ReadOnlySnapshots, closed_chart_events
-from .market import BaoStock, load_dataset, validate_bars
+from .market import BaoStock, completed_date, load_dataset, validate_bars
 from .holding_quotes import net_invested
+from .provider_guard import ProviderError, ProviderGuard
 from .sources import market_source
 
 
-def load_holding_chart(store, row, *, quote=None):
+class MissingHoldingHistory(ValueError):
+    """The ledger is valid but no local daily bars exist for charting."""
+
+
+_ON_DEMAND_CACHE = OrderedDict()
+_ON_DEMAND_CACHE_LOCK = threading.Lock()
+_ON_DEMAND_CACHE_LIMIT = 20
+
+
+def load_holding_chart(store, row, *, quote=None, history=None):
     positions = store.rows("SELECT * FROM positions WHERE id=? AND account_id=? AND status='OPEN'",
                            (row["id"], row["account_id"]))
     if not positions or positions[0]["code"] != row["code"]:
@@ -19,13 +31,17 @@ def load_holding_chart(store, row, *, quote=None):
     quantity = sum((1 if f["side"] == "BUY" else -1) * f["quantity"] for f in fills)
     if not fills or quantity <= 0:
         raise ValueError("没有有效的在持仓成交链路。")
-    snapshots = store.rows(
-        "SELECT * FROM datasets WHERE code=? AND timeframe='daily' AND source IN (?,'csv','legacy-engine-a') "
-        "ORDER BY CASE WHEN source=? THEN 0 ELSE 1 END,end DESC, CASE WHEN adjustment IN ('不复权','none','3') THEN 0 ELSE 1 END,"
-        "created DESC,rowid DESC LIMIT 1", (position["code"],market_source(store),market_source(store)))
-    if not snapshots:
-        raise ValueError("本地没有该标的日线，请先在盘前任务更新行情。")
-    frame, record = load_dataset(_ReadOnlySnapshots(store), snapshots[0]["id"])
+    if history is None:
+        snapshots = store.rows(
+            "SELECT * FROM datasets WHERE code=? AND timeframe='daily' AND source IN (?,'csv','legacy-engine-a') "
+            "ORDER BY CASE WHEN source=? THEN 0 ELSE 1 END,end DESC, CASE WHEN adjustment IN ('不复权','none','3') THEN 0 ELSE 1 END,"
+            "created DESC,rowid DESC LIMIT 1", (position["code"],market_source(store),market_source(store)))
+        if not snapshots:
+            raise MissingHoldingHistory("本地没有该标的日线")
+        frame, record = load_dataset(_ReadOnlySnapshots(store), snapshots[0]["id"])
+    else:
+        frame, record = history
+        frame = validate_bars(frame)
     if frame.empty:
         raise ValueError("该标的日线为空，请先更新行情。")
     # Same EMA20 definition as the premarket base chart, no strategy rescan.
@@ -56,6 +72,63 @@ def load_holding_chart(store, row, *, quote=None):
             "code": position["code"], "name": position["name"], "estimated": False,
             "holding": True, "levels": levels, "close_date": end,
             "reference_needed": factor is None}
+
+
+def fetch_missing_holding_chart(store, row, cancel_event, *, quote=None, provider_factory=BaoStock):
+    """Fetch one holding's chart bars without writing the market-data Store."""
+    positions = store.rows("SELECT * FROM positions WHERE id=? AND account_id=? AND status='OPEN'",
+                           (row["id"], row["account_id"]))
+    if not positions or positions[0]["code"] != row["code"]:
+        raise ValueError("持仓已变化，请刷新后重试。")
+    fills = store.rows("SELECT trade_date FROM position_fills WHERE position_id=? ORDER BY trade_date",
+                       (positions[0]["id"],))
+    if not fills:
+        raise ValueError("没有有效的在持仓成交链路。")
+    end = completed_date()
+    end_date = datetime.fromisoformat(end).date()
+    first_fill = datetime.fromisoformat(fills[0]["trade_date"]).date()
+    start = min(end_date - timedelta(days=730), first_fill - timedelta(days=180)).isoformat()
+    cache_key = (positions[0]["code"], start, end)
+    with _ON_DEMAND_CACHE_LOCK:
+        cached = _ON_DEMAND_CACHE.get(cache_key)
+        if cached is not None:
+            _ON_DEMAND_CACHE.move_to_end(cache_key)
+            frame = cached.copy()
+        else:
+            frame = None
+    if frame is None:
+        if cancel_event.is_set():
+            raise InterruptedError("已取消获取持仓图行情")
+        guard = ProviderGuard(store, 'baostock')
+        try:
+            guard.check()
+        except ValueError as exc:
+            raise ValueError("BaoStock 当前处于访问冷却，请稍后再查看持仓图。\n" + str(exc)) from exc
+        provider = provider_factory()
+        provider.cancel_event = cancel_event
+        provider.login_timeout, provider.query_timeout = 8, 20
+        try:
+            with provider:
+                frame = provider.fetch_unadjusted(positions[0]["code"], start, end)
+        except (ProviderError, TimeoutError) as exc:
+            guard.failure(exc)
+            raise
+        frame = validate_bars(frame)
+        if frame.empty:
+            raise ValueError("数据源未返回该标的日K")
+        with _ON_DEMAND_CACHE_LOCK:
+            _ON_DEMAND_CACHE[cache_key] = frame.copy()
+            _ON_DEMAND_CACHE.move_to_end(cache_key)
+            while len(_ON_DEMAND_CACHE) > _ON_DEMAND_CACHE_LIMIT:
+                _ON_DEMAND_CACHE.popitem(last=False)
+    record = {
+        "id": "holding-on-demand-" + positions[0]["code"].replace('.', ''),
+        "source": "BaoStock 持仓图按需行情", "adjustment": "不复权",
+        "start": frame.iloc[0].date, "end": frame.iloc[-1].date,
+    }
+    data = load_holding_chart(store, row, quote=quote, history=(frame, record))
+    data["warnings"].insert(0, "该标的不在盘前股票行情缓存中；本图已按需获取，未写入或混入三套盘前数据源。")
+    return data
 
 
 def _is_close_reference(quote, end):

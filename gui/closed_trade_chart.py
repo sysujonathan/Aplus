@@ -185,12 +185,13 @@ class ClosedTradeChartDialog:
 
 
 class HoldingTradeChartDialog(ClosedTradeChartDialog):
-    def __init__(self, parent, store, row, *, quote=None):
+    def __init__(self, parent, store, row, *, quote=None, data=None):
         from workbench.holding_chart import load_holding_chart
         self._reference_cancel = threading.Event()
         self._reference_after = None
         self._reference_results = queue.Queue()
-        super().__init__(parent, store, row, data=load_holding_chart(store, row, quote=quote))
+        super().__init__(parent, store, row,
+                         data=data if data is not None else load_holding_chart(store, row, quote=quote))
         self.top.title(f'持仓图 · {self.data["name"]} {self.data["code"]}')
         if self.data.get("reference_needed"):
             self._start_reference()
@@ -239,3 +240,51 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
                 self.top.after_cancel(self._reference_after)
                 self._reference_after = None
         super()._destroyed(event)
+
+
+def fetch_missing_holding_chart_dialog(parent, store, row, *, quote=None):
+    """Responsive modal fetch for a holding absent from premarket history."""
+    from workbench.holding_chart import fetch_missing_holding_chart
+    owner = parent.winfo_toplevel()
+    top = tk.Toplevel(parent)
+    top.title("正在准备持仓图")
+    top.configure(bg=APP_BG)
+    top.resizable(False, False)
+    top.transient(owner)
+    top.grab_set()
+    cancel = threading.Event()
+    results = queue.Queue()
+    ttk.Label(top, text="本地没有该标的日K，正在按需获取持仓图行情…",
+              padding=(24, 20)).pack(fill=tk.X)
+    ttk.Label(top, text="不会写入或混入盘前的 BaoStock、TickFlow、腾讯行情。",
+              foreground=MUTED, padding=(24, 0, 24, 14)).pack(fill=tk.X)
+    ttk.Button(top, text="取消", bootstyle="secondary",
+               command=lambda: (cancel.set(), top.destroy())).pack(pady=(0, 18))
+    top.protocol("WM_DELETE_WINDOW", lambda: (cancel.set(), top.destroy()))
+
+    def work():
+        try:
+            results.put((fetch_missing_holding_chart(store, row, cancel, quote=quote), None))
+        except Exception as exc:
+            results.put((None, exc))
+
+    threading.Thread(target=work, daemon=True, name="holding-chart-history").start()
+    outcome = {"data": None, "error": None}
+
+    def poll():
+        if cancel.is_set() or not top.winfo_exists():
+            return
+        try:
+            outcome["data"], outcome["error"] = results.get_nowait()
+        except queue.Empty:
+            top.after(100, poll)
+            return
+        top.destroy()
+
+    top.after(100, poll)
+    parent.wait_window(top)
+    if cancel.is_set() and outcome["data"] is None:
+        return None
+    if outcome["error"] is not None:
+        raise ValueError("未能取得该标的持仓图日K；持仓记录不受影响。\n" + str(outcome["error"]))
+    return outcome["data"]

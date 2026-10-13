@@ -195,6 +195,14 @@ class DirectBaoStock:
         rows = validate_status_rows(code, start, end, frame.to_dict(orient='records'))
         return pd.DataFrame(rows, columns=['date','code','tradestatus','volume'])
 
+    def daily_astock(self, date):
+        """Official one-day A-share archive (unadjusted, one request)."""
+        return self.collect(self.bs.query_daily_history_k_AStock(date), 'daily_astock')
+
+    def daily_adjust_factor(self, date):
+        """Official corporate-action rows effective on one date."""
+        return self.collect(self.bs.query_daily_adjust_factor(date), 'daily_adjust_factor')
+
     def fetch(self, code, start, end, adjustflag='2'):
         # Research/sync keep their existing default. Holding charts explicitly
         # request raw prices in an isolated provider process, without saving them.

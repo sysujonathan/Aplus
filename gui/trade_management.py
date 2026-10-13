@@ -850,13 +850,24 @@ class TradeManagementFrame(ttk.Frame):
             self._open_position_chart(self, row)
 
     def _open_position_chart(self, parent, row):
-        from .closed_trade_chart import HoldingTradeChartDialog
+        from .closed_trade_chart import HoldingTradeChartDialog, fetch_missing_holding_chart_dialog
+        from workbench.holding_chart import MissingHoldingHistory, load_holding_chart
         previous_grab = parent.grab_current()
         try:
             quote = self._live_quotes.get(row["code"]) or self._history_quotes.get(row["code"])
-            dialog = HoldingTradeChartDialog(parent, self.store, row, quote=quote)
+            try:
+                data = load_holding_chart(self.store, row, quote=quote)
+            except MissingHoldingHistory:
+                data = fetch_missing_holding_chart_dialog(parent, self.store, row, quote=quote)
+                if data is None:
+                    if previous_grab is not None and previous_grab.winfo_exists():
+                        previous_grab.grab_set()
+                    return
+            dialog = HoldingTradeChartDialog(parent, self.store, row, quote=quote, data=data)
         except Exception as exc:
             messagebox.showerror("无法查看 K 线", str(exc), parent=parent)
+            if previous_grab is not None and previous_grab.winfo_exists():
+                previous_grab.grab_set()
             return
         parent.wait_window(dialog.top)
         if previous_grab is not None and previous_grab.winfo_exists():
