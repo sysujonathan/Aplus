@@ -157,6 +157,10 @@ class Service:
             raise ValueError('同步开始日期不能晚于已完成行情日期')
         scope_reused = False
         basics_reused = False
+        daily_batch = None
+        daily_batch_codes = []
+        daily_batch_request_seconds = 0.0
+        daily_batch_request_count = 0
         if 'boards' in spec:
             if not spec['boards']:
                 raise ValueError('请至少勾选一个板块')
@@ -192,6 +196,31 @@ class Service:
                                          date=end, evidence=evidence, count=len(directory))
                         self.progress(job,0,1,'当日目录与同源证券档案完全一致，免除重复下载')
                     save_directory(self.store, directory, end, job, basics=basics)
+                    selected = select_board_codes(directory, spec['boards'])
+                    if (not spec.get('force') and not spec.get('repair_codes')):
+                        from .baostock_daily_batch import one_day_tail_candidates
+                        active = [code for code in selected if code not in set(
+                            directory.loc[directory.tradeStatus.astype(str) == '0', 'code'])]
+                        daily_batch_codes = one_day_tail_candidates(self.store, active, start, end)
+                        # Two official requests replace thousands of single-stock
+                        # tail requests only when the saving is material.
+                        if len(daily_batch_codes) >= 50:
+                            self.progress(job, 0, len(selected),
+                                          f'BaoStock · 获取 {end} 整日行情并核对复权事件')
+                            stamp = time.monotonic()
+                            try:
+                                archive = candidate.daily_astock(end)
+                                daily_batch_request_count += 1
+                                factors = candidate.daily_adjust_factor(end)
+                                daily_batch_request_count += 1
+                                daily_batch = (archive, factors)
+                            except Exception as exc:
+                                daily_batch = None
+                                daily_batch_codes = []
+                                self.store.event(job, '整日行情不可用，自动改用逐股更新',
+                                                 date=end, error=str(exc))
+                            finally:
+                                daily_batch_request_seconds = time.monotonic() - stamp
                 universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
             codes = select_board_codes(universe,spec['boards'])
         else:
@@ -223,7 +252,11 @@ class Service:
             self.progress(job,processed,len(codes),f'{current_request[0]} · 等待响应 {seconds}秒')
         workers = 1  # BaoStock public rules prohibit concurrent connections.
         report['connections'] = workers
-        report['timings'] = dict(history_requests=0, history_request_seconds=0.0, stock_processing_seconds=0.0)
+        report['timings'] = dict(history_requests=0, history_request_seconds=0.0,
+                                 stock_processing_seconds=0.0,
+                                 daily_batch_requests=daily_batch_request_count,
+                                 daily_batch_request_seconds=daily_batch_request_seconds,
+                                 daily_batch_processing_seconds=0.0)
         def timing(code, elapsed):
             for key, value in elapsed.items():
                 report['timings'][key] += value
@@ -236,7 +269,45 @@ class Service:
                                 and not spec.get('force'))
         repair_timeframe = spec.get('scan_timeframe', 'daily') if selective_repair else None
         report['repair_timeframe'] = repair_timeframe
-        results = sync_results(self.store, BaoStock, [c for c in codes if c not in suspended], start, end,
+        batch_saved, batch_fallback = {}, {}
+        if daily_batch is not None and daily_batch_codes:
+            from .baostock_daily_batch import apply_one_day_tail
+            stamp = time.monotonic()
+            last_batch_notice = [0.0]
+            def batch_progress(done, total, code, outcome):
+                moment = time.monotonic()
+                if done == total or moment - last_batch_notice[0] >= .5:
+                    last_batch_notice[0] = moment
+                    self.progress(job, len(suspended) + done, len(codes),
+                                  f'BaoStock · 校验并保存整日行情 {done}/{total} · {code}')
+            try:
+                batch_saved, batch_fallback = apply_one_day_tail(
+                    self.store, daily_batch_codes, daily_batch[0], daily_batch[1], start, end, job,
+                    on_progress=batch_progress, check_stop=lambda: self.check_stop(job))
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                # Archive-level validation is an optimization failure, not a
+                # market-sync failure. The established per-stock path remains
+                # the source of truth and rechecks every candidate.
+                batch_saved = {}
+                batch_fallback = {code: '整日行情整体校验未通过' for code in daily_batch_codes}
+                self.store.event(job, '整日行情整体校验未通过，自动改用逐股更新',
+                                 date=end, error=str(exc))
+            report['timings']['daily_batch_processing_seconds'] = time.monotonic() - stamp
+            report['updated'] += len(batch_saved)
+            report['success'] += len(batch_saved)
+            report['datasets'].extend(batch_saved.values())
+            processed += len(batch_saved)
+            report['daily_batch'] = {
+                'eligible': len(daily_batch_codes), 'saved': len(batch_saved),
+                'fallback': len(batch_fallback),
+            }
+            self.store.event(job, '整日行情处理完成', date=end,
+                             **report['daily_batch'],
+                             fallback_reasons=dict(list(batch_fallback.items())[:20]))
+        remaining_codes = [c for c in codes if c not in suspended and c not in batch_saved]
+        results = sync_results(self.store, BaoStock, remaining_codes, start, end,
                                job, bool(spec.get('force') or (spec.get('repair_codes') and not selective_repair)),
                                self.cancel_flags[job], halt, workers, waiting,
                                on_request=requesting, repair_timeframe=repair_timeframe, on_timing=timing)
