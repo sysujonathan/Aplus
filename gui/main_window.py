@@ -95,6 +95,9 @@ class AplusMainWindow(ttk.Window):
         self.toolbar._on_scan_started = self.version_controller.scan_hint
         if enable_tray:
             self._setup_tray()
+        from .chart_alerts import ChartAlertMonitor
+        self.chart_alert_monitor = ChartAlertMonitor(self, self.store)
+        self.chart_alert_monitor.start()
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)

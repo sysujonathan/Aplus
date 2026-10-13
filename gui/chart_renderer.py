@@ -2,7 +2,19 @@
 from __future__ import annotations
 
 import io
+import threading
+from functools import wraps
 from PIL import Image
+
+_RENDER_LOCK = threading.RLock()
+
+
+def serialized_render(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _RENDER_LOCK:
+            return function(*args, **kwargs)
+    return wrapped
 
 from .chart_annotations import (
     annotation_kwargs, info_panel_lines, marker_specs,
@@ -14,10 +26,11 @@ from .theme import (
 )
 
 
+@serialized_render
 def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type="",
                  replay_events=(), view_bars=120, size=None, price_scale=1.0, view_offset=0,
                  code=None, instrument_type=None, research_overlay=(), replay_label_scale=1.0,
-                 holding_levels=()):
+                 holding_levels=(), display_options=None):
     """绘制通用底图、冻结策略专属标注和通用信息层。"""
     import matplotlib
     matplotlib.use("Agg")
@@ -31,9 +44,11 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     strategy_plot = visible.reset_index(drop=True).copy()
     plot = visible.copy()
     plot.index = pd.to_datetime(plot["date"])
+    options = dict(display_options or {})
+    show_volume = options.get('volume', True)
     colors = mpf.make_marketcolors(
-        up=UP,
-        down=DOWN,
+        up=options.get('up', UP),
+        down=options.get('down', DOWN),
         edge="inherit",
         wick="inherit",
         volume="in",
@@ -57,8 +72,15 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     )
     adds = []
     legend_handles = []
-    if "ema20" in plot:
-        adds.append(mpf.make_addplot(plot.ema20, color=AVERAGE, width=1.35))
+    if options.get('ema', True):
+        if display_options is not None:
+            ema = frame[options.get('ema_source', 'close')].ewm(
+                span=int(options.get('ema_length', 20)), adjust=False).mean().shift(int(options.get('ema_offset', 0)))
+            ema = ema.loc[visible.index]
+        else:
+            ema = plot.get('ema20')
+        if ema is not None and ema.notna().any():
+            adds.append(mpf.make_addplot(ema, color=options.get('ema_color', AVERAGE), width=1.35))
     signal_column = meta.get("signal_column")
     h2 = signal_column == 'signal_gap_h2' and payload.get('plan_kind') == 'gap-h2-next-session'
     structure_unavailable = False
@@ -175,8 +197,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             plot,
             type="candle",
             style=style,
-            volume=True,
-            panel_ratios=(7, 1),
+            volume=show_volume,
+            panel_ratios=(7, 1) if show_volume else (1,),
             title=dict(title=title, fontsize=9 if size[0]<1000 else 12) if size else title,
             ylabel="",
             figsize=(max(100, size[0])/110, max(100, size[1])/110) if size else (12.2, 7.5),
@@ -199,7 +221,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             width, height = max(100, size[0]), max(100, size[1])
             left, right = 8/width, 1-min(64, width*.3)/width
             bottom, top = min(48, height*.2)/height, 1-min(30, height*.15)/height
-            volume_height = (top-bottom)/8
+            volume_height = (top-bottom)/8 if show_volume else 0
             for text in fig.texts:
                 text.set_position(((left+right)/2, 1-4/height))
                 text.set_verticalalignment('top')
@@ -207,7 +229,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             if size:
                 is_price = index < 2
                 axis.set_position([left, bottom+volume_height if is_price else bottom,
-                                   right-left, volume_height*(7 if is_price else 1)])
+                                   right-left, (top-bottom-volume_height) if is_price else volume_height])
             axis.set_facecolor(CHART_BG)
             axis.tick_params(colors=MUTED, labelsize=8)
             for spine in axis.spines.values():
@@ -347,14 +369,16 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         )
         buf.seek(0)
         image = Image.open(buf).copy()
-        box, volume_box = ax.get_window_extent(), axes[2].get_window_extent()
+        box = ax.get_window_extent()
+        volume_box = axes[2].get_window_extent() if show_volume else box
         image.info['replay_view'] = dict(total=len(frame), bars=len(visible), offset=len(frame)-end,
             price_x=(box.x0*factor-crop_x, box.x1*factor-crop_x),
             price_y=(image.height-(box.y1*factor-crop_y), image.height-(box.y0*factor-crop_y)),
             plot_y=(image.height-(box.y1*factor-crop_y), image.height-(volume_box.y0*factor-crop_y)),
             candle_x=[float(ax.transData.transform((i, 0))[0])*factor-crop_x for i in range(len(plot))],
             candles=visible[['date', 'open', 'high', 'low', 'close']].to_dict('records'),
-            decimals=decimals)
+            decimals=decimals, price_bounds=(view_low, view_high),
+            ema_values=ema.fillna(float('nan')).tolist() if display_options is not None and options.get('ema', True) else [])
         return image
     finally:
         if fig is not None:

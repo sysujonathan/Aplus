@@ -71,6 +71,8 @@ class ChartPanel(native_ttk.Frame):
         self._tf = "daily"
         self._image = None
         self._photo = None
+        self._workspace_context = None
+        self._workspace_request = None
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
@@ -102,6 +104,12 @@ class ChartPanel(native_ttk.Frame):
             cursor="hand2",
         )
         self._tv_btn.pack(side=tk.RIGHT, fill=tk.Y)
+        self._analysis_btn = tk.Button(
+            self.header, text="A++ 图表", command=self._open_workspace, state=tk.DISABLED,
+            bg=CONTROL_BG, fg=MUTED, activebackground=ACCENT, activeforeground=TEXT,
+            borderwidth=0, padx=8, cursor="hand2",
+        )
+        self._analysis_btn.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.readout = tk.StringVar(value='移到 K 线上查看开、高、低、收')
         self.readout_frame = native_ttk.Frame(self, style='ChartBody.TFrame', height=42)
@@ -147,6 +155,7 @@ class ChartPanel(native_ttk.Frame):
         self.header.configure(bg=color)
         self.title_label.configure(bg=color)
         self._tv_btn.configure(bg=color)
+        self._analysis_btn.configure(bg=color)
 
     def set_drop_target(self, active):
         if active:
@@ -154,6 +163,7 @@ class ChartPanel(native_ttk.Frame):
             self.header.configure(bg=DROP_TARGET)
             self.title_label.configure(bg=DROP_TARGET)
             self._tv_btn.configure(bg=DROP_TARGET)
+            self._analysis_btn.configure(bg=DROP_TARGET)
 
     def show_placeholder(self, title="空位"):
         self.readout.set('移到 K 线上查看开、高、低、收')
@@ -161,9 +171,12 @@ class ChartPanel(native_ttk.Frame):
         self._observation_id = None
         self._image = None
         self._photo = None
+        self._workspace_context = None
+        self._workspace_request = None
         self._title_var.set(title)
         self.chart_label.configure(image="", text="拖入关注标的或切换候选页")
         self._tv_btn.configure(state=tk.DISABLED)
+        self._analysis_btn.configure(state=tk.DISABLED)
 
     def show_observation(
         self,
@@ -176,6 +189,10 @@ class ChartPanel(native_ttk.Frame):
         anchor_asof=None,
     ):
         self.store = store
+        self._workspace_request = dict(observation_id=observation_id,
+            market_dataset_id=market_dataset_id, mode=mode, market_asof=market_asof,
+            anchor_asof=anchor_asof)
+        self._workspace_context = None
         self._code = None
         self._observation_id = observation_id
         self._image = None
@@ -185,6 +202,7 @@ class ChartPanel(native_ttk.Frame):
             self.readout.set('移到 K 线上查看开、高、低、收')
         self.chart_label.configure(image="", text="正在生成 K 线…")
         self._tv_btn.configure(state=tk.DISABLED)
+        self._analysis_btn.configure(state=tk.DISABLED)
         if store is None or observation_id is None:
             self.show_placeholder()
             return
@@ -195,6 +213,7 @@ class ChartPanel(native_ttk.Frame):
             self._image, self._code, self._tf, title = cached
             self._title_var.set(title)
             self._tv_btn.configure(state=tk.NORMAL)
+            self._analysis_btn.configure(state=tk.NORMAL)
             self._fit_image()
             return
         from .data import load_observation_candles, code_names
@@ -245,6 +264,12 @@ class ChartPanel(native_ttk.Frame):
                 code=self._code,
                 instrument_type=bars.attrs.get('instrument_type'),
             )
+            self._workspace_context = dict(
+                frame=calculated, record={**(record or {}), 'timeframe': self._tf}, code=self._code,
+                name=name, timeframe=self._tf, payload=payload, metadata=instance.get_metadata(),
+                strategy=instance, strategy_type=observation['strategy'],
+                instrument_type=bars.attrs.get('instrument_type'), title='',
+            )
             chart_identity = f"{self._code}  {name}".rstrip()
             if mode == "watch":
                 current_day = str(bars.date.iloc[-1])[:10]
@@ -275,12 +300,14 @@ class ChartPanel(native_ttk.Frame):
                 if len(cache) > 72:
                     cache.pop(next(iter(cache)))
             self._tv_btn.configure(state=tk.NORMAL)
+            self._analysis_btn.configure(state=tk.NORMAL)
             self._fit_image()
         except Exception as exc:
             self._code = None
             self._image = self._photo = None
             self._title_var.set("加载失败")
             self.chart_label.configure(image="", text=f"图表加载失败：{exc}")
+            self._analysis_btn.configure(state=tk.DISABLED)
 
     def _activate(self, _event=None):
         if self._on_activate:
@@ -317,6 +344,46 @@ class ChartPanel(native_ttk.Frame):
             import webbrowser
             from .tv import tv_link
             webbrowser.open(tv_link(self._code, self._tf))
+
+    def _open_workspace(self):
+        if not self._workspace_request or not self.store:
+            return
+        try:
+            context = self._workspace_context or self._rebuild_workspace_context()
+            from .chart_workspace import open_chart_workspace
+            open_chart_workspace(self, self.store, **context)
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror('图表工作区无法打开', str(exc), parent=self)
+
+    def _rebuild_workspace_context(self):
+        """Rebuild context when the lightweight image cache was used."""
+        from .data import load_observation_candles, code_names
+        from workbench.market import load_dataset
+        from workbench.strategies import catalog, prepare, calculate
+        request = self._workspace_request
+        frame, record, payload = load_observation_candles(self.store, request['observation_id'])
+        if frame is None:
+            raise ValueError('该观察无可用行情快照')
+        observation = self.store.rows('SELECT * FROM observations WHERE id=?',
+                                      (request['observation_id'],))[0]
+        payload = dict(payload or {})
+        for key in ('asof','setup_date'):
+            if observation.get(key): payload.setdefault(key,observation[key])
+        if request['mode']=='watch' and request['market_dataset_id']:
+            frame,record=load_dataset(self.store,request['market_dataset_id'])
+        cutoff=((request['market_asof'] or (record or {}).get('end'))
+                if request['mode']=='watch' and request['market_dataset_id'] else observation['asof'])
+        spec=catalog(self.store)[observation['strategy']]
+        bars=prepare(frame,observation['timeframe'],str(cutoff)[:10])
+        instance,calculated=calculate(spec,bars)
+        context=dict(frame=calculated,record={**(record or {}),'timeframe':observation['timeframe']},
+            code=observation['code'],name=code_names(self.store).get(observation['code'],''),
+            timeframe=observation['timeframe'],payload=payload,metadata=instance.get_metadata(),
+            strategy=instance,strategy_type=observation['strategy'],
+            instrument_type=bars.attrs.get('instrument_type'),title='')
+        self._workspace_context=context
+        return context
 
 
 class ChartGrid(ttk.Frame):
