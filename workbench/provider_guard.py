@@ -25,6 +25,14 @@ def restricted(exc):
     return getattr(exc, 'code', None) == '10001011' or any(w in str(exc).lower() for w in ('黑名单','blacklist'))
 
 
+def access_limited(exc):
+    """An explicit provider refusal that must not be followed by another request."""
+    code = str(getattr(exc, 'code', '') or '')
+    message = str(exc).lower()
+    return (restricted(exc) or code in {'403', '429'} or
+            any(w in message for w in ('限制访问', 'rate limit', 'too many requests')))
+
+
 class ProviderGuard:
     def __init__(self, store, source, clock=time.time):
         self.store, self.source, self.clock = store, source, clock

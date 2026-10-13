@@ -149,6 +149,12 @@ class BaoStock:
     def trading_status(self, code, start, end):
         return self._query('trading_status', [code, start, end])
 
+    def daily_astock(self, date):
+        return self._query('daily_astock', [date], self.basics_timeout)
+
+    def daily_adjust_factor(self, date):
+        return self._query('daily_adjust_factor', [date], self.basics_timeout)
+
     def __exit__(self,*exc):
         try:
             if self.process is not None and not self.cancel_event.is_set():

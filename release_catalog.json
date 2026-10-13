@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.12.37",
-    "pr": 37,
-    "date": "2026-10-12"
+    "version": "2026.10.13.38",
+    "pr": 38,
+    "date": "2026-10-13"
   },
   "history": [
     {
@@ -450,14 +450,28 @@
       "pr": 37,
       "version": "2026.10.12.37",
       "date": "2026-10-12",
-      "status": "preview",
+      "status": "released",
       "title": "精简腾讯尾部请求并修正扫描结果日期",
       "notes": [
         "腾讯日常尾部更新只请求实际需要的 K 线范围，减少固定取 640 根及频繁落库的浪费，官方单连接、间隔和停止保护不变。",
         "BaoStock 当日目录与同源证券档案逐只一致时免除重复档案下载；不一致仍请求官方资料。",
         "扫描完成后自动显示本次实际扫描日期的结果；行情更新仍保留用户正在复核的历史日期。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/37"
+      "url": "https://github.com/sysujonathan/Aplus/pull/37",
+      "commit": "c88e43434967e2dc526328c02d103ceca26b3506"
+    },
+    {
+      "pr": 38,
+      "version": "2026.10.13.38",
+      "date": "2026-10-13",
+      "status": "preview",
+      "title": "BaoStock整日安全增量与ETF持仓按需看图",
+      "notes": [
+        "BaoStock普通单日更新优先使用官方整日行情，并以复权事件和前收盘双重核对；异常股票自动退回原逐股更新。",
+        "ETF等不在盘前股票缓存中的持仓可按需只读获取日K并打开持仓图，不写入或混入三套盘前行情。",
+        "整日接口遇到黑名单、403、429或明确限制访问时立即停批；ETF按需看图共用BaoStock全局冷却。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/38"
     }
   ]
 }
