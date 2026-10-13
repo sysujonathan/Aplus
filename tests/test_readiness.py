@@ -110,7 +110,7 @@ def test_short_directory_does_not_replace_existing_universe(store):
 
 
 def test_board_sync_checks_dates_and_repeat_reuses_all_bars(store, frame, monkeypatch):
-    calls = []
+    calls = []; basics_calls = []
     class Provider:
         def __enter__(self): return self
         def __exit__(self, *args): pass
@@ -121,6 +121,7 @@ def test_board_sync_checks_dates_and_repeat_reuses_all_bars(store, frame, monkey
         def universe(self, day):
             return pd.DataFrame({'code':['sh.600000','sh.600001'], 'tradeStatus':['1','1'],'code_name':['甲','乙']})
         def basics(self):
+            basics_calls.append(True)
             return pd.DataFrame({'code':['sh.600000','sh.600001'], 'ipoDate':['2000-01-01']*2,
                                  'outDate':['',''],'status':['1','1'],'type':['1','1']})
         def fetch(self, code, start, end):
@@ -135,7 +136,25 @@ def test_board_sync_checks_dates_and_repeat_reuses_all_bars(store, frame, monkey
     second = wait_for(store, service.submit('sync',spec))
     service.pool.shutdown()
     assert second['status']=='completed'
-    assert json.loads(second['result'])['skipped']==2 and len(calls)==2
+    second_report=json.loads(second['result'])
+    assert second_report['skipped']==2 and len(calls)==2
+    assert second_report['basics_reused'] and len(basics_calls)==1
+
+
+def test_baostock_archive_reuse_requires_exact_effective_roster(store):
+    from workbench.readiness import reusable_baostock_basics, save_directory
+    old_day='2024-01-05'; new_day='2024-01-08'
+    basics=pd.DataFrame(dict(code=['sh.600000','sh.600001','sh.600002'],
+        ipoDate=['2000-01-01','2024-01-08','2000-01-01'],
+        outDate=['','','2024-01-08'],type=['1','1','1'],status=['1','1','0']))
+    old=pd.DataFrame(dict(code=['sh.600000','sh.600002'],code_name=['甲','丙'],tradeStatus=['1','1']))
+    save_directory(store,old,old_day,basics=basics)
+    current=pd.DataFrame(dict(code=['sh.600000','sh.600001'],code_name=['甲','乙'],tradeStatus=['1','1']))
+    reused=reusable_baostock_basics(store,current,new_day)
+    assert reused is not None and reused.attrs['reused_from'].endswith('2024-01-05-basics.csv')
+    changed=pd.concat([current,pd.DataFrame(dict(code=['sh.600003'],code_name=['丁'],tradeStatus=['1']))],
+                      ignore_index=True)
+    assert reusable_baostock_basics(store,changed,new_day) is None
 
 
 def test_verified_calendar_cache_allows_sync_without_calendar_network(store,frame,monkeypatch):

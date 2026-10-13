@@ -52,6 +52,27 @@ def test_backward_pagination_has_no_duplicate_or_infinite_loop(monkeypatch):
     with pytest.raises(ValueError,match='结束日|分页'):provider.fetch('sh.600000',data.date.iloc[0],data.date.iloc[-1])
 
 
+def test_tail_history_requests_only_the_remaining_calendar_bound(monkeypatch):
+    data=bars(10); provider=Tencent(); requests=[]
+    start=data.date.iloc[-2]; end=data.date.iloc[-1]
+    def query(op,args):
+        requests.append((op,args))
+        return response(args[0],data[data.date.between(start,end)])
+    monkeypatch.setattr(provider,'_query',query)
+    fetched=provider.fetch('sh.600000',start,end)
+    expected=(pd.Timestamp(end)-pd.Timestamp(start)).days+1
+    assert fetched.date.tolist()==[start,end]
+    assert requests==[('history_page',['sh.600000',end,expected])]
+
+
+def test_http_history_page_uses_validated_requested_count(monkeypatch):
+    http=TencentHTTP(); calls=[]
+    monkeypatch.setattr(http,'request',lambda url,params,operation:calls.append((params,operation)) or {})
+    http.history_page('sh.600000','2026-10-12',4)
+    assert calls==[({'param':'sh600000,day,,2026-10-12,4,'},'history_page')]
+    with pytest.raises(ValueError,match='1 至 640'):http.history_page('sh.600000','2026-10-12',641)
+
+
 def test_catalog_does_not_use_prices_or_infer_trade_status(monkeypatch):
     http=TencentHTTP()
     monkeypatch.setattr(http,'request',lambda *a:[dict(symbol='sz000906',code='000906',name='公开名称',
@@ -176,6 +197,25 @@ def test_tencent_cache_hits_do_not_reset_network_failure_budget(store,monkeypatc
         assert calls==[codes[0],codes[2],codes[4]]
         assert result['network_failures']==3 and result['processed']==5 and result['remaining']==2
         assert result['cooldown']
+    finally:service.pool.shutdown()
+
+
+def test_tencent_sync_uses_short_atomic_stock_writes(store,monkeypatch):
+    data=bars(); first,last=scope(store,data,['sh.600000']); options=[]
+    class Provider:
+        def __enter__(self):return self
+        def __exit__(self,*a):pass
+    def fake_sync(*args,**kwargs):
+        options.append(kwargs)
+        return 'dataset','skipped'
+    monkeypatch.setattr('workbench.tencent_service.Tencent',Provider)
+    monkeypatch.setattr('workbench.tencent_service.sync_stock',fake_sync)
+    service=Service(store)
+    try:
+        row=wait_for(store,service.submit('sync',dict(source='tencent',codes=['sh.600000'],
+                                                       start=first,end=last)))
+        assert row['status']=='completed',row['message']
+        assert options and options[0]['batch_writes'] is True
     finally:service.pool.shutdown()
 
 

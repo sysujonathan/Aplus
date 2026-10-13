@@ -16,6 +16,10 @@ class BaoStock:
     vendor = 'baostock'
     login_timeout = 30
     query_timeout = 60
+    # The full securities archive is materially larger than one stock's daily
+    # history.  Keep the ordinary request bound tight, but do not kill a valid
+    # official archive response merely because it needs more than one minute.
+    basics_timeout = 120
     logout_timeout = 3
 
     def __init__(self):
@@ -111,14 +115,14 @@ class BaoStock:
                 self.lease.release(); self.lease = None
             raise
 
-    def _query(self, operation, args):
+    def _query(self, operation, args, timeout=None):
         if self.process is None:
             self._start()
         # A single connection and a small pause avoid bursts against the free service.
         if self.cancel_event.wait(.3):
             self._stop()
             raise InterruptedError('已停止下载，已保存行情保留')
-        result = self._request(operation,args,self.query_timeout)
+        result = self._request(operation,args,self.query_timeout if timeout is None else timeout)
         if self.vendor != 'baostock':
             return result
         if isinstance(result, dict) and 'rows' in result:
@@ -140,7 +144,7 @@ class BaoStock:
         return self._query('calendar',[start,end])
 
     def basics(self):
-        return self._query('basics',[])
+        return self._query('basics',[],self.basics_timeout)
 
     def trading_status(self, code, start, end):
         return self._query('trading_status', [code, start, end])

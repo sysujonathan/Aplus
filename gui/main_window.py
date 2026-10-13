@@ -541,14 +541,18 @@ class AplusMainWindow(ttk.Window):
             self._status_text.set("拖拽未落在 K 线图格内，未替换")
 
     # ---- 任务结束（下载/扫描）：刷新候选、观察池与信号日下拉 ----
-    def _on_job_finished(self, kind, status):
+    def _on_job_finished(self, kind, status, result=None):
         if self.store is None:
             return
         try:
-            # 同步后把新行情日加入下拉，但保持交易员当前正在看的扫描日；
-            # 扫描后也由交易员主动切到新日期，不抢走当前复核上下文。
+            # 行情更新只扩充可选日期，不打断交易员正在复核的旧信号；
+            # 扫描产出属于用户刚发起的当前任务，应立即显示该次实际扫描日。
             selected_date = self.toolbar.selected_date()
             self.toolbar._load_date_options()
+            scanned_day = (result or {}).get('asof') if (
+                kind == '扫描策略' and status in ('completed','partial')) else None
+            if scanned_day and self.toolbar._select_date(scanned_day):
+                selected_date = self.toolbar.selected_date()
             self._cur_date = selected_date
             self._candidate_source = self._source_for_current_date(self._tf_var.get())
             self.candidates.load_from_store(

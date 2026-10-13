@@ -73,9 +73,11 @@ class TencentHTTP:
             code = str(exc.code) if isinstance(exc, urllib.error.HTTPError) else None
             raise ProviderError('tencent', operation, str(exc), code, round(time.monotonic()-started,3)) from exc
 
-    def history_page(self, code, end):
+    def history_page(self, code, end, count=PAGE_BARS):
+        if not isinstance(count, int) or not 1 <= count <= PAGE_BARS:
+            raise ValueError('腾讯历史请求根数必须在 1 至 640 之间')
         symbol = code_of(code).replace('.', '')
-        return self.request(HISTORY_URL, {'param':f'{symbol},day,,{end},{PAGE_BARS},'}, 'history_page')
+        return self.request(HISTORY_URL, {'param':f'{symbol},day,,{end},{count},'}, 'history_page')
 
     def directory_count(self):
         value = self.request(DIRECTORY_URL+'getHQNodeStockCount', {'node':'hs_a'}, 'directory_count')
@@ -116,10 +118,15 @@ class Tencent(BaoStock):
         chunks=[]; right=end
         # Each IPC operation is separately cancellable; never one ten-year wait.
         for _ in range(32):
+            # The endpoint counts K lines, not calendar days.  Calendar days in
+            # the remaining interval are a safe upper bound for required K
+            # lines, so ordinary tail updates no longer download 640 rows just
+            # to retain one or two new sessions.
+            page_bars=min(PAGE_BARS, max(1, (date.fromisoformat(right)-date.fromisoformat(start)).days+1))
             started=time.monotonic()
             self.history_timings['history_page_requests']+=1
             try:
-                raw=self._query('history_page',[code,right])
+                raw=self._query('history_page',[code,right,page_bars])
             finally:
                 # Includes the existing protective pause and worker IPC, not
                 # just remote server latency. Failed pages are counted too.
@@ -132,7 +139,7 @@ class Tencent(BaoStock):
                     raise ValueError('腾讯历史分页未向前推进，未保存截断历史')
             chunks.append(frame)
             first=frame.date.min()
-            if first<=start or len(frame)<PAGE_BARS:
+            if first<=start or len(frame)<page_bars:
                 break
             right=(date.fromisoformat(first)-timedelta(days=1)).isoformat()
         else:

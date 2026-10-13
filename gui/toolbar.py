@@ -166,7 +166,7 @@ class ToolBar(ttk.Frame):
         self._tf_var = tf_var or tk.StringVar(value="daily")
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
-        self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态)，主窗口借此刷新列表
+        self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态, 回执)，主窗口借此刷新列表
         self._on_chart_page = on_chart_page
         self._on_chart_layout = on_chart_layout
         self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
@@ -561,12 +561,24 @@ class ToolBar(ttk.Frame):
             for value in (self.year_var, self.month_var, self.day_var):
                 value.set(_ALL)
         if day:
-            y, m, d = str(day)[:10].split("-")
-            self.year_var.set(y)
-            self._refresh_months()
-            self.month_var.set(m)
-            self._refresh_days()
-            self.day_var.set(d)
+            self._select_date(day)
+
+    def _select_date(self, day):
+        """Select one real scan day without firing a second user-change event."""
+        parsed = self._parse_asof(day)
+        if parsed is None:
+            return False
+        y, m, d = parsed
+        if y not in self._all_years or m not in self._months_by_year.get(y, []):
+            return False
+        if d not in self._days_by_ym.get((y, m), []):
+            return False
+        self.year_var.set(y)
+        self._refresh_months()
+        self.month_var.set(m)
+        self._refresh_days()
+        self.day_var.set(d)
+        return True
 
     # ---- 周期切换 ----
     def _fire_tf(self):
@@ -1122,7 +1134,7 @@ class ToolBar(ttk.Frame):
             self.set_status(text+f"；可扫描 {i['scan']['ready']}/{i['scan']['expected']} · 待处理 {count} 只，点击「缺口分类」")
         if self._on_job_finished:
             try:
-                self._on_job_finished(kind, status)
+                self._on_job_finished(kind, status, r)
             except Exception:
                 pass
         if chain_scan:
