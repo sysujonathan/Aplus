@@ -476,14 +476,15 @@
     },
     {
       "pr": 39,
-      "version": null,
-      "date": "2026-10-13",
-      "status": "not_released",
-      "title": "TV风格图表工作区（独立待合入）",
+      "version": "2026.10.14.39",
+      "date": "2026-10-14",
+      "status": "released",
+      "title": "TV风格图表工作区",
       "notes": [
-        "伙伴提交的独立图表工作区PR尚未合入，本轮代码不包含该功能。"
+        "新增独立图表工作区，支持常用画线、对象管理、回放及本机收盘提醒。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/39"
+      "url": "https://github.com/sysujonathan/Aplus/pull/39",
+      "commit": "4b863aae8b05415dea57296fd08c61e15824762d"
     },
     {
       "pr": 40,

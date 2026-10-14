@@ -1,4 +1,6 @@
 """Explicit daily data routing; changing a source never rewrites old snapshots."""
+import json
+
 SOURCES = {'baostock': 'BaoStock', 'tickflow': 'TickFlow', 'tencent': '腾讯'}
 FALLBACK_SOURCES = ('tickflow', 'tencent')
 ADJUSTMENTS = {'baostock':'前复权', 'tickflow':'前复权', 'tencent':'不复权'}
@@ -51,9 +53,17 @@ def market_source(store):
 def set_market_source(store, source):
     if source not in SOURCES:
         raise ValueError('未知日 K 数据源')
-    if store.rows("SELECT id FROM jobs WHERE status IN ('queued','running')"):
-        raise ValueError('请等待当前任务结束后切换数据源')
-    isolate_tickflow_legacy(store)
+    running = store.rows("SELECT id,kind,spec FROM jobs WHERE status IN ('queued','running')")
+    if running:
+        parents = {r['id'] for r in running if r['kind'] == 'premarket'}
+        # Only the display preference may change: these jobs have explicit,
+        # frozen source specs. Ordinary jobs keep the original switch guard.
+        if not parents or any(r['id'] not in parents and not (
+                r['kind'] in ('sync','scan') and
+                json.loads(r['spec']).get('premarket_parent') in parents) for r in running):
+            raise ValueError('请等待当前任务结束后切换数据源')
+    else:
+        isolate_tickflow_legacy(store)
     store.execute("INSERT INTO meta VALUES('daily_market_source',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (source,))
 
 

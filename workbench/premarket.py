@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .market import BOARDS, board_of, completed_date, latest_datasets
 from .provider_guard import ProviderError, ProviderGuard, error_detail
-from .sources import SOURCES
+from .sources import SOURCES, isolate_tickflow_legacy
 from .store import Store, dumps, now
 
 
@@ -28,6 +28,8 @@ def run_premarket(service, job, spec):
     report = dict(sources={}, asof=end, complete=False, errors=[])
     notice_lock, scan_lock = threading.Lock(), threading.Lock()
     last_notice = [0.0]
+    # Finish any legacy inventory migration before independent vendors write.
+    isolate_tickflow_legacy(service.store)
 
     def notice(source, phase, done=0, total=0, message='', force=False):
         with notice_lock:
@@ -59,8 +61,13 @@ def run_premarket(service, job, spec):
 
         def stage(kind, stage_spec, phase):
             child = uuid.uuid4().hex[:16]
+            stage_spec = dict(stage_spec, premarket_parent=job)
             proxy.cancel_flags = {child: stop}
-            proxy.progress = lambda _job, done, total, msg: notice(source, phase, done, total, msg)
+            def progress(_job, done, total, msg):
+                proxy.store.execute('UPDATE jobs SET progress=?,total=?,message=? WHERE id=?',
+                                    (done, total, msg, child))
+                notice(source, phase, done, total, msg)
+            proxy.progress = progress
             proxy.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
                                 (child, kind, 'running', now(), dumps(stage_spec)))
             proxy.store.event(child, '一键盘前子任务', parent=job, source=source)

@@ -26,9 +26,14 @@ def test_sources_download_independently_and_fast_source_scans_before_slow_finish
             assert fast_scanned.wait(3), '快源扫描被慢源网络阻塞'
         else:
             assert slow_started.wait(3)
+        self.progress(job, 1, 1, '已更新')
         return dict(source=spec['source'], success=1)
     def scan(self, job, spec):
         calls.append(('scan', spec['source'], spec['asof']))
+        from workbench.sources import set_market_source, market_source
+        set_market_source(self.store, 'tencent')
+        assert market_source(self.store)=='tencent'
+        self.progress(job, 1, 1, '已扫描')
         if spec['source'] != 'baostock': fast_scanned.set()
         return dict(asof=spec['asof'], success=1, signals=1)
     monkeypatch.setattr(Service, '_sync', sync)
@@ -41,9 +46,27 @@ def test_sources_download_independently_and_fast_source_scans_before_slow_finish
         assert set(result['sources']) == {'baostock','tickflow','tencent'}
         assert len({day for _, _, day in calls}) == 1
         assert len(store.rows("SELECT id FROM jobs WHERE kind IN ('sync','scan')"))==6
-        assert not store.rows("SELECT value FROM meta WHERE key='market_source'")
+        assert store.rows("SELECT value FROM meta WHERE key='daily_market_source'")[0]['value']=='tencent'
+        assert all(r['progress']==r['total']==1 for r in store.rows(
+            "SELECT progress,total FROM jobs WHERE kind IN ('sync','scan')"))
     finally:
         service.pool.shutdown()
+
+
+def test_display_source_switch_still_blocks_unrelated_active_jobs(store):
+    from workbench.sources import set_market_source
+    from workbench.store import dumps
+    store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
+                  ('parent','premarket','running','now',dumps(multi_spec())))
+    store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
+                  ('child','sync','running','now',dumps(dict(source='baostock',premarket_parent='parent'))))
+    set_market_source(store,'tickflow')
+    store.execute('UPDATE jobs SET spec=? WHERE id=?',('{}','child'))
+    with pytest.raises(ValueError,match='等待'):
+        set_market_source(store,'tencent')
+    store.execute("DELETE FROM jobs WHERE id='parent'")
+    with pytest.raises(ValueError,match='等待'):
+        set_market_source(store,'tencent')
 
 
 def test_one_provider_cooldown_does_not_stop_other_sources_or_scan_its_old_cache(store, monkeypatch):

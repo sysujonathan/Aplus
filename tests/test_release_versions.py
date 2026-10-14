@@ -35,7 +35,8 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[37]['commit'] == 'c88e43434967e2dc526328c02d103ceca26b3506'
     assert by_pr[38]['status'] == 'released' and by_pr[38]['version'] == '2026.10.13.38'
     assert by_pr[38]['commit'] == 'd7d0c3c476f7e2b31cbb3957855d9d6b2a6b8dca'
-    assert by_pr[39]['status'] == 'not_released'
+    assert by_pr[39]['status'] == 'released'
+    assert by_pr[39]['commit'] == '4b863aae8b05415dea57296fd08c61e15824762d'
     assert by_pr[40]['status'] == 'preview'
     assert by_pr[41]['status'] == 'preview'
     assert all('commit' not in by_pr[x] for x in (33, 34))

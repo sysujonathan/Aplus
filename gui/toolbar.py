@@ -1031,7 +1031,7 @@ class ToolBar(ttk.Frame):
         # Successful submission first: version networking never delays or
         # invalidates a market/strategy task. One-click premarket uses this too.
         hint = getattr(self, '_on_scan_started', None)
-        if kind == 'scan' and callable(hint):
+        if kind in ('scan','premarket') and callable(hint):
             try:
                 hint()
             except Exception:

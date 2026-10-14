@@ -411,7 +411,7 @@ def test_oneclick_partial_data_uses_explicit_scan_readiness(source, allowed):
     assert toolbar.after_idle.call_count == int(allowed)
 
 
-@pytest.mark.parametrize('kind', ['sync', 'scan'])
+@pytest.mark.parametrize('kind', ['sync', 'scan', 'premarket'])
 def test_only_successful_scan_submission_triggers_hint_after_task_starts(kind):
     from gui.toolbar import ToolBar
     toolbar = Mock()
@@ -419,7 +419,7 @@ def test_only_successful_scan_submission_triggers_hint_after_task_starts(kind):
     toolbar.service.submit.side_effect = lambda *args: order.append('submit') or 'job'
     toolbar._on_scan_started = lambda: order.append('version')
     ToolBar._submit_job(toolbar, kind, '扫描策略' if kind == 'scan' else '更新行情', {})
-    assert order == (['submit', 'version'] if kind == 'scan' else ['submit'])
+    assert order == (['submit', 'version'] if kind in ('scan','premarket') else ['submit'])
 
 
 def test_failed_scan_submission_does_not_check_version():
