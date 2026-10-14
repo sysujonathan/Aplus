@@ -50,8 +50,15 @@ def validate_daily_archive(frame, day):
         raise ValueError('BaoStock 整日行情为空或证券代码重复')
     if not data.date.astype(str).eq(day).all():
         raise ValueError('BaoStock 整日行情日期与请求日期不一致')
-    if not data.code.map(board_of).notna().all():
-        raise ValueError('BaoStock 整日行情混入非 A 股证券')
+    # The official all-stock archive is broader than Aplus's board roster
+    # (e.g. 689 CDR / 302 securities). Validate identities first, then select
+    # supported boards exactly as DirectBaoStock.universe does. An unrelated
+    # security must not force thousands of valid tails onto per-stock queries.
+    if not data.code.astype(str).str.fullmatch(r'(sh|sz|bj)\.\d{6}').all():
+        raise ValueError('BaoStock 整日行情证券代码格式无效')
+    data = data.loc[data.code.map(board_of).notna()].copy()
+    if data.empty:
+        raise ValueError('BaoStock 整日行情未返回支持范围内证券')
     if not data.adjustflag.astype(str).eq('3').all():
         raise ValueError('BaoStock 整日行情不是明确的不复权口径')
     if not data.tradestatus.astype(str).isin(['0', '1']).all():

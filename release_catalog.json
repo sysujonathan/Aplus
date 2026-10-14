@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.13.38",
-    "pr": 38,
-    "date": "2026-10-13"
+    "version": "2026.10.14.39",
+    "pr": 39,
+    "date": "2026-10-14"
   },
   "history": [
     {
@@ -464,14 +464,26 @@
       "pr": 38,
       "version": "2026.10.13.38",
       "date": "2026-10-13",
-      "status": "preview",
+      "status": "released",
       "title": "BaoStock整日安全增量与ETF持仓按需看图",
       "notes": [
         "BaoStock普通单日更新优先使用官方整日行情，并以复权事件和前收盘双重核对；异常股票自动退回原逐股更新。",
         "ETF等不在盘前股票缓存中的持仓可按需只读获取日K并打开持仓图，不写入或混入三套盘前行情。",
         "整日接口遇到黑名单、403、429或明确限制访问时立即停批；ETF按需看图共用BaoStock全局冷却。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/38"
+      "url": "https://github.com/sysujonathan/Aplus/pull/38",
+      "commit": "d7d0c3c476f7e2b31cbb3957855d9d6b2a6b8dca"
+    },
+    {
+      "pr": 39,
+      "version": "2026.10.14.39",
+      "date": "2026-10-14",
+      "status": "preview",
+      "title": "修正BaoStock整日行情范围校验",
+      "notes": [
+        "整日行情先核验代码与日期，再筛选Aplus支持的板块；范围外证券不再导致整批退回逐股下载。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/39"
     }
   ]
 }
