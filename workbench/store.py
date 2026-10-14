@@ -214,6 +214,61 @@ class Store:
         self.execute("INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)",
                      (now(), job, action, str(path), dumps(detail)))
 
+    def chart_document(self, identity):
+        from .chart_workspace import document, validate_document
+        rows = self.rows('SELECT value FROM meta WHERE key=?', ('chart_workspace:'+identity,))
+        return validate_document(json.loads(rows[0]['value'])) if rows else document()
+
+    def save_chart_document(self, identity, value, expected_revision):
+        """Analysis only. Optimistic concurrency protects other chart windows."""
+        from .chart_workspace import validate_document
+        value = validate_document(value)
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT value FROM meta WHERE key=?', ('chart_workspace:'+identity,)).fetchone()
+            revision = json.loads(row['value']).get('revision', 0) if row else 0
+            if revision != expected_revision:
+                raise ValueError('另一图表窗口已保存修改，请重新打开后继续；本窗口修改仍保留')
+            value['revision'] = revision+1
+            db.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       ('chart_workspace:'+identity, dumps(value)))
+        return value['revision']
+
+    def save_chart_series(self, identity, timeframe, frame, *, label='手工导入真实分钟行情'):
+        """Persist an immutable analysis-only series under the new runtime root."""
+        if timeframe not in ('5m',):
+            raise ValueError('当前只接受真实 5 分钟底层行情')
+        content = frame.to_csv(index=False, lineterminator='\n').encode('utf-8')
+        fingerprint = digest(content)
+        # Keep immutable hashes in metadata, while bounding the physical path
+        # for Windows installations with long user/temp directory names.
+        relative = f'chart_series/{identity[:24]}/{timeframe}/{fingerprint[:32]}.csv'
+        path = self.write_artifact(relative, content)
+        record = dict(identity=identity, timeframe=timeframe, sha256=fingerprint,
+                      path=relative, rows=len(frame), start=str(frame.date.iloc[0]),
+                      end=str(frame.date.iloc[-1]), label=str(label), created=now())
+        self.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) '
+                     'DO UPDATE SET value=excluded.value',
+                     (f'chart_series:{identity}:{timeframe}', dumps(record)))
+        return record
+
+    def load_chart_series(self, identity, timeframe):
+        """Load and verify an analysis-only series without touching market datasets."""
+        rows = self.rows('SELECT value FROM meta WHERE key=?',
+                         (f'chart_series:{identity}:{timeframe}',))
+        if not rows:
+            return None, None
+        record = json.loads(rows[0]['value'])
+        content = self.read_artifact(record['path'])
+        if digest(content) != record['sha256']:
+            raise ValueError('分钟行情文件校验失败，请重新导入原始 CSV')
+        from io import BytesIO
+        from .chart_workspace import minute_frame
+        # minute_frame owns every format and OHLC validation rule. A BytesIO is
+        # accepted by pandas and avoids materialising a second unverified path.
+        frame = minute_frame(BytesIO(content), 5)
+        return frame, record
+
     def gap_review_decisions(self, source):
         from .sources import SOURCES
         if source not in SOURCES:

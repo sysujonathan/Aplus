@@ -50,6 +50,7 @@ class ClosedTradeChartDialog:
     def __init__(self, parent, store, row, *, data=None):
         # Fail before creating a modal window, so the caller can show an error.
         self.data = load_closed_chart(store, row) if data is None else data
+        self.store = store
         self.top = tk.Toplevel(parent)
         self.top.title(f'K 线买卖点 · {self.data["name"]} {self.data["code"]}')
         self.top.configure(bg=APP_BG)
@@ -76,6 +77,8 @@ class ClosedTradeChartDialog:
             caption = "持仓买点 · 当前成本／止盈止损"
         ttk.Label(toolbar, text=caption).pack(side=tk.LEFT)
         ttk.Button(toolbar, text="关闭", command=self.close, bootstyle="secondary").pack(side=tk.RIGHT)
+        ttk.Button(toolbar, text="A++ 图表工作区", command=self.open_workspace,
+                   bootstyle="primary-outline").pack(side=tk.RIGHT, padx=8)
         ttk.Button(toolbar, text="重置视图", command=self.reset_view,
                    bootstyle="secondary-outline").pack(side=tk.RIGHT, padx=8)
         snapshot = self.data["dataset"]
@@ -168,6 +171,14 @@ class ClosedTradeChartDialog:
         if event.widget is self.top and self._after:
             self.top.after_cancel(self._after)
             self._after = None
+
+    def open_workspace(self):
+        from .chart_workspace import open_chart_workspace
+        open_chart_workspace(self.top, self.store, frame=self.data['frame'],
+            record={**self.data.get('dataset', {}), 'timeframe': 'daily'},
+            code=self.data['code'], name=self.data['name'], timeframe='daily',
+            holding_levels=self.data.get('levels', ()), replay_events=self.data.get('events', ()),
+            title=f"A++ 图表工作区 · {self.data['name']} {self.data['code']}")
 
     def close(self):
         self.top.destroy()
