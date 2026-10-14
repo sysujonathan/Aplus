@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.14.39",
-    "pr": 39,
+    "version": "2026.10.14.40",
+    "pr": 40,
     "date": "2026-10-14"
   },
   "history": [
@@ -476,14 +476,25 @@
     },
     {
       "pr": 39,
-      "version": "2026.10.14.39",
+      "version": null,
+      "date": "2026-10-13",
+      "status": "not_released",
+      "title": "TV风格图表工作区（独立待合入）",
+      "notes": [
+        "伙伴提交的独立图表工作区PR尚未合入，本轮代码不包含该功能。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/39"
+    },
+    {
+      "pr": 40,
+      "version": "2026.10.14.40",
       "date": "2026-10-14",
       "status": "preview",
       "title": "修正BaoStock整日行情范围校验",
       "notes": [
         "整日行情先核验代码与日期，再筛选Aplus支持的板块；范围外证券不再导致整批退回逐股下载。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/39"
+      "url": "https://github.com/sysujonathan/Aplus/pull/40"
     }
   ]
 }
