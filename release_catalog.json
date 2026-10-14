@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.14.42",
-    "pr": 42,
+    "version": "2026.10.14.43",
+    "pr": 43,
     "date": "2026-10-14"
   },
   "history": [
@@ -517,12 +517,23 @@
       "version": "2026.10.14.42",
       "date": "2026-10-14",
       "status": "preview",
+      "title": "统一策略总图并严格筛选MTR信号K",
+      "notes": [
+        "待合并方案：统一策略全周期总图，并为MTR加入明示的信号K收盘位置95%门槛；本轮更新修复不包含该方案。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/42"
+    },
+    {
+      "pr": 43,
+      "version": "2026.10.14.43",
+      "date": "2026-10-14",
+      "status": "preview",
       "title": "按实际兼容性判断软件更新",
       "notes": [
         "数据保存程序仅增加常规功能且结构、路径和已有保存逻辑不变时，不再整文件拦截一键更新。",
         "保留精确主线自检、依赖与冻结策略保护、启动预检和备份；无法确认的保存或结构改动仍需人工安装。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/42"
+      "url": "https://github.com/sysujonathan/Aplus/pull/43"
     }
   ]
 }
