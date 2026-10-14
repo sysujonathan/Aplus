@@ -73,6 +73,7 @@ def sync_tencent(service, job, spec):
         catalog_source='sina_public_securities_only',repair_codes=spec.get('repair_codes',[]),
         limitations=['腾讯历史为不复权：除权除息可能形成价格跳空，跨除权回测不包含分红及股数调整；不与其他来源混算'])
     repair=set(spec.get('repair_codes') or [])
+    selective=bool(repair and spec.get('repair_scope')=='scan' and not spec.get('force'))
     from .repair_outcomes import before_repair, remember_repairs
     repair_before=before_repair(service.store,'tencent',repair)
     with provider:
@@ -144,8 +145,9 @@ def sync_tencent(service, job, spec):
                     requesting('repair',left,right)
                     restore_corrupt_snapshot(service.store,provider,code,left,right,job,source='tencent')
                 did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
-                    force=spec.get('force',False) or code in repair,source='tencent',on_request=requesting,
-                    batch_writes=True)
+                    force=spec.get('force',False) or (code in repair and not selective),source='tencent',on_request=requesting,
+                    batch_writes=True,
+                    repair_timeframe=spec.get('scan_timeframe','daily') if selective else None)
                 report['datasets'].append(did); report[outcome]+=1; report['success']+=1
                 if outcome != 'skipped':
                     consecutive_failures = 0

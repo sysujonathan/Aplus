@@ -66,7 +66,8 @@ def run_premarket(service, job, spec):
             def progress(_job, done, total, msg):
                 proxy.store.execute('UPDATE jobs SET progress=?,total=?,message=? WHERE id=?',
                                     (done, total, msg, child))
-                notice(source, phase, done, total, msg)
+                display_phase = '核对缓存' if phase == '更新' and msg.startswith('核对已保存行情') else phase
+                notice(source, display_phase, done, total, msg)
             proxy.progress = progress
             proxy.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
                                 (child, kind, 'running', now(), dumps(stage_spec)))
@@ -93,11 +94,12 @@ def run_premarket(service, job, spec):
             with notice_lock:
                 receipt[kind+'_seconds'] = elapsed
                 receipt[kind+'_status'] = status
-                receipt[kind+'_result'] = {k: result[k] for k in ('asof','success','signals','reused','calculated','daily_batch','batch_fallback_reason') if k in result}
+                receipt[kind+'_result'] = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','resume','skipped','note') if k in result}
             return result, status, message
 
         sync_spec = dict(source=source, boards=list(spec['boards']), start=spec['start'],
-                         end=end, force=False, scan_timeframe=spec['timeframe'])
+                         end=end, force=False, scan_timeframe=spec['timeframe'], resume=True,
+                         full_history=spec.get('full_history', False))
         result, status, message = stage('sync', sync_spec, '更新')
         if status in ('failed','cancelled'):
             notice(source, '失败' if status=='failed' else '已停止', message=message, force=True)

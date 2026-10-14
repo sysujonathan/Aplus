@@ -261,7 +261,7 @@ class ToolBar(ttk.Frame):
         self.btn_auto_menu.pack(side=tk.RIGHT, fill=tk.Y)
         self.btn_auto.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._auto_tips = [
-            ToolTip(self.btn_auto, text='一键盘前：更新所选来源行情，再扫描合格股票。'),
+            ToolTip(self.btn_auto, text='一键完成盘前：复用已齐行情，自动补拉普通缺口，再扫描；中断后再点可续做。'),
             ToolTip(self.btn_auto_menu, text='选择一键盘前使用的数据源。'),
         ]
         self._auto_sources_saved = store.premarket_sources() if store else None
@@ -1048,7 +1048,8 @@ class ToolBar(ttk.Frame):
         self._scan_elapsed = None
         self._submit_job('premarket', '一键盘前', dict(sources=sources, boards=boards,
             strategies=self._selected_strategies(), timeframe=self._tf_var.get(),
-            start=sync_start_date(self.store, self.full_history_var.get(), self._tf_var.get())))
+            start=sync_start_date(self.store, self.full_history_var.get(), self._tf_var.get()),
+            full_history=self.full_history_var.get()))
 
     def _save_auto_sources(self):
         sources = [s for s, variable in self.auto_source_vars.items() if variable.get()]
@@ -1091,6 +1092,8 @@ class ToolBar(ttk.Frame):
             "end": None,
             "force": False,
             "scan_timeframe":self._tf_var.get(),
+            "resume": True,
+            "full_history": self.full_history_var.get(),
         }
         self._submit_job("sync", "更新行情", spec)
 
@@ -1284,7 +1287,18 @@ class ToolBar(ttk.Frame):
                 f'行情{format_elapsed(item.get("sync_seconds"))}／扫描{format_elapsed(item.get("scan_seconds"))}'
                 for s,item in r['sources'].items())
             for s,item in r['sources'].items():
-                batch = item.get('sync_result', {}).get('daily_batch', {})
+                sync_result = item.get('sync_result', {})
+                resume = sync_result.get('resume', {})
+                scan_result = item.get('scan_result', {})
+                if resume:
+                    text += f"；{SOURCES[s]}行情复用 {resume.get('reused',0)}"
+                    if resume.get('repair_attempted'):
+                        text += f"／补拉 {len(resume.get('repair_codes',[]))} 只"
+                    elif resume.get('waiting_for_cooldown'):
+                        text += '／其余待冷却结束'
+                if 'reused' in scan_result:
+                    text += f"，判断复用 {scan_result['reused']}／新计算 {scan_result.get('calculated',0)}"
+                batch = sync_result.get('daily_batch', {})
                 if batch.get('fallback'):
                     text += f"；{SOURCES[s]}逐股回退 {batch['fallback']} 只"
             current = r['sources'].get(market_source(self.store), {})
@@ -1300,7 +1314,7 @@ class ToolBar(ttk.Frame):
                 text += '；部分未核验，请查看回执'
         elif status == "completed" and kind == "扫描策略":
             text = (f"✓ 扫描完成：命中 {r.get('signals', 0)} 个信号 · "
-                    f"检查 {r.get('success', 0)} 项 · 复用 {r.get('reused', 0)}")
+                    f"检查 {r.get('success', 0)} 项 · 判断复用 {r.get('reused', 0)}／新计算 {r.get('calculated',0)}")
         elif status == "completed":
             text = (f"✓ 行情更新完成：新增 {r.get('downloaded', 0)} · 补齐 {r.get('updated', 0)} · "
                     f"复用 {r.get('skipped', 0)} · 重刷 {r.get('refreshed', 0)} · "
@@ -1339,6 +1353,15 @@ class ToolBar(ttk.Frame):
         elif elapsed is not None:
             text += f" · 用时 {format_elapsed(elapsed)}"
         batch = r.get('daily_batch')
+        if kind == '更新行情' and r.get('resume'):
+            resume = r['resume']
+            text += f"；已齐行情复用 {resume.get('reused',0)} 只"
+            if resume.get('repair_attempted'):
+                text += f"，自动补拉 {len(resume.get('repair_codes',[]))} 只（是否补齐见完整性）"
+            if resume.get('unchanged'):
+                text += f"；{len(resume['unchanged'])} 只补拉无改善，保留待查，不重复请求"
+        if kind == '扫描策略' and status == 'partial':
+            text += f"；判断复用 {r.get('reused',0)}／新计算 {r.get('calculated',0)}"
         if kind == '更新行情' and batch:
             text += f"；整日保存 {batch.get('saved',0)} 只，逐股回退 {batch.get('fallback',0)} 只"
             reason = r.get('batch_fallback_reason') or batch.get('reason')

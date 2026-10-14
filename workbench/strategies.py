@@ -256,7 +256,7 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
     return payload
 
 
-def scan_engine_version():
+def scan_engine_version(include_frozen=True):
     """Fingerprint only code that can change a scan result."""
     from .market import weekly_bars
     functions = [prepare, prepare_indicators, calculate_prepared, calculate, signal_at_end,
@@ -264,4 +264,6 @@ def scan_engine_version():
     semantic = '\n'.join(inspect.getsource(func) for func in functions).encode()
     semantic += b''.join((ROOT/'workbench'/name).read_bytes()
                          for name in ['h2_plan.py','prices.py'])
-    return digest(semantic + verify_frozen().encode())
+    # Old cache identities remain readable during the migration. New per-
+    # detector keys already bind their protected dependency fingerprints.
+    return digest(semantic + (verify_frozen().encode() if include_frozen else b''))

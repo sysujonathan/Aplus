@@ -58,9 +58,9 @@ def test_strategy_bar_shows_all_six_groups_without_paging():
 
 def test_repeated_candidates_are_counted_within_current_filter():
     rows = [
-        {"code": "sz.002357", "observation_id": "new"},
-        {"code": "sz.002102", "observation_id": "only"},
-        {"code": "sz.002357", "observation_id": "old"},
+        {"code": "sz.002357", "observation_id": "new", "date": "2026-10-14"},
+        {"code": "sz.002102", "observation_id": "only", "date": "2026-10-14"},
+        {"code": "sz.002357", "observation_id": "old", "date": "2026-10-13"},
     ]
     counts = candidate_repeat_counts(rows)
     assert counts["sz.002357"] == 2

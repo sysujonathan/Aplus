@@ -123,6 +123,12 @@ class TickFlow(BaoStock):
     def fetch(self,code,start,end):
         key = (code,start,end)
         if key not in self.cache:
+            for (cached_code,a,b), cached in self.cache.items():
+                if cached_code == code and a <= start <= end <= b:
+                    if isinstance(cached,Exception):
+                        raise cached
+                    return cached.loc[cached.date.between(start,end)].copy()
+        if key not in self.cache:
             self.preload([code],start,end,preserve=True)
         result = self.cache[key]
         if isinstance(result,Exception):

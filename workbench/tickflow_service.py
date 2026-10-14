@@ -30,13 +30,22 @@ def sync_tickflow(service, job, spec):
             if not spec['boards']:
                 raise ValueError('请至少勾选一个板块')
             service.progress(job,0,1,'TickFlow 核对股票目录；不访问 BaoStock')
-            directory=provider.universe(end)
+            from .premarket_resume import certified_scope
+            if spec.get('resume_scope') and certified_scope(service.store,'tickflow',end):
+                from .sources import directory_file
+                import pandas as pd
+                directory=pd.read_csv(directory_file(service.store,'tickflow'),dtype=str)
+                report_scope_reused=True
+            else:
+                directory=provider.universe(end)
+                report_scope_reused=False
             directory, retired, excluded = filter_tickflow_directory(service.store, directory, end, job)
             save_directory(service.store,directory,end,job,retired_codes=retired,source='tickflow')
             codes=select_board_codes(directory,spec['boards'])
         else:
             codes=list(dict.fromkeys(spec['codes']))
         repair = set(spec.get('repair_codes') or [])
+        selective = bool(repair and spec.get('repair_scope') == 'scan' and not spec.get('force'))
         from .repair_outcomes import before_repair, remember_repairs
         repair_before=before_repair(service.store,'tickflow',repair)
         if repair and ('boards' not in spec or not repair.issubset(set(codes))):
@@ -49,6 +58,7 @@ def sync_tickflow(service, job, spec):
             excluded_retired=excluded if 'boards' in spec else [], history_warnings=[],
             confirmed_halts=proven_halts, repair_codes=sorted(repair), processed=0,
             timings=dict(planned_batch_requests=0,planned_batch_seconds=0,stock_processing_seconds=0))
+        report['scope_reused']=report_scope_reused if 'boards' in spec else False
         groups={}
         for code in codes:
             service.check_stop(job)
@@ -87,7 +97,31 @@ def sync_tickflow(service, job, spec):
                 left=state['end']
             operation=('repair' if spec.get('force') or code in repair else
                        'history' if not state else 'tail' if left==state['end'] else 'prefix')
-            groups.setdefault((left,right,operation),[]).append(code)
+            if selective and state:
+                # Only unknown holes within the active scan window plus any
+                # missing tail; do not preload years of already saved history.
+                from .sync import repair_intervals
+                try:
+                    old, _ = local_history(service.store,code,job,source='tickflow')
+                except (OSError,ValueError):
+                    # Explicit manual repair still has its original quarantine
+                    # and exact-old-hash recovery path; auto repair excludes it.
+                    groups.setdefault((left,right,'repair'),[]).append(code)
+                    continue
+                intervals = repair_intervals(service.store,code,old,state['start'],end,
+                                             spec.get('scan_timeframe','daily'),'tickflow')
+                if end > state['end']:
+                    intervals.append((state['end'],end))
+                if intervals:
+                    # One batch prefetch/code. fetch() serves narrower anchored
+                    # intervals from this bounded same-source range in memory.
+                    a,b=min(i[0] for i in intervals),max(i[1] for i in intervals)
+                    groups.setdefault((a,b,'repair'),[]).append(code)
+                # A cached/confirmed issue may no longer require a request.
+                if not intervals:
+                    groups.setdefault((end,end,'cached'),[]).append(code)
+            else:
+                groups.setdefault((left,right,operation),[]).append(code)
         stopped=False
         for (left,right,operation),group in groups.items():
             for offset in range(0,len(group),100):
@@ -97,8 +131,9 @@ def sync_tickflow(service, job, spec):
                                  sync_progress('tickflow',operation,f'{len(batch)}只',left,right))
                 try:
                     batch_started=time.monotonic()
-                    provider.preload(batch,left,right)
-                    report['timings']['planned_batch_requests']+=1
+                    if operation != 'cached':
+                        provider.preload(batch,left,right)
+                        report['timings']['planned_batch_requests']+=1
                     report['timings']['planned_batch_seconds']+=round(time.monotonic()-batch_started,3)
                 except (ProviderError,TimeoutError) as exc:
                     report['cooldown']=ProviderGuard(service.store,'tickflow').failure(exc)
@@ -116,8 +151,9 @@ def sync_tickflow(service, job, spec):
                         def requesting(op,a,b):
                             service.progress(job,report['processed'],len(codes),sync_progress('tickflow',op,code,a,b))
                         did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
-                                              spec.get('force',False) or code in repair,source='tickflow',batch_writes=True,
-                                              on_request=requesting)
+                                              spec.get('force',False) or (code in repair and not selective),source='tickflow',batch_writes=True,
+                                              on_request=requesting,
+                                              repair_timeframe=spec.get('scan_timeframe','daily') if selective else None)
                         report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
                     except (ProviderError,TimeoutError) as exc:
                         state=ProviderGuard(service.store,'tickflow').failure(exc)

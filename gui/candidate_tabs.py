@@ -42,8 +42,17 @@ def strategy_window(keys, start=0, page_size=None):
 
 
 def candidate_repeat_counts(rows):
-    """统计当前筛选范围内同一股票重复出现的次数。"""
-    return Counter(row.get("code") for row in rows if row.get("code"))
+    """Only distinct trading days count; reruns/revisions are not repeats."""
+    days = {}
+    for row in rows:
+        code = row.get('code')
+        if not code:
+            continue
+        days.setdefault(code, set())
+        day = str(row.get('date') or row.get('asof') or '')[:10]
+        if len(day) == 10 and day[4:5] == '-' and day[7:8] == '-':
+            days[code].add(day)
+    return Counter({code: max(1, len(values)) for code, values in days.items()})
 
 
 def collapse_candidate_rows(rows):

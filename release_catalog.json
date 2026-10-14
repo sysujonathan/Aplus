@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.14.44",
-    "pr": 44,
-    "date": "2026-10-14"
+    "version": "2026.10.15.47",
+    "pr": 47,
+    "date": "2026-10-15"
   },
   "history": [
     {
@@ -543,13 +543,50 @@
       "pr": 44,
       "version": "2026.10.14.44",
       "date": "2026-10-14",
-      "status": "preview",
+      "status": "released",
       "title": "获批策略版本支持一键软件更新",
       "notes": [
         "已获批的MTR V36.3升级逐文件核对旧版、新版和批准记录，主线自检通过后可一键更新，不再仅因策略文件变化要求人工安装。",
         "依赖、数据保存或未核准策略变化仍安全拦截，并用简明文字说明具体原因；保留备份、隔离启动预检、原数据目录与本机启动文件。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/44"
+      "url": "https://github.com/sysujonathan/Aplus/pull/44",
+      "commit": "7b1aedb9a326f8f13c2d49b614eeaf5f13cf4e36"
+    },
+    {
+      "pr": 45,
+      "version": "2026.10.14.45",
+      "date": "2026-10-14",
+      "status": "preview",
+      "title": "MTR无合格信号K不进入正式候选",
+      "notes": [
+        "MTR V36.4移除无合格光头阳线仍发布正式候选的兼容分支，并增加信号K输出证明。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/45"
+    },
+    {
+      "pr": 46,
+      "version": "2026.10.15.46",
+      "date": "2026-10-15",
+      "status": "preview",
+      "title": "恢复GAP H2样式与TV高保真原型",
+      "notes": [
+        "恢复蓝色空心缺口区域，提供TV习惯图表工作台的离线高保真原型，不改变信号规则。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/46"
+    },
+    {
+      "pr": 47,
+      "version": "2026.10.15.47",
+      "date": "2026-10-15",
+      "status": "preview",
+      "title": "一键续做盘前与同日候选去重",
+      "notes": [
+        "已核验的同日行情直接复用，普通价格缺口自动定向补拉后扫描，中断后再点只续做未完成项。",
+        "判断按各策略计算依赖复用，策略迭代不重下载行情；完整阶段证据齐全时直接复用整批结果。",
+        "同日重复扫描和策略换版不再产生黄色×2，当前候选显示有效判断，历史观察与交易记录保留。",
+        "停牌、根数不足、身份问题及补拉无改善仍待处理，供应商黑名单、冷却、单连接及请求间隔保护不变。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/47"
     }
   ]
 }
