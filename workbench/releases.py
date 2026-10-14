@@ -126,6 +126,14 @@ def presentation(result, running=None):
             "manual": ("本次更新需要人工安装", "为保护本机文件和已有数据，本次需要人工安装，不能一键替换。这不是等待自检，继续等待或反复检查不会使按钮启用。\n请联系提供 Aplus 的同事协助安装；当前版本可继续使用，不要删除行情或交易记录。", "本次需要人工安装"),
             "cached": ("正在确认新版", "正在后台确认新版是否可安全更新，请稍候；确认通过后即可直接更新，当前版本可继续使用。", "正在确认新版"),
         }.get(reason, ("暂不能自动更新", "暂时无法确认可安全更新，请重新检查；若仍如此，请联系提供 Aplus 的同事，当前版本可继续使用。", "暂不能自动更新"))
+        if reason == 'manual':
+            detail = {
+                'dependencies': '新版需要调整 Python 依赖或安装环境，软件不能替你直接安装这些内容。',
+                'data': '新版改变了数据保存或初始化程序，暂时无法确认与现有记录兼容。',
+                'strategy': '策略或配置文件变化未匹配已核准的版本，不能直接替换。',
+            }.get(result.get('manual_kind'))
+            if detail:
+                message = detail + '\n请联系提供 Aplus 的同事协助升级；等待或反复检查不会解锁。当前版本可继续使用，不要删除行情或交易记录。'
     target = result.get("target_release", {})
     target_label = version_label(target) if target.get("version") else "版本号待确认"
     return dict(title=title, message=message, current=version_label(current),
