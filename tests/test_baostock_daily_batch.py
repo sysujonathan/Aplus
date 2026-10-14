@@ -84,6 +84,68 @@ def test_bad_or_cancelled_daily_archive_never_advances_coverage(tmp_path):
     assert coverage_state(store, CODES[0])[0] == before
 
 
+def test_official_archive_extra_securities_do_not_disable_supported_stock_tails(tmp_path):
+    store = seeded(tmp_path)
+    extra = pd.concat([archive().iloc[[0]].assign(code=code)
+                       for code in ['sh.689009', 'sz.302132', 'sh.510300']], ignore_index=True)
+    data = pd.concat([archive(), extra], ignore_index=True)
+    saved, fallback = apply_one_day_tail(store, CODES, data, pd.DataFrame(),
+                                         '2026-10-08', DAY)
+    assert set(saved) == set(CODES) and not fallback
+    assert all(coverage_state(store, code)[0]['end'] == DAY for code in CODES)
+    assert not store.rows("SELECT id FROM datasets WHERE code IN ('sh.689009','sz.302132','sh.510300')")
+
+
+@pytest.mark.parametrize('fault', ['identity', 'duplicate', 'date'])
+def test_extra_security_still_cannot_hide_invalid_archive_identity(fault):
+    extra = archive().iloc[[0]].assign(code='sh.689009')
+    if fault == 'identity':
+        extra['code'] = 'not-a-security'
+    elif fault == 'date':
+        extra['date'] = PREVIOUS
+    else:
+        extra = pd.concat([extra, extra], ignore_index=True)
+    with pytest.raises(ValueError):
+        validate_daily_archive(pd.concat([archive(), extra], ignore_index=True), DAY)
+
+
+def test_service_bulk_scope_saves_market_without_per_stock_downloads(tmp_path, monkeypatch):
+    codes = [f'sh.{600000 + index:06d}' for index in range(50)]
+    store = seeded(tmp_path)
+    for code in codes:
+        did = save_dataset(store, code, old_bars(), 'baostock', '前复权')
+        save_coverage(store, code, did, '2026-10-08', PREVIOUS)
+    directory = pd.DataFrame(dict(code=codes, code_name=['测试'] * 50, tradeStatus=['1'] * 50))
+    basics = pd.DataFrame(dict(code=codes, ipoDate=['2000-01-01'] * 50,
+                              outDate=[''] * 50, type=['1'] * 50, status=['1'] * 50))
+    data = pd.concat([archive().iloc[[0]].assign(code=code)
+                      for code in codes + ['sh.689009', 'sz.302132']], ignore_index=True)
+    provider = Mock()
+    provider.__enter__ = Mock(return_value=provider)
+    provider.__exit__ = Mock(return_value=False)
+    provider.universe.return_value = directory
+    provider.basics.return_value = basics
+    provider.daily_astock.return_value = data
+    provider.daily_adjust_factor.return_value = pd.DataFrame()
+    remaining = []
+    def per_stock(_store, _factory, requested, *_args, **_kwargs):
+        remaining.extend(requested)
+        yield from ()
+    monkeypatch.setattr('workbench.service.BaoStock', lambda: provider)
+    monkeypatch.setattr('workbench.service.sync_results', per_stock)
+    service = Service(store)
+    try:
+        row = wait_for(store, service.submit('sync', dict(
+            boards=['沪深主板'], start='2026-10-08', end=DAY)))
+        result = json.loads(row['result'])
+        assert result['daily_batch'] == dict(eligible=50, saved=50, fallback=0)
+        assert not remaining
+        assert result['timings']['history_requests'] == 0
+        provider.daily_astock.assert_called_once_with(DAY)
+    finally:
+        service.pool.shutdown()
+
+
 def test_process_adapter_exposes_bounded_bulk_operations():
     from workbench.provider_process import BaoStock
     from unittest.mock import patch
