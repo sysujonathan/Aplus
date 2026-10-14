@@ -188,7 +188,7 @@ def test_cold_daily_weekly_audit_and_scan_parse_same_snapshot_once(store, monkey
 
 
 @pytest.mark.skipif(os.name!='nt', reason='Windows Tk layout')
-@pytest.mark.parametrize('scale',[1.0,2.0])
+@pytest.mark.parametrize('scale',[1.0,1.5,2.0])
 def test_split_button_keeps_original_width_and_source_choices_persist(store, scale):
     # Production has one root. Verify each DPI in its own Tcl lifetime rather
     # than repeatedly recreating Windows interpreters in the full pytest run.
@@ -215,6 +215,11 @@ def check_split_button(path, scale):
         toolbar.pack(fill='x')
         root.update_idletasks()
         assert toolbar._auto_host.winfo_width()==toolbar._auto_original_width
+        assert toolbar.btn_auto.cget('text')=='一键'
+        assert toolbar.btn_auto_menu.cget('text')==''
+        assert toolbar.btn_auto.winfo_width() >= toolbar.btn_auto.winfo_reqwidth()
+        assert toolbar.btn_auto_menu.winfo_width() >= toolbar.btn_auto_menu.winfo_reqwidth()
+        assert toolbar.btn_auto.winfo_x()+toolbar.btn_auto.winfo_width() <= toolbar.btn_auto_menu.winfo_x()
         toolbar.auto_source_vars['tickflow'].set(True)
         toolbar._save_auto_sources()
         assert store.premarket_sources()==['baostock','tickflow']

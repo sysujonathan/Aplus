@@ -247,10 +247,16 @@ class ToolBar(ttk.Frame):
         auto_host.pack(side=tk.LEFT, padx=(0, 8))
         self._auto_host = auto_host
         self._auto_original_width = auto_width
-        self.btn_auto.configure(text='盘前')
-        self.btn_auto_menu = ttk.Menubutton(auto_host, text='▾', padding=(2, 0), bootstyle='success')
+        self.btn_auto.configure(text='一键', padding=(2, 0))
+        # Menubutton already draws its native arrow; adding a glyph repeats it
+        # and steals space from the action label at larger display scaling.
+        self.btn_auto_menu = ttk.Menubutton(auto_host, text='', padding=(2, 0), bootstyle='success')
         self.btn_auto_menu.pack(side=tk.RIGHT, fill=tk.Y)
         self.btn_auto.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._auto_tips = [
+            ToolTip(self.btn_auto, text='一键盘前：更新所选来源行情，再扫描合格股票。'),
+            ToolTip(self.btn_auto_menu, text='选择一键盘前使用的数据源。'),
+        ]
         self._auto_sources_saved = store.premarket_sources() if store else None
         initial = self._auto_sources_saved or [market_source(store) if store else 'baostock']
         self.auto_source_vars = {s: tk.BooleanVar(value=s in initial) for s in SOURCES}
