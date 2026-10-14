@@ -134,16 +134,22 @@ def github_json(path):
         return json.load(response)
 
 
-def acceptance(target, api=github_json):
+def acceptance_status(target, api=github_json):
     payload = api(f"/actions/runs?head_sha={target}&branch=main&event=push&per_page=30")
     runs = [r for r in payload.get("workflow_runs", [])
             if r.get("head_sha") == target and r.get("head_branch") == "main"
             and r.get("event") == "push" and r.get("name") == "A acceptance"
             and r.get("path") == ".github/workflows/checks.yml"]
     if not runs:
-        return False
+        return 'missing'
     latest = max(runs, key=lambda r: (int(r.get("id", 0)), int(r.get("run_attempt", 0))))
-    return latest.get("status") == "completed" and latest.get("conclusion") == "success"
+    if latest.get("status") != "completed":
+        return 'running'
+    return 'passed' if latest.get("conclusion") == "success" else 'failed'
+
+
+def acceptance(target, api=github_json):
+    return acceptance_status(target, api) == 'passed'
 
 
 def write_json(path, value):
@@ -289,7 +295,8 @@ def check_version(root, force=False, api=github_json, fetch=None):
             fetch(target)
         if run_git(root, "rev-parse", "refs/aplus-update/main") != target:
             raise UpdateError("主线在检查中发生变化，请重新检查。")
-        passed = acceptance(target, api)
+        result['ci_status'] = acceptance_status(target, api)
+        passed = result['ci_status'] == 'passed'
         result["ci_passed"] = passed
         if target == local["head"]:
             result.update(state="current", message="已是主线当前版本。")

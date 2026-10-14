@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from .backtest import Assumptions, run_study, summarize
-from .market import BaoStock, completed_date, load_dataset, save_dataset, validate_bars, select_board_codes, latest_datasets
+from .market import BaoStock, completed_date, load_dataset, verify_dataset, save_dataset, validate_bars, select_board_codes, latest_datasets
 from .store import ROOT, digest, dumps, now
 from .strategies import (calculate, catalog, prepare, prepare_indicators, scan_engine_version,
                          signal_at_end, verify_frozen)
@@ -51,9 +51,13 @@ class Service:
                       "WHERE status IN ('queued','running')", (now(),))
 
     def submit(self, kind, spec):
-        if kind not in {'sync','scan','backtest','validate','universe','verify_status'}:
+        if kind not in {'sync','scan','backtest','validate','universe','verify_status','premarket'}:
             raise ValueError('未知任务类型')
         if kind in {'scan','backtest','validate'}:
+            verify_frozen()
+        if kind == 'premarket':
+            from .premarket import validate_spec
+            validate_spec(spec)
             verify_frozen()
         if kind=='sync':
             spec=dict(spec,source=spec.get('source') or market_source(self.store))
@@ -129,6 +133,10 @@ class Service:
     def _verify_status(self, job, spec):
         from .status_review import review_job
         return review_job(self, job, spec)
+
+    def _premarket(self, job, spec):
+        from .premarket import run_premarket
+        return run_premarket(self, job, spec)
 
     def _universe(self, job,spec):
         provider = BaoStock()
@@ -236,6 +244,7 @@ class Service:
                                 daily_batch_codes = []
                                 self.store.event(job, '整日行情不可用，自动改用逐股更新',
                                                  date=end, error=str(exc))
+                                daily_batch = {'unavailable': str(exc)}
                             finally:
                                 daily_batch_request_seconds = time.monotonic() - stamp
                 universe = pd.read_csv(io.BytesIO(self.store.read_artifact('universe.csv',job)))
@@ -287,7 +296,9 @@ class Service:
         repair_timeframe = spec.get('scan_timeframe', 'daily') if selective_repair else None
         report['repair_timeframe'] = repair_timeframe
         batch_saved, batch_fallback = {}, {}
-        if daily_batch is not None and daily_batch_codes:
+        if isinstance(daily_batch, dict):
+            report['daily_batch'] = dict(saved=0, fallback=len(codes), reason=daily_batch['unavailable'])
+        if isinstance(daily_batch, tuple) and daily_batch_codes:
             from .baostock_daily_batch import apply_one_day_tail
             stamp = time.monotonic()
             last_batch_notice = [0.0]
@@ -311,6 +322,7 @@ class Service:
                 batch_fallback = {code: '整日行情整体校验未通过' for code in daily_batch_codes}
                 self.store.event(job, '整日行情整体校验未通过，自动改用逐股更新',
                                  date=end, error=str(exc))
+                report['batch_fallback_reason'] = str(exc)
             report['timings']['daily_batch_processing_seconds'] = time.monotonic() - stamp
             report['updated'] += len(batch_saved)
             report['success'] += len(batch_saved)
@@ -324,6 +336,16 @@ class Service:
                              **report['daily_batch'],
                              fallback_reasons=dict(list(batch_fallback.items())[:20]))
         remaining_codes = [c for c in codes if c not in suspended and c not in batch_saved]
+        batch_info = report.get('daily_batch', {})
+        if batch_info.get('fallback'):
+            reason = report.get('batch_fallback_reason') or batch_info.get('reason')
+            suffix = f'；整日回退逐股 {batch_info["fallback"]} 只' + (f'：{reason}' if reason else '')
+            current_request[0] += suffix
+            base_requesting = requesting
+            def requesting(code, operation, a, b):
+                base_requesting(code, operation, a, b)
+                current_request[0] += suffix
+                self.progress(job, processed, len(codes), current_request[0])
         results = sync_results(self.store, BaoStock, remaining_codes, start, end,
                                job, bool(spec.get('force') or (spec.get('repair_codes') and not selective_repair)),
                                self.cancel_flags[job], halt, workers, waiting,
@@ -399,6 +421,15 @@ class Service:
         return sync_tickflow(self, job, spec)
 
     def _scan(self, job,spec):
+        from .scan_reads import ScanReads
+        previous = getattr(self.store, '_scan_reads', None)
+        self.store._scan_reads = ScanReads()
+        try:
+            return self._scan_flow(job, spec)
+        finally:
+            self.store._scan_reads = previous
+
+    def _scan_flow(self, job,spec):
         if 'timeframes' not in spec:
             return self._scan_one(job,spec)
         periods = spec['timeframes']
@@ -494,10 +525,22 @@ class Service:
             def queue_event(action, path='', **detail):
                 event_rows.append((now(), job, action, str(path), dumps(detail)))
 
+            keys = {strategy.id: digest(dumps(
+                [did,strategy.id,strategy.version,timeframe,asof,engine]).encode())
+                for strategy in strategies}
+            placeholders = ','.join('?' for _ in keys)
+            cache_records = self.store.rows(
+                f'SELECT key,signal FROM scan_cache WHERE key IN ({placeholders})', tuple(keys.values()))
+            cached_signals = {row['key']: row['signal'] for row in cache_records}
+            all_cached = all(key in cached_signals for key in keys.values())
             try:
-                data,record = load_dataset(self.store,did,job)
-                data = prepare(data,timeframe,asof)
-                data.attrs['code'] = record['code']
+                if all_cached:
+                    record = verify_dataset(self.store, did, job)
+                    data = None
+                else:
+                    data,record = load_dataset(self.store,did,job)
+                    data = prepare(data,timeframe,asof)
+                    data.attrs['code'] = record['code']
                 data_error = None
             except Exception as exc:
                 data_error = str(exc)
@@ -505,16 +548,9 @@ class Service:
             self.progress(job,previous.get('total',0)+done,overall_total or total,
                           f"{timeframe} · {record['code']} · {len(strategies)} 个策略")
 
-            keys = {strategy.id: digest(dumps(
-                [did,strategy.id,strategy.version,timeframe,asof,engine]).encode())
-                for strategy in strategies}
-            cached_signals = {}
-            eligible = not data_error and len(data) >= 125
-            if eligible:
-                placeholders = ','.join('?' for _ in keys)
-                rows = self.store.rows(
-                    f'SELECT key,signal FROM scan_cache WHERE key IN ({placeholders})', tuple(keys.values()))
-                cached_signals = {row['key']: row['signal'] for row in rows}
+            eligible = not data_error and (all_cached or len(data) >= 125)
+            if not eligible:
+                cached_signals = {}
             prepared = None
             prepare_error = None
             if eligible and any(keys[strategy.id] not in cached_signals for strategy in strategies):
@@ -531,7 +567,7 @@ class Service:
                 try:
                     if data_error:
                         raise ValueError(data_error)
-                    if len(data)<125:
+                    if not all_cached and len(data)<125:
                         raise ValueError(f'已完成 K 线仅 {len(data)} 根，至少需要 125 根')
                     key = keys[strategy.id]
                     if key in cached_signals:

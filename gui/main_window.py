@@ -554,6 +554,11 @@ class AplusMainWindow(ttk.Window):
             self.toolbar._load_date_options()
             scanned_day = (result or {}).get('asof') if (
                 kind == '扫描策略' and status in ('completed','partial')) else None
+            if kind == '一键盘前':
+                from workbench.sources import market_source
+                item = (result or {}).get('sources', {}).get(market_source(self.store), {})
+                if item.get('scan_status') in ('completed','partial'):
+                    scanned_day = item.get('scan_result', {}).get('asof')
             if scanned_day and self.toolbar._select_date(scanned_day):
                 selected_date = self.toolbar.selected_date()
             self._cur_date = selected_date

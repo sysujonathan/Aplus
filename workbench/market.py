@@ -117,7 +117,14 @@ def load_dataset(store, dataset_id, job=None):
     content = store.read_artifact(record['path'], job)
     if digest(content) != record['sha256']:
         raise ValueError('行情文件被外部修改，校验不一致。请重新同步，不使用此快照')
-    return validate_bars(pd.read_csv(io.BytesIO(content))), record
+    cache = getattr(store, '_scan_reads', None)
+    cached = cache.get(dataset_id) if cache is not None else None
+    if cached is not None:
+        return cached, record
+    frame = validate_bars(pd.read_csv(io.BytesIO(content)))
+    if cache is not None:
+        cache.put(dataset_id, frame)
+    return frame, record
 
 
 def verify_dataset(store, dataset_id, job=None, record=None):

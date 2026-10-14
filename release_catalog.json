@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.14.40",
-    "pr": 40,
+    "version": "2026.10.14.41",
+    "pr": 41,
     "date": "2026-10-14"
   },
   "history": [
@@ -476,25 +476,40 @@
     },
     {
       "pr": 39,
-      "version": null,
-      "date": "2026-10-13",
-      "status": "not_released",
-      "title": "TV风格图表工作区（独立待合入）",
+      "version": "2026.10.14.39",
+      "date": "2026-10-14",
+      "status": "released",
+      "title": "TV风格图表工作区",
       "notes": [
-        "伙伴提交的独立图表工作区PR尚未合入，本轮代码不包含该功能。"
+        "新增独立图表工作区，支持常用画线、对象管理、回放及本机收盘提醒。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/39"
+      "url": "https://github.com/sysujonathan/Aplus/pull/39",
+      "commit": "4b863aae8b05415dea57296fd08c61e15824762d"
     },
     {
       "pr": 40,
       "version": "2026.10.14.40",
       "date": "2026-10-14",
-      "status": "preview",
+      "status": "released",
       "title": "修正BaoStock整日行情范围校验",
       "notes": [
         "整日行情先核验代码与日期，再筛选Aplus支持的板块；范围外证券不再导致整批退回逐股下载。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/40"
+      "url": "https://github.com/sysujonathan/Aplus/pull/40",
+      "commit": "61959b04c97dabe442af134be8993d19604a8cc9"
+    },
+    {
+      "pr": 41,
+      "version": "2026.10.14.41",
+      "date": "2026-10-14",
+      "status": "preview",
+      "title": "同宽盘前来源菜单与独立多源任务",
+      "notes": [
+        "盘前按钮保持原宽度，箭头菜单可保存一个或多个来源；各源独立更新，就绪后分别扫描。",
+        "显示整日回退原因及各源耗时，优化扫描缓存和同任务重复解析，修复深目录长备份名的临时写入失败。",
+        "软件更新明确区分等待自检、自检失败与人工安装，灰色按钮说明下一步，同编号修订不再冒充版本号变化。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/41"
     }
   ]
 }

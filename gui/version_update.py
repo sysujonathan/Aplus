@@ -194,6 +194,8 @@ class VersionController:
         text = f"正在运行：{view['current']}\n正式版：{view['target']}"
         if result.get("day"):
             text += f"\n检查日期：{result['day']}"
+        if view['revision_note']:
+            text += '\n' + view['revision_note']
         text += "\n\n" + view["message"]
         if view["can_update"]:
             text += "\n点击“立即更新并重启”后将自动完成备份、更新和重新打开。"
@@ -237,13 +239,14 @@ class VersionController:
         primary_actions = ttk.Frame(body)
         primary_actions.pack(fill=tk.X, pady=(6, 12))
         if result.get("state") == "available":
-            ttk.Button(primary_actions, text="立即更新并重启", command=accept,
+            ttk.Button(primary_actions, text=view['action_label'], command=accept,
                        bootstyle="success", width=24,
                        state=tk.NORMAL if view["can_update"] and not editing and not active else tk.DISABLED
                        ).pack(fill=tk.X, ipady=8)
         actions = ttk.Frame(body)
         actions.pack(fill=tk.X)
-        ttk.Button(actions, text="稍后" if result.get("state") == "available" else "关闭",
+        manual_block = result.get('block_reason') in ('manual','modified','development') and not view['can_update']
+        ttk.Button(actions, text="稍后" if result.get("state") == "available" and not manual_block else "关闭",
                    command=close, bootstyle="secondary").pack(side=tk.RIGHT, padx=8)
         ttk.Button(actions, text="重新检查", command=lambda: (close(), self.manual_check())).pack(side=tk.LEFT)
         dialog.protocol("WM_DELETE_WINDOW", close)

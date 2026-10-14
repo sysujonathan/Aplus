@@ -127,6 +127,25 @@ def test_latest_failed_rerun_overrides_earlier_success(repo):
     assert not v.acceptance(target, api_for(target, extra=[newer]))
 
 
+@pytest.mark.parametrize('status,conclusion,expected', [
+    ('queued',None,'running'),('in_progress',None,'running'),
+    ('completed','failure','failed'),('completed','cancelled','failed'),('completed','success','passed')])
+def test_check_reports_exact_main_ci_state_without_relaxing_permission(repo,status,conclusion,expected):
+    root,_,target=repo
+    run=dict(id=20,head_sha=target,head_branch='main',event='push',name='A acceptance',
+             path='.github/workflows/checks.yml',status=status,conclusion=conclusion)
+    result=v.check_version(root,force=True,api=api_for(target,extra=[run]),fetch=Mock())
+    assert result['ci_status']==expected and result['ci_passed']==(expected=='passed')
+    assert result['can_update']==(expected=='passed')
+
+
+def test_missing_main_ci_is_not_mistaken_for_running_or_success(repo):
+    root,_,target=repo
+    api=lambda path: {'commit':{'sha':target}} if path=='/branches/main' else {'workflow_runs':[]}
+    result=v.check_version(root,force=True,api=api,fetch=Mock())
+    assert result['ci_status']=='missing' and result['state']=='pending' and not result['can_update']
+
+
 @pytest.mark.parametrize('mutation', ['tracked', 'untracked', 'branch', 'ahead', 'diverged', 'origin'])
 def test_unsafe_local_versions_are_never_overwritten(repo, mutation):
     root, old, target = repo
@@ -411,7 +430,7 @@ def test_oneclick_partial_data_uses_explicit_scan_readiness(source, allowed):
     assert toolbar.after_idle.call_count == int(allowed)
 
 
-@pytest.mark.parametrize('kind', ['sync', 'scan'])
+@pytest.mark.parametrize('kind', ['sync', 'scan', 'premarket'])
 def test_only_successful_scan_submission_triggers_hint_after_task_starts(kind):
     from gui.toolbar import ToolBar
     toolbar = Mock()
@@ -419,7 +438,7 @@ def test_only_successful_scan_submission_triggers_hint_after_task_starts(kind):
     toolbar.service.submit.side_effect = lambda *args: order.append('submit') or 'job'
     toolbar._on_scan_started = lambda: order.append('version')
     ToolBar._submit_job(toolbar, kind, '扫描策略' if kind == 'scan' else '更新行情', {})
-    assert order == (['submit', 'version'] if kind == 'scan' else ['submit'])
+    assert order == (['submit', 'version'] if kind in ('scan','premarket') else ['submit'])
 
 
 def test_failed_scan_submission_does_not_check_version():

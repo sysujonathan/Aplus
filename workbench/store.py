@@ -276,6 +276,24 @@ class Store:
         rows = self.rows('SELECT value FROM meta WHERE key=?', ('gap_review:'+source,))
         return json.loads(rows[0]['value']) if rows else {}
 
+    def premarket_sources(self):
+        from .sources import SOURCES
+        rows = self.rows("SELECT value FROM meta WHERE key='premarket_sources'")
+        if not rows:
+            return None
+        try:
+            values = json.loads(rows[0]['value'])
+            return list(dict.fromkeys(s for s in values if s in SOURCES)) or None
+        except (ValueError, TypeError):
+            return None
+
+    def save_premarket_sources(self, sources):
+        from .sources import SOURCES
+        if not sources or any(s not in SOURCES for s in sources):
+            raise ValueError('请至少保留一个数据源')
+        self.execute("INSERT INTO meta VALUES('premarket_sources',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (dumps(list(dict.fromkeys(sources))),))
+
     def set_gap_review_decisions(self, source, issues, state):
         """UI preferences only; never update market quality, coverage or datasets."""
         from .gap_review import STATES
@@ -365,7 +383,9 @@ class Store:
         if path.exists() and path.read_bytes() == content:
             self.event(job, "复用已有文件", path, bytes=len(content))
             return path
-        tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+        # Atomic replacement remains in the same directory; a short temp name
+        # avoids duplicating the long hash filename under Windows MAX_PATH.
+        tmp = path.with_name(".a-" + uuid.uuid4().hex + ".tmp")
         with tmp.open("xb") as f:
             f.write(content)
             f.flush()

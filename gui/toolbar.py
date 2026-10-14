@@ -231,14 +231,35 @@ class ToolBar(ttk.Frame):
         ).pack(side=tk.LEFT)
 
         # 高频默认路径是一键盘前；两个分步任务继续保留，便于核验和迭代。
+        auto_host = ttk.Frame(actions)
         self.btn_auto = ttk.Button(
-            actions,
+            auto_host,
             text="一键盘前",
             command=self._on_auto,
             bootstyle="success",
             cursor="hand2",
         )
-        self.btn_auto.pack(side=tk.LEFT, padx=(0, 8))
+        # Reserve exactly the former button's requested width, including at DPI
+        # scaling. The smaller label makes room for the menu inside that width.
+        auto_width, auto_height = self.btn_auto.winfo_reqwidth(), self.btn_auto.winfo_reqheight()
+        auto_host.configure(width=auto_width, height=auto_height)
+        auto_host.pack_propagate(False)
+        auto_host.pack(side=tk.LEFT, padx=(0, 8))
+        self._auto_host = auto_host
+        self._auto_original_width = auto_width
+        self.btn_auto.configure(text='盘前')
+        self.btn_auto_menu = ttk.Menubutton(auto_host, text='▾', padding=(2, 0), bootstyle='success')
+        self.btn_auto_menu.pack(side=tk.RIGHT, fill=tk.Y)
+        self.btn_auto.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._auto_sources_saved = store.premarket_sources() if store else None
+        initial = self._auto_sources_saved or [market_source(store) if store else 'baostock']
+        self.auto_source_vars = {s: tk.BooleanVar(value=s in initial) for s in SOURCES}
+        auto_menu = tk.Menu(self.btn_auto_menu, tearoff=0)
+        auto_menu.add_command(label='一键盘前使用的数据源', state=tk.DISABLED)
+        for source, variable in self.auto_source_vars.items():
+            auto_menu.add_checkbutton(label=SOURCES[source], variable=variable,
+                                      command=self._save_auto_sources)
+        self.btn_auto_menu.configure(menu=auto_menu)
         ttk.Separator(actions, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=(0, 8), pady=3
         )
@@ -846,6 +867,8 @@ class ToolBar(ttk.Frame):
         source=next(k for k,v in SOURCES.items() if v==self.source_var.get())
         try:
             set_market_source(self.store,source)
+            if not getattr(self, '_auto_sources_saved', None) and hasattr(self, 'auto_source_vars'):
+                for key, variable in self.auto_source_vars.items(): variable.set(key == source)
             self._sync_elapsed = self._scan_elapsed = None
             self._refresh_timing_status()
             # Date choices are source-owned too; changing only the selected
@@ -868,17 +891,38 @@ class ToolBar(ttk.Frame):
         if not self._selected_strategies():
             self.set_status("一键盘前未开始：请至少选择一个扫描策略")
             return
+        sources = [s for s, variable in self.auto_source_vars.items() if variable.get()] if hasattr(self, 'auto_source_vars') else [market_source(self.store)]
+        if not sources:
+            self.set_status('一键盘前未开始：请至少选择一个数据源')
+            return
+        boards = self._selected_boards()
+        if not boards or self.service is None:
+            self.set_status('请先连接后端并选择行情板块')
+            return
+        from workbench.scope import save_boards
+        save_boards(self.store, boards)
+        if market_source(self.store) not in sources:
+            self.source_var.set(SOURCES[sources[0]])
+            self._source_changed()
         self._auto_chain_cancelled = False
-        self._auto_scan_after_sync = True
-        self._auto_started_at = time.monotonic()
-        self._auto_sync_elapsed = None
+        self._auto_scan_after_sync = False
         self._sync_elapsed = None
         self._scan_elapsed = None
-        self._refresh_timing_status()
-        self._on_sync(chained=True)
-        if self._job_id is None:
-            self._auto_scan_after_sync = False
-            self._auto_started_at = None
+        self._submit_job('premarket', '一键盘前', dict(sources=sources, boards=boards,
+            strategies=self._selected_strategies(), timeframe=self._tf_var.get(),
+            start=sync_start_date(self.store, self.full_history_var.get(), self._tf_var.get())))
+
+    def _save_auto_sources(self):
+        sources = [s for s, variable in self.auto_source_vars.items() if variable.get()]
+        if not sources:
+            for s in self._auto_sources_saved or [market_source(self.store)]:
+                self.auto_source_vars[s].set(True)
+            self.set_status('至少保留一个数据源')
+            return
+        if self.store:
+            self.store.save_premarket_sources(sources)
+        self._auto_sources_saved = sources
+        self.set_status('一键盘前来源：' + '、'.join(SOURCES[s] for s in sources))
 
     def _on_sync(self, chained=False):
         if not chained:
@@ -979,13 +1023,15 @@ class ToolBar(ttk.Frame):
         ):
             button.state(["disabled"])
         if hasattr(self,'source_combo'):
-            self.source_combo.state(['disabled'])
+            self.source_combo.state(['!disabled','readonly'] if kind == 'premarket' else ['disabled'])
+        if hasattr(self,'btn_auto_menu'):
+            self.btn_auto_menu.state(['disabled'])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
         self.after(800, self._poll_job)
         # Successful submission first: version networking never delays or
         # invalidates a market/strategy task. One-click premarket uses this too.
         hint = getattr(self, '_on_scan_started', None)
-        if kind == 'scan' and callable(hint):
+        if kind in ('scan','premarket') and callable(hint):
             try:
                 hint()
             except Exception:
@@ -1019,7 +1065,7 @@ class ToolBar(ttk.Frame):
             elapsed = (f" · 已用时 {format_elapsed(elapsed_seconds)}"
                        if elapsed_seconds is not None else "")
             if total:
-                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:56]}{elapsed}")
+                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:180]}{elapsed}")
             else:
                 fallback = '排队中…' if status == 'queued' else '运行中，准备核验…'
                 self.set_status(f"⏳ {self._job_kind}：{msg[:64] or fallback}{elapsed}")
@@ -1060,6 +1106,8 @@ class ToolBar(ttk.Frame):
             btn.state(["!disabled"])
         if hasattr(self,'source_combo'):
             self.source_combo.state(['!disabled','readonly'])
+        if hasattr(self,'btn_auto_menu'):
+            self.btn_auto_menu.state(['!disabled'])
         try:
             r = json.loads(result_json) if result_json else {}
         except Exception:
@@ -1071,7 +1119,18 @@ class ToolBar(ttk.Frame):
         )
         if kind == '更新行情' and not chain_scan and status != 'completed':
             self._auto_scan_after_sync = False
-        if kind == '核验缺日' and status in ('completed','partial'):
+        if kind == '一键盘前' and r.get('sources'):
+            text = ' · '.join(f'{SOURCES[s]} {item.get("phase","未完成")}：'
+                f'行情{format_elapsed(item.get("sync_seconds"))}／扫描{format_elapsed(item.get("scan_seconds"))}'
+                for s,item in r['sources'].items())
+            for s,item in r['sources'].items():
+                batch = item.get('sync_result', {}).get('daily_batch', {})
+                if batch.get('fallback'):
+                    text += f"；{SOURCES[s]}逐股回退 {batch['fallback']} 只"
+            current = r['sources'].get(market_source(self.store), {})
+            self._sync_elapsed = current.get('sync_seconds')
+            self._scan_elapsed = current.get('scan_seconds')
+        elif kind == '核验缺日' and status in ('completed','partial'):
             c = r.get('coverage', {})
             marker = '✓' if status == 'completed' else '⚠'
             text = (f"{marker} 缺日核验：确认停牌 {len(r.get('confirmed_halt', []))} 天 · "
@@ -1119,6 +1178,11 @@ class ToolBar(ttk.Frame):
             self._auto_sync_elapsed = None
         elif elapsed is not None:
             text += f" · 用时 {format_elapsed(elapsed)}"
+        batch = r.get('daily_batch')
+        if kind == '更新行情' and batch:
+            text += f"；整日保存 {batch.get('saved',0)} 只，逐股回退 {batch.get('fallback',0)} 只"
+            reason = r.get('batch_fallback_reason') or batch.get('reason')
+            if reason: text += f'：{reason}'
         if kind == "更新行情" and status != "completed" and not chain_scan:
             self._auto_started_at = None
             self._auto_sync_elapsed = None
