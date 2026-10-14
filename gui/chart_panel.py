@@ -206,6 +206,10 @@ class ChartPanel(native_ttk.Frame):
         if store is None or observation_id is None:
             self.show_placeholder()
             return
+        # Keep the real Store on self for explicitly saved workspace edits,
+        # but reading candles must not wait to write a "read file" DB event.
+        from .background_status import display_store
+        store = display_store(store)
         cache = getattr(self, "_image_cache", None)
         cache_key = (observation_id, market_dataset_id or "", mode, market_asof, anchor_asof)
         cached = cache.get(cache_key) if isinstance(cache, dict) else None

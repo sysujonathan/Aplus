@@ -23,6 +23,7 @@ def test_native_source_switch_rebuilds_date_choices():
 
 def check_source_switch():
     import tempfile
+    import time
     import ttkbootstrap as ttk
     from unittest.mock import patch
     from gui.toolbar import ToolBar
@@ -51,15 +52,24 @@ def check_source_switch():
                 toolbar = ToolBar(root, store=store, on_date_change=lambda *values: callbacks.append(
                     (market_source(store), values, tuple(toolbar.day_combo.cget('values')))))
                 root.update()
+                def switch(source):
+                    count = len(callbacks)
+                    toolbar.source_combo.set(SOURCES[source])
+                    toolbar.source_combo.event_generate('<<ComboboxSelected>>', when='tail')
+                    deadline = time.monotonic()+10
+                    while time.monotonic() < deadline:
+                        root.update()
+                        if len(callbacks)>count and not toolbar._source_pending and toolbar._status_poll is None:
+                            return
+                        time.sleep(.01)
+                    raise AssertionError('来源切换或后台显示刷新未完成')
                 for source, month, day, options in (
                     ('baostock', '09', '30', ('全部', '29', '30')),
                     ('tencent', '10', '08', ('全部', '08')),
                     ('tickflow', '10', '09', ('全部', '09')),
                     ('baostock', '09', '30', ('全部', '29', '30')),
                 ):
-                    toolbar.source_combo.set(SOURCES[source])
-                    toolbar.source_combo.event_generate('<<ComboboxSelected>>', when='tail')
-                    root.update()
+                    switch(source)
                     assert market_source(store) == source
                     assert tuple(toolbar.day_combo.cget('values')) == options
                     assert toolbar.selected_date() == ('2026', month, day)
@@ -68,9 +78,7 @@ def check_source_switch():
                 # A source with market data but no saved signal resets selection,
                 # while retaining only its own market dates in the dropdown.
                 store.execute("DELETE FROM observations WHERE dataset_id LIKE 'tencent%'")
-                toolbar.source_combo.set(SOURCES['tencent'])
-                toolbar.source_combo.event_generate('<<ComboboxSelected>>', when='tail')
-                root.update()
+                switch('tencent')
                 assert toolbar.selected_date() == (None, None, None)
                 assert tuple(toolbar.day_combo.cget('values')) == ('全部', '08')
                 assert callbacks[-1][0:2] == ('tencent', (None, None, None))

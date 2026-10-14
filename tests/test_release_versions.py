@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_catalog_covers_each_pr_without_inventing_publications():
     catalog = r.read_catalog(ROOT)
-    assert [x['pr'] for x in catalog['history']] == list(range(1, 42))
+    assert [x['pr'] for x in catalog['history']] == list(range(1, 44))
     by_pr = {x['pr']: x for x in catalog['history']}
     assert by_pr[1]['version'] is None and by_pr[1]['status'] == 'not_released'
     assert by_pr[12]['included_in'] == by_pr[13]['included_in'] == 11
@@ -39,7 +39,11 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[39]['commit'] == '4b863aae8b05415dea57296fd08c61e15824762d'
     assert by_pr[40]['status'] == 'released'
     assert by_pr[40]['commit'] == '61959b04c97dabe442af134be8993d19604a8cc9'
-    assert by_pr[41]['status'] == 'preview'
+    assert by_pr[41]['status'] == 'released'
+    assert by_pr[41]['commit'] == '3ef30d8a019c8e0f618f202c686d1852e2097101'
+    assert by_pr[42]['status'] == 'released'
+    assert by_pr[42]['commit'] == 'c8993064e5f5a2f05a54dc1c66f007878d56b7b7'
+    assert by_pr[43]['status'] == 'preview'
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -60,7 +64,9 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.13.38-preview' not in text
     assert 'v2026.10.14.40-preview' not in text
     assert 'v2026.10.14.40' in text
-    assert 'v2026.10.14.41-preview' in text
+    assert 'v2026.10.14.41-preview' not in text
+    assert 'v2026.10.14.42-preview' not in text
+    assert 'v2026.10.14.43-preview' in text
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'version', 'date', 'duplicate', 'status', 'sha', 'notes', 'build_pr', 'date_version', 'row'])
@@ -95,7 +101,7 @@ def test_exact_historical_main_and_current_preview_are_distinct():
     assert r.version_label(merged) == 'v2026.10.11.30'
     assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
-    assert r.version_label(preview) == 'v2026.10.14.41 · 预览版'
+    assert r.version_label(preview) == 'v2026.10.14.43 · 预览版'
     # A short hash and an unrelated revision must not be called PR29.
     assert r.identity(ROOT, target='18670c8')['version'] is None
     assert r.identity(ROOT, target='b'*40)['version'] is None
