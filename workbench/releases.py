@@ -101,11 +101,18 @@ def presentation(result, running=None):
     title, message = {
         "current": ("当前无需更新", "当前软件与检查到的主线提交一致。"),
         "ahead": ("当前使用本机修复版", "正式发布版尚未包含本机提交。可继续使用，不会退回旧版本。"),
-        "diverged": ("需要维护者核对版本", "本机与正式版各有改动，为保留本机修复，暂不自动替换。"),
-        "pending": ("新版尚在验收", "新代码尚未通过验收，暂不提供更新；当前版本可以继续使用。"),
+        "diverged": ("本机版本需先确认", "本机与正式版各有改动，不能直接覆盖。请联系提供 Aplus 的同事协助保留改动并升级；等待不会自动解决，当前版本可继续使用。"),
+        "pending": ("新版尚未通过验收", "新版尚未通过自动检查，暂不能安装。请继续使用当前版本，稍后重新检查；若持续未通过，请联系提供 Aplus 的同事确认。"),
         "unavailable": ("暂时无法检查版本", "请稍后重新检查；不影响行情更新和策略扫描。"),
         "available": ("发现软件新版", "更新软件将保留原行情与交易记录，需要重新启动。"),
     }.get(state, ("版本状态待确认", "暂不自动更新，当前版本可以继续使用。"))
+    if state == 'pending':
+        title, message = {
+            'running': ('新版正在自检，请稍候', '新版自动检查尚未完成，暂不能安装。你可继续使用当前版本，稍后点击“重新检查”；检查通过后才会开放更新。'),
+            'failed': ('新版自检未通过', '新版自动检查失败或被取消，暂不能安装。请继续使用当前版本，等待项目负责人修复并通过检查；反复点击更新不能解决。'),
+            'missing': ('新版尚未开始自检', '尚未查到这个新版的自动检查结果，暂不能安装。请继续使用当前版本，稍后重新检查；若一直如此，请联系提供 Aplus 的同事确认。'),
+        }.get(result.get('ci_status'), (title, message))
+    action_label = '立即更新并重启'
     allowed = bool(result.get("can_update")) and not changed
     if changed:
         title, message = "代码已更换，需要重新启动", "当前窗口仍运行启动时的版本。请先保存编辑，从托盘完整退出后重新打开。"
@@ -113,16 +120,22 @@ def presentation(result, running=None):
         title, message = "当前安装有本机定制", "本机保留了修改或新增文件，暂不能确认与正式版完全一致；不会自动覆盖。"
     elif state == "available" and not allowed:
         reason = result.get("block_reason")
-        message = {
-            "modified": "本机保留了修改或新增文件，请维护者先核对；不会自动覆盖。",
-            "development": "当前是预览/开发安装，请维护者先对齐正式版，保留已有修复。",
-            "manual": "新版涉及依赖、数据结构或受保护文件，需要维护者升级并验收。",
-            "cached": "正在后台确认新版；确认通过后即可直接更新。",
-        }.get(reason, "目前尚不满足安全更新条件，请重新检查或让维护者核对。")
+        title, message, action_label = {
+            "modified": ("需先保留本机修改", "本机有修改或新增文件，自动覆盖可能丢失这些内容。请联系提供 Aplus 的同事协助保留并升级；等待不会自动解决，当前版本可继续使用。", "需先处理本机修改"),
+            "development": ("需先确认这份安装", "当前是预览或开发安装，不能直接替换。请联系提供 Aplus 的同事确认正式安装方式；等待不会自动解决，当前版本可继续使用。", "需先确认安装版本"),
+            "manual": ("本次更新需要人工安装", "为保护本机文件和已有数据，本次需要人工安装，不能一键替换。这不是等待自检，继续等待或反复检查不会使按钮启用。\n请联系提供 Aplus 的同事协助安装；当前版本可继续使用，不要删除行情或交易记录。", "本次需要人工安装"),
+            "cached": ("正在确认新版", "正在后台确认新版是否可安全更新，请稍候；确认通过后即可直接更新，当前版本可继续使用。", "正在确认新版"),
+        }.get(reason, ("暂不能自动更新", "暂时无法确认可安全更新，请重新检查；若仍如此，请联系提供 Aplus 的同事，当前版本可继续使用。", "暂不能自动更新"))
     target = result.get("target_release", {})
     target_label = version_label(target) if target.get("version") else "版本号待确认"
     return dict(title=title, message=message, current=version_label(current),
                 target=target_label if result.get("target") else "未能确认", can_update=allowed,
+                action_label=action_label,
+                revision_note='同一版本号下有代码修订，是否可更新以本次检查结果为准。' if (
+                    state == 'available' and current.get('version') and current.get('version') == target.get('version')
+                    and COMMIT.fullmatch(str(current.get('head') or local.get('head', '')))
+                    and COMMIT.fullmatch(str(result.get('target', '')))
+                    and (current.get('head') or local.get('head')) != result.get('target')) else '',
                 notes=result.get("target_release", {}).get("notes", [])[:4])
 
 

@@ -117,7 +117,7 @@ def test_malformed_remote_and_unknown_old_version_stay_unknown(tmp_path):
 
 
 @pytest.mark.parametrize('state,phrase', [('current','无需更新'), ('ahead','本机修复版'),
-    ('diverged','维护者'), ('pending','验收'), ('unavailable','无法检查'), ('available','新版')])
+    ('diverged','确认'), ('pending','验收'), ('unavailable','无法检查'), ('available','新版')])
 def test_beginner_conclusions_and_permissions(state, phrase):
     result = dict(state=state, can_update=state=='available', local={'head':'a'*40}, target='b'*40,
                   local_release=dict(version='2026.10.10.29'), target_release=dict(version='2026.10.11.31'))
@@ -128,10 +128,36 @@ def test_beginner_conclusions_and_permissions(state, phrase):
     assert view['current'].startswith('v2026')
 
 
-@pytest.mark.parametrize('reason,phrase', [('modified','修改'), ('development','预览'), ('manual','依赖'), ('cached','后台确认')])
+@pytest.mark.parametrize('reason,phrase', [('modified','修改'), ('development','预览'), ('manual','人工安装'), ('cached','后台确认')])
 def test_blocked_update_has_next_step(reason, phrase):
     view = r.presentation(dict(state='available', can_update=False, block_reason=reason))
     assert not view['can_update'] and phrase in view['message']
+
+
+@pytest.mark.parametrize('status,phrase', [('running','请稍候'), ('failed','未通过'), ('missing','尚未开始')])
+def test_ci_next_step_distinguishes_waiting_from_failed_checks(status, phrase):
+    view=r.presentation(dict(state='pending',ci_status=status,can_update=False))
+    assert phrase in view['title'] and not view['can_update']
+    assert '当前版本' in view['message']
+    if status=='failed': assert '负责人修复' in view['message']
+
+
+def test_manual_install_is_not_presented_as_waiting_for_ci():
+    view=r.presentation(dict(state='available',can_update=False,block_reason='manual',ci_passed=True))
+    assert view['title']=='本次更新需要人工安装'
+    assert view['action_label']=='本次需要人工安装'
+    assert '这不是等待自检' in view['message'] and '不会使按钮启用' in view['message']
+    assert '提供 Aplus 的同事' in view['message'] and '不要删除' in view['message']
+    assert not view['can_update']
+
+
+def test_same_version_different_commit_explains_code_revision_without_inventing_version():
+    result=dict(state='available',local={'head':'a'*40},target='b'*40,
+                local_release=dict(version='2026.10.13.38'),target_release=dict(version='2026.10.13.38'))
+    view=r.presentation(result)
+    assert view['current']==view['target']=='v2026.10.13.38'
+    assert '同一版本号' in view['revision_note'] and not view['can_update']
+    assert not r.presentation(dict(result,target='a'*40))['revision_note']
 
 
 def test_running_version_is_not_relabelled_after_disk_replacement():
@@ -212,6 +238,13 @@ service.cancel_flags['synthetic']=object()
 c.show_details(release); w.update()
 assert str(button('立即更新并重启').cget('state'))=='disabled'
 button('稍后').invoke(); service.cancel_flags.clear()
+blocked=dict(release,can_update=False,block_reason='manual',ci_passed=True)
+c.show_details(blocked); w.update()
+assert str(button('本次需要人工安装').cget('state'))=='disabled'
+labels=' '.join(str(x.cget('text')) for x in children(c.notice) if x.winfo_class()=='TLabel')
+assert '这不是等待自检' in labels and '提供 Aplus 的同事' in labels
+button('本次需要人工安装').invoke(); assert c.begin_update.call_count==1
+button('关闭').invoke()
 assert w.chart.winfo_height()==height and not s.rows('SELECT id FROM jobs')
 w.destroy(); service.pool.shutdown(wait=True)
 '''
