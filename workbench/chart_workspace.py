@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import math
 import uuid
@@ -162,7 +162,8 @@ def risk_readout(obj):
         return '止损／目标方向无效', 0, 0
     ratio = reward/risk
     quantity = math.floor(float(obj['risk_budget'])/risk)
-    return f'风险 {risk/entry:.2%} · 回报 {reward/entry:.2%} · R {ratio:.2f} · 测算 {quantity} 股', ratio, quantity
+    return (f'风险 {risk/entry:.2%} · 回报 {reward/entry:.2%} · R {ratio:.2f} · '
+            f'分析模拟数量 {quantity} 股 · 非交易建议'), ratio, quantity
 
 
 def session_counts(frame):
@@ -194,6 +195,7 @@ def aggregate_minutes(frame, minutes):
         raise ValueError('分钟聚合仅支持 1 小时或 4 小时')
     value = frame.copy()
     stamp = pd.to_datetime(value.date)
+    validate_session_sequence(stamp, 5)
     pieces = []
     value['_stamp'] = stamp
     for _, day in value.groupby(stamp.dt.strftime('%Y-%m-%d'), sort=False):
@@ -212,6 +214,32 @@ def aggregate_minutes(frame, minutes):
     return pd.DataFrame(pieces)
 
 
+def validate_session_sequence(dates, minutes=5):
+    """Reject closed days and gaps inside each A-share half-session.
+
+    Partial first/last sessions remain valid for live imports.  Missing bars
+    inside an observed half-session do not: Bar Count and aggregation must not
+    silently compress a 10:00 -> 10:20 hole into adjacent five-minute bars.
+    """
+    from .exchange_calendar import is_trading_day
+
+    stamps = pd.Series(pd.to_datetime(dates)).reset_index(drop=True)
+    step = timedelta(minutes=int(minutes))
+    for day, group in stamps.groupby(stamps.dt.normalize(), sort=False):
+        if day.date().isoformat() < '1990-12-19':
+            raise ValueError('分钟行情日期早于中国证券市场有效历史范围')
+        if is_trading_day(day.date()) is False:
+            raise ValueError(f'{day.date().isoformat()} 不是交易日')
+        clock = group.dt.hour*60 + group.dt.minute
+        for start, end in ((9*60+30, 11*60+30), (13*60, 15*60)):
+            session = group.loc[clock.between(start, end)]
+            if len(session) > 1 and not session.diff().iloc[1:].eq(step).all():
+                raise ValueError(
+                    f'{day.date().isoformat()} 同一交易时段存在缺失或跳跃的 {minutes} 分钟 K 线'
+                )
+    return True
+
+
 def minute_frame(path, minutes=5):
     """Explicit real-data CSV import, never invent ticks or fill missing bars."""
     frame = pd.read_csv(path)
@@ -222,6 +250,12 @@ def minute_frame(path, minutes=5):
     if any(c not in frame for c in needed):
         raise ValueError('CSV 需要时间、开高低收、成交量列（或英文列名）')
     frame = frame[needed].copy()
+    raw_dates = frame.date.astype(str).str.strip()
+    explicit_date = raw_dates.str.match(
+        r'^(?:19|20)\d{2}(?:[-/.]\d{1,2}[-/.]\d{1,2}|\d{4})(?:[T\s]|$)'
+    )
+    if not explicit_date.all():
+        raise ValueError('分钟行情时间必须包含明确交易日期，不能只有时分')
     dates = pd.to_datetime(frame.date, errors='raise')
     if dates.dt.tz is not None:
         dates = dates.dt.tz_convert('Asia/Shanghai').dt.tz_localize(None)
@@ -233,6 +267,7 @@ def minute_frame(path, minutes=5):
     in_session = clock.between(9*60+30, 11*60+30) | clock.between(13*60, 15*60)
     if not in_session.all():
         raise ValueError('分钟行情包含 A 股连续交易时段之外的 K 线')
+    validate_session_sequence(dates, minutes)
     for key in needed[1:]:
         frame[key] = pd.to_numeric(frame[key], errors='raise')
     if not frame[needed[1:]].map(math.isfinite).all().all():
@@ -245,6 +280,35 @@ def minute_frame(path, minutes=5):
     if len(frame) < 2:
         raise ValueError('至少需要两根真实 K 线')
     return frame
+
+
+def bar_completed(stamp, timeframe, now):
+    """Whether one bar is safely closed in Shanghai market time.
+
+    Imported intraday bars and their aggregates carry the last constituent
+    five-minute timestamp, so a five-minute cushion is deliberately used for
+    both start-labelled and end-labelled vendor CSVs.
+    """
+    def local(value):
+        result = pd.Timestamp(value)
+        if result.tzinfo is None:
+            return result.tz_localize('Asia/Shanghai')
+        return result.tz_convert('Asia/Shanghai')
+
+    candle, moment = local(stamp), local(now)
+    if timeframe in ('5m', '1h', '4h'):
+        close = candle + timedelta(minutes=5)
+    elif timeframe == 'daily':
+        close = candle.normalize() + timedelta(hours=19)
+    elif timeframe == 'weekly':
+        close = candle.tz_localize(None).to_period('W-FRI').end_time.normalize()
+        close = close.tz_localize('Asia/Shanghai') + timedelta(hours=19)
+    elif timeframe == 'monthly':
+        close = candle.tz_localize(None).to_period('M').end_time.normalize()
+        close = close.tz_localize('Asia/Shanghai') + timedelta(hours=19)
+    else:
+        raise ValueError('提醒周期无效')
+    return moment >= close
 
 
 def evaluate_alert(alert, frame, *, now, replay=False):
@@ -260,12 +324,20 @@ def evaluate_alert(alert, frame, *, now, replay=False):
     if alert['expires'] and comparable(now) >= comparable(alert['expires']):
         updated.update(enabled=False, status='已到期')
         return updated, None
-    stamp = str(frame.date.iloc[-1])
+    completed = [index for index, stamp in enumerate(frame.date)
+                 if bar_completed(stamp, alert['timeframe'], now)]
+    if not completed:
+        updated['status'] = '等待最新 K 线收盘确认'
+        return updated, None
+    closed = frame.iloc[:completed[-1]+1]
+    if len(closed) < 2:
+        return updated, None
+    stamp = str(closed.date.iloc[-1])
     if stamp <= str(alert.get('cursor', '')):
         return updated, None
     # Creation seeds the cursor: older bars are not replayed as new alerts.
     updated['cursor'] = stamp
-    series = frame.close.astype(float)
+    series = closed.close.astype(float)
     threshold = (series.ewm(span=int(alert['ema_length']), adjust=False).mean()
                  if alert['target'] == 'ema' else pd.Series(float(alert['value']), index=series.index))
     previous, current = float(series.iloc[-2]-threshold.iloc[-2]), float(series.iloc[-1]-threshold.iloc[-1])

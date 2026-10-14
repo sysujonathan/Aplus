@@ -7,8 +7,8 @@ import pytest
 from gui.chart_renderer import render_chart
 from gui.chart_workspace import resample_daily
 from workbench.chart_workspace import (
-    History, aggregate_minutes, create_alert, document, evaluate_alert, identity,
-    make_drawing, minute_frame, session_counts,
+    History, aggregate_minutes, bar_completed, create_alert, document, evaluate_alert, identity,
+    make_drawing, minute_frame, risk_readout, session_counts,
 )
 from workbench.store import Store
 
@@ -55,6 +55,24 @@ def test_closed_bar_alert_is_forward_only_deduplicated_and_replay_safe():
     assert event is None and replayed['cursor'] == '2026-01-06'
 
 
+def test_intraday_alert_waits_for_close_and_checks_latest_completed_prefix():
+    frame = bars(dates=['2026-10-12 14:45:00', '2026-10-12 14:50:00'], closes=[9, 9.5])
+    alert = create_alert(name='上穿10', code='sz.000001', source='s', adjustment='qfq',
+                         timeframe='5m', target='price', condition='cross_up', value=10,
+                         frame=frame)
+    alert['cursor'] = '2026-10-12 14:45:00'
+    extended = pd.concat([frame, bars(dates=['2026-10-12 14:55:00'], closes=[10.2])],
+                         ignore_index=True)
+    waiting, event = evaluate_alert(alert, extended, now='2026-10-12T14:59:59+08:00')
+    assert event is None and waiting['cursor'] == '2026-10-12 14:50:00'
+    assert bar_completed('2026-10-12 14:55:00', '5m', '2026-10-12T14:59:59+08:00') is False
+    triggered, event = evaluate_alert(waiting, extended, now='2026-10-12T15:00:00+08:00')
+    assert event['bar'] == '2026-10-12 14:55:00'
+    assert triggered['cursor'] == '2026-10-12 14:55:00'
+    assert bar_completed('2026-10-12', 'daily', '2026-10-12T18:59:59+08:00') is False
+    assert bar_completed('2026-10-12', 'daily', '2026-10-12T19:00:00+08:00') is True
+
+
 def test_real_five_minute_import_counts_sessions_and_never_bridges_lunch():
     times = [*pd.date_range('2026-10-12 09:30',periods=24,freq='5min'),
              *pd.date_range('2026-10-12 13:00',periods=24,freq='5min')]
@@ -73,6 +91,28 @@ def test_minute_import_rejects_daily_data_and_duplicate_bars():
     value = bars(dates=['2026-01-05','2026-01-05'])
     with pytest.raises(ValueError, match='唯一'):
         minute_frame(BytesIO(value.to_csv(index=False).encode()), 5)
+
+
+@pytest.mark.parametrize('dates, message', [
+    (['2026-10-12 10:00:00', '2026-10-12 10:20:00'], '缺失或跳跃'),
+    (['2026-10-11 09:30:00', '2026-10-11 09:35:00'], '不是交易日'),
+    (['2026-10-01 09:30:00', '2026-10-01 09:35:00'], '不是交易日'),
+    (['1900-01-01 09:30:00', '1900-01-01 09:35:00'], '有效历史范围'),
+    (['09:30', '09:35'], '明确交易日期'),
+])
+def test_minute_import_rejects_session_gaps_and_invalid_dates(dates, message):
+    source = pd.DataFrame({'date': dates, 'open': 10, 'high': 10.2, 'low': 9.9,
+                           'close': 10.1, 'volume': 100})
+    with pytest.raises(ValueError, match=message):
+        minute_frame(BytesIO(source.to_csv(index=False).encode()), 5)
+
+
+def test_risk_readout_is_explicitly_analysis_only():
+    obj = make_drawing('long', [['2026-10-12', 10]], created_at='2026-10-12',
+                       settings={'fib_levels': [0, .5, 1], 'risk_budget': 1000})
+    text, _, quantity = risk_readout(obj)
+    assert quantity == 2000
+    assert '分析模拟数量 2000 股' in text and '非交易建议' in text
 
 
 def test_chart_document_is_optimistic_and_does_not_write_trade_tables(tmp_path):
