@@ -173,7 +173,9 @@ find_button(c.notice,'立即更新并重启').invoke()
 assert c.notice is None; c.begin_update.assert_called_once_with(release)
 release=dict(release,target='d'*40,can_update=False,message='开发分支需人工核对')
 c.pending_notice=release; c.maybe_show_notice()
-assert str(find_button(c.notice,'立即更新并重启').cget('state')) == 'disabled'
+blocked=find_button(c.notice,'暂不能自动更新')
+assert str(blocked.cget('state')) == 'disabled'
+blocked.invoke(); assert c.notice.winfo_exists() and c.begin_update.call_count==1
 find_button(c.notice,'稍后').invoke()
 assert w.chart.winfo_height()==height
 assert not s.rows('SELECT id FROM jobs')
