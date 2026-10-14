@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import math
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from .geometric_engine import GeometricTrendlineEngine
@@ -32,6 +33,9 @@ class MTRStructuralEngineV35:
         "pullback_range": (0.500, 0.786),  # (H1-TL)/(H1-L1) 回撤深度
         "h2_min_pos": 0.618               # (H2-TL)/(H1-TL) H2位置 (备用)
     }
+
+    # [V36.3] 信号K必须是光头阳线：收盘等于最高价，不允许上影线。
+    SIGNAL_CLOSE_POSITION_MIN = 1.0
 
     def __init__(self, ema_period: int = 20):
         self.ema_period = ema_period
@@ -224,8 +228,8 @@ class MTRStructuralEngineV35:
 
     def _find_signal_bar(self, df: pd.DataFrame, tl: MTRPoint) -> dict:
         """
-        [V36.0] 寻找信号K线 + 质量评估 — Brooks Buy Stop Order
-        条件: 阳线 + 收盘在K线上半部（50%以上）
+        [V36.3] 寻找信号K线 + 质量评估 — Brooks Buy Stop Order
+        条件: 阳线 + 收盘等于最高价（光头阳线）
         质量 (quality: 0-10):
           - 实体/ATR (最高5分) — 实体越大越好
           - 上影线位置 (最高5分) — 光头阳(Close=High)满分，上影线<20%得3分
@@ -245,8 +249,9 @@ class MTRStructuralEngineV35:
             bar_range = h - lo
             if bar_range <= 0:
                 continue
-            # 条件: 阳线 + 收盘在K线上半部
-            if c > o and (c - lo) / bar_range >= 0.5:
+            close_position = (c - lo) / bar_range
+            # 条件: 阳线 + 收盘等于最高价。容忍行情小数序列化带来的极小误差。
+            if c > o and math.isclose(c, h, rel_tol=1e-9, abs_tol=1e-9):
                 body = c - o
                 upper_wick = h - c
                 quality = 0.0
@@ -273,7 +278,8 @@ class MTRStructuralEngineV35:
                     'idx': si,
                     'high': h,
                     'date': df['date'].iloc[si] if 'date' in df.columns else '',
-                    'quality': round(quality, 1)
+                    'quality': round(quality, 1),
+                    'close_position': float(close_position),
                 }
         return None
 

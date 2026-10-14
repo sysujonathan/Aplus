@@ -16,10 +16,6 @@ from core.strategy_registry import StrategyRegistry
 from .store import ROOT, digest, dumps, now
 
 
-MTR_SIGNAL_CLOSE_POSITION_MIN = 0.95
-MTR_SIGNAL_QUALITY_GATE = 'aplus-mtr-signal-close-top-5pct-v1'
-
-
 def verify_frozen():
     manifest = json.loads((ROOT / 'frozen_manifest.json').read_text(encoding='utf-8'))
     errors = []
@@ -184,14 +180,6 @@ def _number(value):
         return None
 
 
-def _mtr_signal_close_position(row):
-    """Return the signal bar close position within its full high-low range."""
-    high, low, close = (_number(row.get(name)) for name in ('high', 'low', 'close'))
-    if high is None or low is None or close is None or high <= low:
-        return None
-    return (close - low) / (high - low)
-
-
 def _setup_date(instance, df, meta):
     last = df.iloc[-1]
     idx = _number(last.get('mtr_signal_bar_idx'))
@@ -236,18 +224,6 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
     flag = row[meta.get('active_signal_column') or meta['signal_column']]
     if pd.isna(flag) or not bool(flag):
         return None
-    quality_gate = None
-    if spec.id == 'MTR_MASTER':
-        close_position = _mtr_signal_close_position(row)
-        if (close_position is None
-                or close_position + np.finfo(float).eps < MTR_SIGNAL_CLOSE_POSITION_MIN):
-            return None
-        quality_gate = {
-            'id': MTR_SIGNAL_QUALITY_GATE,
-            'label': 'Aplus额外筛选：信号K收盘位于整根K线顶部5%',
-            'close_position': close_position,
-            'minimum': MTR_SIGNAL_CLOSE_POSITION_MIN,
-        }
     def price(kind):
         return _number(row.get(meta.get('active_' + kind + '_column') or meta.get(kind + '_column', '')))
     entry, stop = price('entry'), price('sl')
@@ -267,8 +243,16 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
     payload = {'asof':str(row.date), 'setup_date':_setup_date(instance,df,meta),
                'entry':entry,'stop':stop,'target':target,'score':score,'rating':rating,
                'close':float(row.close), 'warning':warning}
-    if quality_gate is not None:
-        payload['quality_gate'] = quality_gate
+    close_position_column = meta.get('signal_close_position_column')
+    close_position_minimum = _number(meta.get('signal_close_position_min'))
+    close_position = _number(row.get(close_position_column, '')) if close_position_column else None
+    if close_position is not None and close_position_minimum is not None:
+        payload['signal_quality_rule'] = {
+            'label': 'MTR规则：信号K为光头阳线',
+            'close_position': close_position,
+            'minimum': close_position_minimum,
+            'strategy_revision': meta.get('strategy_revision'),
+        }
     return payload
 
 
@@ -276,12 +260,8 @@ def scan_engine_version():
     """Fingerprint only code that can change a scan result."""
     from .market import weekly_bars
     functions = [prepare, prepare_indicators, calculate_prepared, calculate, signal_at_end,
-                 _number, _mtr_signal_close_position, _setup_date, weekly_bars]
+                 _number, _setup_date, weekly_bars]
     semantic = '\n'.join(inspect.getsource(func) for func in functions).encode()
-    semantic += dumps({
-        'mtr_signal_close_position_min': MTR_SIGNAL_CLOSE_POSITION_MIN,
-        'mtr_signal_quality_gate': MTR_SIGNAL_QUALITY_GATE,
-    }).encode()
     semantic += b''.join((ROOT/'workbench'/name).read_bytes()
                          for name in ['h2_plan.py','prices.py'])
     return digest(semantic + verify_frozen().encode())

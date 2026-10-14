@@ -126,7 +126,7 @@ def test_info_panel_restores_plan_quality_rating_and_hit_factors():
         "entry": 10,
         "stop": 9,
         "target": 12,
-        "quality_gate": {"close_position": .96, "minimum": .95},
+        "signal_quality_rule": {"close_position": 1., "minimum": 1.},
         "rating": {
             "score": 76,
             "factors": [
@@ -144,7 +144,7 @@ def test_info_panel_restores_plan_quality_rating_and_hit_factors():
     )
 
     assert "Entry 10.00 · SL 9.00 · TP1 12.00 · (2.00R)" in lines
-    assert "信号K收盘位置 96%（门槛≥95%）" in lines[1]
+    assert "信号K收盘位置 100%（门槛≥100%）" in lines[1]
     assert "Quality 0.75" in lines[1]
     assert "PB bars 4" in lines[1]
     assert "Rating 76" in lines[1]

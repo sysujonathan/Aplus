@@ -1,6 +1,14 @@
 {
   "source": "https://github.com/lhy438769415-wq/A",
   "commit": "6bc1b9e1800d1523118fc862f3791edb8e7faa0f",
+  "approved_strategy_updates": [
+    {
+      "date": "2026-10-14",
+      "strategy": "MTR_MASTER",
+      "revision": "V36.3",
+      "reason": "User-approved bullish signal bar whose close equals its high"
+    }
+  ],
   "files": [
     {
       "path": "core/__init__.py",
@@ -68,11 +76,11 @@
     },
     {
       "path": "core/strategies/mtr_strategy.py",
-      "sha256": "6d4335b15ef9865e32bd99186e66c5a688b0a8b915c3e5b50aae94c2e8a1a184"
+      "sha256": "68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a"
     },
     {
       "path": "core/strategies/mtr_structural_v35.py",
-      "sha256": "32b88d4ba919fbab86ee8a55b9efed13345538b10c2bb664c657ca13d9402c38"
+      "sha256": "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e"
     },
     {
       "path": "core/strategies/structural_gap_strategy.py",

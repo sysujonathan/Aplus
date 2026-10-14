@@ -36,7 +36,7 @@ class MTRStrategy(BaseStrategy):
 
     @property
     def description(self) -> str:
-        return "MTR V35.0 5-Point Structural Sequence (Fibonacci Strict)"
+        return "MTR V36.3 Structural Sequence (Bullish Marubozu Signal Bar)"
 
     @property
     def signal_column(self) -> str:
@@ -55,6 +55,9 @@ class MTRStrategy(BaseStrategy):
             'tp_columns': ['tp1_price', 'tp2_price'],
             'score_column': 'mtr_score',
             'signal_column': 'signal_mtr',
+            'signal_close_position_column': 'mtr_signal_close_position',
+            'signal_close_position_min': MTRStructuralEngineV35.SIGNAL_CLOSE_POSITION_MIN,
+            'strategy_revision': 'V36.3',
             'supported_timeframes': ['daily'],
             'tp_multiplier': 2.0,
             'ai_audit': False,
@@ -262,6 +265,7 @@ class MTRStrategy(BaseStrategy):
         df['mtr_signal_bar_idx'] = np.nan
         df['mtr_entry_price'] = np.nan
         df['mtr_signal_bar_quality'] = np.nan
+        df['mtr_signal_close_position'] = np.nan
         
         # 4. 跳级扫描 (仅在摆动点确认位置运行)
         swing_check_indices = set([s.index for s in swings] + [s.index + 5 for s in swings])
@@ -298,6 +302,7 @@ class MTRStrategy(BaseStrategy):
                         df.at[df.index[i], 'mtr_signal_bar_idx'] = sb_idx
                         df.at[df.index[i], 'mtr_entry_price'] = signal_bar['high']
                         df.at[df.index[i], 'mtr_signal_bar_quality'] = signal_bar.get('quality', 0)
+                        df.at[df.index[i], 'mtr_signal_close_position'] = signal_bar.get('close_position', np.nan)
 
                         # 🟢 [Bugfix] 把信号信息同步写到信号K线位置，因为下游
                         #    run_scanner_all/绘图/归档读取的是 signal_mtr=True 的那一行。
@@ -305,6 +310,8 @@ class MTRStrategy(BaseStrategy):
                         df.at[df.index[sb_idx], 'mtr_score'] = res['score']
                         df.at[df.index[sb_idx], 'mtr_stage'] = res['stage']
                         df.at[df.index[sb_idx], 'mtr_entry_price'] = signal_bar['high']
+                        df.at[df.index[sb_idx], 'mtr_signal_bar_quality'] = signal_bar.get('quality', 0)
+                        df.at[df.index[sb_idx], 'mtr_signal_close_position'] = signal_bar.get('close_position', np.nan)
                         # 结构价格也复制到信号K线，供下游计算 SL/TP 与绘图标注
                         for name, pt in res['points'].items():
                             if pt:
