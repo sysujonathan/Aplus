@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 import time
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -178,6 +179,12 @@ class ToolBar(ttk.Frame):
         self._auto_sync_elapsed = None
         self._sync_elapsed = None
         self._scan_elapsed = None
+        self._async_status_mode = False
+        self._source_pending = False
+        self._source_reader = self._status_reader = None
+        self._status_context = self._status_snapshot = None
+        self._source_poll = self._status_poll = None
+        self._premarket_progress = {}
         self._mkt_var = tk.StringVar(value="行情：连接中…")  # 行情健康状态（常驻，只读）
         self._header_data_var = tk.StringVar(value="行情 连接中… · 信号 连接中…")
         self._timing_var = tk.StringVar(value=format_task_timings())
@@ -457,6 +464,12 @@ class ToolBar(ttk.Frame):
         self._layout_traces = []
         for tip in self._status_tips:
             tip.leave()
+        for reader in (self._source_reader, self._status_reader):
+            if reader:
+                reader.close()
+        for poll in (self._source_poll, self._status_poll):
+            if poll:
+                self.after_cancel(poll)
 
     def _status_required_width(self):
         # A fixed, font-aware minimum for sharing the controls row, not the
@@ -609,6 +622,8 @@ class ToolBar(ttk.Frame):
 
     # ---- 周期切换 ----
     def _fire_tf(self):
+        if self._source_pending:
+            return
         self._load_date_options()
         self._select_latest_date()
         self._load_market_status()
@@ -745,6 +760,8 @@ class ToolBar(ttk.Frame):
         self._fire_date()
 
     def _fire_date(self):
+        if self._source_pending:
+            return
         y = self.year_var.get()
         m = self.month_var.get()
         d = self.day_var.get()
@@ -756,12 +773,15 @@ class ToolBar(ttk.Frame):
         self._load_market_status()
 
     # ---- 行情健康状态（常驻，只读现有表）----
-    def _load_market_status(self):
+    def _load_market_status(self, force=False):
         if self.store is None:
             self._mkt_var.set("行情：未连接")
             self._header_data_var.set("行情 无 — · 信号 无 — · 范围待核验")
             return self._mkt_var.get()
         from .data import latest_market_date, latest_scan_date
+
+        if self._async_status_mode or self._job_kind == '一键盘前':
+            return self._load_status_async(force)
 
         market = latest_market_date(self.store, self._tf_var.get())
         signal = latest_scan_date(self.store, self._tf_var.get())
@@ -771,15 +791,18 @@ class ToolBar(ttk.Frame):
             from workbench.readiness import audit_scope
 
             audit = audit_scope(self.store, boards, self._integrity_asof(), timeframe=self._tf_var.get(),history_cache_only=True)
-            readiness = format_scope_readiness(boards, audit)
         except Exception:
-            readiness = format_scope_readiness(boards, {})
+            audit = {}
+        return self._render_market_status(market, signal, boards, audit)
+
+    def _render_market_status(self, market, signal, boards, audit, pending=None):
+        readiness = format_scope_readiness(boards, audit)
         text = format_data_chain_status(market, signal, readiness)
         self._tickflow_audit = audit
         if hasattr(self,'btn_integrity'):
             if market_source(self.store) in SOURCES:
                 from workbench.gap_review import pending_count
-                count=pending_count(self.store,audit,self._tf_var.get()) if audit.get('scope_valid') else 0
+                count=(pending if pending is not None else pending_count(self.store,audit,self._tf_var.get())) if audit.get('scope_valid') else 0
                 label=(f'缺口处理 {count}' if count else '缺口分类') if audit.get('scope_valid') else '范围待核验'
                 self.btn_integrity.configure(text=label)
                 self.btn_integrity.pack(side=tk.LEFT,padx=3,after=self.btn_sync)
@@ -790,6 +813,48 @@ class ToolBar(ttk.Frame):
             SOURCES[market_source(self.store)]+' · '+format_header_data_status(market, signal, boards, audit)
         )
         return text
+
+    def _status_key(self):
+        return (market_source(self.store), tuple(self._selected_boards()), self._integrity_asof(), self._tf_var.get())
+
+    def _load_status_async(self, force=False):
+        from .background_status import LatestRefresh, load_status
+        context = self._status_key()
+        if force:
+            self._status_snapshot = None
+        if self._status_snapshot and self._status_snapshot[0] == context:
+            item = self._status_snapshot[1]
+            return self._render_market_status(item['market'], item['signal'], context[1], item['audit'], item['pending'])
+        if self._status_reader is None:
+            root = self.store.root
+            self._status_reader = LatestRefresh(lambda value, check: load_status(root, value, check))
+        if self._status_context != context or force:
+            self._status_context = context
+            self._status_reader.submit(context)
+        self._tickflow_audit = {}
+        text = SOURCES[context[0]]+' · 正在后台核对完整性；可继续查看已保存结果'
+        self._mkt_var.set(text)
+        self._header_data_var.set(text)
+        self.btn_integrity.configure(text='完整性刷新中')
+        if self._status_poll is None:
+            self._status_poll = self.after(50, self._poll_status)
+        return text
+
+    def _poll_status(self):
+        self._status_poll = None
+        reply = self._status_reader.poll()
+        if reply:
+            _, context, item, error = reply
+            self._status_context = None
+            if not self._source_pending and context == self._status_key():
+                if error:
+                    self._header_data_var.set(SOURCES[context[0]]+' · 完整性暂未读出，可稍后重试')
+                    self.btn_integrity.configure(text='完整性待刷新')
+                else:
+                    self._status_snapshot = (context, item)
+                    self._render_market_status(item['market'], item['signal'], context[1], item['audit'], item['pending'])
+            return
+        self._status_poll = self.after(50, self._poll_status)
 
     def _refresh_timing_status(self, running_elapsed=None):
         """刷新右上角计时，不让底部临时消息覆盖已经完成的分项用时。"""
@@ -821,6 +886,9 @@ class ToolBar(ttk.Frame):
         if self.store is None or market_source(self.store) not in SOURCES:
             return
         source=market_source(self.store)
+        if self._source_pending:
+            self.set_status('正在切换来源，请稍后打开缺口分类')
+            return
         from workbench.gap_review import review_receipt
         from workbench.readiness import expected_day
         from workbench.market import completed_date
@@ -845,10 +913,13 @@ class ToolBar(ttk.Frame):
                 codes=codes,timeframe=timeframe,asof=day,retry=retry))
             return bool(self._job_id)
         show_integrity(self,report,repair_selected,store=self.store,on_changed=self._gap_decisions_changed,
-                       on_verify=verify_selected)
+                       on_verify=verify_selected, repair_blocked=self._repair_block_reason)
 
     def _gap_decisions_changed(self):
-        self._load_market_status()
+        self._load_market_status(force=True)
+        if self._async_status_mode:
+            self.set_status('缺口处理已保存，正在后台刷新数量；不改变扫描资格')
+            return
         from workbench.gap_review import pending_count
         audit=self._tickflow_audit
         count=pending_count(self.store,audit,self._tf_var.get())
@@ -867,12 +938,71 @@ class ToolBar(ttk.Frame):
             scan_timeframe=tf,repair_scope='history' if include_history else 'scan'))
         return bool(self._job_id)
 
-    def _source_changed(self,event=None):
+    def _repair_block_reason(self, action='repair'):
+        if self._source_pending:
+            return '正在切换来源，切换完成后可查看补拉条件。'
+        if self._job_id:
+            if self._job_kind == '一键盘前':
+                ended = ('完成','部分完成','未完成','失败','已停止')
+                waiting = '、'.join(SOURCES[s]+' '+item.get('phase','进行中')
+                    for s,item in self._premarket_progress.items() if item.get('phase') not in ended)
+                return (f'本轮仍有 {waiting or "行情或扫描任务"}；'
+                        '三源任务全部结束后才能补拉。可先查看详情，不需要重做已完成结果。')
+            return f'{self._job_kind or "当前任务"}尚未结束；结束后才能补拉或核验缺日。'
+        from workbench.provider_guard import ProviderGuard
+        source = 'baostock' if action == 'verify' else market_source(self.store)
+        try:
+            remaining = ProviderGuard(self.store, source).state().get('until', 0)-time.time()
+        except Exception:
+            return '暂时无法确认访问状态，请稍后重试；未发出补拉请求。'
+        if remaining > 0:
+            return f'{SOURCES[source]}正在访问冷却，约 {int(remaining)+1} 秒后可重试；不要连续请求。'
+        return ''
+
+    def _source_changed(self,event=None, background=True):
         if self.store is None:
             return
         source=next(k for k,v in SOURCES.items() if v==self.source_var.get())
+        self._async_status_mode = True
+        if background:
+            from .background_status import LatestRefresh
+            if self._source_reader is None:
+                store = self.store
+                def save(value, check):
+                    check()
+                    set_market_source(store, value)
+                    return value
+                self._source_reader = LatestRefresh(save)
+            self._source_pending = True
+            self._source_reader.submit(source)
+            self.set_status(f'正在切换到 {SOURCES[source]}；当前图仍为原来源，后台任务继续')
+            self._header_data_var.set(f'正在切换到 {SOURCES[source]} · 当前图仍为原来源')
+            if self._source_poll is None:
+                self._source_poll = self.after(50, self._poll_source)
+            return
         try:
             set_market_source(self.store,source)
+            self._apply_source(source)
+        except Exception as exc:
+            self.source_var.set(SOURCES[market_source(self.store)])
+            self.set_status(str(exc))
+
+    def _poll_source(self):
+        self._source_poll = None
+        reply = self._source_reader.poll()
+        if reply is None:
+            self._source_poll = self.after(50, self._poll_source)
+            return
+        _, source, _, error = reply
+        self._source_pending = False
+        if error:
+            self.source_var.set(SOURCES[market_source(self.store)])
+            self.set_status(str(error))
+            return
+        self._apply_source(source)
+
+    def _apply_source(self, source):
+        try:
             if not getattr(self, '_auto_sources_saved', None) and hasattr(self, 'auto_source_vars'):
                 for key, variable in self.auto_source_vars.items(): variable.set(key == source)
             self._sync_elapsed = self._scan_elapsed = None
@@ -881,7 +1011,6 @@ class ToolBar(ttk.Frame):
             # variables leaves the Combobox inventories on the previous source.
             self._load_date_options()
             self._select_latest_date()
-            self._load_market_status()
             self._fire_date()
             risk='；不复权，跨除权扫描／回测受影响' if source=='tencent' else ''
             self.set_status(f'日 K 来源已切换为 {SOURCES[source]}；独立缓存，旧快照与旧回测保留'+risk)
@@ -891,6 +1020,9 @@ class ToolBar(ttk.Frame):
 
     def _on_auto(self):
         """先更新行情，成功后自动用同一范围执行策略扫描。"""
+        if self._source_pending:
+            self.set_status('正在切换来源，请切换完成后再开始一键盘前')
+            return
         if self._job_id:
             self.set_status(f"已有{self._job_kind}运行中，请等待或终止后再试")
             return
@@ -909,7 +1041,7 @@ class ToolBar(ttk.Frame):
         save_boards(self.store, boards)
         if market_source(self.store) not in sources:
             self.source_var.set(SOURCES[sources[0]])
-            self._source_changed()
+            self._source_changed(background=False)
         self._auto_chain_cancelled = False
         self._auto_scan_after_sync = False
         self._sync_elapsed = None
@@ -931,6 +1063,9 @@ class ToolBar(ttk.Frame):
         self.set_status('一键盘前来源：' + '、'.join(SOURCES[s] for s in sources))
 
     def _on_sync(self, chained=False):
+        if self._source_pending:
+            self.set_status('正在切换来源，请切换完成后再更新行情')
+            return
         if not chained:
             self._auto_scan_after_sync = False
         if self.service is None:
@@ -960,6 +1095,9 @@ class ToolBar(ttk.Frame):
         self._submit_job("sync", "更新行情", spec)
 
     def _on_scan(self):
+        if self._source_pending:
+            self.set_status('正在切换来源，请切换完成后再扫描')
+            return
         self._auto_scan_after_sync = False
         if self.service is None:
             self.set_status("后端未连接：扫描需接 service")
@@ -995,6 +1133,12 @@ class ToolBar(ttk.Frame):
         self._submit_job("scan", "扫描策略", spec)
 
     def _submit_job(self, kind, label, spec):
+        if getattr(self, '_source_pending', False) is True:
+            self.set_status('正在切换数据源，请切换完成后再提交任务')
+            return
+        if kind == 'premarket':
+            self._async_status_mode = True
+            self._premarket_progress = {}
         """提交任务并启动轮询。service 的互斥拒绝（已有任务）在这里转成人话。"""
         try:
             job = self.service.submit(kind, spec)
@@ -1058,6 +1202,16 @@ class ToolBar(ttk.Frame):
             self._finish_job("failed", "任务记录丢失")
             return
         j = rows[0]
+        if self._job_kind == '一键盘前':
+            previous = self._premarket_progress
+            try:
+                self._premarket_progress = json.loads(j.get('result') or '{}').get('sources', {})
+            except (ValueError, TypeError):
+                self._premarket_progress = {}
+            source = market_source(self.store)
+            phase = self._premarket_progress.get(source, {}).get('phase')
+            if phase in ('完成','部分完成','未完成','失败','已停止') and phase != previous.get(source, {}).get('phase'):
+                self._load_market_status(force=True)
         status = j["status"]
         if status in ("queued", "running"):
             prog, total = j["progress"] or 0, j["total"] or 0
@@ -1193,7 +1347,7 @@ class ToolBar(ttk.Frame):
             self._auto_started_at = None
             self._auto_sync_elapsed = None
         self._refresh_timing_status()
-        self._load_market_status()
+        self._load_market_status(force=True)
         if status == "completed" and kind in {"更新行情", "扫描策略"}:
             text += "；" + self.data_chain_summary()
         self.set_status(text)

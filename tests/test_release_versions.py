@@ -41,7 +41,8 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[40]['commit'] == '61959b04c97dabe442af134be8993d19604a8cc9'
     assert by_pr[41]['status'] == 'released'
     assert by_pr[41]['commit'] == '3ef30d8a019c8e0f618f202c686d1852e2097101'
-    assert by_pr[42]['status'] == 'preview'
+    assert by_pr[42]['status'] == 'released'
+    assert by_pr[42]['commit'] == 'c8993064e5f5a2f05a54dc1c66f007878d56b7b7'
     assert by_pr[43]['status'] == 'preview'
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
@@ -64,7 +65,7 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.14.40-preview' not in text
     assert 'v2026.10.14.40' in text
     assert 'v2026.10.14.41-preview' not in text
-    assert 'v2026.10.14.42-preview' in text
+    assert 'v2026.10.14.42-preview' not in text
     assert 'v2026.10.14.43-preview' in text
 
 

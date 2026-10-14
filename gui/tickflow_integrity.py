@@ -7,7 +7,7 @@ from workbench.gap_review import (GROUPS, STATES, classify_review, review_summar
                                  review_selection, repair_selection, review_evidence, status_review_selection)
 
 
-def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_verify=None):
+def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_verify=None, repair_blocked=None):
     from workbench.sources import SOURCES
     window = ttk.Toplevel(parent)
     window.title(SOURCES.get(report.get('source'), '行情')+' 缺口分类处理')
@@ -37,6 +37,9 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_ve
     ttk.Checkbutton(controls, text='显示更早历史（不影响当前扫描）', variable=include_history).pack(anchor=tk.W)
     help_label = ttk.Label(controls, text='选择分类或股票后处理；具体缺日和证据在详情中查看。', wraplength=890, justify=tk.LEFT)
     help_label.pack(fill=tk.X, pady=5)
+    blocked_text = tk.StringVar()
+    blocked_label = ttk.Label(controls, textvariable=blocked_text, wraplength=890, justify=tk.LEFT)
+    blocked_label.pack(fill=tk.X, pady=(0, 5))
     buttons = ttk.Frame(controls); buttons.pack(fill=tk.X)
     evidence = review_evidence(store, report['asof'], report['source']) if store else {}
     memory, state = {}, {}
@@ -51,14 +54,17 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_ve
         return review_selection(state['review'], selections())
 
     def selection_changed(*_):
+        reason = repair_blocked('repair') if repair_blocked else ''
+        verify_reason = repair_blocked('verify') if repair_blocked else ''
+        blocked_text.set('\n'.join(dict.fromkeys(r for r in (reason,verify_reason) if r)))
         codes = repair_selection(state['review'], selections())
         repair_button.configure(text=f'继续补拉（{len(codes)} 只）')
-        repair_button.state(['!disabled'] if codes else ['disabled'])
+        repair_button.state(['!disabled'] if codes and not reason else ['disabled'])
         for button in (ignore_button, pending_button, details_button):
             button.state(['!disabled'] if rows_selected() else ['disabled'])
         codes = status_review_selection(state['review'], selections())
         verify_button.configure(text=f'核验缺日（{len(codes)} 只）')
-        verify_button.state(['!disabled'] if codes and on_verify else ['disabled'])
+        verify_button.state(['!disabled'] if codes and on_verify and not verify_reason else ['disabled'])
 
     def refresh(*_):
         old = list(tree.selection())
@@ -109,6 +115,11 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_ve
         ttk.Button(dialog, text='关闭', command=dialog.destroy).pack(pady=(0, 10))
 
     def repair():
+        reason = repair_blocked('repair') if repair_blocked else ''
+        if reason:
+            blocked_text.set(reason)
+            selection_changed()
+            return
         selected = rows_selected(); codes = repair_selection(state['review'], selections())
         if not codes: return
         issues = [r for r in selected if r['code'] in codes and r['repairable'] and r['state'] != 'ignored']
@@ -132,6 +143,11 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_ve
     retry_status = tk.BooleanVar(value=False)
     ttk.Checkbutton(verify_controls, text='重查上次未返回明确状态的缺日', variable=retry_status).pack(side=tk.LEFT)
     def verify():
+        reason = repair_blocked('verify') if repair_blocked else ''
+        if reason:
+            blocked_text.set(reason)
+            selection_changed()
+            return
         codes = status_review_selection(state['review'], selections())
         if not codes or not on_verify: return
         if not messagebox.askyesno('核验缺日',
@@ -149,13 +165,21 @@ def show_integrity(parent, report, on_repair, store=None, on_changed=None, on_ve
     tree.bind('<Double-1>', lambda _: details() if rows_selected() and not str(tree.focus()).startswith('group:') else None)
     traces = [(var, var.trace_add('write', refresh)) for var in (include_history, period)]
     refresh()
+    refresh_timer = [None]
+    def availability():
+        selection_changed()
+        refresh_timer[0] = window.after(800, availability)
+    if repair_blocked:
+        refresh_timer[0] = window.after(800, availability)
 
     def resized(event):
         if event.widget is window:
-            for label in (summary_label, footer, help_label): label.configure(wraplength=max(1, event.width-32))
+            for label in (summary_label, footer, help_label, blocked_label): label.configure(wraplength=max(1, event.width-32))
 
     def destroyed(event):
         if event.widget is window:
+            if refresh_timer[0]:
+                window.after_cancel(refresh_timer[0])
             for var, trace in traces: var.trace_remove('write', trace)
             traces.clear()
 

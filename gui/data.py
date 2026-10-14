@@ -298,6 +298,8 @@ def _build_asof_pattern(asof_filter):
 
 def load_observation_candles(store, observation_id):
     """取某观察对应的行情帧与 payload。返回 (frame, record, payload)；无则 (None, None, None)。"""
+    from .background_status import display_store
+    store = display_store(store)
     obs = store.rows("SELECT * FROM observations WHERE id=?", (observation_id,))
     if not obs:
         return None, None, None

@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 
 import pytest
 
@@ -16,16 +17,17 @@ def multi_spec():
                 strategies=['STRATEGY_3K'], timeframe='daily', start='2024-01-01')
 
 
-def test_sources_download_independently_and_fast_source_scans_before_slow_finishes(store, monkeypatch):
-    slow_started, fast_scanned = threading.Event(), threading.Event()
+@pytest.mark.parametrize('checkpoint_delay', [0, 3.5])
+def test_sources_download_independently_and_fast_source_scans_before_slow_finishes(store, monkeypatch, checkpoint_delay):
+    slow_started, fast_scanned, release_slow = threading.Event(), threading.Event(), threading.Event()
     calls = []
     def sync(self, job, spec):
         calls.append(('sync', spec['source'], spec['end']))
         if spec['source'] == 'baostock':
             slow_started.set()
-            assert fast_scanned.wait(3), '快源扫描被慢源网络阻塞'
+            assert release_slow.wait(20), '测试未释放慢源'
         else:
-            assert slow_started.wait(3)
+            assert slow_started.wait(20)
         self.progress(job, 1, 1, '已更新')
         return dict(source=spec['source'], success=1)
     def scan(self, job, spec):
@@ -34,13 +36,23 @@ def test_sources_download_independently_and_fast_source_scans_before_slow_finish
         set_market_source(self.store, 'tencent')
         assert market_source(self.store)=='tencent'
         self.progress(job, 1, 1, '已扫描')
-        if spec['source'] != 'baostock': fast_scanned.set()
+        if spec['source'] != 'baostock' and not fast_scanned.is_set():
+            # Assert ordering, not a three-second CI disk/scheduling budget.
+            # A sequential implementation cannot reach this point until the
+            # test releases the slow vendor, and will still fail deterministically.
+            assert slow_started.is_set() and not release_slow.is_set()
+            time.sleep(checkpoint_delay)
+            assert not release_slow.is_set()
+            fast_scanned.set()
         return dict(asof=spec['asof'], success=1, signals=1)
     monkeypatch.setattr(Service, '_sync', sync)
     monkeypatch.setattr(Service, '_scan', scan)
     service = Service(store)
     try:
-        row = wait_for(store, service.submit('premarket', multi_spec()))
+        job = service.submit('premarket', multi_spec())
+        assert fast_scanned.wait(20), '快源扫描被尚未释放的慢源阻塞'
+        release_slow.set()
+        row = wait_for(store, job)
         assert row['status']=='completed', row['result']
         result = json.loads(row['result'])
         assert set(result['sources']) == {'baostock','tickflow','tencent'}
@@ -50,6 +62,7 @@ def test_sources_download_independently_and_fast_source_scans_before_slow_finish
         assert all(r['progress']==r['total']==1 for r in store.rows(
             "SELECT progress,total FROM jobs WHERE kind IN ('sync','scan')"))
     finally:
+        release_slow.set()
         service.pool.shutdown()
 
 
