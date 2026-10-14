@@ -240,9 +240,20 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
             rating = obj.to_dict() if obj is not None else None
         except Exception as exc:
             warning += f' 评级失败：{exc}'
-    return {'asof':str(row.date), 'setup_date':_setup_date(instance,df,meta),
-            'entry':entry,'stop':stop,'target':target,'score':score,'rating':rating,
-            'close':float(row.close), 'warning':warning}
+    payload = {'asof':str(row.date), 'setup_date':_setup_date(instance,df,meta),
+               'entry':entry,'stop':stop,'target':target,'score':score,'rating':rating,
+               'close':float(row.close), 'warning':warning}
+    close_position_column = meta.get('signal_close_position_column')
+    close_position_minimum = _number(meta.get('signal_close_position_min'))
+    close_position = _number(row.get(close_position_column, '')) if close_position_column else None
+    if close_position is not None and close_position_minimum is not None:
+        payload['signal_quality_rule'] = {
+            'label': 'MTR规则：信号K为光头阳线',
+            'close_position': close_position,
+            'minimum': close_position_minimum,
+            'strategy_revision': meta.get('strategy_revision'),
+        }
+    return payload
 
 
 def scan_engine_version():
