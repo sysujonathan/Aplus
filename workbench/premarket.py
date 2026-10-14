@@ -1,0 +1,118 @@
+"""Independent vendor downloads, bounded local scans and durable child receipts."""
+import copy
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+
+from .market import BOARDS, board_of, completed_date, latest_datasets
+from .provider_guard import ProviderError, ProviderGuard, error_detail
+from .sources import SOURCES
+from .store import Store, dumps, now
+
+
+def validate_spec(spec):
+    sources = spec.get('sources', [])
+    if not sources or len(sources) != len(set(sources)) or any(s not in SOURCES for s in sources):
+        raise ValueError('请至少选择一个有效数据源，不能重复')
+    if not spec.get('boards') or any(b not in BOARDS for b in spec['boards']):
+        raise ValueError('请选择有效板块')
+    if not spec.get('strategies') or spec.get('timeframe') not in ('daily', 'weekly'):
+        raise ValueError('请选择策略与日线／周线周期')
+
+
+def run_premarket(service, job, spec):
+    validate_spec(spec)
+    end = min(spec.get('end') or completed_date(), completed_date())
+    stop = service.cancel_flags[job]
+    report = dict(sources={}, asof=end, complete=False, errors=[])
+    notice_lock, scan_lock = threading.Lock(), threading.Lock()
+    last_notice = [0.0]
+
+    def notice(source, phase, done=0, total=0, message='', force=False):
+        with notice_lock:
+            item = report['sources'].setdefault(source, {})
+            item.update(phase=phase, progress=done, total=total, message=message)
+            stamp = time.monotonic()
+            if force or stamp - last_notice[0] >= .5:
+                last_notice[0] = stamp
+                text = ' · '.join(f'{SOURCES[s]} {i["phase"]} {i.get("progress",0)}/{i.get("total",0)}'
+                                  + ('（逐股回退）' if '整日回退逐股' in i.get('message','') else '')
+                                  + (f'：{i.get("message", "")[:30]}' if i['phase']=='失败' else '')
+                                  for s, i in report['sources'].items())
+                service.progress(job, sum(i['phase'] in ('完成','部分完成','未完成','失败','已停止')
+                                          for i in report['sources'].values()), len(spec['sources']), text)
+                service.store.execute('UPDATE jobs SET result=? WHERE id=?', (dumps(report), job))
+
+    # Separate Store caches per source; same durable database and file lock.
+    stores = {}
+    for source in spec['sources']:
+        child_store = Store(service.store.root)
+        child_store._files_lock = service.store._files_lock
+        stores[source] = child_store
+        notice(source, '等待', force=True)
+
+    def work(source):
+        proxy = copy.copy(service)
+        proxy.store = stores[source]
+        receipt = report['sources'][source]
+
+        def stage(kind, stage_spec, phase):
+            child = uuid.uuid4().hex[:16]
+            proxy.cancel_flags = {child: stop}
+            proxy.progress = lambda _job, done, total, msg: notice(source, phase, done, total, msg)
+            proxy.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
+                                (child, kind, 'running', now(), dumps(stage_spec)))
+            proxy.store.event(child, '一键盘前子任务', parent=job, source=source)
+            with notice_lock:
+                receipt[kind+'_job'] = child
+            started = time.monotonic()
+            try:
+                proxy.check_stop(child)
+                result = getattr(proxy, '_'+kind)(child, stage_spec)
+                status = 'partial' if result.get('errors') or result.get('complete') is False else 'completed'
+                if stop.is_set(): status = 'cancelled'
+                message = result.get('stop_reason', '完成')
+            except InterruptedError as exc:
+                result, status, message = {}, 'cancelled', str(exc)
+            except Exception as exc:
+                detail = error_detail(exc, source)
+                if kind == 'sync' and isinstance(exc, (ProviderError, TimeoutError)):
+                    detail['cooldown'] = getattr(exc, '_provider_guard_state', None) or ProviderGuard(proxy.store,source).failure(exc)
+                result, status, message = {'errors':[detail]}, 'failed', str(exc)
+            elapsed = time.monotonic() - started
+            proxy.store.execute('UPDATE jobs SET status=?,finished=?,message=?,result=? WHERE id=?',
+                                (status, now(), message, dumps(result), child))
+            with notice_lock:
+                receipt[kind+'_seconds'] = elapsed
+                receipt[kind+'_status'] = status
+                receipt[kind+'_result'] = {k: result[k] for k in ('asof','success','signals','reused','calculated','daily_batch','batch_fallback_reason') if k in result}
+            return result, status, message
+
+        sync_spec = dict(source=source, boards=list(spec['boards']), start=spec['start'],
+                         end=end, force=False, scan_timeframe=spec['timeframe'])
+        result, status, message = stage('sync', sync_spec, '更新')
+        if status in ('failed','cancelled'):
+            notice(source, '失败' if status=='failed' else '已停止', message=message, force=True)
+            return
+        notice(source, '等待扫描', force=True)
+        # A slow vendor never holds this lock while waiting on its network.
+        with scan_lock:
+            if stop.is_set():
+                notice(source, '已停止', force=True)
+                return
+            ids = [r['id'] for r in latest_datasets(proxy.store,source)
+                   if r['timeframe']=='daily' and board_of(r['code']) in spec['boards']]
+            result, status, message = stage('scan', dict(source=source, boards=list(spec['boards']),
+                datasets=ids, strategies=list(spec['strategies']), timeframes=[spec['timeframe']], asof=end), '扫描')
+        notice(source, '完成' if status=='completed' else '部分完成' if status=='partial' else '已停止' if status=='cancelled' else '未完成',
+               message=message, force=True)
+
+    with ThreadPoolExecutor(max_workers=len(spec['sources']), thread_name_prefix='premarket-source') as pool:
+        futures = [pool.submit(work, s) for s in spec['sources']]
+        for future in futures:
+            future.result()
+    report['complete'] = all(i.get('scan_status') == 'completed' for i in report['sources'].values())
+    report['errors'] = [dict(source=s, error=i.get('message','未完成')) for s,i in report['sources'].items()
+                        if i.get('scan_status') != 'completed']
+    return report
