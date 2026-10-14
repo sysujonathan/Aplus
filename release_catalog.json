@@ -490,12 +490,13 @@
       "pr": 40,
       "version": "2026.10.14.40",
       "date": "2026-10-14",
-      "status": "preview",
+      "status": "released",
       "title": "修正BaoStock整日行情范围校验",
       "notes": [
         "整日行情先核验代码与日期，再筛选Aplus支持的板块；范围外证券不再导致整批退回逐股下载。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/40"
+      "url": "https://github.com/sysujonathan/Aplus/pull/40",
+      "commit": "61959b04c97dabe442af134be8993d19604a8cc9"
     },
     {
       "pr": 41,
