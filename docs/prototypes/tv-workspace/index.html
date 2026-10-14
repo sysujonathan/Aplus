@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A+ 图表工作台高保真原型</title>
+  <link rel="stylesheet" href="prototype.css">
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true">
+    <symbol id="i-cross" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8" opacity=".35"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M5 18 19 6"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/></symbol>
+    <symbol id="i-fib" viewBox="0 0 24 24"><path d="M3 6h18M3 10h12M3 14h16M3 18h9"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="10" r="1"/><circle cx="3" cy="14" r="1"/><circle cx="3" cy="18" r="1"/></symbol>
+    <symbol id="i-path" viewBox="0 0 24 24"><path d="M4 18c4-9 7 0 11-8 1-2 3-3 5-4"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="6" r="1.5"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M9 19h6"/></symbol>
+    <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 10h.01M16 10h.01M8 14c2 3 6 3 8 0"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24"><path d="m5 19-2-2L17 3l4 4L7 21l-2-2Z"/><path d="m13 7 2 2m-5 1 2 2m-5 1 2 2"/></symbol>
+    <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M10 7v6M7 10h6"/></symbol>
+    <symbol id="i-magnet" viewBox="0 0 24 24"><path d="M5 4v9a7 7 0 0 0 14 0V4h-5v9a2 2 0 0 1-4 0V4H5Z"/><path d="M5 8h5m4 0h5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14"/></symbol>
+    <symbol id="i-candle" viewBox="0 0 24 24"><path d="M7 3v4m0 8v6m-3-14h6v8H4V7Zm13-4v7m0 8v3m-3-11h6v8h-6v-8Z"/></symbol>
+    <symbol id="i-indicator" viewBox="0 0 24 24"><path d="M3 17h3v4H3v-4Zm6-7h3v11H9V10Zm6 3h3v8h-3v-8Zm-12 1 6-7 5 3 7-7"/></symbol>
+    <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-alarm" viewBox="0 0 24 24"><circle cx="11" cy="13" r="7"/><path d="M11 9v4l3 2M5 3 2 6m15-3 3 3M19 14v7m-3-3h6"/></symbol>
+    <symbol id="i-replay" viewBox="0 0 24 24"><path d="M5 5v14m14-14-9 7 9 7V5Z"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5m4-5h-8a6 6 0 0 0-6 6"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h4l2-3h4l2 3h4v13H4V7Z"/><circle cx="12" cy="13" r="4"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM15 4v16"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 3 14 5l3-.3.8 2.9L20 9v3l-2.2 1.4-.8 2.9-3-.3-2 2-2-2-3 .3-.8-2.9L4 12V9l2.2-1.4L7 4.7l3 .3 2-2Z"/><circle cx="12" cy="10.5" r="3"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></symbol>
+  </svg>
+
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark" title="A+ 交易工作台">A+</div>
+      <button class="symbol-pill"><b>002259</b><span>⌄</span></button>
+      <button class="round-button">＋</button>
+      <span class="divider"></span>
+      <nav class="timeframes" aria-label="时间周期">
+        <button class="disabled" data-unavailable="当前未接入分钟行情">5分</button>
+        <button class="disabled" data-unavailable="当前未接入分钟行情">1小时</button>
+        <button class="disabled" data-unavailable="当前未接入分钟行情">4小时</button>
+        <button class="active" data-timeframe="daily">天</button>
+        <button data-timeframe="weekly">周</button>
+        <button data-timeframe="monthly">月</button>
+        <button aria-label="更多周期">⌄</button>
+      </nav>
+      <span class="divider"></span>
+      <button class="icon-button" title="折线"><svg><use href="#i-trend"/></svg></button>
+      <button class="icon-button active-box" title="K线类型"><svg><use href="#i-candle"/></svg><span class="caret">⌄</span></button>
+      <span class="divider"></span>
+      <button class="icon-label" title="技术指标"><svg><use href="#i-indicator"/></svg><span>指标</span><span class="caret">⌄</span></button>
+      <button class="icon-button" title="图表布局"><svg><use href="#i-layout"/></svg></button>
+      <span class="divider"></span>
+      <button class="icon-button" id="openAlert" title="创建提醒"><svg><use href="#i-alarm"/></svg></button>
+      <button class="icon-button" id="startReplay" title="K线回放"><svg><use href="#i-replay"/></svg></button>
+      <button class="icon-button muted" title="撤销"><svg><use href="#i-undo"/></svg></button>
+      <button class="icon-button muted" title="重做"><svg><use href="#i-redo"/></svg></button>
+      <div class="topbar-spacer"></div>
+      <button class="layout-name">常用 <span>⌄</span></button>
+      <button class="avatar">常</button>
+      <span class="divider"></span>
+      <button class="icon-button" id="snapshot" title="生成快照"><svg><use href="#i-camera"/></svg></button>
+      <button class="icon-button" id="togglePanel" title="侧栏"><svg><use href="#i-panel"/></svg></button>
+    </header>
+
+    <section class="workspace">
+      <aside class="leftbar" aria-label="绘图工具">
+        <button class="tool active" data-tool="cross" title="十字光标"><svg><use href="#i-cross"/></svg></button>
+        <button class="tool" data-tool="trend" title="趋势线"><svg><use href="#i-trend"/></svg><span class="sub">⌄</span></button>
+        <button class="tool" data-tool="fib" title="斐波那契回撤"><svg><use href="#i-fib"/></svg><span class="sub">⌄</span></button>
+        <button class="tool" data-tool="path" title="几何形态"><svg><use href="#i-path"/></svg><span class="sub">⌄</span></button>
+        <button class="tool" data-tool="text" title="文字"><svg><use href="#i-text"/></svg></button>
+        <button class="tool" data-tool="smile" title="图标"><svg><use href="#i-smile"/></svg></button>
+        <span class="tool-divider"></span>
+        <button class="tool" data-tool="ruler" title="测量"><svg><use href="#i-ruler"/></svg></button>
+        <button class="tool" data-tool="zoom" title="放大"><svg><use href="#i-zoom"/></svg></button>
+        <button class="tool magnet on" data-tool="magnet" title="磁铁模式"><svg><use href="#i-magnet"/></svg></button>
+        <button class="tool" data-tool="lock" title="锁定所有图形"><svg><use href="#i-lock"/></svg></button>
+        <button class="tool" id="toggleDrawings" title="隐藏所有图形"><svg><use href="#i-eye"/></svg><span class="sub">⌄</span></button>
+        <span class="left-spacer"></span>
+        <button class="tool" id="removeObjects" title="移除对象"><svg><use href="#i-trash"/></svg></button>
+        <button class="tool"><svg><use href="#i-star"/></svg></button>
+      </aside>
+
+      <section class="chart-column">
+        <div class="instrument-row">
+          <div class="instrument-title"><span class="exchange-dot">深</span><b>升达林业 · 1天 · SZSE</b></div>
+          <span class="status-dot"></span><span class="session">D</span>
+          <div class="ohlc">开=<b id="openValue">4.99</b>&nbsp; 高=<b id="highValue">5.19</b>&nbsp; 低=<b id="lowValue">4.88</b>&nbsp; 收=<b id="closeValue">5.01</b>&nbsp; <b class="positive">+0.12 (+2.45%)</b></div>
+          <div class="currency">CNY⌄</div>
+        </div>
+
+        <div class="chart-wrap" id="chartWrap">
+          <canvas id="chartCanvas"></canvas>
+          <div class="quote-buttons">
+            <div class="quote sell"><b>5.00</b><span>卖出</span></div>
+            <small>0.01</small>
+            <div class="quote buy"><b>5.01</b><span>买入</span></div>
+          </div>
+          <div class="indicator-legend">
+            <div><span>EMA 20 close</span><b class="ema-value">4.32</b><button>⋮</button></div>
+            <div class="disabled-indicator"><span>Bar Count Normal 2</span><span class="hint">5分钟行情接入后可用</span><button>◉̸</button></div>
+          </div>
+
+          <div class="favorite-tools" aria-label="常用绘图工具">
+            <span class="drag-handle">⠿</span>
+            <button data-favorite="fib" title="斐波那契回撤"><svg><use href="#i-fib"/></svg></button>
+            <button data-favorite="long" title="多头仓位"><span class="position-icon">L</span></button>
+            <button data-favorite="ray" title="水平射线"><span class="ray-icon">—•</span></button>
+            <button data-favorite="trend" title="趋势线"><svg><use href="#i-trend"/></svg></button>
+            <button data-favorite="short" title="空头仓位"><span class="position-icon">S</span></button>
+            <button data-favorite="rectangle" title="矩形"><span class="rectangle-icon"></span></button>
+            <button data-favorite="up" title="向上箭头"><span class="arrow-up">⇧</span></button>
+            <button data-favorite="down" title="向下箭头"><span class="arrow-down">⇩</span></button>
+            <button data-favorite="arrow" title="箭头"><span class="diag-arrow">↗</span></button>
+            <button data-favorite="path" title="路径"><svg><use href="#i-path"/></svg></button>
+            <button data-favorite="channel" title="平行通道"><span class="channel-icon">∥</span></button>
+          </div>
+
+          <button class="selected-object" id="selectedObject" title="打开对象设置"><span class="color-swatch"></span><b>2px</b><span>—</span><svg><use href="#i-settings"/></svg><svg><use href="#i-trash"/></svg></button>
+          <div class="chart-crosshair" id="crosshair"><span class="cross-x"></span><span class="cross-y"></span><em id="crossPrice">4.86</em><small id="crossDate">2026-09-30</small></div>
+          <div class="chart-watermark">A+</div>
+          <div class="rangebar">
+            <nav><button>1天</button><button>5天</button><button>1个月</button><button>3个月</button><button>6个月</button><button>YTD</button><button>1年</button><button>5年</button><button>全部</button></nav>
+            <span class="clock">20:38:26 UTC+8</span><button class="adj">ADJ</button>
+          </div>
+          <div class="replaybar" id="replayBar">
+            <button id="exitReplay"><svg><use href="#i-close"/></svg></button><b>K线回放</b><span class="replay-symbol">升达林业 · 1天</span>
+            <button>◀|</button><button>◀</button><button class="play">▶</button><button>▶</button><button>|▶</button>
+            <input id="replaySlider" type="range" min="30" max="71" value="57"><span id="replayDate">2026-09-08</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="right-panel" id="rightPanel">
+        <div class="panel-tabs">
+          <button class="active" data-panel="strategy">策略匹配</button>
+          <button data-panel="watch">自选标的</button>
+          <button class="panel-menu"><svg><use href="#i-more"/></svg></button>
+        </div>
+        <div class="panel-context">
+          <span>GAP H2 · 2026-09-30</span><button>筛选⌄</button>
+        </div>
+        <div class="candidate-list" id="candidateList">
+          <button class="candidate active">
+            <span class="badge sz">深</span><span class="candidate-name"><b>升达林业</b><small>002259 · GH2</small></span>
+            <span class="candidate-price"><b>5.01</b><small class="positive">+2.45%</small></span>
+          </button>
+          <button class="candidate">
+            <span class="badge sh">沪</span><span class="candidate-name"><b>公牛集团</b><small>603195 · GH2</small></span>
+            <span class="candidate-price"><b>39.07</b><small class="positive">+0.08%</small></span>
+          </button>
+          <button class="candidate">
+            <span class="badge sh">沪</span><span class="candidate-name"><b>嘉澳环保</b><small>603822 · GH2</small></span>
+            <span class="candidate-price"><b>48.26</b><small class="negative">−1.21%</small></span>
+          </button>
+        </div>
+        <section class="decision-card">
+          <div class="decision-title"><span>次日挂单机会</span><b>待挂</b></div>
+          <dl><div><dt>Entry</dt><dd>5.20</dd></div><div><dt>SL1</dt><dd>4.56</dd></div><div><dt>MM</dt><dd>5.98</dd></div></dl>
+          <div class="risk-line"><span>风险 12.31%</span><span>收益 1.22R</span></div>
+          <p>策略证据固定为只读；图形、提醒和复盘笔记随标的保存。</p>
+        </section>
+        <div class="object-panel-title"><b>对象树</b><button id="openObject">管理</button></div>
+        <div class="object-tree">
+          <label><input type="checkbox" checked><span class="tree-eye">◉</span><b>策略证据</b><small>只读</small></label>
+          <label><input type="checkbox" checked><span class="tree-eye">◉</span><b>EMA 20</b><small>指标</small></label>
+          <label class="selected"><input type="checkbox" checked><span class="tree-eye">◉</span><b>斐波那契回撤</b><small>已保存</small></label>
+          <label><input type="checkbox" checked><span class="tree-eye">◉</span><b>多头仓位</b><small>已保存</small></label>
+          <label><input type="checkbox" checked><span class="tree-eye">◉</span><b>价格提醒 5.20</b><small>本机</small></label>
+        </div>
+        <footer class="save-state"><span class="saved-dot"></span>所有更改已保存到本机</footer>
+      </aside>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <div class="modal-backdrop" id="modalBackdrop">
+    <section class="modal" id="alertModal">
+      <header><b>创建提醒</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
+      <div class="modal-body">
+        <label>标的<div class="select-row"><span class="badge sz">深</span><b>升达林业 · 002259</b><span>⌄</span></div></label>
+        <label>条件<div class="condition-grid"><button class="active">价格</button><button>EMA 20</button></div></label>
+        <div class="field-row"><label><span>触发方式</span><div class="select-row"><span>向上穿越</span><span>⌄</span></div></label><label><span>价格</span><input value="5.20"></label></div>
+        <label>触发频率<div class="select-row"><span>每根K线仅一次</span><span>⌄</span></div></label>
+        <label>名称<input value="002259 向上穿越 5.20"></label>
+        <div class="notice"><b>本机收盘提醒</b><span>只在新K线收盘后判断；不会补发历史提醒，也不会发送外部消息。</span></div>
+      </div>
+      <footer><button class="secondary close-modal">取消</button><button class="primary" id="createAlert">创建</button></footer>
+    </section>
+
+    <section class="modal object-modal" id="objectModal">
+      <header><b>斐波那契回撤</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
+      <nav class="modal-tabs"><button class="active">样式</button><button>坐标</button><button>可见性</button></nav>
+      <div class="modal-body">
+        <div class="setting-row"><span>线条</span><button class="color-input"><i></i>#2962FF</button><button>2 px⌄</button><button>实线⌄</button></div>
+        <div class="setting-row"><span>背景</span><button class="color-input purple"><i></i>#7B1FA2</button><label class="switch"><input type="checkbox" checked><i></i></label><span>8%</span></div>
+        <div class="levels-table">
+          <label><input type="checkbox" checked><i style="--level:#26a69a"></i><span>0</span></label>
+          <label><input type="checkbox" checked><i style="--level:#787b86"></i><span>0.5</span></label>
+          <label><input type="checkbox" checked><i style="--level:#ab47bc"></i><span>1</span></label>
+        </div>
+        <div class="setting-row"><span>标签</span><label class="switch"><input type="checkbox" checked><i></i></label><span>价格与比例</span></div>
+      </div>
+      <footer><button class="secondary">保存为默认</button><span></span><button class="secondary close-modal">取消</button><button class="primary close-modal">确定</button></footer>
+    </section>
+
+    <section class="modal snapshot-modal" id="snapshotModal">
+      <header><b>生成快照</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
+      <div class="snapshot-preview"><img id="snapshotImage" alt="图表快照预览"></div>
+      <div class="snapshot-options"><label><input type="checkbox" checked>包含图形与策略证据</label><label><input type="checkbox">包含右侧决策栏</label></div>
+      <footer><button class="secondary close-modal">取消</button><button class="primary" id="downloadSnapshot">保存 PNG</button></footer>
+    </section>
+
+    <section class="modal confirm-modal" id="removeModal">
+      <header><b>移除对象</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
+      <div class="modal-body"><p>选择要从当前标的图表移除的内容。策略证据为只读，不会被删除。</p><button class="remove-option">移除所有图形 <small>4 个已保存对象</small></button><button class="remove-option">移除所有指标 <small>EMA 20</small></button><button class="remove-option danger">移除图形与指标</button></div>
+      <footer><button class="secondary close-modal">取消</button></footer>
+    </section>
+  </div>
+
+  <script src="prototype.js"></script>
+</body>
+</html>

@@ -5,6 +5,9 @@ from workbench.h2_plan import STATE_LABELS
 from .theme import ACCENT, ANNOTATION, BORDER, CONTROL_BG, MUTED, STOP, TARGET, TEXT
 
 
+GAP_COLOR = '#2962FF'
+
+
 def draw_h2(ax, plot, plan):
     from matplotlib.patches import Rectangle
 
@@ -57,15 +60,28 @@ def draw_h2(ax, plot, plan):
         mark('H2', trigger_day, trigger_high, TARGET, (0, 30))
     floor, top = plan.get('gap_floor'), plan.get('gap_top')
     if floor is not None:
-        ax.axhline(floor, color=ACCENT, linestyle=':', linewidth=.8, alpha=.65)
+        # Keep the frozen strategy's original gap visual language.  This blue
+        # level belongs to the gap area itself; BO/H1/H2 leaders stay neutral
+        # so they cannot be confused with candle direction.
+        ax.axhline(floor, color=GAP_COLOR, linestyle='-', linewidth=1, alpha=.5)
     if floor is not None and top is not None and top > floor:
         bo = dates.index(plan['bo_date']) if plan.get('bo_date') in dates else 0
         setup = dates.index(plan['h2_setup_date']) if plan.get('h2_setup_date') in dates else 0
         if setup >= bo and plan.get('h2_setup_date', '') >= dates[0]:
-            ax.add_patch(Rectangle((bo - .4, floor), max(setup - bo + .8, .8), top - floor,
-                                   facecolor=ACCENT, edgecolor=ACCENT, alpha=.12))
-            ax.text((bo + setup) / 2, (floor + top) / 2, 'Gap', color=ACCENT,
-                    fontsize=8, ha='center', va='center')
+            ax.add_patch(Rectangle(
+                (bo - .4, floor), max(setup - bo + .8, .8), top - floor,
+                linewidth=1.2, facecolor='none', edgecolor=GAP_COLOR,
+                linestyle='--', alpha=.6,
+            ))
+            ax.text(
+                (bo + setup) / 2, (floor + top) / 2, 'Gap',
+                color=GAP_COLOR, fontsize=9, fontweight='normal',
+                ha='center', va='center',
+                bbox=dict(
+                    boxstyle='square,pad=0.2', facecolor='white',
+                    edgecolor=GAP_COLOR, alpha=.8,
+                ),
+            )
     for gap in plan.get('prior_open_gaps', []):
         if gap['date'] in dates:
             ax.hlines(gap['floor'], dates.index(gap['date']), len(dates) - 1,
