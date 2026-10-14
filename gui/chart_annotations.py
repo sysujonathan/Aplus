@@ -222,6 +222,11 @@ def info_panel_lines(payload, info, frame, open_gap_count=0):
     rating = payload.get("rating") or info.get("rating") or {}
     rating_score = _number(rating.get("score")) if isinstance(rating, dict) else None
     quality_parts = []
+    gate = payload.get("quality_gate") if isinstance(payload.get("quality_gate"), dict) else {}
+    gate_position = _number(gate.get("close_position"))
+    gate_minimum = _number(gate.get("minimum"))
+    if gate_position is not None and gate_minimum is not None:
+        quality_parts.append(f"信号K收盘位置 {gate_position:.0%}（门槛≥{gate_minimum:.0%}）")
     if quality is not None:
         quality_parts.append(f"Quality {quality:.2f}")
     if pb_bars is not None:
