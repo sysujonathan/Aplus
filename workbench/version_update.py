@@ -6,6 +6,8 @@ cannot change the updater halfway through an update.
 from __future__ import annotations
 
 import argparse
+import ast
+import copy
 import ctypes
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -29,8 +31,9 @@ REPOSITORY = "sysujonathan/Aplus"
 REMOTE = f"https://github.com/{REPOSITORY}.git"
 API = f"https://api.github.com/repos/{REPOSITORY}"
 SHA = re.compile(r"^[0-9a-f]{40}$")
+DATA_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROTECTED = {"runtime", "data", ".git", ".venv", "venv", ".workbuddy", "upgrade-backups"}
-MANUAL_FILES = {"workbench/store.py", "frozen_manifest.json", "requirements.txt",
+MANUAL_FILES = {"frozen_manifest.json", "requirements.txt",
                 "requirements-lock.txt", "setup.cmd"}
 PRESERVED_LOCAL_FILES = {"push.cmd"}
 MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
@@ -209,6 +212,88 @@ def _main_can_fast_forward(root, target):
             raise UpdateError("本机main正被其他工作目录使用，请维护者核对。")
 
 
+def compatible_store_extension(before, after):
+    """Static proof for additive Store APIs, not a schema-number-only exemption.
+
+    Never import either revision or open a database. All module initialization,
+    class structure and existing methods must remain semantically identical.
+    The sole existing-method exception is the audited same-directory short
+    atomic temp name; every other statement in that writer stays unchanged.
+    """
+    def clean(node):
+        node = copy.deepcopy(node)
+        for item in ast.walk(node):
+            if isinstance(item, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                if item.body and isinstance(item.body[0], ast.Expr) and isinstance(item.body[0].value, ast.Constant) and isinstance(item.body[0].value.value, str):
+                    item.body.pop(0)
+        return node
+
+    def dump(node):
+        return ast.dump(clean(node), include_attributes=False)
+
+    def split(source):
+        tree = ast.parse(source)
+        classes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Store']
+        if len(classes) != 1:
+            raise ValueError('Store definition missing or ambiguous')
+        cls = classes[0]
+        methods = [n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        if len({n.name for n in methods}) != len(methods) or '__init__' not in {n.name for n in methods}:
+            raise ValueError('Store methods missing or ambiguous')
+        # Retain bases, decorators, class attributes and all top-level code.
+        skeleton = copy.deepcopy(tree)
+        store_node = next(n for n in skeleton.body if isinstance(n, ast.ClassDef) and n.name == 'Store')
+        store_node.body = [n for n in store_node.body if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        return dump(skeleton), {n.name: n for n in methods}
+
+    old_temp = ast.parse('tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")').body[0]
+    new_temp = ast.parse('tmp = path.with_name(".a-" + uuid.uuid4().hex + ".tmp")').body[0]
+
+    def writer(node):
+        node = copy.deepcopy(node)
+        for index, statement in enumerate(node.body):
+            if dump(statement) in (dump(old_temp), dump(new_temp)):
+                node.body[index] = copy.deepcopy(new_temp)
+        return dump(node)
+
+    try:
+        old_structure, old = split(before)
+        new_structure, new = split(after)
+        if old_structure != new_structure or not old.keys() <= new.keys():
+            return False
+        for name, method in old.items():
+            normalize = writer if name == '_write_artifact' else dump
+            if normalize(method) != normalize(new[name]):
+                return False
+        for name in new.keys() - old.keys():
+            if name.startswith('_'):
+                return False  # No new lifecycle/dispatch hooks.
+            method = new[name]
+            if method.decorator_list or method.returns or any(
+                    arg.annotation for arg in (*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs,
+                                              *([method.args.vararg] if method.args.vararg else []),
+                                              *([method.args.kwarg] if method.args.kwarg else []))):
+                return False  # No new class-definition-time execution.
+            for default in (*method.args.defaults, *(v for v in method.args.kw_defaults if v is not None)):
+                try:
+                    ast.literal_eval(default)
+                except (ValueError, TypeError):
+                    return False
+            for node in ast.walk(method):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and re.search(
+                        r'\b(CREATE|ALTER|DROP|ATTACH|DETACH|VACUUM)\b|\bPRAGMA\b|schema_version', node.value, re.I):
+                    return False
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id in {'exec','eval','compile','setattr','delattr','__import__'}:
+                        return False
+                    if isinstance(node.func, ast.Attribute) and node.func.attr in {'execute','executemany','executescript','rows'}:
+                        if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
+                            return False  # Dynamic SQL cannot be proved safe here.
+        return True
+    except (SyntaxError, ValueError, TypeError, RecursionError):
+        return False
+
+
 def compatible_target(root, current, target, local=None):
     if not SHA.fullmatch(current) or not SHA.fullmatch(target):
         raise UpdateError("版本编号无效，未更新。")
@@ -221,6 +306,14 @@ def compatible_target(root, current, target, local=None):
     changed = set(run_git(root, "diff", "--name-only", current, target).splitlines())
     if changed & MANUAL_FILES or any(p.startswith(("core/", "config/")) for p in changed):
         raise UpdateError("新版涉及依赖、数据库实现或冻结策略，请人工升级并验收。")
+    if 'workbench/store.py' in changed:
+        try:
+            before = run_git(root, 'show', f'{current}:workbench/store.py')
+            after = run_git(root, 'show', f'{target}:workbench/store.py')
+        except UpdateError:
+            raise UpdateError('无法核对数据保存程序的兼容性，请人工安装。') from None
+        if not compatible_store_extension(before, after):
+            raise UpdateError('新版改变了数据结构、已有保存逻辑或无法确认的初始化行为，请人工安装并验收。')
     files = run_git(root, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", target).splitlines()
     if local and any(name not in files for name in local.get("preserved", {})):
         raise UpdateError("新版不再包含本机受保护启动文件，请维护者核对。")
@@ -504,7 +597,7 @@ def rollback(root, target, old, old_branch=None, payloads=None):
         _restore_preserved(root, payloads)
 
 
-def prepare_worker(root, plan, runtime, python=None, spawn=None):
+def prepare_worker(root, plan, runtime, python=None, spawn=None, data_checksum=None):
     """Prepare a technical receipt/helper outside changing tracked code."""
     root = Path(root).resolve()
     local = local_version(root)
@@ -526,6 +619,10 @@ def prepare_worker(root, plan, runtime, python=None, spawn=None):
         python = Path(python or sys.executable).resolve()
         request = {"root": str(root), "plan": plan, "runtime": str(Path(runtime).resolve()),
                    "python": str(python), "parent_pid": os.getpid()}
+        if data_checksum is not None:
+            if not isinstance(data_checksum, str) or not DATA_SHA256.fullmatch(data_checksum):
+                raise UpdateError('运行数据校验值无效，未准备更新。')
+            request['data_checksum'] = data_checksum
         request_path = folder / "request.json"
         write_json(request_path, request)
         (spawn or subprocess.Popen)([str(python), str(helper), "--worker", str(request_path)], cwd=folder,
@@ -553,6 +650,16 @@ def application_mutex():
         finally:
             k.CloseHandle(ctypes.c_void_p(handle))
     return held()
+
+
+def verify_maintenance_data(request):
+    """Optional maintenance proof, before restart can legitimately write meta."""
+    expected = request.get('data_checksum')
+    if expected is None:
+        return
+    path = Path(request['runtime'])/'workbench.sqlite3'
+    if not DATA_SHA256.fullmatch(str(expected)) or not path.is_file() or _digest(path) != expected:
+        raise UpdateError('运行数据在升级期间发生变化，请停止其他程序后核对；未回退或删除数据。')
 
 
 def worker(request_path):
@@ -586,7 +693,11 @@ def worker(request_path):
             raise UpdateError('用户界面已取消更新准备，未更新代码。')
         with application_mutex():
             require_web_closed()
+            verify_maintenance_data(request)
             apply_update(root, request["plan"], folder / "old-code.zip", request["python"])
+            verify_maintenance_data(request)
+            if request.get('data_checksum'):
+                result['data_unchanged_before_restart'] = True
         env = dict(os.environ, A_WORKBENCH_HOME=request["runtime"], APLUS_UPDATE_ACK=str(folder / "started.json"))
         launched = subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
