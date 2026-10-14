@@ -33,15 +33,39 @@ API = f"https://api.github.com/repos/{REPOSITORY}"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DATA_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROTECTED = {"runtime", "data", ".git", ".venv", "venv", ".workbuddy", "upgrade-backups"}
-MANUAL_FILES = {"frozen_manifest.json", "requirements.txt",
+MANUAL_FILES = {"requirements.txt",
                 "requirements-lock.txt", "setup.cmd"}
 PRESERVED_LOCAL_FILES = {"push.cmd"}
 MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
 DISCARDABLE_RELEASE_PATHS = {"README.md", "release_catalog.json"}
 
+# Release permission, not new strategy logic. Only this already owner-approved
+# PR42 byte transition is recognized. A candidate manifest cannot authorize its
+# own arbitrary code; later strategy upgrades need their own reviewed policy.
+APPROVED_FROZEN_TRANSITIONS = ({
+    "approval": {
+        "date": "2026-10-14", "strategy": "MTR_MASTER", "revision": "V36.3",
+        "reason": "User-approved bullish signal bar whose close equals its high",
+    },
+    "files": {
+        "core/strategies/mtr_strategy.py": (
+            "6d4335b15ef9865e32bd99186e66c5a688b0a8b915c3e5b50aae94c2e8a1a184",
+            "68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a"),
+        "core/strategies/mtr_structural_v35.py": (
+            "32b88d4ba919fbab86ee8a55b9efed13345538b10c2bb664c657ca13d9402c38",
+            "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e"),
+    },
+},)
+
 
 class UpdateError(ValueError):
     pass
+
+
+class ManualUpdateError(UpdateError):
+    def __init__(self, message, kind):
+        super().__init__(message)
+        self.kind = kind
 
 
 def require_web_closed(port=8517):
@@ -294,6 +318,69 @@ def compatible_store_extension(before, after):
         return False
 
 
+def compatible_frozen_transition(root, current, target, changed):
+    """Verify an approved release transition using Git bytes, never imports/DB.
+
+    Both complete manifests must match their blobs. File lists, baseline source,
+    unrelated metadata and all other protected bytes stay identical. Exact
+    approved old/new fingerprints plus the appended approval record are needed;
+    CI and official-main identity are separately rechecked by the caller.
+    """
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate manifest key')
+            result[key] = value
+        return result
+
+    def load(revision):
+        manifest = json.loads(run_git(root, 'show', f'{revision}:frozen_manifest.json',
+                                      binary=True), object_pairs_hook=unique_keys)
+        if not isinstance(manifest, dict):
+            raise ValueError('invalid manifest')
+        entries = manifest.pop('files')
+        approvals = manifest.pop('approved_strategy_updates', [])
+        if not isinstance(entries, list) or not entries or not isinstance(approvals, list):
+            raise ValueError('invalid manifest records')
+        files = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != {'path', 'sha256'}:
+                raise ValueError('invalid file record')
+            path, checksum = entry['path'], entry['sha256']
+            if (not isinstance(path, str) or not path.startswith(('core/', 'config/'))
+                    or '\\' in path or ':' in path or any(p in {'', '.', '..'} for p in path.split('/'))
+                    or path in files or not isinstance(checksum, str)
+                    or not DATA_SHA256.fullmatch(checksum)):
+                raise ValueError('invalid protected path or fingerprint')
+            files[path] = checksum
+        return manifest, approvals, files
+
+    try:
+        old_meta, old_approvals, old = load(current)
+        new_meta, new_approvals, new = load(target)
+        if old_meta != new_meta or old.keys() != new.keys():
+            return False
+        delta = {path: (old[path], new[path]) for path in old if old[path] != new[path]}
+        sensitive = {p for p in changed if p == 'frozen_manifest.json'
+                     or p.startswith(('core/', 'config/'))}
+        if sensitive != set(delta) | {'frozen_manifest.json'}:
+            return False
+        approved = any(delta == rule['files'] and rule['approval'] not in old_approvals
+                       and new_approvals == old_approvals + [rule['approval']]
+                       for rule in APPROVED_FROZEN_TRANSITIONS)
+        if not approved:
+            return False
+        for revision, files in ((current, old), (target, new)):
+            for path, expected in files.items():
+                blob = run_git(root, 'show', f'{revision}:{path}', binary=True)
+                if hashlib.sha256(blob).hexdigest() != expected:
+                    return False
+        return True
+    except (UpdateError, KeyError, TypeError, ValueError, RecursionError):
+        return False
+
+
 def compatible_target(root, current, target, local=None):
     if not SHA.fullmatch(current) or not SHA.fullmatch(target):
         raise UpdateError("版本编号无效，未更新。")
@@ -303,17 +390,23 @@ def compatible_target(root, current, target, local=None):
         run_git(root, "merge-base", "--is-ancestor", current, target)
     else:
         _main_can_fast_forward(root, target)
-    changed = set(run_git(root, "diff", "--name-only", current, target).splitlines())
-    if changed & MANUAL_FILES or any(p.startswith(("core/", "config/")) for p in changed):
-        raise UpdateError("新版涉及依赖、数据库实现或冻结策略，请人工升级并验收。")
+    # Git quotes non-ASCII names by default; quoted "core/..." would evade the
+    # prefix guard. Read NUL-delimited actual paths, including Unicode/newlines.
+    raw_paths = run_git(root, 'diff', '--name-only', '-z', current, target, binary=True)
+    changed = {p.decode('utf-8', 'surrogateescape') for p in raw_paths.split(b'\0') if p}
+    if changed & MANUAL_FILES:
+        raise ManualUpdateError("新版需要调整Python运行依赖或安装环境，请人工安装。", 'dependencies')
+    if ('frozen_manifest.json' in changed or any(p.startswith(('core/', 'config/')) for p in changed)):
+        if not compatible_frozen_transition(root, current, target, changed):
+            raise ManualUpdateError("策略或配置变化不属于已核准的逐文件版本升级，请人工核对。", 'strategy')
     if 'workbench/store.py' in changed:
         try:
             before = run_git(root, 'show', f'{current}:workbench/store.py')
             after = run_git(root, 'show', f'{target}:workbench/store.py')
         except UpdateError:
-            raise UpdateError('无法核对数据保存程序的兼容性，请人工安装。') from None
+            raise ManualUpdateError('无法核对数据保存程序的兼容性，请人工安装。', 'data') from None
         if not compatible_store_extension(before, after):
-            raise UpdateError('新版改变了数据结构、已有保存逻辑或无法确认的初始化行为，请人工安装并验收。')
+            raise ManualUpdateError('新版改变了数据结构、已有保存逻辑或无法确认的初始化行为，请人工安装并验收。', 'data')
     files = run_git(root, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", target).splitlines()
     if local and any(name not in files for name in local.get("preserved", {})):
         raise UpdateError("新版不再包含本机受保护启动文件，请维护者核对。")
@@ -429,6 +522,8 @@ def check_version(root, force=False, api=github_json, fetch=None):
             result["can_update"] = True
             result.pop("block_reason", None)
     except Exception as exc:
+        if isinstance(exc, ManualUpdateError):
+            result['manual_kind'] = exc.kind
         result["message"] = str(exc) if isinstance(exc, UpdateError) else "版本检查暂不可用（网络或GitHub限制），不影响行情更新。"
     if local["dirty"] and result["state"] == "current":
         result["message"] = "提交号与主线相同，但本地有修改；不能按提交号认定代码一致。"
