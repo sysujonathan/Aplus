@@ -221,6 +221,7 @@ function openModal(id) {
 }
 function closeModal() { document.querySelector('#modalBackdrop').classList.remove('show'); }
 
+if (!window.tvPrototypeV2) {
 canvas.addEventListener('mousemove', event => {
   const view = canvas._view;
   if (!view) return;
@@ -337,3 +338,4 @@ if (state === 'alert') openModal('alertModal');
 if (state === 'object') { selected = true; selectedObject.classList.add('visible'); openModal('objectModal'); renderChart(); }
 if (state === 'replay') document.querySelector('#startReplay').click();
 if (state === 'snapshot') document.querySelector('#snapshot').click();
+}

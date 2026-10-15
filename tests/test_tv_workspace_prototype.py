@@ -42,6 +42,7 @@ def test_prototype_is_offline_and_contains_reviewed_states():
 
 def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():
     script = (PROTOTYPE / 'prototype.js').read_text(encoding='utf-8')
+    interactions = (PROTOTYPE / 'prototype-interactions.js').read_text(encoding='utf-8')
     style = (PROTOTYPE / 'prototype.css').read_text(encoding='utf-8')
 
     assert '2026-06-22' in script and '2026-09-30' in script
@@ -51,4 +52,33 @@ def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():
     assert "ctx.fillStyle = '#fff'" in script
     assert '--blue: #2962ff' in style
     assert '5分钟行情接入后可用' in (PROTOTYPE / 'index.html').read_text(encoding='utf-8')
+    assert "ctx.setLineDash([6, 4])" in interactions
+    assert "ctx.strokeStyle = '#2962ff'" in interactions
+
+
+def test_prototype_contains_tradingview_interaction_contract():
+    html = (PROTOTYPE / 'index.html').read_text(encoding='utf-8')
+    script = (PROTOTYPE / 'prototype-interactions.js').read_text(encoding='utf-8')
+    style = (PROTOTYPE / 'prototype.css').read_text(encoding='utf-8')
+
+    assert 'id="zoomOut"' in html
+    assert 'id="favoriteDragHandle"' in html
+    assert 'href="#i-polyline"' in html
+    assert 'data-tab="coordinates"' in html
+    assert 'data-tab="visibility"' in html
+    assert 'event.deltaY' in script and 'anchorIndex' in script
+    assert "mode: 'price-scale'" in script
+    assert "priceZoom = clamp" in script
+    assert "localStorage.setItem(tvStateKey" in script
+    assert "hitObject(point.x, point.y)" in script
+    assert "openObjectSettings()" in script
+    assert "mode: 'zoom-box'" in script
+    assert "mode: region.handle ? 'object-handle' : 'object-move'" in script
+    assert 'snapDrawingPoint' in script and 'row.open, row.high, row.low, row.close' in script
+    assert 'exitDrawingMode()' in script
+    assert 'drawingPalette' in script and 'data-color=' in script
+    assert "object.type === 'up' || object.type === 'down'" in script
+    assert 'ClipboardItem' in script and 'navigator.clipboard.write' in script
+    assert '.favorite-tools .drag-handle' in style
+    assert 'cursor: ns-resize' in style
 
