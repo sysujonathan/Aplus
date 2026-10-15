@@ -252,6 +252,7 @@ class MTRStructuralEngineV35:
             close_position = (c - lo) / bar_range
             # 条件: 阳线 + 收盘等于最高价。容忍行情小数序列化带来的极小误差。
             if c > o and math.isclose(c, h, rel_tol=1e-9, abs_tol=1e-9):
+                close_position = 1.0
                 body = c - o
                 upper_wick = h - c
                 quality = 0.0

@@ -165,6 +165,15 @@ def calculate_prepared(spec, enriched):
     flags = result[col].dropna()
     if not flags.isin([True,False,0,1]).all():
         raise ValueError('信号列必须为 True/False，不能用文本代替')
+    quality_col = meta.get('signal_close_position_column')
+    quality_min = _number(meta.get('signal_close_position_min'))
+    if quality_col and quality_min is not None:
+        if quality_col not in result:
+            raise ValueError(f'策略没有返回声明的信号质量列 {quality_col}')
+        signal_rows = result[result[col].fillna(False).astype(bool)]
+        quality = pd.to_numeric(signal_rows[quality_col], errors='coerce')
+        if quality.isna().any() or (quality < quality_min).any():
+            raise ValueError('MTR 正式候选缺少合格光头阳线证明，已停止记录该股票')
     return instance, result
 
 
