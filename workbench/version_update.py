@@ -39,9 +39,9 @@ PRESERVED_LOCAL_FILES = {"push.cmd"}
 MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
 DISCARDABLE_RELEASE_PATHS = {"README.md", "release_catalog.json"}
 
-# Release permission, not new strategy logic. Only this already owner-approved
-# PR42 byte transition is recognized. A candidate manifest cannot authorize its
-# own arbitrary code; later strategy upgrades need their own reviewed policy.
+# Release permission, not new strategy logic. Only these owner-approved byte
+# transitions are recognized. A candidate manifest cannot authorize its own
+# arbitrary code; every later strategy upgrade needs its own reviewed policy.
 APPROVED_FROZEN_TRANSITIONS = ({
     "approval": {
         "date": "2026-10-14", "strategy": "MTR_MASTER", "revision": "V36.3",
@@ -55,7 +55,20 @@ APPROVED_FROZEN_TRANSITIONS = ({
             "32b88d4ba919fbab86ee8a55b9efed13345538b10c2bb664c657ca13d9402c38",
             "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e"),
     },
-},)
+}, {
+    "approval": {
+        "date": "2026-10-14", "strategy": "MTR_MASTER", "revision": "V36.4",
+        "reason": "User-approved fix: setup without a qualifying signal bar cannot be published as an MTR candidate",
+    },
+    "files": {
+        "core/strategies/mtr_strategy.py": (
+            "68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a",
+            "69ca7d4f4924e1bfdec8ff97b2d68cb16dd11c9195d9a8fae838dffb10fec849"),
+        "core/strategies/mtr_structural_v35.py": (
+            "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e",
+            "2ccbfa11c6da884f7c8ccc675fc754502c99590937955950f3d61d3635774cf2"),
+    },
+})
 
 
 class UpdateError(ValueError):
