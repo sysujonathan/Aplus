@@ -556,23 +556,25 @@
       "pr": 45,
       "version": "2026.10.14.45",
       "date": "2026-10-14",
-      "status": "preview",
+      "status": "released",
       "title": "MTR无合格信号K不进入正式候选",
       "notes": [
         "MTR V36.4移除无合格光头阳线仍发布正式候选的兼容分支，并增加信号K输出证明。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/45"
+      "url": "https://github.com/sysujonathan/Aplus/pull/45",
+      "commit": "365de0a5f951f86673ab6222697a2690836237c9"
     },
     {
       "pr": 46,
       "version": "2026.10.15.46",
       "date": "2026-10-15",
-      "status": "preview",
+      "status": "released",
       "title": "恢复GAP H2样式与TV高保真原型",
       "notes": [
         "恢复蓝色空心缺口区域，提供TV习惯图表工作台的离线高保真原型，不改变信号规则。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/46"
+      "url": "https://github.com/sysujonathan/Aplus/pull/46",
+      "commit": "8af35e9ca85201096505694caeb243a21464a577"
     },
     {
       "pr": 47,
@@ -586,7 +588,8 @@
         "同日重复扫描和策略换版不再产生黄色×2，当前候选显示有效判断，历史观察与交易记录保留。",
         "停牌、根数不足、身份问题及补拉无改善仍待处理，供应商黑名单、冷却、单连接及请求间隔保护不变。",
         "自检窗口仅对已确认可读的Windows初始化文件偶发读取失败重试一次，不跳过界面测试或重试业务断言。",
-        "三源本地短保存统一协调，进度后台只读并在临时读取失败后自动恢复；单源失败保留处理数量和诊断，不再误显0/0。"
+        "三源本地短保存统一协调，进度后台只读并在临时读取失败后自动恢复；单源失败保留处理数量和诊断，不再误显0/0。",
+        "同步已发布PR45／46，验证MTR V36.3旧判断升级后重算；未变3K／GAP缓存经限定兼容核对后复用，旧观察不删除。"
       ],
       "url": "https://github.com/sysujonathan/Aplus/pull/47"
     }

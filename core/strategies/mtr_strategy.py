@@ -36,7 +36,7 @@ class MTRStrategy(BaseStrategy):
 
     @property
     def description(self) -> str:
-        return "MTR V36.3 Structural Sequence (Bullish Marubozu Signal Bar)"
+        return "MTR V36.4 Structural Sequence (Confirmed Bullish Marubozu Signal Bar)"
 
     @property
     def signal_column(self) -> str:
@@ -57,7 +57,7 @@ class MTRStrategy(BaseStrategy):
             'signal_column': 'signal_mtr',
             'signal_close_position_column': 'mtr_signal_close_position',
             'signal_close_position_min': MTRStructuralEngineV35.SIGNAL_CLOSE_POSITION_MIN,
-            'strategy_revision': 'V36.3',
+            'strategy_revision': 'V36.4',
             'supported_timeframes': ['daily'],
             'tp_multiplier': 2.0,
             'ai_audit': False,
@@ -317,9 +317,7 @@ class MTRStrategy(BaseStrategy):
                             if pt:
                                 df.at[df.index[sb_idx], f'mtr_{name}_price'] = pt.price
                                 df.at[df.index[sb_idx], f'mtr_{name}_idx'] = pt.index
-                    else:
-                        # 无信号K时仍标记当前位置（向后兼容）
-                        df.at[df.index[i], 'signal_mtr'] = True
+                    # 没有合格光头阳线时只保留内部结构阶段，不发布正式 MTR 候选。
                 
                 # 记录关键坐标用于图表渲染
                 for name, pt in res['points'].items():

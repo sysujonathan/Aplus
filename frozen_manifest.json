@@ -7,6 +7,12 @@
       "strategy": "MTR_MASTER",
       "revision": "V36.3",
       "reason": "User-approved bullish signal bar whose close equals its high"
+    },
+    {
+      "date": "2026-10-14",
+      "strategy": "MTR_MASTER",
+      "revision": "V36.4",
+      "reason": "User-approved fix: setup without a qualifying signal bar cannot be published as an MTR candidate"
     }
   ],
   "files": [
@@ -76,11 +82,11 @@
     },
     {
       "path": "core/strategies/mtr_strategy.py",
-      "sha256": "68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a"
+      "sha256": "69ca7d4f4924e1bfdec8ff97b2d68cb16dd11c9195d9a8fae838dffb10fec849"
     },
     {
       "path": "core/strategies/mtr_structural_v35.py",
-      "sha256": "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e"
+      "sha256": "2ccbfa11c6da884f7c8ccc675fc754502c99590937955950f3d61d3635774cf2"
     },
     {
       "path": "core/strategies/structural_gap_strategy.py",

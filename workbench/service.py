@@ -523,8 +523,9 @@ class Service:
         # Only calculation semantics belong in the cache fingerprint.  Progress
         # wording and orchestration changes in this service must not invalidate
         # every strategy result on the next daily run.
-        from .scan_cache import calculation_versions, cache_key, cached_answers, finished_scan
+        from .scan_cache import calculation_versions, cache_key, cached_answers, finished_scan, compatible_engines
         versions = calculation_versions(strategies)
+        compatible = compatible_engines(strategies)
         engine = scan_engine_version(include_frozen=False)
         legacy_engine = scan_engine_version()
         checkpoint = digest(dumps([spec.get('source'), sorted(spec['datasets']),
@@ -564,11 +565,15 @@ class Service:
             keys = {strategy.id: cache_key(did,strategy.id,versions[strategy.id],timeframe,asof,engine)
                 for strategy in strategies}
             legacy = {s.id:cache_key(did,s.id,s.version,timeframe,asof,legacy_engine) for s in strategies}
+            bridged = {s.id:cache_key(did,s.id,versions[s.id],timeframe,asof,compatible[s.id])
+                       for s in strategies if s.id in compatible}
             cached_signals = {} if spec.get('force') else cached_answers(
-                self.store, [*keys.values(),*legacy.values()])
+                self.store, [*keys.values(),*legacy.values(),*bridged.values()])
             for s in strategies:
                 if keys[s.id] not in cached_signals and legacy[s.id] in cached_signals:
                     cached_signals[keys[s.id]] = cached_signals[legacy[s.id]]
+                if keys[s.id] not in cached_signals and bridged.get(s.id) in cached_signals:
+                    cached_signals[keys[s.id]] = cached_signals[bridged[s.id]]
             all_cached = all(key in cached_signals for key in keys.values())
             try:
                 if all_cached:

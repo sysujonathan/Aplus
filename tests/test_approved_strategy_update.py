@@ -240,13 +240,19 @@ def test_remaining_manual_reason_is_specific_but_never_raw_technical_details(kin
     assert 'secret' not in view['message'] and not view['can_update']
 
 
-def test_production_policy_matches_the_unchanged_approved_pr42_manifest_bytes():
+def test_production_policy_matches_the_approved_manifest_transition_chain():
     root = Path(__file__).resolve().parents[1]
     manifest = json.loads((root / 'frozen_manifest.json').read_bytes())
     rules = v.APPROVED_FROZEN_TRANSITIONS
-    assert len(rules) == 1 and set(rules[0]['files']) == set(PATHS)
-    assert rules[0]['approval'] in manifest['approved_strategy_updates']
+    assert len(rules) == 2
+    assert all(set(rule['files']) == set(PATHS) for rule in rules)
+    assert [rule['approval'] for rule in rules] == manifest['approved_strategy_updates']
     files = {entry['path']: entry['sha256'] for entry in manifest['files']}
-    for path, (before, after) in rules[0]['files'].items():
-        assert before != after and v.DATA_SHA256.fullmatch(before)
+    for index, rule in enumerate(rules):
+        for path, (before, after) in rule['files'].items():
+            assert before != after and v.DATA_SHA256.fullmatch(before)
+            assert v.DATA_SHA256.fullmatch(after)
+            if index:
+                assert before == rules[index - 1]['files'][path][1]
+    for path, (_, after) in rules[-1]['files'].items():
         assert after == files[path] == checksum((root / path).read_bytes())

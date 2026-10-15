@@ -1,9 +1,51 @@
 """Calculation identities separate from archived release-version identities."""
 import ast
+import inspect
 import json
 from pathlib import Path
 
 from .store import ROOT, digest, dumps
+
+
+# Exact audited PR45 addition. It is still executed for every calculation;
+# this string only proves an old engine's unchanged behavior for native
+# detectors that do NOT opt into signal-quality validation. Any gate edit
+# disables the bridge; MTR and plugins never receive the old-engine alias.
+PR45_QUALITY_GATE = '''    quality_col = meta.get('signal_close_position_column')
+    quality_min = _number(meta.get('signal_close_position_min'))
+    if quality_col and quality_min is not None:
+        if quality_col not in result:
+            raise ValueError(f'策略没有返回声明的信号质量列 {quality_col}')
+        signal_rows = result[result[col].fillna(False).astype(bool)]
+        quality = pd.to_numeric(signal_rows[quality_col], errors='coerce')
+        if quality.isna().any() or (quality < quality_min).any():
+            raise ValueError('MTR 正式候选缺少合格光头阳线证明，已停止记录该股票')
+'''
+
+
+def compatible_engines(strategies):
+    """Read/promote proven pre-PR45 per-detector answers, never old MTR ones.
+
+    All other current semantic functions/files stay in the byte recipe. A
+    shared change elsewhere cannot accidentally match the historical key.
+    The new key/report always uses the full current engine fingerprint.
+    """
+    from . import strategies as adapters
+    source = inspect.getsource(adapters.calculate_prepared)
+    if source.count(PR45_QUALITY_GATE) != 1:
+        return {}
+    previous = digest(adapters._scan_engine_semantics(source.replace(PR45_QUALITY_GATE,'')))
+    result = {}
+    for strategy in strategies:
+        try:
+            path = Path(strategy.file).resolve().relative_to(ROOT).as_posix()
+            meta = strategy.cls.get_metadata()
+            if path.startswith('core/strategies/') and not (
+                    meta.get('signal_close_position_column') or meta.get('signal_close_position_min') is not None):
+                result[strategy.id] = previous
+        except (ValueError,TypeError,AttributeError):
+            continue  # Unknown/dynamic metadata cannot prove compatibility.
+    return result
 
 
 def calculation_versions(strategies, root=ROOT):
@@ -129,21 +171,23 @@ def filter_candidate_revisions(store, rows, source, timeframe):
     entries = catalog(store)
     selected = [entries[k] for k in {r['strategy'] for r in rows} if k in entries]
     versions = calculation_versions(selected)
+    compatible = compatible_engines(selected)
     engine = scan_engine_version(include_frozen=False)
     latest = {r['code']:r['id'] for r in latest_datasets(store,source) if r['timeframe']=='daily'}
     lookups = []
     for row in rows:
         key = row['strategy']
         ids = list(dict.fromkeys([latest.get(row['code'],row['dataset_id']),row['dataset_id']]))
-        lookups.append([cache_key(did,key,versions[key],timeframe,str(row['asof'])[:10],engine)
-                        for did in ids] if key in versions else [])
-    answers = cached_answers(store, (key for group in lookups for key in group))
+        engines = [engine] + ([compatible[key]] if key in compatible else [])
+        lookups.append([(cache_key(did,key,versions[key],timeframe,str(row['asof'])[:10],stamp),did)
+                        for did in ids for stamp in engines] if key in versions else [])
+    answers = cached_answers(store, (key for group in lookups for key,_ in group))
     result = []
     for row, keys in zip(rows,lookups):
-        matched = next((key for key in keys if key in answers), None)
+        matched = next(((key,did) for key,did in keys if key in answers), None)
         if matched is not None:
             try:
-                answer = json.loads(answers[matched])
+                answer = json.loads(answers[matched[0]])
                 archived = json.loads(row['payload'])
             except (ValueError,TypeError):
                 # Broken judgment evidence cannot supersede saved history.
@@ -154,7 +198,7 @@ def filter_candidate_revisions(store, rows, source, timeframe):
             # Prefer new snapshot/current release observations whenever their
             # atomic cache+observation checkpoint exists, not stale revisions.
             preferred = latest.get(row['code'],row['dataset_id'])
-            if matched == keys[0] and row['dataset_id'] != preferred:
+            if matched[1] == preferred and row['dataset_id'] != preferred:
                 continue
             # Release versions cover the whole frozen manifest. An unrelated
             # MTR upgrade must not hide a still-valid 3K hit before the user

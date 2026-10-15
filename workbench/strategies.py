@@ -165,6 +165,15 @@ def calculate_prepared(spec, enriched):
     flags = result[col].dropna()
     if not flags.isin([True,False,0,1]).all():
         raise ValueError('信号列必须为 True/False，不能用文本代替')
+    quality_col = meta.get('signal_close_position_column')
+    quality_min = _number(meta.get('signal_close_position_min'))
+    if quality_col and quality_min is not None:
+        if quality_col not in result:
+            raise ValueError(f'策略没有返回声明的信号质量列 {quality_col}')
+        signal_rows = result[result[col].fillna(False).astype(bool)]
+        quality = pd.to_numeric(signal_rows[quality_col], errors='coerce')
+        if quality.isna().any() or (quality < quality_min).any():
+            raise ValueError('MTR 正式候选缺少合格光头阳线证明，已停止记录该股票')
     return instance, result
 
 
@@ -256,14 +265,21 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
     return payload
 
 
-def scan_engine_version(include_frozen=True):
-    """Fingerprint only code that can change a scan result."""
+def _scan_engine_semantics(prepared_source=None):
+    """Shared byte recipe; optional source is only for a proven cache bridge."""
     from .market import weekly_bars
     functions = [prepare, prepare_indicators, calculate_prepared, calculate, signal_at_end,
                  _number, _setup_date, weekly_bars]
-    semantic = '\n'.join(inspect.getsource(func) for func in functions).encode()
+    semantic = '\n'.join(prepared_source if func is calculate_prepared and prepared_source is not None
+                         else inspect.getsource(func) for func in functions).encode()
     semantic += b''.join((ROOT/'workbench'/name).read_bytes()
                          for name in ['h2_plan.py','prices.py'])
+    return semantic
+
+
+def scan_engine_version(include_frozen=True):
+    """Fingerprint only code that can change a scan result."""
+    semantic = _scan_engine_semantics()
     # Old cache identities remain readable during the migration. New per-
     # detector keys already bind their protected dependency fingerprints.
     return digest(semantic + (verify_frozen().encode() if include_frozen else b''))
