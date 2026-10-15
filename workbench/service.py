@@ -33,6 +33,7 @@ def merge_scan_reports(previous, current):
     for key in ['errors','observation_ids']:
         merged[key] = previous.get(key,[]) + current.get(key,[])
     merged['strategy_versions'] = dict(previous.get('strategy_versions',{}), **current.get('strategy_versions',{}))
+    merged['checkpoints'] = dict(previous.get('checkpoints',{}), **current.get('checkpoints',{}))
     coverage = current.get('coverage')
     if coverage and coverage.get('source') in SOURCES and current.get('timeframe'):
         merged['coverage_by_timeframe'] = dict(previous.get('coverage_by_timeframe',{}),
@@ -63,7 +64,8 @@ class Service:
             spec=dict(spec,source=spec.get('source') or market_source(self.store))
             if spec['source'] not in SOURCES:
                 raise ValueError('未知日 K 数据源')
-            ProviderGuard(self.store,spec['source']).check()
+            if not spec.get('resume'):
+                ProviderGuard(self.store,spec['source']).check()
         with self.lock:
             if self._code_update_reserved:
                 raise ValueError('正在准备版本更新，请完成更新或取消后再开始任务')
@@ -153,6 +155,12 @@ class Service:
         raise ValueError('最近十天未取得股票名单，请检查行情服务')
 
     def _sync(self, job,spec):
+        if spec.get('resume'):
+            from .premarket_resume import continue_sync
+            return continue_sync(self, job, spec)
+        return self._sync_once(job, spec)
+
+    def _sync_once(self, job,spec):
         source=spec.get('source','baostock')
         ProviderGuard(self.store,source).check()
         if source=='tickflow':
@@ -515,8 +523,37 @@ class Service:
         # Only calculation semantics belong in the cache fingerprint.  Progress
         # wording and orchestration changes in this service must not invalidate
         # every strategy result on the next daily run.
-        engine = scan_engine_version()
-        report.update(engine_version=engine,asof=asof,total=total)
+        from .scan_cache import calculation_versions, cache_key, cached_answers, finished_scan, compatible_engines
+        versions = calculation_versions(strategies)
+        compatible = compatible_engines(strategies)
+        engine = scan_engine_version(include_frozen=False)
+        legacy_engine = scan_engine_version()
+        checkpoint = digest(dumps([spec.get('source'), sorted(spec['datasets']),
+            sorted((s.id,s.version,versions[s.id]) for s in strategies),timeframe,asof,engine]).encode())
+        report.update(engine_version=engine,calculation_versions=versions,asof=asof,total=total)
+        answer_keys = [cache_key(did,s.id,versions[s.id],timeframe,asof,engine)
+                       for did in spec['datasets'] for s in strategies]
+        complete = None if spec.get('force') else finished_scan(self.store,checkpoint,timeframe,answer_keys)
+        if complete is not None:
+            # Market scans just verified all files in their actual audit. Direct
+            # imports need the same tamper check before their stage is reused.
+            if coverage is None:
+                try:
+                    for did in spec['datasets']:
+                        self.check_stop(job)
+                        verify_dataset(self.store,did,job)
+                except (OSError,ValueError):
+                    complete = None  # Original per-stock error/exclusion path.
+        if complete is not None:
+            self.check_stop(job)
+            report.update(success=total,reused=total,signals=complete['signals'],
+                          no_signal=total-complete['signals'],observation_ids=complete['observation_ids'],
+                          checkpoints={timeframe:complete},stage_reused=True)
+            self.store.event(job,'复用已完成扫描阶段',source=spec.get('source'),timeframe=timeframe,
+                             asof=asof,judgments=total)
+            self.progress(job,previous.get('total',0)+total,overall_total or total,
+                          f'{timeframe} 已完成判断直接复用 {total} 次，无需重新扫描')
+            return report
         self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(merge_scan_reports(previous,report)),job))
         for did in spec['datasets']:
             self.check_stop(job)
@@ -525,13 +562,18 @@ class Service:
             def queue_event(action, path='', **detail):
                 event_rows.append((now(), job, action, str(path), dumps(detail)))
 
-            keys = {strategy.id: digest(dumps(
-                [did,strategy.id,strategy.version,timeframe,asof,engine]).encode())
+            keys = {strategy.id: cache_key(did,strategy.id,versions[strategy.id],timeframe,asof,engine)
                 for strategy in strategies}
-            placeholders = ','.join('?' for _ in keys)
-            cache_records = self.store.rows(
-                f'SELECT key,signal FROM scan_cache WHERE key IN ({placeholders})', tuple(keys.values()))
-            cached_signals = {row['key']: row['signal'] for row in cache_records}
+            legacy = {s.id:cache_key(did,s.id,s.version,timeframe,asof,legacy_engine) for s in strategies}
+            bridged = {s.id:cache_key(did,s.id,versions[s.id],timeframe,asof,compatible[s.id])
+                       for s in strategies if s.id in compatible}
+            cached_signals = {} if spec.get('force') else cached_answers(
+                self.store, [*keys.values(),*legacy.values(),*bridged.values()])
+            for s in strategies:
+                if keys[s.id] not in cached_signals and legacy[s.id] in cached_signals:
+                    cached_signals[keys[s.id]] = cached_signals[legacy[s.id]]
+                if keys[s.id] not in cached_signals and bridged.get(s.id) in cached_signals:
+                    cached_signals[keys[s.id]] = cached_signals[bridged[s.id]]
             all_cached = all(key in cached_signals for key in keys.values())
             try:
                 if all_cached:
@@ -616,6 +658,9 @@ class Service:
                     (previous.get('total',0)+done,overall_total or total,dumps(merge_scan_reports(previous,report)),
                      f"{timeframe} 已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
             self.check_stop(job)
+        if report['success'] == total:
+            report['checkpoints'] = {timeframe:dict(identity=checkpoint,signals=report['signals'],
+                                                  observation_ids=report['observation_ids'])}
         return report
 
     def _backtest(self, job,spec):

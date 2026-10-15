@@ -39,8 +39,9 @@ def collect_tk():
 @pytest.fixture(scope="module")
 def quote_window():
     import ttkbootstrap as ttk
+    from tests.native_ui import create_window
     ttk.Style.instance = None
-    root = ttk.Window(themename="darkly")
+    root = create_window(lambda:ttk.Window(themename="darkly"))
     root.withdraw()
     yield root
     root.destroy()

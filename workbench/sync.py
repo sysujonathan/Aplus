@@ -40,12 +40,12 @@ def local_history(store, code, job, coverage=None, source='baostock'):
     return frame, state
 
 
-def tail_pending(store, code, last, end):
+def tail_pending(store, code, last, end, source='baostock'):
     """Only explicit dated halts or verified closed sessions excuse absent bars."""
     if last >= end:
         return False
     try:
-        calendar = json.loads(calendar_file(store, 'baostock').read_text(encoding='utf-8'))
+        calendar = json.loads(calendar_file(store, source).read_text(encoding='utf-8'))
         if (not isinstance(calendar, dict) or
                 not calendar['start'] <= last <= end <= calendar['end']):
             return True
@@ -64,10 +64,10 @@ def tail_pending(store, code, last, end):
     return bool(needed - set(halted))
 
 
-def repair_intervals(store, code, old, start, end, timeframe):
+def repair_intervals(store, code, old, start, end, timeframe, source='baostock'):
     """Unknown holes in the selected scan input, bounded by real price anchors."""
     from .history_quality import describe_history
-    quality = describe_history(store, code, old, start, end, source='baostock')
+    quality = describe_history(store, code, old, start, end, source=source)
     window = quality['windows'][timeframe]
     dates = old.date.tolist()
     intervals = []
@@ -93,8 +93,8 @@ def repair_intervals(store, code, old, start, end, timeframe):
 def sync_stock(store, provider, code, start, end, job=None, force=False, source='baostock', batch_writes=False,
                on_request=None, repair_timeframe=None):
     """provider is lazy: a fully cached request makes no network connection."""
-    if repair_timeframe is not None and (source != 'baostock' or repair_timeframe not in ('daily', 'weekly')):
-        raise ValueError('定向缺口补拉须选择 BaoStock 日线或周线')
+    if repair_timeframe is not None and repair_timeframe not in ('daily', 'weekly'):
+        raise ValueError('定向缺口补拉须选择日线或周线')
     coverage = coverage_state(store,code,source)
     track_quality = source in FALLBACK_SOURCES or calendar_file(store, source).is_file()
     state = coverage[0] if coverage else None
@@ -190,10 +190,10 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
             pieces.append(fetch(old.date.iloc[-1], right, 'tail'))
         if start < state['start']:
             pieces.append(fetch(left, old.date.iloc[0], 'prefix'))
-        if source != 'baostock' and end > state['end']:
+        if source != 'baostock' and tail_pending(store,code,state['end'],end,source):
             pieces.append(fetch(old.date.iloc[-1], right, 'tail'))
         if repair_timeframe is not None:
-            for a, b in repair_intervals(store, code, old, left, end, repair_timeframe):
+            for a, b in repair_intervals(store, code, old, left, end, repair_timeframe, source):
                 part = fetch(a, b, 'repair')
                 if not set(old.loc[old.date.between(a, b), 'date']).issubset(set(part.date)):
                     raise ValueError('局部补拉返回不完整，保留原快照，未推进同步进度')

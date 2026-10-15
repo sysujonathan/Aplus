@@ -75,13 +75,18 @@ def integrity_view(report, timeframe, boards=None, asof=None):
     return result
 
 
-def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='tickflow'):
+def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='tickflow',
+                     period_audits=None, check_stop=None):
     if timeframe not in ('daily', 'weekly'):
         raise ValueError('请选择日线或周线完整性核验')
     # Both periods are checked once in the background. Changing the display
     # period never forces another market download or weakens the weekly gate.
-    periods = {tf:audit_scope(store, boards, asof, source=source, timeframe=tf, verify_files=True)
-               for tf in ('daily', 'weekly')}
+    # Resume already performed an actual file-verifying audit. Reuse that
+    # period's facts for display, rather than reading every price file again.
+    # These receipts never authorize the actual scan, which keeps its own gate.
+    periods = period_audits if period_audits is not None else {
+        tf:audit_scope(store, boards, asof, source=source, timeframe=tf, verify_files=True,
+                       check_stop=check_stop) for tf in ('daily', 'weekly')}
     audit = periods[timeframe]
     result = dict(source=source, asof=asof, timeframe=timeframe, scan=audit,
                   unknown_history=[], confirmed_history=[], repair_codes=[], scan_repair_codes=[], boards=boards,
@@ -96,10 +101,12 @@ def integrity_report(store, boards, asof, errors=(), timeframe='daily', source='
     calendar = calendar_of(store,source)
     from .trading_status import halt_evidence
     for code in sorted(codes):
+        if check_stop: check_stop()
         days,proof=halt_evidence(store,code,asof,asof)
         if days:
             result['current_halts'].append(dict(code=code,evidence=proof))
     for code, record in records.items():
+        if check_stop: check_stop()
         try:
             q = quality_for(store,record,asof,calendar)
             if q['missing_dates']:

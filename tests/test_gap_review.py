@@ -177,6 +177,7 @@ def test_baostock_targeted_repair_keeps_original_single_connection(store,monkeyp
     monkeypatch.setattr('workbench.service.sync_results',fake_results)
     service=SimpleNamespace(store=store,cancel_flags={'test':Event()},progress=lambda *a:None,
                             check_stop=lambda *a:None)
+    service._sync_once=Service._sync_once.__get__(service)
     spec=dict(source='baostock',boards=['沪深主板'],start=first,end=last,
               repair_codes=['sh.600000'],force=False)
     spec.update(settings)

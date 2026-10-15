@@ -139,7 +139,7 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     """
     source=source or market_source(store)
     sql = (
-        "SELECT o.code, o.strategy, o.timeframe, o.asof, o.id, o.dataset_id, "
+        "SELECT o.code, o.strategy, o.version, o.payload, o.timeframe, o.asof, o.id, o.dataset_id, "
         "d.source AS source "
         "FROM observations o JOIN datasets d ON d.id=o.dataset_id "
         "WHERE d.source=? AND o.timeframe=?"
@@ -149,12 +149,22 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     if pattern is not None:
         sql += " AND o.asof LIKE ?"
         params.append(pattern)
-    sql += " ORDER BY o.created DESC"
+    sql += " ORDER BY o.created DESC,o.rowid DESC"
     rows = store.rows(sql, tuple(params))
+    # Preserve every archived observation in the DB, but show one effective
+    # result per stock/strategy/period/day. New cached no-signal judgments also
+    # suppress stale old hits; lack of a newer judgment is not an empty result.
+    from workbench.scan_cache import filter_candidate_revisions
+    rows = filter_candidate_revisions(store, rows, source, timeframe)
+    seen = set()
     names = code_names(store)
     grouped = {}
     for r in rows:
         key = r["strategy"]
+        identity = (r['code'], key, str(r['asof'])[:10])
+        if identity in seen:
+            continue
+        seen.add(identity)
         grouped.setdefault(key, []).append(
             {
                 "code": r["code"],

@@ -148,6 +148,9 @@ def check_native_refresh():
     bar._job_id, bar._job_kind = 'parent','一键盘前'
     st.execute('UPDATE jobs SET result=? WHERE id=?', (dumps({'sources':{'baostock':{'phase':'更新'}}}),'parent'))
     bar._poll_job()
+    deadline = time.monotonic()+3
+    while not bar._premarket_progress and time.monotonic()<deadline:
+        root.update(); time.sleep(.01)
     assert bar._premarket_progress == {'baostock':{'phase':'更新'}}
     writer = sqlite3.connect(st.path)
     writer.execute('BEGIN IMMEDIATE')

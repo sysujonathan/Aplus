@@ -265,12 +265,21 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
     return payload
 
 
-def scan_engine_version():
-    """Fingerprint only code that can change a scan result."""
+def _scan_engine_semantics(prepared_source=None):
+    """Shared byte recipe; optional source is only for a proven cache bridge."""
     from .market import weekly_bars
     functions = [prepare, prepare_indicators, calculate_prepared, calculate, signal_at_end,
                  _number, _setup_date, weekly_bars]
-    semantic = '\n'.join(inspect.getsource(func) for func in functions).encode()
+    semantic = '\n'.join(prepared_source if func is calculate_prepared and prepared_source is not None
+                         else inspect.getsource(func) for func in functions).encode()
     semantic += b''.join((ROOT/'workbench'/name).read_bytes()
                          for name in ['h2_plan.py','prices.py'])
-    return digest(semantic + verify_frozen().encode())
+    return semantic
+
+
+def scan_engine_version(include_frozen=True):
+    """Fingerprint only code that can change a scan result."""
+    semantic = _scan_engine_semantics()
+    # Old cache identities remain readable during the migration. New per-
+    # detector keys already bind their protected dependency fingerprints.
+    return digest(semantic + (verify_frozen().encode() if include_frozen else b''))
