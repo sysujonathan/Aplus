@@ -89,6 +89,13 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert 'replaySpeeds = [10, 7, 5, 3, 1, .5, .3, .2, .1]' in script
     assert 'replayStartDate' in html and 'replaySpeedMenu' in html
     assert 'drawReplayBoundary' in script and 'createdAtIndex' in script
+    assert 'fibLevelDefaults' in script and '[4.764, false' in script
+    assert 'data-fib-level-color' in script and 'data-fib-setting="fibExtend"' in script
+    assert 'data-coordinate-field="index"' in script
+    assert 'fibVisibilityDefaults' in script and 'data-fib-visibility-bound' in script
+    assert 'saveFibTemplate' in script and 'loadFibTemplate' in script
+    assert '>可见范围</button>' in html
+    assert '.fib-level-grid' in style and '.fib-visibility-row' in style
     assert '.favorite-tools .drag-handle' in style
     assert '.chart-nav-controls.visible' in style
     assert 'cursor: ns-resize' in style

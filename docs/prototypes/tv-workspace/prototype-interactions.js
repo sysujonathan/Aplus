@@ -10,6 +10,20 @@ const toolNames = {
   arrow: '箭头', path: '多段折线', channel: '平行通道', text: '文字', ruler: '价格范围'
 };
 const onePointTools = new Set(['ray', 'up', 'down', 'text']);
+const fibLevelDefaults = [
+  [0, true, '#4caf50'], [.236, false, '#4caf50'], [.382, false, '#4caf50'], [.5, true, '#4caf50'],
+  [.618, false, '#4caf50'], [.786, false, '#4caf50'], [1, true, '#4caf50'], [1.618, false, '#4caf50'],
+  [2.618, false, '#4caf50'], [3.618, false, '#4caf50'], [4.236, false, '#4caf50'], [1.272, false, '#4caf50'],
+  [1.414, false, '#4caf50'], [2.272, false, '#4caf50'], [2.414, false, '#4caf50'], [2, false, '#4caf50'],
+  [3, false, '#4caf50'], [3.272, false, '#4caf50'], [3.414, false, '#4caf50'], [4, false, '#4caf50'],
+  [4.272, false, '#4caf50'], [4.414, false, '#4caf50'], [4.618, false, '#4caf50'], [4.764, false, '#4caf50']
+];
+const fibVisibilityDefaults = {
+  ticks: { enabled: true }, seconds: { enabled: true, min: 1, max: 59 },
+  minutes: { enabled: true, min: 1, max: 59 }, hours: { enabled: true, min: 1, max: 24 },
+  days: { enabled: true, min: 1, max: 366 }, weeks: { enabled: true, min: 1, max: 52 },
+  months: { enabled: true, min: 1, max: 12 }, ranges: { enabled: true }
+};
 const defaultObjects = [
   { id: 'trend-1', type: 'trend', a: { index: focusIndex(20), value: 3.43 }, b: { index: focusIndex(70), value: 5.34 }, color: '#f23645', width: 1, dash: 'solid', visible: true, createdAtIndex: focusIndex(70) },
   { id: 'fib-1', type: 'fib', a: { index: focusIndex(21), value: 3.14 }, b: { index: focusIndex(60), value: 4.98 }, color: '#4caf50', width: 1, dash: 'solid', visible: true, createdAtIndex: focusIndex(70) },
@@ -32,6 +46,8 @@ let replayPlaying = false;
 let replaySpeedValue = 1;
 let replayTimer = null;
 let preReplayView = null;
+let activeTimeframeUnit = 'daily';
+let objectSettingsSnapshot = null;
 let replayCalendarCursor = new Date(`${bars[Math.max(0, bars.length - 35)].date}T00:00:00`);
 const initialPrototypeState = loadPrototypeState();
 let userObjects = initialPrototypeState.objects || structuredClone(defaultObjects);
@@ -85,6 +101,41 @@ function dashPattern(style) {
   if (style === 'dashed') return [7, 5];
   if (style === 'dotted') return [2, 4];
   return [];
+}
+
+function ensureFibSettings(object) {
+  if (!object || object.type !== 'fib') return object;
+  object.fibLevels = Array.isArray(object.fibLevels) && object.fibLevels.length
+    ? object.fibLevels
+    : fibLevelDefaults.map(([value, enabled, color]) => ({ value, enabled, color }));
+  object.fibVisibility = object.fibVisibility || structuredClone(fibVisibilityDefaults);
+  for (const [key, defaults] of Object.entries(fibVisibilityDefaults)) {
+    object.fibVisibility[key] = { ...defaults, ...(object.fibVisibility[key] || {}) };
+  }
+  object.fibExtend = object.fibExtend || 'none';
+  object.fibLevelFormat = object.fibLevelFormat || 'value';
+  object.fibLabelHorizontal = object.fibLabelHorizontal || 'left';
+  object.fibLabelVertical = object.fibLabelVertical || 'middle';
+  object.fibTextHorizontal = object.fibTextHorizontal || 'center';
+  object.fibTextVertical = object.fibTextVertical || 'middle';
+  object.fibFontSize = object.fibFontSize || 12;
+  return object;
+}
+
+function loadFibTemplate() {
+  try { return JSON.parse(localStorage.getItem(`${tvStateKey}-fib-template`) || 'null'); } catch (_) { return null; }
+}
+
+function saveFibTemplate(object) {
+  const template = Object.fromEntries(Object.entries(object).filter(([key]) => key === 'color' || key === 'width' || key === 'dash' || key.startsWith('fib')));
+  try { localStorage.setItem(`${tvStateKey}-fib-template`, JSON.stringify(template)); } catch (_) { /* prototype remains usable without storage. */ }
+}
+
+function objectVisibleAtTimeframe(object) {
+  if (object.type !== 'fib') return true;
+  const visibility = ensureFibSettings(object).fibVisibility;
+  const key = activeTimeframeUnit === 'weekly' ? 'weeks' : activeTimeframeUnit === 'monthly' ? 'months' : 'days';
+  return visibility[key]?.enabled !== false;
 }
 
 function segmentDistance(px, py, ax, ay, bx, by) {
@@ -200,7 +251,7 @@ function renderWorkspace() {
 
   if (drawingsVisible) {
     if (!replayActive || replayIndex >= focusIndex(57)) drawStrategyEvidence(ctx, canvas._view);
-    userObjects.filter(item => item.visible !== false && (!replayActive || (item.createdAtIndex ?? bars.length - 1) <= replayIndex)).forEach(item => drawUserObject(ctx, canvas._view, item));
+    userObjects.filter(item => item.visible !== false && objectVisibleAtTimeframe(item) && (!replayActive || (item.createdAtIndex ?? bars.length - 1) <= replayIndex)).forEach(item => drawUserObject(ctx, canvas._view, item));
     if (draftAnchor && draftCursor) drawUserObject(ctx, canvas._view, {
       id: 'draft', type: activeDrawingTool, a: draftAnchor, b: draftCursor,
       points: activeDrawingTool === 'path' ? [...draftPoints, draftCursor] : undefined,
@@ -289,13 +340,43 @@ function drawUserObject(ctx, view, object, draft = false) {
     ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1); ctx.strokeRect(ax, ay, bx - ax, by - ay);
     registerRect(object.id, ax, ay, bx, by);
   } else if (object.type === 'fib') {
-    const levels = [0, .236, .382, .5, .618, .786, 1];
-    levels.forEach(level => {
-      const value = object.a.value + (b.value - object.a.value) * level;
-      const py = y(value);
-      ctx.beginPath(); ctx.moveTo(ax, py); ctx.lineTo(bx, py); ctx.stroke();
-      ctx.font = '11px Segoe UI'; ctx.textAlign = 'right'; ctx.fillText(`${level}`, ax - 5, py + 4);
-      registerSegment(object.id, ax, py, bx, py);
+    ensureFibSettings(object);
+    const startX = object.fibExtend === 'left' || object.fibExtend === 'both' ? left : Math.min(ax, bx);
+    const endX = object.fibExtend === 'right' || object.fibExtend === 'both' ? plotRight : Math.max(ax, bx);
+    const enabledLevels = object.fibLevels.filter(level => level.enabled);
+    const renderedLevels = enabledLevels.map(level => {
+      const ratio = object.fibReverse ? 1 - Number(level.value) : Number(level.value);
+      const value = object.a.value + (b.value - object.a.value) * ratio;
+      return { ...level, valueAtLevel: value, py: y(value) };
+    });
+    if (object.fibBackground && renderedLevels.length > 1) {
+      const sorted = [...renderedLevels].sort((aLevel, bLevel) => aLevel.py - bLevel.py);
+      ctx.save(); ctx.globalAlpha = object.fibBackgroundAlpha ?? .12;
+      sorted.slice(0, -1).forEach((level, index) => {
+        ctx.fillStyle = object.fibUseOneColor ? (object.fibSingleColor || object.color) : level.color;
+        ctx.fillRect(startX, level.py, endX - startX, sorted[index + 1].py - level.py);
+      });
+      ctx.restore();
+    }
+    if (object.fibTrendLine) {
+      ctx.save(); ctx.strokeStyle = object.color || '#4caf50'; ctx.setLineDash(dashPattern(object.fibTrendDash || 'dashed'));
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.restore();
+    }
+    renderedLevels.forEach(level => {
+      const lineColor = object.fibUseOneColor ? (object.fibSingleColor || object.color || '#4caf50') : level.color;
+      ctx.strokeStyle = lineColor; ctx.fillStyle = lineColor;
+      ctx.lineWidth = object.fibHorizontalWidth || object.width || 1;
+      ctx.setLineDash(dashPattern(object.fibHorizontalDash || object.dash));
+      ctx.beginPath(); ctx.moveTo(startX, level.py); ctx.lineTo(endX, level.py); ctx.stroke();
+      const labelX = object.fibLabelHorizontal === 'right' ? endX - 5 : object.fibLabelHorizontal === 'center' ? (startX + endX) / 2 : startX + 5;
+      const labelAlign = object.fibLabelHorizontal === 'right' ? 'right' : object.fibLabelHorizontal === 'center' ? 'center' : 'left';
+      const labelOffset = object.fibLabelVertical === 'top' ? -5 : object.fibLabelVertical === 'bottom' ? (object.fibFontSize || 12) + 4 : 4;
+      const levelLabel = object.fibLevelFormat === 'percent' ? `${(Number(level.value) * 100).toFixed(1).replace('.0', '')}%` : `${level.value}`;
+      const text = [object.fibShowLevels !== false ? levelLabel : '', object.fibShowPrices !== false ? `(${level.valueAtLevel.toFixed(2)})` : ''].filter(Boolean).join(' ');
+      if (object.fibText !== false && text) {
+        ctx.font = `${object.fibFontSize || 12}px Segoe UI`; ctx.textAlign = labelAlign; ctx.fillText(text, labelX, level.py + labelOffset);
+      }
+      registerSegment(object.id, startX, level.py, endX, level.py);
     });
   } else if (object.type === 'channel') {
     const delta = Math.max(.2, Math.abs(b.value - object.a.value) * .34);
@@ -454,6 +535,10 @@ function placeDrawing(point) {
     a: draftAnchor, b: onePointTools.has(activeDrawingTool) ? draftAnchor : finish,
     color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, createdAtIndex: replayActive ? replayIndex : bars.length - 1
   };
+  if (object.type === 'fib') {
+    Object.assign(object, structuredClone(loadFibTemplate() || {}));
+    ensureFibSettings(object);
+  }
   if (object.type === 'long') object.stop = object.a.value - Math.abs(object.b.value - object.a.value) * .55;
   if (object.type === 'short') object.stop = object.a.value + Math.abs(object.b.value - object.a.value) * .55;
   rememberObjects();
@@ -721,11 +806,63 @@ function paletteSettings(object) {
   return `<div class="color-palette">${drawingPalette.map(color => `<button class="color-choice ${color === object.color ? 'active' : ''}" data-color="${color}" style="--choice:${color}" title="${color}"></button>`).join('')}</div>`;
 }
 
+function commitObjectSetting(object, key, value) {
+  rememberObjects(); object[key] = value; savePrototypeState(); renderWorkspace();
+}
+
+function renderFibSettings(object) {
+  ensureFibSettings(object);
+  const host = document.querySelector('#toolSpecificSettings');
+  const levels = object.fibLevels.map((level, index) => `
+    <label class="fib-level-cell ${level.enabled ? '' : 'disabled'}">
+      <input type="checkbox" data-fib-level-enabled="${index}" ${level.enabled ? 'checked' : ''} aria-label="启用 ${level.value} 水平位">
+      <input type="number" step="any" data-fib-level-value="${index}" value="${level.value}" ${level.enabled ? '' : 'disabled'} aria-label="水平位 ${level.value}">
+      <input type="color" data-fib-level-color="${index}" value="${level.color}" ${level.enabled ? '' : 'disabled'} aria-label="水平位 ${level.value} 颜色">
+    </label>`).join('');
+  host.innerHTML = `<div class="fib-setting-stack">
+    <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibTrendLine" ${object.fibTrendLine ? 'checked' : ''}>趋势线</label><input type="color" data-fib-setting="color" value="${object.color || '#4caf50'}" aria-label="趋势线颜色"><select data-fib-setting="fibTrendDash" aria-label="趋势线线型"><option value="solid">实线</option><option value="dashed">虚线</option><option value="dotted">点线</option></select></div>
+    <div class="fib-setting-row"><b>水平线</b><select data-fib-setting="fibHorizontalWidth" aria-label="水平线粗细"><option value="1">1 px</option><option value="2">2 px</option><option value="3">3 px</option><option value="4">4 px</option></select><select data-fib-setting="fibHorizontalDash" aria-label="水平线线型"><option value="solid">实线</option><option value="dashed">虚线</option><option value="dotted">点线</option></select></div>
+    <div class="fib-setting-row"><b>延伸</b><select class="fib-wide-select" data-fib-setting="fibExtend" aria-label="延伸方式"><option value="none">不要扩大</option><option value="left">向左延伸</option><option value="right">向右延伸</option><option value="both">双向延伸</option></select></div>
+    <div class="fib-level-grid">${levels}</div>
+    <div class="fib-setting-row"><b>使用一种颜色</b><input type="color" data-fib-setting="fibSingleColor" value="${object.fibSingleColor || object.color || '#4caf50'}" aria-label="斐波那契单一颜色"><label class="switch"><input type="checkbox" data-fib-setting="fibUseOneColor" ${object.fibUseOneColor ? 'checked' : ''}><i></i></label></div>
+    <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibBackground" ${object.fibBackground ? 'checked' : ''}>背景</label><input type="range" min="0" max="100" data-fib-setting="fibBackgroundAlpha" value="${Math.round((object.fibBackgroundAlpha ?? .12) * 100)}" aria-label="背景透明度"><span>${Math.round((object.fibBackgroundAlpha ?? .12) * 100)}%</span></div>
+    <div class="fib-setting-row compact"><label><input type="checkbox" data-fib-setting="fibReverse" ${object.fibReverse ? 'checked' : ''}>反手</label></div>
+    <div class="fib-setting-row compact"><label><input type="checkbox" data-fib-setting="fibShowPrices" ${object.fibShowPrices === false ? '' : 'checked'}>价格</label></div>
+    <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibShowLevels" ${object.fibShowLevels === false ? '' : 'checked'}>水平位</label><select data-fib-setting="fibLevelFormat" aria-label="水平位格式"><option value="value">数值</option><option value="percent">百分比</option></select></div>
+    <div class="fib-setting-row"><b>标签</b><select data-fib-setting="fibLabelHorizontal" aria-label="标签水平位置"><option value="left">左</option><option value="center">中心</option><option value="right">右</option></select><select data-fib-setting="fibLabelVertical" aria-label="标签垂直位置"><option value="top">顶部</option><option value="middle">中间</option><option value="bottom">底部</option></select></div>
+    <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibText" ${object.fibText === false ? '' : 'checked'}>文本</label><select data-fib-setting="fibTextHorizontal" aria-label="文本水平位置"><option value="left">左</option><option value="center">中心</option><option value="right">右</option></select><select data-fib-setting="fibTextVertical" aria-label="文本垂直位置"><option value="top">顶部</option><option value="middle">中间</option><option value="bottom">底部</option></select></div>
+    <div class="fib-setting-row"><b>字体大小</b><select data-fib-setting="fibFontSize" aria-label="字体大小"><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="14">14</option><option value="16">16</option></select></div>
+    <div class="fib-setting-row compact muted-option"><label><input type="checkbox" disabled>基于对数坐标的Fib水平</label></div>
+  </div>`;
+  ['fibTrendDash', 'fibHorizontalWidth', 'fibHorizontalDash', 'fibExtend', 'fibLevelFormat', 'fibLabelHorizontal', 'fibLabelVertical', 'fibTextHorizontal', 'fibTextVertical', 'fibFontSize'].forEach(key => {
+    const control = host.querySelector(`[data-fib-setting="${key}"]`);
+    if (control) control.value = String(object[key] ?? ({ fibTrendDash: 'dashed', fibHorizontalWidth: object.width || 1, fibHorizontalDash: object.dash || 'solid' }[key] || ''));
+  });
+  host.querySelectorAll('[data-fib-level-enabled]').forEach(control => control.addEventListener('change', () => {
+    const index = Number(control.dataset.fibLevelEnabled); rememberObjects(); object.fibLevels[index].enabled = control.checked;
+    savePrototypeState(); renderFibSettings(object); renderWorkspace();
+  }));
+  host.querySelectorAll('[data-fib-level-value]').forEach(control => control.addEventListener('input', () => {
+    const index = Number(control.dataset.fibLevelValue); commitObjectSetting(object.fibLevels[index], 'value', Number(control.value));
+  }));
+  host.querySelectorAll('[data-fib-level-color]').forEach(control => control.addEventListener('input', () => {
+    const index = Number(control.dataset.fibLevelColor); object.fibLevels[index].color = control.value; savePrototypeState(); renderWorkspace();
+  }));
+  host.querySelectorAll('[data-fib-setting]').forEach(control => control.addEventListener('change', () => {
+    const key = control.dataset.fibSetting;
+    let value = control.type === 'checkbox' ? control.checked : control.value;
+    if (key === 'fibHorizontalWidth' || key === 'fibFontSize') value = Number(value);
+    if (key === 'fibBackgroundAlpha') value = Number(value) / 100;
+    commitObjectSetting(object, key, value);
+    if (key === 'color') document.querySelector('.color-swatch').style.background = value;
+  }));
+}
+
 function renderToolSpecificSettings(object) {
   const host = document.querySelector('#toolSpecificSettings');
+  if (object.type === 'fib') { renderFibSettings(object); return; }
   let extra = '';
-  if (object.type === 'fib') extra = `<div class="setting-section-title">斐波那契级别</div><div class="levels-table"><label><input type="checkbox" checked><i style="--level:#26a69a"></i><span>0</span></label><label><input type="checkbox" checked><i style="--level:#787b86"></i><span>0.5</span></label><label><input type="checkbox" checked><i style="--level:#ab47bc"></i><span>1</span></label></div><div class="setting-row"><span>标签</span><label class="switch"><input type="checkbox" checked><i></i></label><span>价格与比例</span></div>`;
-  else if (object.type === 'long' || object.type === 'short') extra = `<div class="setting-section-title">仓位工具</div><div class="setting-row"><span>利润区域</span><button class="color-input"><i style="background:#089981"></i>#089981</button><label class="switch"><input type="checkbox" checked><i></i></label></div><div class="setting-row"><span>止损区域</span><button class="color-input"><i style="background:#f23645"></i>#F23645</button><label class="switch"><input type="checkbox" checked><i></i></label></div><div class="setting-row"><span>显示</span><label><input type="checkbox" checked> 风险/回报比</label><label><input type="checkbox" checked> 数量</label></div>`;
+  if (object.type === 'long' || object.type === 'short') extra = `<div class="setting-section-title">仓位工具</div><div class="setting-row"><span>利润区域</span><button class="color-input"><i style="background:#089981"></i>#089981</button><label class="switch"><input type="checkbox" checked><i></i></label></div><div class="setting-row"><span>止损区域</span><button class="color-input"><i style="background:#f23645"></i>#F23645</button><label class="switch"><input type="checkbox" checked><i></i></label></div><div class="setting-row"><span>显示</span><label><input type="checkbox" checked> 风险/回报比</label><label><input type="checkbox" checked> 数量</label></div>`;
   else if (object.type === 'rectangle') extra = `<div class="setting-section-title">矩形</div><div class="setting-row"><span>背景</span><label class="switch"><input data-setting="fill" type="checkbox" ${object.fill === false ? '' : 'checked'}><i></i></label><input data-setting="backgroundAlpha" type="range" min="0" max="60" value="${Math.round((object.backgroundAlpha ?? .13) * 100)}"><b class="opacity-value">${Math.round((object.backgroundAlpha ?? .13) * 100)}%</b></div>`;
   else if (object.type === 'up' || object.type === 'down') extra = `<div class="setting-section-title">箭头标记</div><div class="setting-row"><span>大小</span><select data-setting="size"><option value="24">小</option><option value="30">中</option><option value="38">大</option></select></div>`;
   else if (object.type === 'path') extra = `<div class="setting-section-title">多段折线</div><div class="setting-row"><span>节点</span><span>${object.points?.length || 2} 个转折点；可在图上逐点拖动</span></div>`;
@@ -758,17 +895,67 @@ function renderToolSpecificSettings(object) {
   }));
 }
 
+function renderCoordinateSettings(object) {
+  const host = document.querySelector('#coordinateSettings');
+  const b = object.b || object.a;
+  const fibLabel = object.type === 'fib';
+  host.innerHTML = `<div class="coordinate-rows">
+    <div class="coordinate-row"><b>#1${fibLabel ? '（价格，K线）' : ''}</b><input type="number" step="0.01" data-coordinate-point="a" data-coordinate-field="value" value="${object.a.value.toFixed(2)}" aria-label="#1 价格"><input type="number" step="1" min="1" max="${bars.length}" data-coordinate-point="a" data-coordinate-field="index" value="${Math.round(object.a.index) + 1}" aria-label="#1 K线"></div>
+    <div class="coordinate-row"><b>#2${fibLabel ? '（价格，K线）' : ''}</b><input type="number" step="0.01" data-coordinate-point="b" data-coordinate-field="value" value="${b.value.toFixed(2)}" aria-label="#2 价格"><input type="number" step="1" min="1" max="${bars.length}" data-coordinate-point="b" data-coordinate-field="index" value="${Math.round(b.index) + 1}" aria-label="#2 K线"></div>
+  </div>`;
+  host.querySelectorAll('[data-coordinate-field]').forEach(control => control.addEventListener('input', () => {
+    rememberObjects();
+    const pointKey = control.dataset.coordinatePoint;
+    if (!object[pointKey]) object[pointKey] = { ...object.a };
+    object[pointKey][control.dataset.coordinateField] = control.dataset.coordinateField === 'index'
+      ? clamp(Number(control.value) - 1, 0, bars.length - 1)
+      : Number(control.value);
+    savePrototypeState(); renderWorkspace();
+  }));
+}
+
+function renderVisibilitySettings(object) {
+  const host = document.querySelector('#visibilitySettings');
+  if (object.type !== 'fib') {
+    host.innerHTML = `<p class="visibility-note">在所选周期中显示</p><div class="visibility-grid"><label><input type="checkbox">分钟</label><label><input type="checkbox">小时</label><label><input type="checkbox" checked>天</label><label><input type="checkbox" checked>周</label><label><input type="checkbox" checked>月</label></div>`;
+    return;
+  }
+  ensureFibSettings(object);
+  const labels = { ticks: 'ticks', seconds: '秒', minutes: '分钟', hours: '小时', days: '日', weeks: '周', months: '个月', ranges: 'Ranges' };
+  host.innerHTML = `<div class="fib-visibility-list">${Object.entries(labels).map(([key, label]) => {
+    const setting = object.fibVisibility[key];
+    const bounds = setting.min === undefined ? '' : `<input type="number" data-fib-visibility-bound="min" value="${setting.min}" ${setting.enabled ? '' : 'disabled'} aria-label="${label}最小值"><span class="visibility-range-track"></span><input type="number" data-fib-visibility-bound="max" value="${setting.max}" ${setting.enabled ? '' : 'disabled'} aria-label="${label}最大值">`;
+    return `<div class="fib-visibility-row" data-fib-visibility-key="${key}"><label><input type="checkbox" data-fib-visibility-enabled ${setting.enabled ? 'checked' : ''}>${label}</label>${bounds}</div>`;
+  }).join('')}</div>`;
+  host.querySelectorAll('[data-fib-visibility-key]').forEach(row => {
+    const setting = object.fibVisibility[row.dataset.fibVisibilityKey];
+    row.querySelector('[data-fib-visibility-enabled]').addEventListener('change', event => {
+      rememberObjects(); setting.enabled = event.target.checked; savePrototypeState(); renderVisibilitySettings(object); renderWorkspace();
+    });
+    row.querySelectorAll('[data-fib-visibility-bound]').forEach(control => control.addEventListener('input', () => {
+      rememberObjects(); setting[control.dataset.fibVisibilityBound] = Number(control.value); savePrototypeState(); renderWorkspace();
+    }));
+  });
+}
+
 function openObjectSettings() {
   const object = objectAtSelection();
   if (!object) { showToast('先在图上单击一个人工标绘'); return; }
+  objectSettingsSnapshot = structuredClone(object);
+  document.querySelector('#objectModal').classList.toggle('fib-object-modal', object.type === 'fib');
   document.querySelector('#objectModalTitle').textContent = toolNames[object.type] || '图形设置';
-  renderToolSpecificSettings(object);
-  const pointDate = point => bars[clamp(Math.round(point.index), 0, bars.length - 1)].date;
-  document.querySelector('#coordDate1').value = pointDate(object.a);
-  document.querySelector('#coordPrice1').value = object.a.value.toFixed(2);
-  document.querySelector('#coordDate2').value = pointDate(object.b || object.a);
-  document.querySelector('#coordPrice2').value = (object.b || object.a).value.toFixed(2);
+  document.querySelectorAll('#objectTabs button').forEach(button => button.classList.toggle('active', button.dataset.tab === 'style'));
+  document.querySelectorAll('.object-tab-panel').forEach(panel => panel.classList.toggle('active', panel.dataset.panel === 'style'));
+  renderToolSpecificSettings(object); renderCoordinateSettings(object); renderVisibilitySettings(object);
   openWorkspaceModal('objectModal');
+}
+
+function closeObjectSettings(revert = false) {
+  if (revert && objectSettingsSnapshot) {
+    const index = userObjects.findIndex(item => item.id === objectSettingsSnapshot.id);
+    if (index >= 0) userObjects[index] = structuredClone(objectSettingsSnapshot);
+  }
+  objectSettingsSnapshot = null; closeWorkspaceModal(); savePrototypeState(); updateObjectTree(); renderWorkspace();
 }
 
 document.querySelector('#quickSettings').addEventListener('click', openObjectSettings);
@@ -806,13 +993,27 @@ function updateObjectTree() {
 
 document.querySelectorAll('.timeframes .disabled').forEach(button => button.addEventListener('click', () => showToast(button.dataset.unavailable)));
 document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
-  document.querySelectorAll('.timeframes button').forEach(item => item.classList.remove('active')); button.classList.add('active'); showToast(`${button.textContent}线原型状态`);
+  document.querySelectorAll('.timeframes button').forEach(item => item.classList.remove('active')); button.classList.add('active');
+  activeTimeframeUnit = button.dataset.timeframe; renderWorkspace(); showToast(`${button.textContent}线原型状态`);
 }));
 document.querySelector('#openAlert').addEventListener('click', () => openWorkspaceModal('alertModal'));
 document.querySelector('#openObject').addEventListener('click', openObjectSettings);
 document.querySelector('#removeObjects').addEventListener('click', () => openWorkspaceModal('removeModal'));
 document.querySelectorAll('.close-modal').forEach(button => button.addEventListener('click', closeWorkspaceModal));
-document.querySelector('#modalBackdrop').addEventListener('click', event => { if (event.target.id === 'modalBackdrop') closeWorkspaceModal(); });
+document.querySelector('#closeObjectSettings').addEventListener('click', () => closeObjectSettings(false));
+document.querySelector('#cancelObjectSettings').addEventListener('click', () => closeObjectSettings(true));
+document.querySelector('#confirmObjectSettings').addEventListener('click', () => closeObjectSettings(false));
+document.querySelector('#objectTemplate').addEventListener('click', () => {
+  const object = objectAtSelection();
+  if (!object || object.type !== 'fib') { showToast('当前工具暂无可保存模板'); return; }
+  saveFibTemplate(ensureFibSettings(object));
+  showToast('当前斐波那契设置已保存为绘图模板');
+});
+document.querySelector('#modalBackdrop').addEventListener('click', event => {
+  if (event.target.id !== 'modalBackdrop') return;
+  if (document.querySelector('#objectModal').classList.contains('show')) closeObjectSettings(true);
+  else closeWorkspaceModal();
+});
 document.querySelector('#createAlert').addEventListener('click', () => { closeWorkspaceModal(); showToast('提醒已保存：收盘价向上穿越 5.20'); });
 
 document.querySelector('#toggleDrawings').addEventListener('click', () => {

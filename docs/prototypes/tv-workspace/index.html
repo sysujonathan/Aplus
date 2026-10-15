@@ -221,19 +221,18 @@
     </section>
 
     <section class="modal object-modal" id="objectModal">
-      <header><b id="objectModalTitle">斐波那契回撤</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
-      <nav class="modal-tabs" id="objectTabs"><button class="active" data-tab="style">样式</button><button data-tab="coordinates">坐标</button><button data-tab="visibility">可见性</button></nav>
+      <header><b id="objectModalTitle">斐波那契回撤</b><span class="rename-glyph" title="重命名">✎</span><button id="closeObjectSettings"><svg><use href="#i-close"/></svg></button></header>
+      <nav class="modal-tabs" id="objectTabs"><button class="active" data-tab="style">样式</button><button data-tab="coordinates">坐标</button><button data-tab="visibility">可见范围</button></nav>
       <div class="modal-body object-tab-panel active" data-panel="style">
         <div id="toolSpecificSettings"></div>
       </div>
       <div class="modal-body object-tab-panel" data-panel="coordinates">
-        <div class="coordinate-grid"><label>起点时间<input id="coordDate1" readonly></label><label>起点价格<input id="coordPrice1" readonly></label><label>终点时间<input id="coordDate2" readonly></label><label>终点价格<input id="coordPrice2" readonly></label></div>
+        <div id="coordinateSettings"></div>
       </div>
       <div class="modal-body object-tab-panel" data-panel="visibility">
-        <p class="visibility-note">在所选周期中显示</p>
-        <div class="visibility-grid"><label><input type="checkbox">分钟</label><label><input type="checkbox">小时</label><label><input type="checkbox" checked>天</label><label><input type="checkbox" checked>周</label><label><input type="checkbox" checked>月</label></div>
+        <div id="visibilitySettings"></div>
       </div>
-      <footer><button class="secondary">保存为默认</button><span></span><button class="secondary close-modal">取消</button><button class="primary close-modal">确定</button></footer>
+      <footer><button class="secondary template-button" id="objectTemplate">模板⌄</button><span></span><button class="secondary" id="cancelObjectSettings">取消</button><button class="primary" id="confirmObjectSettings">确认</button></footer>
     </section>
 
     <section class="modal snapshot-modal" id="snapshotModal">

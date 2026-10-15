@@ -255,7 +255,15 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .opacity-value { min-width: 38px; color: #bbb; text-align: right; }
 .zoom-selection { position: absolute; z-index: 7; display: none; border: 1px solid #2962ff; background: rgba(41,98,255,.12); pointer-events: none; }
 .zoom-selection.visible { display: block; }
-.object-tab-panel { display: none; min-height: 238px; }
+.object-modal { width: 458px; max-height: min(690px, 92vh); }
+.object-modal header { border-bottom: 0; font-size: 18px; }
+.object-modal .rename-glyph { margin-left: 9px; color: #9da0a7; font-size: 16px; }
+.object-modal .modal-tabs { margin: 0 16px; padding: 0; }
+.object-modal .modal-tabs button { padding: 0 0; margin-right: 28px; font-size: 14px; font-weight: 650; }
+.object-modal .modal-tabs button.active { border-bottom-color: #ececef; }
+.object-modal footer { position: relative; z-index: 2; background: #1f1f1f; }
+.object-modal .template-button { margin-right: auto; }
+.object-tab-panel { display: none; min-height: 238px; max-height: min(520px, calc(92vh - 150px)); overflow-y: auto; align-content: start; }
 .object-tab-panel.active { display: grid; }
 .coordinate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .coordinate-grid label { display: grid; gap: 6px; color: #999; font-size: 12px; }
@@ -263,6 +271,31 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .visibility-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .visibility-grid label { display: flex; align-items: center; gap: 7px; padding: 11px; border: 1px solid #3d3d3d; border-radius: 5px; background: #191919; }
 .visibility-grid input { width: auto; height: auto; accent-color: var(--blue); }
+.fib-setting-stack { display: grid; gap: 10px; }
+.fib-setting-row { min-height: 40px; display: flex; align-items: center; gap: 9px; }
+.fib-setting-row>b, .fib-setting-row>label:first-child { min-width: 96px; color: #d7d7db; font-size: 13px; font-weight: 500; }
+.fib-setting-row label { display: flex; align-items: center; gap: 9px; }
+.fib-setting-row input[type="checkbox"], .fib-level-cell input[type="checkbox"], .fib-visibility-row input[type="checkbox"] { width: 18px; height: 18px; padding: 0; accent-color: #f1f1f1; }
+.fib-setting-row input[type="color"], .fib-level-cell input[type="color"] { width: 36px; height: 34px; padding: 3px; border: 1px solid #4a4a4a; border-radius: 5px; background: #292929; }
+.fib-setting-row select { height: 36px; min-width: 86px; padding: 0 10px; border: 1px solid #484848; border-radius: 6px; background: #242424; color: #e0e0e3; }
+.fib-setting-row .fib-wide-select { min-width: 180px; }
+.fib-setting-row input[type="range"] { height: auto; padding: 0; border: 0; background: transparent; accent-color: #2962ff; }
+.fib-setting-row.compact { min-height: 30px; }
+.fib-setting-row.muted-option { color: #707177; }
+.fib-level-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; padding: 4px 0 8px; }
+.fib-level-cell { display: grid; grid-template-columns: 18px 1fr 36px; gap: 8px; align-items: center; }
+.fib-level-cell input[type="number"] { height: 36px; min-width: 0; padding: 0 9px; border: 1px solid #474747; border-radius: 6px; background: #242424; color: #e5e5e7; }
+.fib-level-cell.disabled { opacity: .44; }
+.coordinate-rows { display: grid; gap: 18px; padding: 2px 0 74px; }
+.coordinate-row { display: grid; grid-template-columns: 118px 1fr 1fr; gap: 10px; align-items: center; }
+.coordinate-row b { color: #d7d7db; font-size: 13px; font-weight: 500; }
+.coordinate-row input { height: 38px; min-width: 0; }
+.fib-visibility-list { display: grid; gap: 10px; padding-bottom: 18px; }
+.fib-visibility-row { display: grid; grid-template-columns: 72px 98px 1fr 98px; gap: 10px; align-items: center; min-height: 40px; }
+.fib-visibility-row label { display: flex; align-items: center; gap: 9px; color: #ddd; }
+.fib-visibility-row input[type="number"] { height: 38px; min-width: 0; }
+.visibility-range-track { height: 4px; border-radius: 3px; background: linear-gradient(90deg, #74767d 0 100%); box-shadow: inset 0 0 0 1px #0005; }
+.fib-visibility-row:has(input[type="checkbox"]:not(:checked)) { opacity: .48; }
 .snapshot-modal { width: min(830px, 80vw); }
 .snapshot-preview { height: min(460px, 58vh); display: grid; place-items: center; padding: 13px; background: #0c0c0c; }
 .snapshot-preview img { max-width: 100%; max-height: 100%; border: 1px solid #333; }
