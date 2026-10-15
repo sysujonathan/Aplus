@@ -109,6 +109,15 @@ def display_store(store):
     return ReadView(store.root, market_source(store)) if isinstance(store, Store) else store
 
 
+def load_job(root, job, check):
+    """Bounded read-only progress lookup. No Tk, Store init or write events."""
+    check()
+    rows = ReadView(root, None).rows(
+        'SELECT status,progress,total,message,result FROM jobs WHERE id=?', (job,))
+    check()
+    return rows[0] if rows else None
+
+
 def load_status(root, context, check):
     from .data import latest_market_date, latest_scan_date
     from workbench.readiness import audit_scope

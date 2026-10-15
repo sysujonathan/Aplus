@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 import json
+import logging
 import time
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -182,6 +183,10 @@ class ToolBar(ttk.Frame):
         self._async_status_mode = False
         self._source_pending = False
         self._source_reader = self._status_reader = None
+        self._job_reader = self._job_poll = None
+        self._job_read_pending = False
+        self._job_snapshot = None
+        self._job_read_error = False
         self._status_context = self._status_snapshot = None
         self._source_poll = self._status_poll = None
         self._premarket_progress = {}
@@ -464,10 +469,10 @@ class ToolBar(ttk.Frame):
         self._layout_traces = []
         for tip in self._status_tips:
             tip.leave()
-        for reader in (self._source_reader, self._status_reader):
+        for reader in (self._source_reader, self._status_reader, self._job_reader):
             if reader:
                 reader.close()
-        for poll in (self._source_poll, self._status_poll):
+        for poll in (self._source_poll, self._status_poll, self._job_poll):
             if poll:
                 self.after_cancel(poll)
 
@@ -800,7 +805,7 @@ class ToolBar(ttk.Frame):
         text = format_data_chain_status(market, signal, readiness)
         self._tickflow_audit = audit
         if hasattr(self,'btn_integrity'):
-            if market_source(self.store) in SOURCES:
+            if self._display_source() in SOURCES:
                 from workbench.gap_review import pending_count
                 count=(pending if pending is not None else pending_count(self.store,audit,self._tf_var.get())) if audit.get('scope_valid') else 0
                 label=(f'缺口处理 {count}' if count else '缺口分类') if audit.get('scope_valid') else '范围待核验'
@@ -810,12 +815,17 @@ class ToolBar(ttk.Frame):
                 self.btn_integrity.pack_forget()
         self._mkt_var.set(text)
         self._header_data_var.set(
-            SOURCES[market_source(self.store)]+' · '+format_header_data_status(market, signal, boards, audit)
+            SOURCES[self._display_source()]+' · '+format_header_data_status(market, signal, boards, audit)
         )
         return text
 
+    def _display_source(self):
+        # The display selection is already in Tk; progress painting
+        # must not make another blocking query on the busy business database.
+        return next((key for key,label in SOURCES.items() if label == self.source_var.get()), 'baostock')
+
     def _status_key(self):
-        return (market_source(self.store), tuple(self._selected_boards()), self._integrity_asof(), self._tf_var.get())
+        return (self._display_source(), tuple(self._selected_boards()), self._integrity_asof(), self._tf_var.get())
 
     def _load_status_async(self, force=False):
         from .background_status import LatestRefresh, load_status
@@ -1152,6 +1162,8 @@ class ToolBar(ttk.Frame):
             self.set_status(f"{label}提交失败：{exc}")
             return
         self._job_id, self._job_kind = job, label
+        self._job_snapshot = None
+        self._job_read_pending = self._job_read_error = False
         self._job_started_at = time.monotonic()
         if label == "更新行情":
             from workbench.market import completed_date
@@ -1180,7 +1192,7 @@ class ToolBar(ttk.Frame):
         if hasattr(self,'btn_auto_menu'):
             self.btn_auto_menu.state(['disabled'])
         self.set_status(f"⏳ {label}已提交（任务 {job[:8]}），排队中…")
-        self.after(800, self._poll_job)
+        self._job_poll = self.after(800, self._poll_job)
         # Successful submission first: version networking never delays or
         # invalidates a market/strategy task. One-click premarket uses this too.
         hint = getattr(self, '_on_scan_started', None)
@@ -1191,34 +1203,72 @@ class ToolBar(ttk.Frame):
                 pass
 
     def _poll_job(self):
-        """每 800ms 查一次 jobs 表，把进度滚到状态栏；终态时出简报并恢复按钮。"""
+        """Tk only paints snapshots; bounded reads run off-thread and recover."""
+        self._job_poll = None
         if not self._job_id or self.store is None:
             return
+        job = self._job_id
         try:
-            rows = self.store.rows(
-                "SELECT status, progress, total, message, result FROM jobs WHERE id=?",
-                (self._job_id,),
-            )
+            from .background_status import LatestRefresh, load_job
+            if self._job_reader is None:
+                root = self.store.root
+                self._job_reader = LatestRefresh(lambda value, check: load_job(root, value, check))
+            reply = self._job_reader.poll()
+            if reply and reply[1] == job:
+                self._job_read_pending = False
+                _, _, item, error = reply
+                self._job_read_error = error is not None
+                if error:
+                    logging.getLogger(__name__).warning('任务进度读取失败，将重试：%s', error)
+                elif item is None:
+                    # Only a successful empty query proves that it is absent.
+                    self._finish_job('failed', '任务记录不存在；请检查任务回执')
+                    return
+                else:
+                    self._job_snapshot = (job, item, time.monotonic())
+            if not self._job_read_pending:
+                self._job_reader.submit(job)
+                self._job_read_pending = True
+            snapshot = self._job_snapshot
+            if snapshot and snapshot[0] == job:
+                self._render_job_snapshot(snapshot[1])
+            else:
+                started = self._job_started_at
+                elapsed = max(0, time.monotonic()-started) if isinstance(started,(int,float)) else None
+                self._refresh_timing_status(running_elapsed=elapsed)
+                hint = '进度暂未读出，正在重试；不必重复点击' if self._job_read_error else '正在后台读取任务进度'
+                self.set_status(f'⏳ {self._job_kind}：{hint} · 已用时 {format_elapsed(elapsed)}')
         except Exception:
-            rows = []
-        if not rows:
-            self._finish_job("failed", "任务记录丢失")
-            return
-        j = rows[0]
+            # A display/read problem is not a business failure. Keep the stop
+            # control and task identity, log it, and never lose the next poll.
+            logging.getLogger(__name__).exception('任务进度显示异常')
+            self.set_status('进度显示暂未恢复，正在重试；请勿重复提交任务' if self._job_id
+                            else '任务已结束；结果显示暂未恢复，请查看任务回执')
+        finally:
+            # _finish_job may start a new chained job with its own timer.
+            if self._job_id == job:
+                self._job_poll = self.after(800, self._poll_job)
+
+    def _render_job_snapshot(self, j):
         if self._job_kind == '一键盘前':
             previous = self._premarket_progress
-            try:
-                self._premarket_progress = json.loads(j.get('result') or '{}').get('sources', {})
-            except (ValueError, TypeError):
-                self._premarket_progress = {}
-            source = market_source(self.store)
-            phase = self._premarket_progress.get(source, {}).get('phase')
+            result = json.loads(j.get('result') or '{}')
+            progress = result.get('sources', {})
+            if not isinstance(progress,dict):
+                raise ValueError('任务来源进度格式异常')
+            source = self._display_source()
+            phase = progress.get(source, {}).get('phase')
             if phase in ('完成','部分完成','未完成','失败','已停止') and phase != previous.get(source, {}).get('phase'):
                 self._load_market_status(force=True)
+            self._premarket_progress = progress
         status = j["status"]
         if status in ("queued", "running"):
             prog, total = j["progress"] or 0, j["total"] or 0
-            msg = (j["message"] or "").strip()
+            msg = (j["message"] or "").strip()[:180]
+            if self._job_read_error:
+                msg += ' · 进度暂未读出，正在重试（以上为上次进度）'
+            elif time.monotonic()-self._job_snapshot[2] > 3:
+                msg += ' · 正在后台读取新进度（以上为上次进度）'
             started = getattr(self, "_job_started_at", None)
             elapsed_seconds = (
                 max(0, time.monotonic() - started)
@@ -1228,11 +1278,10 @@ class ToolBar(ttk.Frame):
             elapsed = (f" · 已用时 {format_elapsed(elapsed_seconds)}"
                        if elapsed_seconds is not None else "")
             if total:
-                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg[:180]}{elapsed}")
+                self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg}{elapsed}")
             else:
                 fallback = '排队中…' if status == 'queued' else '运行中，准备核验…'
-                self.set_status(f"⏳ {self._job_kind}：{msg[:64] or fallback}{elapsed}")
-            self.after(800, self._poll_job)
+                self.set_status(f"⏳ {self._job_kind}：{msg or fallback}{elapsed}")
             return
         self._finish_job(status, j["message"] or "", j["result"] or "")
 

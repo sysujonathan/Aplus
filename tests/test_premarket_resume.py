@@ -228,6 +228,21 @@ def test_same_day_reruns_and_different_revisions_are_never_yellow():
     assert candidate_repeat_counts([dict(code='sh.600000')])['sh.600000']==1
 
 
+@pytest.mark.parametrize('source',['baostock','tickflow','tencent'])
+@pytest.mark.parametrize('timeframe',['daily','weekly'])
+def test_screenshot_single_day_two_versions_are_one_hit_without_deleting_history(store,frame,source,timeframe):
+    day = frame.date.iloc[-1]
+    for version in ('earlier-rule','current-rule'):
+        did = save_dataset(store,'sz.002428',frame,source,ADJUSTMENTS[source],timeframe=timeframe)
+        store.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+            (version,'job','sz.002428','MTR_MASTER',version,timeframe,day,day,did,'{}',version))
+    grouped = load_candidates(store,timeframe,source,tuple(day.split('-')))
+    rows = grouped['MTR_MASTER']
+    assert len(rows) == 1
+    assert collapse_candidate_rows(rows)[0]['repeat_count'] == 1
+    assert len(store.rows('SELECT id FROM observations')) == 2
+
+
 def test_current_list_one_result_per_day_keeps_database_history(store,frame):
     did=save_dataset(store,'sh.600000',frame,'baostock','前复权'); day=frame.date.iloc[-1]
     for i in range(3):
