@@ -10,3 +10,4 @@ mplfinance==0.12.10b0
 pystray>=0.19,<1
 pypinyin==0.55.0
 rapidocr-onnxruntime==1.4.4
+pywebview==6.2.1

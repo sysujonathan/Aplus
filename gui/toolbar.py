@@ -384,7 +384,7 @@ class ToolBar(ttk.Frame):
         ttk.Separator(filters, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=(12, 8), pady=2
         )
-        self.layout_var = tk.StringVar(value="2×2")
+        self.layout_var = tk.StringVar(value="1×1")
         self.layout_combo = ttk.Combobox(
             filters,
             textvariable=self.layout_var,

@@ -1034,5 +1034,17 @@ class ChartWorkspaceDialog:
 
 
 def open_chart_workspace(parent, store, **context):
-    """Small integration seam used by candidate, holding and closed-trade charts."""
+    """Open the production WebView; keep the Tk canvas as a safe local fallback."""
+    if os.environ.get('APLUS_TK_CHART_FALLBACK') != '1':
+        try:
+            from .chart_shell import launch_chart_workspace
+            process = launch_chart_workspace(store, **context)
+            if process is not None:
+                return process
+        except Exception as exc:
+            messagebox.showwarning(
+                '高保真图表暂不可用',
+                '本机 WebView 未能启动，已切换到兼容图表；行情和图形记录不受影响。\n\n' + str(exc),
+                parent=parent,
+            )
     return ChartWorkspaceDialog(parent, store, **context)

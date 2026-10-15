@@ -156,7 +156,7 @@ class AplusMainWindow(ttk.Window):
         self.chart = ChartGrid(
             body,
             self.store,
-            layout_count=4,
+            layout_count=1,
             on_page_state=self.toolbar.set_chart_page_status,
             on_active_item=self._on_chart_item_activated,
         )

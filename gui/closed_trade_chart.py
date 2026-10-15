@@ -178,6 +178,7 @@ class ClosedTradeChartDialog:
             record={**self.data.get('dataset', {}), 'timeframe': 'daily'},
             code=self.data['code'], name=self.data['name'], timeframe='daily',
             holding_levels=self.data.get('levels', ()), replay_events=self.data.get('events', ()),
+            context_kind='holding' if self.data.get('holding') else 'closed',
             title=f"A++ 图表工作区 · {self.data['name']} {self.data['code']}")
 
     def close(self):

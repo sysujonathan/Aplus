@@ -6,6 +6,7 @@ import pytest
 
 from gui.chart_renderer import render_chart
 from gui.chart_workspace import resample_daily
+from gui.chart_bridge import ChartBridge, workspace_boot
 from workbench.chart_workspace import (
     History, aggregate_minutes, bar_completed, create_alert, document, evaluate_alert, identity,
     make_drawing, minute_frame, risk_readout, session_counts,
@@ -155,3 +156,53 @@ def test_weekly_and_monthly_views_are_derived_only_from_real_daily_bars():
     weekly = resample_daily(frame,'weekly'); monthly = resample_daily(frame,'monthly')
     assert weekly.volume.sum() == frame.volume.sum() == monthly.volume.sum()
     assert weekly.iloc[0].open == frame.iloc[0].open
+
+
+def test_production_web_workspace_uses_real_context_and_persists_objects(tmp_path):
+    store = Store(tmp_path)
+    frame = bars(pd.bdate_range('2026-01-05', periods=40).strftime('%Y-%m-%d').tolist())
+    boot = workspace_boot(store, dict(
+        frame=frame, record={'source': 'baostock', 'adjustment': '前复权'},
+        code='sz.000001', name='平安银行', timeframe='daily', context_kind='watch',
+        strategy_type='STRATEGY_GAP_H2',
+        payload={'gap_floor': 10.2, 'gap_top': 10.5, 'bo_date': frame.date.iloc[20],
+                 'h2_setup_date': frame.date.iloc[30], 'entry_plan_price': 14.2,
+                 'sl1_plan_price': 12.8, 'mm_target': 16.4},
+    ))
+    assert boot['production'] and boot['contextTitle'] == '自选标的'
+    assert boot['bars'][-1]['date'] == frame.date.iloc[-1]
+    assert set(boot['series']) == {'daily', 'weekly', 'monthly'}
+    assert sum(row['volume'] for row in boot['series']['weekly']) == sum(frame.volume)
+    assert boot['drawings'] == []
+
+    bridge = ChartBridge(store, boot)
+    state = {'objects': [{
+        'id': 'trend-web-1', 'type': 'trend',
+        'a': {'index': 5, 'value': 10.1}, 'b': {'index': 15, 'value': 12.3},
+        'color': '#2962ff', 'width': 2, 'visible': True, 'locked': False,
+        'createdAtIndex': 15,
+    }], 'toolbar': {'left': '410px', 'top': '58px'},
+        'view': {'count': 32, 'offset': 4, 'priceZoom': 1.2}, 'timeframe': 'daily'}
+    saved = bridge.save_state(state, 0)
+    assert saved['revision'] == 1
+    reopened = workspace_boot(store, dict(
+        frame=frame, record={'source': 'baostock', 'adjustment': '前复权'},
+        code='sz.000001', name='平安银行', timeframe='daily', context_kind='watch'))
+    assert reopened['drawings'][0]['a'] == {'index': 5, 'value': 10.1}
+    assert reopened['state']['toolbar']['left'] == '410px'
+    assert reopened['state']['view']['count'] == 32
+    assert store.rows('SELECT COUNT(*) AS n FROM observations')[0]['n'] == 0
+    assert store.rows('SELECT COUNT(*) AS n FROM positions')[0]['n'] == 0
+
+
+def test_web_workspace_alert_is_forward_only_store_alert(tmp_path):
+    store = Store(tmp_path)
+    frame = bars()
+    boot = workspace_boot(store, dict(
+        frame=frame, record={'source': 'baostock', 'adjustment': '前复权'},
+        code='sz.000001', name='平安银行', timeframe='daily'))
+    result = ChartBridge(store, boot).create_price_alert(12.5, name='收盘突破')
+    assert result['alert']['cursor'] == frame.date.iloc[-1]
+    saved = store.chart_document(boot['identity'])
+    assert saved['alerts'][0]['name'] == '收盘突破'
+    assert saved['alerts'][0]['events'] == []

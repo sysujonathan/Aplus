@@ -272,7 +272,7 @@ class ChartPanel(native_ttk.Frame):
                 frame=calculated, record={**(record or {}), 'timeframe': self._tf}, code=self._code,
                 name=name, timeframe=self._tf, payload=payload, metadata=instance.get_metadata(),
                 strategy=instance, strategy_type=observation['strategy'],
-                instrument_type=bars.attrs.get('instrument_type'), title='',
+                instrument_type=bars.attrs.get('instrument_type'), title='', context_kind=mode,
             )
             chart_identity = f"{self._code}  {name}".rstrip()
             if mode == "watch":
@@ -381,11 +381,18 @@ class ChartPanel(native_ttk.Frame):
         spec=catalog(self.store)[observation['strategy']]
         bars=prepare(frame,observation['timeframe'],str(cutoff)[:10])
         instance,calculated=calculate(spec,bars)
+        from workbench.h2_plan import display_plan, is_h2
+        if spec.id == 'STRATEGY_GAP_H2' and is_h2(instance.get_metadata()):
+            payload = display_plan(
+                spec, bars, payload, observation['code'],
+                observation.get('setup_date') or observation['asof'], request['mode'],
+            )
         context=dict(frame=calculated,record={**(record or {}),'timeframe':observation['timeframe']},
             code=observation['code'],name=code_names(self.store).get(observation['code'],''),
             timeframe=observation['timeframe'],payload=payload,metadata=instance.get_metadata(),
             strategy=instance,strategy_type=observation['strategy'],
-            instrument_type=bars.attrs.get('instrument_type'),title='')
+            instrument_type=bars.attrs.get('instrument_type'),title='',
+            context_kind=request['mode'])
         self._workspace_context=context
         return context
 

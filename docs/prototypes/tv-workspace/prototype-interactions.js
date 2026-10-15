@@ -1,8 +1,12 @@
-/* TradingView interaction study: local-only prototype behavior. */
-const tvStateKey = 'aplus-tv-prototype-002259-v3';
+/* TradingView interaction study and production A++ WebView behavior. */
+const chartBoot = window.APLUS_CHART_BOOT || {};
+const tvStateKey = chartBoot.production
+  ? `aplus-tv-${chartBoot.identity}`
+  : 'aplus-tv-prototype-002259-v3';
 const DEFAULT_VISIBLE_BARS = 204;
 const RIGHT_MARGIN_BARS = 12;
-const focusStartIndex = bars.findIndex(row => row.date === '2026-06-22');
+const focusDate = chartBoot.evidence?.bo_date || '2026-06-22';
+const focusStartIndex = Math.max(0, bars.findIndex(row => row.date === focusDate));
 const focusIndex = index => focusStartIndex + index;
 const toolNames = {
   fib: '斐波那契回撤', long: '多头仓位', ray: '水平射线', trend: '趋势线',
@@ -50,9 +54,14 @@ let activeTimeframeUnit = 'daily';
 let objectSettingsSnapshot = null;
 let replayCalendarCursor = new Date(`${bars[Math.max(0, bars.length - 35)].date}T00:00:00`);
 const initialPrototypeState = loadPrototypeState();
-let userObjects = initialPrototypeState.objects || structuredClone(defaultObjects);
+let userObjects = chartBoot.production
+  ? structuredClone(chartBoot.drawings || initialPrototypeState.objects || [])
+  : initialPrototypeState.objects || structuredClone(defaultObjects);
+let chartAlerts = structuredClone(chartBoot.alerts || []);
 let undoStack = [];
 let redoStack = [];
+let bridgeRevision = Number(chartBoot.revision || 0);
+let bridgeSaveChain = Promise.resolve();
 viewCount = Math.min(DEFAULT_VISIBLE_BARS, bars.length);
 viewOffset = 0;
 if (initialPrototypeState.view) {
@@ -63,17 +72,30 @@ if (initialPrototypeState.view) {
 }
 
 function loadPrototypeState() {
+  if (chartBoot.production && chartBoot.state) return structuredClone(chartBoot.state);
   try { return JSON.parse(localStorage.getItem(tvStateKey) || '{}'); } catch (_) { return {}; }
 }
 
 function savePrototypeState() {
   try {
     const toolbar = document.querySelector('#favoriteTools');
-    localStorage.setItem(tvStateKey, JSON.stringify({
+    const state = {
       objects: userObjects,
       toolbar: { left: toolbar.style.left, top: toolbar.style.top },
-      view: { count: viewCount, offset: viewOffset, priceZoom, priceCenterOffset }
-    }));
+      view: { count: viewCount, offset: viewOffset, priceZoom, priceCenterOffset },
+      timeframe: activeTimeframeUnit
+    };
+    localStorage.setItem(tvStateKey, JSON.stringify(state));
+    if (chartBoot.production && window.pywebview?.api?.save_state) {
+      document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>正在保存到本机…';
+      bridgeSaveChain = bridgeSaveChain.then(() => window.pywebview.api.save_state(state, bridgeRevision))
+        .then(result => {
+          bridgeRevision = Number(result.revision);
+          document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>所有更改已保存到本机';
+        }).catch(error => {
+          document.querySelector('.save-state').textContent = `尚未保存：${error.message || error}`;
+        });
+    }
   } catch (_) { /* local files can disable storage; the prototype still works. */ }
 }
 
@@ -250,7 +272,7 @@ function renderWorkspace() {
   });
 
   if (drawingsVisible) {
-    if (!replayActive || replayIndex >= focusIndex(57)) drawStrategyEvidence(ctx, canvas._view);
+    if (chartBoot.production || !replayActive || replayIndex >= focusIndex(57)) drawStrategyEvidence(ctx, canvas._view);
     userObjects.filter(item => item.visible !== false && objectVisibleAtTimeframe(item) && (!replayActive || (item.createdAtIndex ?? bars.length - 1) <= replayIndex)).forEach(item => drawUserObject(ctx, canvas._view, item));
     if (draftAnchor && draftCursor) drawUserObject(ctx, canvas._view, {
       id: 'draft', type: activeDrawingTool, a: draftAnchor, b: draftCursor,
@@ -267,6 +289,43 @@ function renderWorkspace() {
 function drawStrategyEvidence(ctx, view) {
   const { left, width, right, y, candleWidth, xGlobal } = view;
   const plotRight = width - right;
+  if (chartBoot.production) {
+    const evidence = chartBoot.evidence || {};
+    const at = day => Math.max(0, bars.findIndex(row => String(row.date).slice(0, 10) === String(day || '').slice(0, 10)));
+    const floor = Number(evidence.gap_floor);
+    const top = Number(evidence.gap_top);
+    const boIndex = at(evidence.bo_date);
+    const setupIndex = at(evidence.h2_setup_date || evidence.setup_date || evidence.asof);
+    if (Number.isFinite(floor) && Number.isFinite(top) && top > floor) {
+      const gapLeft = Math.max(left, xGlobal(boIndex) - candleWidth * .55);
+      const gapRight = Math.min(plotRight, xGlobal(Math.max(boIndex, setupIndex)) + candleWidth * .55);
+      ctx.save();
+      ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2; ctx.globalAlpha = .72;
+      ctx.setLineDash([6, 4]); ctx.strokeRect(gapLeft, y(top), gapRight - gapLeft, y(floor) - y(top));
+      ctx.setLineDash([]); ctx.globalAlpha = .6;
+      ctx.beginPath(); ctx.moveTo(gapLeft, y(floor)); ctx.lineTo(plotRight, y(floor)); ctx.stroke();
+      ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#2962ff';
+      ctx.fillRect((gapLeft + gapRight) / 2 - 19, y((floor + top) / 2) - 10, 38, 20);
+      ctx.strokeRect((gapLeft + gapRight) / 2 - 19, y((floor + top) / 2) - 10, 38, 20);
+      ctx.fillStyle = '#2962ff'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'center';
+      ctx.fillText('Gap', (gapLeft + gapRight) / 2, y((floor + top) / 2) + 4);
+      ctx.restore();
+      if (evidence.bo_high) callout(ctx, 'BO', xGlobal(boIndex), y(Number(evidence.bo_high)), xGlobal(boIndex - 3), y(Number(evidence.bo_high)) - 28);
+      if (evidence.h1_date && evidence.h1_high) callout(ctx, 'H1', xGlobal(at(evidence.h1_date)), y(Number(evidence.h1_high)), xGlobal(at(evidence.h1_date) - 3), y(Number(evidence.h1_high)) - 28);
+      if (evidence.h2_high && (!replayActive || replayIndex >= setupIndex)) callout(ctx, 'H2', xGlobal(setupIndex), y(Number(evidence.h2_high)), xGlobal(setupIndex - 3), y(Number(evidence.h2_high)) - 32, true);
+      callout(ctx, 'Gap Floor', gapLeft, y(floor), Math.max(left + 5, gapLeft - 32), y(floor) + 28);
+      registerRect('strategy-evidence', gapLeft, y(top), gapRight, y(floor));
+    }
+    (chartBoot.holdingLevels || []).forEach(level => {
+      const price = Number(level.price ?? level.value);
+      if (!Number.isFinite(price) || price <= 0) return;
+      ctx.save(); ctx.strokeStyle = level.color || '#b8bdc8'; ctx.setLineDash(level.style === '--' ? [7, 5] : level.style === '-.' ? [7, 4, 2, 4] : []);
+      ctx.beginPath(); ctx.moveTo(left, y(price)); ctx.lineTo(plotRight, y(price)); ctx.stroke();
+      ctx.fillStyle = level.color || '#b8bdc8'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'left';
+      ctx.fillText(`${level.label} ${price.toFixed(2)}`, left + 8, y(price) - 5); ctx.restore();
+    });
+    return;
+  }
   const gapLeft = Math.max(left, xGlobal(focusIndex(57)) - candleWidth * .55);
   const gapRight = Math.min(plotRight, xGlobal(focusIndex(64)) + candleWidth * .55);
   ctx.save();
@@ -976,11 +1035,14 @@ document.querySelectorAll('#objectTabs button').forEach(button => button.addEven
 
 function updateObjectTree() {
   const tree = document.querySelector('.object-tree');
+  const escaped = value => String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]);
   tree.innerHTML = `
     <label><input type="checkbox" checked disabled><span class="tree-eye">◉</span><b>策略证据</b><small>只读</small></label>
     <label><input type="checkbox" checked disabled><span class="tree-eye">◉</span><b>EMA 20</b><small>指标</small></label>
     ${userObjects.map(item => `<label data-object-id="${item.id}" class="${item.id === selectedId ? 'selected' : ''}"><input type="checkbox" ${item.visible === false ? '' : 'checked'}><span class="tree-eye">${item.visible === false ? '○' : '◉'}</span><b>${toolNames[item.type] || item.type}</b><small>已保存</small></label>`).join('')}
-    <label><input type="checkbox" checked disabled><span class="tree-eye">◉</span><b>价格提醒 5.20</b><small>本机</small></label>`;
+    ${chartAlerts.map(alert => `<label><input type="checkbox" ${alert.enabled === false ? '' : 'checked'} disabled><span class="tree-eye">${alert.enabled === false ? '○' : '◉'}</span><b>${escaped(alert.name)}</b><small>本机</small></label>`).join('')}`;
   tree.querySelectorAll('[data-object-id]').forEach(label => {
     label.addEventListener('click', event => {
       const object = userObjects.find(item => item.id === label.dataset.objectId); if (!object) return;
@@ -992,7 +1054,45 @@ function updateObjectTree() {
 }
 
 document.querySelectorAll('.timeframes .disabled').forEach(button => button.addEventListener('click', () => showToast(button.dataset.unavailable)));
+function switchProductionTimeframe(timeframe, persist = true) {
+  const target = chartBoot.series?.[timeframe];
+  if (!chartBoot.production || !target?.length || timeframe === activeTimeframeUnit) return false;
+  const pointDate = point => point ? { date: bars[clamp(Math.round(point.index), 0, bars.length - 1)].date, value: point.value } : null;
+  const anchors = new Map(userObjects.map(object => [object.id, {
+    a: pointDate(object.a), b: pointDate(object.b),
+    points: (object.points || []).map(pointDate),
+    created: bars[clamp(Number(object.createdAtIndex ?? bars.length - 1), 0, bars.length - 1)].date
+  }]));
+  bars.splice(0, bars.length, ...structuredClone(target));
+  const targetDates = bars.map(row => new Date(`${String(row.date).slice(0, 10)}T00:00:00`).getTime());
+  const remap = point => {
+    if (!point) return null;
+    const stamp = new Date(`${String(point.date).slice(0, 10)}T00:00:00`).getTime();
+    const index = targetDates.reduce((best, value, at) => Math.abs(value - stamp) < Math.abs(targetDates[best] - stamp) ? at : best, 0);
+    return { index, value: point.value };
+  };
+  userObjects.forEach(object => {
+    const saved = anchors.get(object.id); object.a = remap(saved.a); if (saved.b) object.b = remap(saved.b);
+    if (saved.points.length) object.points = saved.points.map(remap);
+    object.createdAtIndex = remap({ date: saved.created, value: 1 }).index;
+  });
+  ema.splice(0, ema.length);
+  bars.forEach((row, index) => ema.push(index ? row.close * (2 / 21) + ema[index - 1] * (19 / 21) : row.close));
+  activeTimeframeUnit = timeframe; replayIndex = bars.length - 1;
+  viewCount = Math.min(DEFAULT_VISIBLE_BARS, bars.length); viewOffset = 0; priceZoom = 1; priceCenterOffset = 0;
+  document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === timeframe));
+  const period = timeframe === 'weekly' ? '1周' : timeframe === 'monthly' ? '1月' : '1天';
+  document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
+  renderWorkspace(); if (persist) savePrototypeState(); return true;
+}
+
 document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
+  if (chartBoot.production) {
+    if (button.dataset.timeframe === activeTimeframeUnit) return;
+    if (switchProductionTimeframe(button.dataset.timeframe)) showToast(`已切换到${button.textContent}线真实聚合行情`);
+    else showToast('当前入口没有该周期的真实底层行情');
+    return;
+  }
   document.querySelectorAll('.timeframes button').forEach(item => item.classList.remove('active')); button.classList.add('active');
   activeTimeframeUnit = button.dataset.timeframe; renderWorkspace(); showToast(`${button.textContent}线原型状态`);
 }));
@@ -1014,7 +1114,18 @@ document.querySelector('#modalBackdrop').addEventListener('click', event => {
   if (document.querySelector('#objectModal').classList.contains('show')) closeObjectSettings(true);
   else closeWorkspaceModal();
 });
-document.querySelector('#createAlert').addEventListener('click', () => { closeWorkspaceModal(); showToast('提醒已保存：收盘价向上穿越 5.20'); });
+document.querySelector('#createAlert').addEventListener('click', async () => {
+  const value = Number(document.querySelector('#alertPrice').value);
+  const name = document.querySelector('#alertName').value.trim();
+  if (!Number.isFinite(value) || value <= 0) { showToast('请输入有效提醒价格'); return; }
+  try {
+    if (chartBoot.production && window.pywebview?.api?.create_price_alert) {
+      const result = await window.pywebview.api.create_price_alert(value, 'cross_up', name, 'price');
+      bridgeRevision = Number(result.revision); chartAlerts.push(result.alert); updateObjectTree();
+    }
+    closeWorkspaceModal(); showToast(`提醒已保存：收盘价向上穿越 ${value.toFixed(2)}`);
+  } catch (error) { showToast(`提醒未保存：${error.message || error}`); }
+});
 
 document.querySelector('#toggleDrawings').addEventListener('click', () => {
   drawingsVisible = !drawingsVisible; renderWorkspace(); showToast(drawingsVisible ? '已显示所有图形' : '已隐藏所有图形');
@@ -1172,7 +1283,7 @@ async function copyCurrentChartSnapshot() {
 }
 document.querySelector('#snapshot').addEventListener('click', copyCurrentChartSnapshot);
 document.querySelector('#downloadSnapshot').addEventListener('click', () => {
-  const link = document.createElement('a'); link.download = 'Aplus-002259-2026-09-30.png'; link.href = canvas.toDataURL('image/png'); link.click(); closeWorkspaceModal();
+  const link = document.createElement('a'); link.download = `Aplus-${chartBoot.displaySymbol || '002259'}-${String(bars.at(-1).date).slice(0, 10)}.png`; link.href = canvas.toDataURL('image/png'); link.click(); closeWorkspaceModal();
 });
 document.querySelectorAll('.candidate').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.candidate').forEach(item => item.classList.remove('active')); button.classList.add('active'); if (!button.textContent.includes('升达林业')) showToast('静态原型仅嵌入 002259 真实日线');
@@ -1194,6 +1305,73 @@ document.querySelector('#redoAction').addEventListener('click', () => {
   document.querySelector('#selectedObject').classList.remove('visible'); savePrototypeState(); updateUndoButtons(); updateObjectTree(); renderWorkspace(); showToast('已重做图形操作');
 });
 
+function applyProductionContext() {
+  if (!chartBoot.production) return;
+  const latest = chartBoot.latest || bars.at(-1);
+  const display = chartBoot.displaySymbol || chartBoot.symbol;
+  const market = String(chartBoot.symbol || '').startsWith('sh.') ? '沪' : '深';
+  document.title = `A++ 图表工作区 · ${chartBoot.name} ${display}`;
+  document.querySelector('.symbol-pill b').textContent = display;
+  document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${chartBoot.timeframe === 'weekly' ? '1周' : chartBoot.timeframe === 'monthly' ? '1月' : '1天'} · ${market === '沪' ? 'SSE' : 'SZSE'}`;
+  document.querySelector('.exchange-dot').textContent = market;
+  ['open', 'high', 'low', 'close'].forEach(key => { document.querySelector(`#${key}Value`).textContent = Number(latest[key]).toFixed(2); });
+  const change = bars.length > 1 ? Number(latest.close) - Number(bars.at(-2).close) : 0;
+  const pct = bars.length > 1 && Number(bars.at(-2).close) ? change / Number(bars.at(-2).close) * 100 : 0;
+  const changeNode = document.querySelector('.ohlc .positive');
+  changeNode.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)} (${change >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+  changeNode.className = change >= 0 ? 'positive' : 'negative';
+  document.querySelector('.quote.sell b').textContent = (Number(latest.close) - .01).toFixed(2);
+  document.querySelector('.quote.buy b').textContent = Number(latest.close).toFixed(2);
+  document.querySelector('.panel-context span').textContent = `${chartBoot.contextTitle} · ${String(latest.date).slice(0, 10)}`;
+  document.querySelector('.panel-tabs [data-panel="strategy"]').textContent = chartBoot.contextTitle;
+  document.querySelector('.candidate-list').innerHTML = `<button class="candidate active"><span class="badge ${market === '沪' ? 'sh' : 'sz'}">${market}</span><span class="candidate-name"><b></b><small></small></span><span class="candidate-price"><b></b><small></small></span></button>`;
+  const candidate = document.querySelector('.candidate-list .candidate');
+  candidate.querySelector('.candidate-name b').textContent = chartBoot.name;
+  candidate.querySelector('.candidate-name small').textContent = `${display} · ${chartBoot.strategyType ? chartBoot.strategyType.replace('STRATEGY_', '') : chartBoot.contextTitle}`;
+  candidate.querySelector('.candidate-price b').textContent = Number(latest.close).toFixed(2);
+  candidate.querySelector('.candidate-price small').textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+  candidate.querySelector('.candidate-price small').className = pct >= 0 ? 'positive' : 'negative';
+  const evidence = chartBoot.evidence || {};
+  const entry = Number(evidence.entry_plan_price ?? evidence.entry);
+  const stop = Number(evidence.sl1_plan_price ?? evidence.stop);
+  const target = Number(evidence.mm_target ?? evidence.target);
+  const card = document.querySelector('.decision-card');
+  if ([entry, stop, target].every(Number.isFinite)) {
+    card.querySelector('.decision-title span').textContent = chartBoot.contextKind === 'watch' ? '关注计划证据' : '次日挂单机会';
+    card.querySelector('.decision-title b').textContent = evidence.pending_state === 'PENDING' ? '待挂' : (evidence.pending_state || '只读');
+    const values = card.querySelectorAll('dd');
+    [entry, stop, target].forEach((value, index) => { values[index].textContent = value.toFixed(2); });
+    const risk = entry > stop ? (entry - stop) / entry * 100 : Number(evidence.initial_risk_pct || 0);
+    const reward = entry > stop ? (target - entry) / (entry - stop) : Number(evidence.mm_r_multiple || 0);
+    const spans = card.querySelectorAll('.risk-line span');
+    spans[0].textContent = `风险 ${risk.toFixed(2)}%`; spans[1].textContent = `收益 ${reward.toFixed(2)}R`;
+  } else if ((chartBoot.holdingLevels || []).length) {
+    card.querySelector('.decision-title span').textContent = chartBoot.contextTitle;
+    card.querySelector('.decision-title b').textContent = '账本只读';
+    card.querySelector('dl').innerHTML = chartBoot.holdingLevels.slice(0, 3).map(level => `<div><dt>${level.label}</dt><dd>${Number(level.value).toFixed(2)}</dd></div>`).join('');
+    card.querySelector('.risk-line').textContent = '实际成交与参考水平来自本机账本';
+  } else {
+    card.querySelector('.decision-title span').textContent = chartBoot.contextTitle;
+    card.querySelector('.decision-title b').textContent = '只读';
+    card.querySelector('dl').innerHTML = '<div><dt>行情</dt><dd>真实日线</dd></div>';
+    card.querySelector('.risk-line').textContent = '当前没有可显示的计划价位';
+  }
+  const alertSymbol = document.querySelector('#alertModal .select-row b');
+  if (alertSymbol) alertSymbol.textContent = `${chartBoot.name} · ${display}`;
+  document.querySelector('#alertPrice').value = Number(latest.close).toFixed(2);
+  document.querySelector('#alertName').value = `${display} 向上穿越 ${Number(latest.close).toFixed(2)}`;
+  document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === chartBoot.timeframe));
+  activeTimeframeUnit = chartBoot.timeframe;
+  const restoredTimeframe = initialPrototypeState.timeframe || chartBoot.timeframe;
+  if (restoredTimeframe !== chartBoot.timeframe && switchProductionTimeframe(restoredTimeframe, false)) {
+    const savedView = initialPrototypeState.view || {};
+    viewCount = clamp(Number(savedView.count) || DEFAULT_VISIBLE_BARS, 18, bars.length);
+    viewOffset = clamp(Number(savedView.offset) || 0, 0, Math.max(0, bars.length - viewCount));
+    priceZoom = clamp(Number(savedView.priceZoom) || 1, .45, 7);
+    priceCenterOffset = Number(savedView.priceCenterOffset) || 0;
+  }
+}
+
 window.addEventListener('keydown', event => {
   if (replayActive && event.shiftKey && (event.key === '+' || event.key === '=')) {
     event.preventDefault(); replayPlaying ? stopReplayTimer() : startReplayTimer(); return;
@@ -1206,6 +1384,7 @@ window.addEventListener('keydown', event => {
 
 const workspaceResize = new ResizeObserver(renderWorkspace);
 workspaceResize.observe(wrap);
+applyProductionContext();
 updateObjectTree(); renderWorkspace();
 updateUndoButtons();
 

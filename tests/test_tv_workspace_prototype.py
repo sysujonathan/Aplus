@@ -100,3 +100,17 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert '.chart-nav-controls.visible' in style
     assert 'cursor: ns-resize' in style
 
+
+def test_prototype_is_also_bound_to_the_production_store_bridge():
+    html = (PROTOTYPE / 'index.html').read_text(encoding='utf-8')
+    script = (PROTOTYPE / 'prototype-interactions.js').read_text(encoding='utf-8')
+    shell = (ROOT / 'gui' / 'chart_shell.py').read_text(encoding='utf-8')
+    bridge = (ROOT / 'gui' / 'chart_bridge.py').read_text(encoding='utf-8')
+
+    assert 'window.APLUS_CHART_BOOT' in script
+    assert 'window.pywebview.api.save_state' in script
+    assert 'create_price_alert' in script
+    assert 'id="alertPrice"' in html and 'id="alertName"' in html
+    assert 'webview.create_window' in shell and 'gui="edgechromium"' in shell
+    assert 'save_chart_document' in bridge
+

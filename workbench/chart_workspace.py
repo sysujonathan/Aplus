@@ -14,7 +14,7 @@ TOOLS = [('fib', '斐波那契'), ('long', '多头测算'), ('ray', '水平射�
          ('up', '向上箭头'), ('down', '向下箭头'), ('arrow', '箭头标记'),
          ('path', '路径'), ('channel', '平行通道')]
 POINT_COUNTS = dict(fib=2, long=1, ray=1, trend=2, short=1, rectangle=2,
-                    up=1, down=1, arrow=2, path=0, channel=3)
+                    up=1, down=1, arrow=2, path=0, channel=3, text=1, ruler=2)
 DEFAULT_SETTINGS = dict(ema=True, ema_length=20, ema_source='close', ema_offset=0,
                         ema_color='#f0a202', bar_count=False, count_interval=2,
                         count_color='#f0a202', count_size=11, volume=False,
