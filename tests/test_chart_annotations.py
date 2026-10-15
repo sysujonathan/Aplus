@@ -21,7 +21,8 @@ from gui.chart_annotations import (
     trend_specs,
 )
 from gui.chart_panel import render_chart
-from gui.theme import CONTROL_BG
+from gui.h2_chart import GAP_COLOR, draw_h2
+from gui.theme import ANNOTATION, CONTROL_BG
 
 
 def _bars(count=30):
@@ -169,6 +170,50 @@ def test_gap_h2_h1_marker_uses_neutral_colors_in_gui_adapter():
     assert to_hex(annotation.arrow_patch.get_edgecolor()).upper() == "#CBD5E1"
     assert to_hex(annotation.get_bbox_patch().get_facecolor()).upper() == CONTROL_BG
     plt.close(figure)
+
+
+def test_gap_h2_restores_blue_outline_while_leaders_remain_neutral():
+    figure, axis = plt.subplots()
+    try:
+        axis.set_xlim(-1, 4)
+        axis.set_ylim(8, 14)
+        plot = pd.DataFrame({
+            'date': ['2026-09-01', '2026-09-02', '2026-09-03'],
+            'high': [12., 11.5, 12.2],
+        })
+        plan = {
+            'pending_state': 'PENDING',
+            'bo_date': '2026-09-01',
+            'bo_high': 12.,
+            'gap_floor_date': '2026-09-01',
+            'gap_floor': 10.,
+            'gap_top': 11.,
+            'h2_setup_date': '2026-09-03',
+            'entry_reference_date': '2026-09-03',
+            'entry_plan_price': 12.21,
+            'sl1_reference_date': '2026-09-02',
+            'sl1_plan_price': 9.8,
+        }
+
+        draw_h2(axis, plot, plan)
+
+        gap, = axis.patches
+        assert to_hex(gap.get_edgecolor()).upper() == GAP_COLOR
+        assert gap.get_facecolor()[3] == 0
+        assert gap.get_linestyle() == '--'
+        assert gap.get_linewidth() == pytest.approx(1.2)
+        floor = next(line for line in axis.lines if line.get_ydata()[0] == 10.)
+        assert to_hex(floor.get_color()).upper() == GAP_COLOR
+        assert floor.get_linestyle() == '-'
+        label = next(text for text in axis.texts if text.get_text() == 'Gap')
+        assert to_hex(label.get_color()).upper() == GAP_COLOR
+        assert to_hex(label.get_bbox_patch().get_edgecolor()).upper() == GAP_COLOR
+        assert any(
+            to_hex(text.arrow_patch.get_edgecolor()).upper() == ANNOTATION
+            for text in axis.texts if text.get_text() == 'BO'
+        )
+    finally:
+        plt.close(figure)
 
 
 def test_annotation_frame_keeps_only_visible_bars_and_uses_integer_axis():
