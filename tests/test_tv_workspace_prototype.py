@@ -35,7 +35,8 @@ def test_prototype_is_offline_and_contains_reviewed_states():
     assert not parser.remote_assets
     assert {
         'chartCanvas', 'rightPanel', 'alertModal', 'objectModal',
-        'replayBar', 'snapshotModal', 'removeModal',
+        'replayBar', 'replayStartModal', 'replayExitModal',
+        'chartNavControls', 'snapshotModal', 'removeModal',
     } <= parser.ids
     assert parser.minute_buttons == ['当前未接入分钟行情'] * 3
 
@@ -44,9 +45,11 @@ def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():
     script = (PROTOTYPE / 'prototype.js').read_text(encoding='utf-8')
     interactions = (PROTOTYPE / 'prototype-interactions.js').read_text(encoding='utf-8')
     style = (PROTOTYPE / 'prototype.css').read_text(encoding='utf-8')
+    history = (PROTOTYPE / 'historical-bars-v2.js').read_text(encoding='utf-8')
 
     assert '2026-06-22' in script and '2026-09-30' in script
     assert script.count('"date":"2026-') >= 70
+    assert '2025-10-20' in history and '2026-06-18' in history
     assert "ctx.setLineDash([6, 4])" in script
     assert "ctx.strokeStyle = '#2962ff'" in script
     assert "ctx.fillStyle = '#fff'" in script
@@ -79,6 +82,14 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert 'drawingPalette' in script and 'data-color=' in script
     assert "object.type === 'up' || object.type === 'down'" in script
     assert 'ClipboardItem' in script and 'navigator.clipboard.write' in script
+    assert 'DEFAULT_VISIBLE_BARS = 204' in script
+    assert 'RIGHT_MARGIN_BARS = 12' in script
+    assert "gesture.startOffset + Math.round(dx / candle)" in script
+    assert 'resetChartView' in script and 'navReset' in html
+    assert 'replaySpeeds = [10, 7, 5, 3, 1, .5, .3, .2, .1]' in script
+    assert 'replayStartDate' in html and 'replaySpeedMenu' in html
+    assert 'drawReplayBoundary' in script and 'createdAtIndex' in script
     assert '.favorite-tools .drag-handle' in style
+    assert '.chart-nav-controls.visible' in style
     assert 'cursor: ns-resize' in style
 

@@ -1,5 +1,9 @@
 /* TradingView interaction study: local-only prototype behavior. */
-const tvStateKey = 'aplus-tv-prototype-002259-v2';
+const tvStateKey = 'aplus-tv-prototype-002259-v3';
+const DEFAULT_VISIBLE_BARS = 204;
+const RIGHT_MARGIN_BARS = 12;
+const focusStartIndex = bars.findIndex(row => row.date === '2026-06-22');
+const focusIndex = index => focusStartIndex + index;
 const toolNames = {
   fib: '斐波那契回撤', long: '多头仓位', ray: '水平射线', trend: '趋势线',
   short: '空头仓位', rectangle: '矩形', up: '向上箭头', down: '向下箭头',
@@ -7,10 +11,10 @@ const toolNames = {
 };
 const onePointTools = new Set(['ray', 'up', 'down', 'text']);
 const defaultObjects = [
-  { id: 'trend-1', type: 'trend', a: { index: 20, value: 3.43 }, b: { index: 70, value: 5.34 }, color: '#f23645', width: 1, dash: 'solid', visible: true },
-  { id: 'fib-1', type: 'fib', a: { index: 21, value: 3.14 }, b: { index: 60, value: 4.98 }, color: '#4caf50', width: 1, dash: 'solid', visible: true },
-  { id: 'channel-1', type: 'channel', a: { index: 64, value: 4.45 }, b: { index: 78, value: 5.45 }, color: '#21b9d6', width: 1, dash: 'solid', visible: true },
-  { id: 'long-1', type: 'long', a: { index: 66, value: 4.76 }, b: { index: 78, value: 5.98 }, stop: 4.08, color: '#8d939c', width: 1, dash: 'solid', visible: true }
+  { id: 'trend-1', type: 'trend', a: { index: focusIndex(20), value: 3.43 }, b: { index: focusIndex(70), value: 5.34 }, color: '#f23645', width: 1, dash: 'solid', visible: true, createdAtIndex: focusIndex(70) },
+  { id: 'fib-1', type: 'fib', a: { index: focusIndex(21), value: 3.14 }, b: { index: focusIndex(60), value: 4.98 }, color: '#4caf50', width: 1, dash: 'solid', visible: true, createdAtIndex: focusIndex(70) },
+  { id: 'channel-1', type: 'channel', a: { index: focusIndex(64), value: 4.45 }, b: { index: focusIndex(78), value: 5.45 }, color: '#21b9d6', width: 1, dash: 'solid', visible: true, createdAtIndex: focusIndex(70) },
+  { id: 'long-1', type: 'long', a: { index: focusIndex(66), value: 4.76 }, b: { index: focusIndex(78), value: 5.98 }, stop: 4.08, color: '#8d939c', width: 1, dash: 'solid', visible: true, createdAtIndex: focusIndex(70) }
 ];
 
 let activeDrawingTool = null;
@@ -23,12 +27,20 @@ let priceZoom = 1;
 let priceCenterOffset = 0;
 let magnetEnabled = true;
 let hitRegions = [];
+let replayActive = false;
+let replayPlaying = false;
+let replaySpeedValue = 1;
+let replayTimer = null;
+let preReplayView = null;
+let replayCalendarCursor = new Date(`${bars[Math.max(0, bars.length - 35)].date}T00:00:00`);
 const initialPrototypeState = loadPrototypeState();
 let userObjects = initialPrototypeState.objects || structuredClone(defaultObjects);
 let undoStack = [];
 let redoStack = [];
+viewCount = Math.min(DEFAULT_VISIBLE_BARS, bars.length);
+viewOffset = 0;
 if (initialPrototypeState.view) {
-  viewCount = clamp(Number(initialPrototypeState.view.count) || bars.length, 18, bars.length);
+  viewCount = clamp(Number(initialPrototypeState.view.count) || DEFAULT_VISIBLE_BARS, 18, bars.length);
   viewOffset = clamp(Number(initialPrototypeState.view.offset) || 0, 0, bars.length - viewCount);
   priceZoom = clamp(Number(initialPrototypeState.view.priceZoom) || 1, .45, 7);
   priceCenterOffset = Number(initialPrototypeState.view.priceCenterOffset) || 0;
@@ -137,9 +149,10 @@ function renderWorkspace() {
   const low = rawCenter - span / 2;
   const high = rawCenter + span / 2;
   const y = value => top + (high - value) / (high - low) * plotHeight;
-  const candleWidth = plotWidth / rows.length;
+  const futureSpace = replayActive ? RIGHT_MARGIN_BARS : Math.max(0, RIGHT_MARGIN_BARS - viewOffset);
+  const candleWidth = plotWidth / Math.max(1, viewCount + futureSpace);
   const xGlobal = globalIndex => xFor(globalIndex - visible.begin, left, candleWidth);
-  canvas._view = { rows, begin: visible.begin, end: visible.end, left, right, top, bottom, width, height, plotWidth, plotHeight, y, low, high, candleWidth, xGlobal };
+  canvas._view = { rows, begin: visible.begin, end: visible.end, left, right, top, bottom, width, height, plotWidth, plotHeight, y, low, high, candleWidth, xGlobal, futureSpace };
   hitRegions = [];
 
   ctx.strokeStyle = css('--grid');
@@ -186,8 +199,8 @@ function renderWorkspace() {
   });
 
   if (drawingsVisible) {
-    drawStrategyEvidence(ctx, canvas._view);
-    userObjects.filter(item => item.visible !== false).forEach(item => drawUserObject(ctx, canvas._view, item));
+    if (!replayActive || replayIndex >= focusIndex(57)) drawStrategyEvidence(ctx, canvas._view);
+    userObjects.filter(item => item.visible !== false && (!replayActive || (item.createdAtIndex ?? bars.length - 1) <= replayIndex)).forEach(item => drawUserObject(ctx, canvas._view, item));
     if (draftAnchor && draftCursor) drawUserObject(ctx, canvas._view, {
       id: 'draft', type: activeDrawingTool, a: draftAnchor, b: draftCursor,
       points: activeDrawingTool === 'path' ? [...draftPoints, draftCursor] : undefined,
@@ -195,6 +208,7 @@ function renderWorkspace() {
       color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
     }, true);
   }
+  if (replayActive) drawReplayBoundary(ctx, canvas._view);
   drawLastPrice(ctx, rows.at(-1).close, y, width, right);
   document.querySelector('.ema-value').textContent = ema[Math.min(replayIndex, bars.length - 1)].toFixed(2);
 }
@@ -202,8 +216,8 @@ function renderWorkspace() {
 function drawStrategyEvidence(ctx, view) {
   const { left, width, right, y, candleWidth, xGlobal } = view;
   const plotRight = width - right;
-  const gapLeft = Math.max(left, xGlobal(57) - candleWidth * .55);
-  const gapRight = Math.min(plotRight, xGlobal(64) + candleWidth * .55);
+  const gapLeft = Math.max(left, xGlobal(focusIndex(57)) - candleWidth * .55);
+  const gapRight = Math.min(plotRight, xGlobal(focusIndex(64)) + candleWidth * .55);
   ctx.save();
   ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2; ctx.globalAlpha = .72;
   ctx.setLineDash([6, 4]); ctx.strokeRect(gapLeft, y(4.56), gapRight - gapLeft, y(4.38) - y(4.56));
@@ -216,11 +230,21 @@ function drawStrategyEvidence(ctx, view) {
   ctx.fillStyle = '#2962ff'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'center';
   ctx.fillText('Gap', (gapLeft + gapRight) / 2, y(4.47) + 4);
   ctx.restore();
-  callout(ctx, 'BO', xGlobal(57), y(4.56), xGlobal(54), y(4.83));
-  callout(ctx, 'H1', xGlobal(58), y(4.45), xGlobal(55), y(4.72));
-  callout(ctx, 'H2', xGlobal(70), y(5.19), xGlobal(67), y(5.48), true);
+  callout(ctx, 'BO', xGlobal(focusIndex(57)), y(4.56), xGlobal(focusIndex(54)), y(4.83));
+  callout(ctx, 'H1', xGlobal(focusIndex(58)), y(4.45), xGlobal(focusIndex(55)), y(4.72));
+  if (!replayActive || replayIndex >= focusIndex(70)) callout(ctx, 'H2', xGlobal(focusIndex(70)), y(5.19), xGlobal(focusIndex(67)), y(5.48), true);
   callout(ctx, 'Gap Floor', gapLeft, y(4.38), gapLeft - 32, y(4.18));
   registerRect('strategy-evidence', gapLeft, y(4.56), gapRight, y(4.38));
+}
+
+function drawReplayBoundary(ctx, view) {
+  const boundaryX = Math.min(view.width - view.right, view.xGlobal(replayIndex) + view.candleWidth / 2);
+  ctx.save();
+  ctx.fillStyle = 'rgba(4,4,4,.24)';
+  ctx.fillRect(boundaryX, view.top, view.width - view.right - boundaryX, view.plotHeight);
+  ctx.strokeStyle = '#777a81'; ctx.lineWidth = 1; ctx.setLineDash([6, 6]);
+  ctx.beginPath(); ctx.moveTo(boundaryX, view.top); ctx.lineTo(boundaryX, view.height - view.bottom); ctx.stroke();
+  ctx.restore();
 }
 
 function drawUserObject(ctx, view, object, draft = false) {
@@ -428,7 +452,7 @@ function placeDrawing(point) {
   const object = {
     id: `${activeDrawingTool}-${Date.now()}`, type: activeDrawingTool,
     a: draftAnchor, b: onePointTools.has(activeDrawingTool) ? draftAnchor : finish,
-    color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
+    color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, createdAtIndex: replayActive ? replayIndex : bars.length - 1
   };
   if (object.type === 'long') object.stop = object.a.value - Math.abs(object.b.value - object.a.value) * .55;
   if (object.type === 'short') object.stop = object.a.value + Math.abs(object.b.value - object.a.value) * .55;
@@ -447,7 +471,7 @@ function finishPath(point) {
   const points = [...draftPoints];
   if (Math.abs(points.at(-1).index - snapped.index) > .2 || Math.abs(points.at(-1).value - snapped.value) > .01) points.push(snapped);
   rememberObjects();
-  const object = { id: `path-${Date.now()}`, type: 'path', a: points[0], b: points.at(-1), points, color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true };
+  const object = { id: `path-${Date.now()}`, type: 'path', a: points[0], b: points.at(-1), points, color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, createdAtIndex: replayActive ? replayIndex : bars.length - 1 };
   userObjects.push(object); savePrototypeState(); updateObjectTree(); selectObject(object.id, point.x, point.y);
   exitDrawingMode(); showToast('多段折线已保存到当前标的'); renderWorkspace(); return true;
 }
@@ -464,6 +488,21 @@ function zoomAround(factor, ratio) {
   viewCount = nextCount;
   viewOffset = bars.length - nextEnd;
   renderWorkspace(); savePrototypeState();
+}
+
+function panChart(barDelta) {
+  const maxOffset = Math.max(0, Math.min(replayIndex + 1, bars.length) - viewCount);
+  viewOffset = clamp(viewOffset + Math.round(barDelta), 0, maxOffset);
+  renderWorkspace(); savePrototypeState();
+}
+
+function resetChartView() {
+  viewCount = Math.min(DEFAULT_VISIBLE_BARS, replayIndex + 1, bars.length);
+  viewOffset = 0;
+  priceZoom = 1;
+  priceCenterOffset = 0;
+  renderWorkspace(); savePrototypeState();
+  showToast(`已重置：${viewCount}根K线，右侧保留${RIGHT_MARGIN_BARS}根K线宽度`);
 }
 
 function updateCrosshair(point) {
@@ -575,7 +614,7 @@ canvas.addEventListener('pointermove', event => {
     viewCount = next; viewOffset = clamp(viewOffset, 0, Math.max(0, bars.length - next)); renderWorkspace();
   } else if (gesture.mode === 'pan' && gesture.moved) {
     const candle = Math.max(3, canvas._view.candleWidth);
-    viewOffset = clamp(gesture.startOffset + Math.round(-dx / candle), 0, Math.max(0, bars.length - viewCount));
+    viewOffset = clamp(gesture.startOffset + Math.round(dx / candle), 0, Math.max(0, Math.min(replayIndex + 1, bars.length) - viewCount));
     renderWorkspace();
   } else if (gesture.mode === 'zoom-box') {
     showZoomSelection(gesture.start, point);
@@ -612,6 +651,25 @@ canvas.addEventListener('wheel', event => {
   const ratio = clamp((event.clientX - rect.left - view.left) / view.plotWidth, 0, 1);
   zoomAround(Math.exp(event.deltaY * .0016), ratio);
 }, { passive: false });
+
+const chartNavControls = document.querySelector('#chartNavControls');
+wrap.addEventListener('pointermove', event => {
+  if (event.target.closest?.('#chartNavControls')) return;
+  const rect = wrap.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const inHoverZone = x >= rect.width / 2 - 250 && x <= rect.width / 2 + 250 && y >= rect.height - 150 && y <= rect.height - 38;
+  chartNavControls.classList.toggle('visible', inHoverZone && !replayActive);
+});
+wrap.addEventListener('pointerleave', () => chartNavControls.classList.remove('visible'));
+chartNavControls.addEventListener('pointerleave', event => {
+  if (!wrap.contains(event.relatedTarget)) chartNavControls.classList.remove('visible');
+});
+document.querySelector('#navZoomOut').addEventListener('click', () => zoomAround(1.25, .5));
+document.querySelector('#navZoomIn').addEventListener('click', () => zoomAround(.8, .5));
+document.querySelector('#navMoveLeft').addEventListener('click', () => panChart(Math.max(1, Math.round(viewCount * .12))));
+document.querySelector('#navMoveRight').addEventListener('click', () => panChart(-Math.max(1, Math.round(viewCount * .12))));
+document.querySelector('#navReset').addEventListener('click', resetChartView);
 
 canvas.addEventListener('dblclick', event => {
   const point = eventPoint(event);
@@ -768,11 +826,136 @@ document.querySelectorAll('.remove-option').forEach((button, index) => button.ad
   selectedId = null; document.querySelector('#selectedObject').classList.remove('visible'); closeWorkspaceModal(); savePrototypeState(); updateObjectTree(); renderWorkspace();
 }));
 
-document.querySelector('#startReplay').addEventListener('click', () => { replayBar.classList.add('visible'); replayIndex = Number(document.querySelector('#replaySlider').value); viewOffset = 0; renderWorkspace(); });
-document.querySelector('#exitReplay').addEventListener('click', () => { replayBar.classList.remove('visible'); replayIndex = bars.length - 1; renderWorkspace(); });
-document.querySelector('#replaySlider').addEventListener('input', event => {
-  replayIndex = Number(event.target.value); document.querySelector('#replayDate').textContent = bars[replayIndex].date; updateReadout(bars[replayIndex]); renderWorkspace();
+const replaySpeeds = [10, 7, 5, 3, 1, .5, .3, .2, .1];
+
+function dateAtOrBefore(value) {
+  let index = bars.findIndex(row => row.date === value);
+  if (index >= 0) return index;
+  index = bars.findLastIndex(row => row.date <= value);
+  return clamp(index < 0 ? 0 : index, 0, bars.length - 1);
+}
+
+function renderReplayCalendar() {
+  const host = document.querySelector('#replayCalendar');
+  const input = document.querySelector('#replayStartDate');
+  const year = replayCalendarCursor.getFullYear();
+  const month = replayCalendarCursor.getMonth();
+  document.querySelector('#calendarMonth').textContent = `${year}年${month + 1}月`;
+  const first = new Date(year, month, 1);
+  const days = new Date(year, month + 1, 0).getDate();
+  const mondayOffset = (first.getDay() + 6) % 7;
+  const availableDates = new Set(bars.map(row => row.date));
+  const cells = ['一', '二', '三', '四', '五', '六', '日'].map(day => `<span>${day}</span>`);
+  for (let blank = 0; blank < mondayOffset; blank += 1) cells.push('<span></span>');
+  for (let day = 1; day <= days; day += 1) {
+    const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const disabled = !availableDates.has(date);
+    cells.push(`<button data-replay-date="${date}" class="${input.value === date ? 'active' : ''}" ${disabled ? 'disabled' : ''}>${day}</button>`);
+  }
+  host.innerHTML = cells.join('');
+  host.querySelectorAll('[data-replay-date]').forEach(button => button.addEventListener('click', () => {
+    input.value = button.dataset.replayDate; renderReplayCalendar();
+  }));
+  document.querySelector('#calendarPrevious').disabled = `${year}-${String(month + 1).padStart(2, '0')}` <= bars[0].date.slice(0, 7);
+  document.querySelector('#calendarNext').disabled = `${year}-${String(month + 1).padStart(2, '0')}` >= bars.at(-1).date.slice(0, 7);
+}
+
+function openReplayDatePicker() {
+  const savedValue = localStorage.getItem(`${tvStateKey}-replay-index`);
+  const savedIndex = savedValue === null ? Number.NaN : Number(savedValue);
+  const preferredIndex = replayActive ? replayIndex : Number.isFinite(savedIndex) && savedIndex >= 0 ? savedIndex : Math.max(0, bars.length - 35);
+  const date = bars[clamp(preferredIndex, 0, bars.length - 1)].date;
+  document.querySelector('#replayStartDate').min = bars[0].date;
+  document.querySelector('#replayStartDate').max = bars.at(-1).date;
+  document.querySelector('#replayStartDate').value = date;
+  replayCalendarCursor = new Date(`${date}T00:00:00`);
+  renderReplayCalendar(); openWorkspaceModal('replayStartModal');
+}
+
+function updateReplayUi() {
+  document.querySelector('#replayDate').textContent = bars[replayIndex].date;
+  document.querySelector('#replayPlay').textContent = replayPlaying ? 'Ⅱ' : '▶';
+  document.querySelector('#replayPlay').classList.toggle('playing', replayPlaying);
+  document.querySelector('#replayPlay').title = replayPlaying ? '暂停 Shift +' : '播放 Shift +';
+  document.querySelector('#replaySpeed').textContent = `${replaySpeedValue}x`;
+  updateReadout(bars[replayIndex]);
+}
+
+function stopReplayTimer() {
+  clearInterval(replayTimer); replayTimer = null; replayPlaying = false; updateReplayUi();
+}
+
+function stepReplay() {
+  if (replayIndex >= bars.length - 1) { stopReplayTimer(); showToast('已到最后一根K线'); return; }
+  replayIndex += 1; viewOffset = 0; updateReplayUi(); renderWorkspace();
+}
+
+function startReplayTimer() {
+  clearInterval(replayTimer); replayPlaying = true; updateReplayUi();
+  replayTimer = setInterval(stepReplay, Math.max(90, Math.round(1000 / replaySpeedValue)));
+}
+
+function enterReplay(index) {
+  if (!replayActive) preReplayView = { count: viewCount, offset: viewOffset, priceZoom, priceCenterOffset };
+  replayActive = true; replayIndex = clamp(index, 0, bars.length - 1); replayPlaying = false; viewOffset = 0;
+  viewCount = Math.min(DEFAULT_VISIBLE_BARS, replayIndex + 1);
+  replayBar.classList.add('visible');
+  document.querySelector('#replayWatermark').classList.add('visible');
+  document.querySelector('#replayModeBadge').classList.add('visible');
+  document.querySelector('#startReplay').classList.add('active-box');
+  document.querySelector('#rightPanel').classList.add('replay-context');
+  chartNavControls.classList.remove('visible');
+  closeWorkspaceModal(); updateReplayUi(); renderWorkspace();
+  showToast(`回放从 ${bars[replayIndex].date} 开始；未来K线已隐藏`);
+}
+
+function leaveReplay() {
+  stopReplayTimer();
+  if (document.querySelector('#saveReplayChoice').checked) localStorage.setItem(`${tvStateKey}-replay-index`, String(replayIndex));
+  else localStorage.removeItem(`${tvStateKey}-replay-index`);
+  replayActive = false; replayIndex = bars.length - 1;
+  replayBar.classList.remove('visible');
+  document.querySelector('#replayWatermark').classList.remove('visible');
+  document.querySelector('#replayModeBadge').classList.remove('visible');
+  document.querySelector('#startReplay').classList.remove('active-box');
+  document.querySelector('#rightPanel').classList.remove('replay-context');
+  if (preReplayView) {
+    viewCount = preReplayView.count; viewOffset = preReplayView.offset;
+    priceZoom = preReplayView.priceZoom; priceCenterOffset = preReplayView.priceCenterOffset;
+  }
+  updateReadout(bars.at(-1)); closeWorkspaceModal(); renderWorkspace(); savePrototypeState(); showToast('已退出K线回放');
+}
+
+document.querySelector('#startReplay').addEventListener('click', openReplayDatePicker);
+document.querySelector('#replayDatePicker').addEventListener('click', openReplayDatePicker);
+document.querySelector('#replayModeBadge').addEventListener('click', openReplayDatePicker);
+document.querySelector('#replayFirstDate').addEventListener('click', () => {
+  document.querySelector('#replayStartDate').value = bars[0].date;
+  replayCalendarCursor = new Date(`${bars[0].date}T00:00:00`); renderReplayCalendar();
 });
+document.querySelector('#replayStartDate').addEventListener('change', event => {
+  replayCalendarCursor = new Date(`${event.target.value}T00:00:00`); renderReplayCalendar();
+});
+document.querySelector('#calendarPrevious').addEventListener('click', () => { replayCalendarCursor.setMonth(replayCalendarCursor.getMonth() - 1); renderReplayCalendar(); });
+document.querySelector('#calendarNext').addEventListener('click', () => { replayCalendarCursor.setMonth(replayCalendarCursor.getMonth() + 1); renderReplayCalendar(); });
+document.querySelector('#confirmReplayStart').addEventListener('click', () => enterReplay(dateAtOrBefore(document.querySelector('#replayStartDate').value)));
+document.querySelector('#replayPlay').addEventListener('click', () => replayPlaying ? stopReplayTimer() : startReplayTimer());
+document.querySelector('#replayStep').addEventListener('click', () => { stopReplayTimer(); stepReplay(); });
+document.querySelector('#replayToLatest').addEventListener('click', () => { stopReplayTimer(); replayIndex = bars.length - 1; viewOffset = 0; updateReplayUi(); renderWorkspace(); showToast('已更新到最后一根K线'); });
+document.querySelector('#replayInterval').addEventListener('click', () => showToast('当前按日K逐根更新'));
+document.querySelector('#exitReplay').addEventListener('click', () => openWorkspaceModal('replayExitModal'));
+document.querySelector('#leaveReplay').addEventListener('click', leaveReplay);
+
+const replaySpeedMenu = document.querySelector('#replaySpeedMenu');
+replaySpeedMenu.innerHTML = replaySpeeds.map(speed => `<button data-replay-speed="${speed}" class="${speed === 1 ? 'active' : ''}"><b>${speed}x</b><small>${speed >= 1 ? `每1秒更新${speed}次` : `每${Math.round(1 / speed)}秒更新1次`}</small></button>`).join('');
+document.querySelector('#replaySpeed').addEventListener('click', event => { event.stopPropagation(); replaySpeedMenu.classList.toggle('visible'); });
+replaySpeedMenu.querySelectorAll('[data-replay-speed]').forEach(button => button.addEventListener('click', () => {
+  replaySpeedValue = Number(button.dataset.replaySpeed);
+  replaySpeedMenu.querySelectorAll('button').forEach(item => item.classList.toggle('active', item === button));
+  replaySpeedMenu.classList.remove('visible');
+  if (replayPlaying) startReplayTimer(); else updateReplayUi();
+}));
+document.addEventListener('click', event => { if (!event.target.closest('.replay-speed-wrap')) replaySpeedMenu.classList.remove('visible'); });
 async function copyCurrentChartSnapshot() {
   const preview = canvas.toDataURL('image/png');
   document.querySelector('#snapshotImage').src = preview;
@@ -811,6 +994,9 @@ document.querySelector('#redoAction').addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', event => {
+  if (replayActive && event.shiftKey && (event.key === '+' || event.key === '=')) {
+    event.preventDefault(); replayPlaying ? stopReplayTimer() : startReplayTimer(); return;
+  }
   if (event.key === 'Escape') {
     draftAnchor = null; draftCursor = null; draftPoints = []; activeDrawingTool = null; hideZoomSelection(); closeWorkspaceModal(); startTool('cross', document.querySelector('[data-tool="cross"]'));
   }

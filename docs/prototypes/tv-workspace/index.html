@@ -96,6 +96,7 @@
           <div class="instrument-title"><span class="exchange-dot">深</span><b>升达林业 · 1天 · SZSE</b></div>
           <span class="status-dot"></span><span class="session">D</span>
           <div class="ohlc">开=<b id="openValue">4.99</b>&nbsp; 高=<b id="highValue">5.19</b>&nbsp; 低=<b id="lowValue">4.88</b>&nbsp; 收=<b id="closeValue">5.01</b>&nbsp; <b class="positive">+0.12 (+2.45%)</b></div>
+          <button class="replay-mode-badge" id="replayModeBadge">回放模式</button>
           <div class="currency">CNY⌄</div>
         </div>
 
@@ -134,14 +135,29 @@
           <div class="chart-crosshair" id="crosshair"><span class="cross-x"></span><span class="cross-y"></span><em id="crossPrice">4.86</em><small id="crossDate">2026-09-30</small></div>
           <div class="zoom-selection" id="zoomSelection"></div>
           <div class="chart-watermark">A+</div>
+          <div class="replay-watermark" id="replayWatermark">回放</div>
+          <div class="chart-nav-controls" id="chartNavControls" aria-label="图表视图控制">
+            <button id="navZoomOut" title="缩小时间范围" aria-label="缩小时间范围">−</button>
+            <button id="navZoomIn" title="放大时间范围" aria-label="放大时间范围">＋</button>
+            <button id="navMoveLeft" title="向左移动到更早K线" aria-label="向左移动到更早K线">‹</button>
+            <button id="navMoveRight" title="向右移动到更新K线" aria-label="向右移动到更新K线">›</button>
+            <button id="navReset" title="重置图表视图：204根K线并保留右侧空间" aria-label="重置图表视图">↻</button>
+          </div>
           <div class="rangebar">
             <nav><button>1天</button><button>5天</button><button>1个月</button><button>3个月</button><button>6个月</button><button>YTD</button><button>1年</button><button>5年</button><button>全部</button></nav>
             <span class="clock">20:38:26 UTC+8</span><button class="adj">ADJ</button>
           </div>
           <div class="replaybar" id="replayBar">
-            <button id="exitReplay"><svg><use href="#i-close"/></svg></button><b>K线回放</b><span class="replay-symbol">升达林业 · 1天</span>
-            <button>◀|</button><button>◀</button><button class="play">▶</button><button>▶</button><button>|▶</button>
-            <input id="replaySlider" type="range" min="30" max="71" value="57"><span id="replayDate">2026-09-08</span>
+            <button class="replay-date-button" id="replayDatePicker" title="选择日期"><span class="calendar-glyph">↔</span><span id="replayDate">选择日期</span><span>⌄</span></button>
+            <span class="replay-divider"></span>
+            <button id="replayPlay" class="replay-control" title="播放 Shift +">▶</button>
+            <button id="replayStep" class="replay-control" title="向前一根K线">▷|</button>
+            <div class="replay-speed-wrap"><button id="replaySpeed" class="replay-text-button" title="回放速度">1x</button><div class="replay-speed-menu" id="replaySpeedMenu"></div></div>
+            <button id="replayInterval" class="replay-text-button" title="回放更新周期">天</button>
+            <span class="replay-divider"></span>
+            <button id="replayToLatest" class="replay-control" title="更新到最后一根K线">|▷</button>
+            <span class="replay-spacer"></span>
+            <button id="exitReplay" title="退出K线回放"><svg><use href="#i-close"/></svg></button>
           </div>
         </div>
       </section>
@@ -155,6 +171,7 @@
         <div class="panel-context">
           <span>GAP H2 · 2026-09-30</span><button>筛选⌄</button>
         </div>
+        <div class="replay-context-notice">回放中：只显示当前日期已经形成的策略证据</div>
         <div class="candidate-list" id="candidateList">
           <button class="candidate active">
             <span class="badge sz">深</span><span class="candidate-name"><b>升达林业</b><small>002259 · GH2</small></span>
@@ -231,9 +248,26 @@
       <div class="modal-body"><p>选择要从当前标的图表移除的内容。策略证据为只读，不会被删除。</p><button class="remove-option">移除所有图形 <small>4 个已保存对象</small></button><button class="remove-option">移除所有指标 <small>EMA 20</small></button><button class="remove-option danger">移除图形与指标</button></div>
       <footer><button class="secondary close-modal">取消</button></footer>
     </section>
+
+    <section class="modal replay-start-modal" id="replayStartModal">
+      <header><b>选择日期</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
+      <div class="modal-body">
+        <div class="replay-date-fields"><input id="replayStartDate" type="date"><select disabled aria-label="回放时间"><option>00:00</option></select></div>
+        <div class="calendar-head"><button id="calendarPrevious" aria-label="上一个月">‹</button><b id="calendarMonth"></b><button id="calendarNext" aria-label="下一个月">›</button></div>
+        <div class="replay-calendar" id="replayCalendar"></div>
+      </div>
+      <footer><button class="secondary first-available" id="replayFirstDate">选择第一个可用日期</button><span></span><button class="secondary close-modal">取消</button><button class="primary" id="confirmReplayStart">选择</button></footer>
+    </section>
+
+    <section class="modal confirm-modal" id="replayExitModal">
+      <header><b>离开当前回放？</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
+      <div class="modal-body"><p>您可以保存此回放，以便稍后继续。</p><label class="save-replay-choice"><input id="saveReplayChoice" type="checkbox" checked>保存此回放</label></div>
+      <footer><button class="primary" id="leaveReplay">离开</button><button class="secondary close-modal">留下</button></footer>
+    </section>
   </div>
 
   <script>window.tvPrototypeV2 = true;</script>
+  <script src="historical-bars-v2.js"></script>
   <script src="prototype.js"></script>
   <script src="prototype-interactions.js"></script>
 </body>

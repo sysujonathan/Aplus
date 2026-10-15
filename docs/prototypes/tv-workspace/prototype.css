@@ -71,6 +71,8 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .session { color: #ffb74d; font-weight: 700; }
 .ohlc { color: #b8bbc2; }
 .ohlc b { color: #d8d9dd; }
+.replay-mode-badge { display: none; height: 26px; padding: 0 9px; border: 1px solid #3d3d3d; border-radius: 5px; background: #252525; color: #d6d7da; }
+.replay-mode-badge.visible { display: block; }
 .positive { color: #31a982 !important; }
 .negative { color: #f05a66 !important; }
 .currency { margin-left: auto; border: 1px solid #3b3b3b; border-radius: 5px; padding: 6px 9px; }
@@ -115,6 +117,12 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 #quickWidth { width: auto; min-width: 38px; padding: 0 5px; font-size: 12px; }
 .color-swatch { width: 17px; height: 17px; border-radius: 3px; background: var(--blue); }
 .chart-watermark { position: absolute; left: 18px; bottom: 49px; color: #fff; font-size: 30px; font-weight: 900; opacity: .9; letter-spacing: -4px; }
+.replay-watermark { position: absolute; display: none; z-index: 2; left: 50%; top: 42%; transform: translate(-50%, -50%); color: rgba(118,121,128,.12); font-size: clamp(74px, 9vw, 142px); font-weight: 700; pointer-events: none; }
+.replay-watermark.visible { display: block; }
+.chart-nav-controls { position: absolute; z-index: 11; left: 50%; bottom: 64px; display: flex; gap: 12px; opacity: 0; transform: translate(-50%, 8px); transition: opacity .12s, transform .12s; pointer-events: none; }
+.chart-nav-controls.visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.chart-nav-controls button { width: 42px; height: 42px; border: 0; border-radius: 7px; background: #303030; box-shadow: 0 3px 10px #0008; color: #d9d9dc; font-size: 27px; line-height: 1; }
+.chart-nav-controls button:hover { background: #444; color: white; }
 .rangebar { position: absolute; bottom: 0; left: 0; right: 0; height: 39px; z-index: 5; display: flex; align-items: center; background: rgba(13,13,13,.96); border-top: 1px solid #2a2a2a; }
 .rangebar nav { display: flex; padding-left: 9px; }
 .rangebar button { height: 31px; border: 0; background: transparent; padding: 0 10px; color: #c9cbd0; }
@@ -130,14 +138,24 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .chart-crosshair em { position: absolute; right: 0; top: calc(var(--cy) - 11px); min-width: 58px; padding: 3px 6px; background: #777; color: white; font-size: 12px; font-style: normal; text-align: center; }
 .chart-crosshair small { position: absolute; bottom: 39px; left: calc(var(--cx) - 43px); padding: 3px 7px; border-radius: 3px; background: #777; color: white; }
 
-.replaybar { position: absolute; display: none; left: 20px; right: 20px; bottom: 49px; height: 51px; z-index: 12; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid #4b4b4b; border-radius: 7px; background: #222; box-shadow: 0 5px 20px #000b; }
+.replaybar { position: absolute; display: none; left: 0; right: 0; bottom: 39px; height: 50px; z-index: 12; align-items: center; gap: 7px; padding: 0 11px; border-top: 1px solid #292929; border-bottom: 1px solid #292929; background: rgba(13,13,13,.98); box-shadow: 0 -3px 14px #0007; }
 .replaybar.visible { display: flex; }
 .replaybar button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; }
 .replaybar button:hover { background: #383838; }
 .replaybar button svg { width: 18px; }
-.replaybar .play { background: var(--blue); border-radius: 50%; color: white; }
-.replaybar .replay-symbol { color: var(--muted); }
-.replaybar input { flex: 1; accent-color: var(--blue); }
+.replaybar .replay-date-button { width: auto; min-width: 112px; display: flex; grid-template-columns: none; gap: 7px; padding: 0 9px; color: #d4d5d8; }
+.calendar-glyph { display: inline-grid; place-items: center; width: 21px; height: 17px; border: 1px solid currentColor; border-radius: 3px; font-size: 13px; }
+.replay-divider { width: 1px; height: 26px; margin: 0 2px; background: #353535; }
+.replaybar .replay-control { font-size: 18px; }
+.replaybar .replay-control.playing { background: #303030; color: white; }
+.replaybar .replay-text-button { width: auto; min-width: 38px; padding: 0 8px; font-size: 13px; }
+.replay-spacer { flex: 1; }
+.replay-speed-wrap { position: relative; }
+.replay-speed-menu { position: absolute; display: none; left: 50%; bottom: 43px; width: 212px; transform: translateX(-50%); padding: 7px; border: 1px solid #3f3f3f; border-radius: 7px; background: #202020; box-shadow: 0 9px 26px #000b; }
+.replay-speed-menu.visible { display: grid; }
+.replay-speed-menu button { width: 100%; height: 32px; display: flex; justify-content: space-between; padding: 0 9px; color: #ddd; font-size: 12px; }
+.replay-speed-menu button.active { background: #353535; color: white; }
+.replay-speed-menu small { color: #85878d; }
 
 .right-panel { width: 312px; flex: 0 0 312px; display: flex; flex-direction: column; border-left: 1px solid #303030; background: var(--panel); transition: width .18s, flex-basis .18s; }
 .right-panel.collapsed { width: 0; flex-basis: 0; overflow: hidden; border-left: 0; }
@@ -147,6 +165,9 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .panel-tabs .panel-menu { margin-left: auto; width: 40px; padding: 0; }
 .panel-context { height: 38px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #252525; font-size: 12px; color: #aaa; }
 .panel-context button { border: 0; background: transparent; color: #aaa; }
+.replay-context-notice { display: none; margin: 10px; padding: 10px 11px; border: 1px solid #4b4530; border-radius: 5px; background: #2c281b; color: #d9c47c; font-size: 12px; line-height: 1.45; }
+.right-panel.replay-context .replay-context-notice { display: block; }
+.right-panel.replay-context .decision-card, .right-panel.replay-context .object-tree { display: none; }
 .candidate-list { border-bottom: 1px solid #303030; }
 .candidate { width: 100%; height: 58px; display: flex; align-items: center; gap: 9px; padding: 0 10px; border: 0; border-left: 3px solid transparent; background: transparent; text-align: left; }
 .candidate:hover { background: #212121; }
@@ -249,6 +270,21 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .snapshot-options input { width: auto; height: auto; accent-color: var(--blue); }
 .confirm-modal { width: 390px; }
 .confirm-modal p { color: #aaa; line-height: 1.6; margin: 0; }
+.replay-start-modal { width: 380px; }
+.replay-date-fields { display: grid; grid-template-columns: 1fr 96px; gap: 9px; }
+.replay-date-fields select { border: 1px solid #454545; border-radius: 5px; background: #171717; color: #777; padding: 0 10px; }
+.calendar-head { display: grid; grid-template-columns: 34px 1fr 34px; align-items: center; text-align: center; }
+.calendar-head button { height: 32px; border: 0; border-radius: 5px; background: transparent; font-size: 20px; }
+.calendar-head button:hover { background: #333; }
+.replay-calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.replay-calendar span { display: grid; place-items: center; height: 25px; color: #777; font-size: 11px; }
+.replay-calendar button { height: 34px; border: 0; border-radius: 50%; background: transparent; color: #ddd; }
+.replay-calendar button:hover:not(:disabled) { background: #353535; }
+.replay-calendar button.active { background: var(--blue); color: white; }
+.replay-calendar button:disabled { color: #4a4a4a; }
+.replay-start-modal .first-available { margin-right: auto; }
+.save-replay-choice { display: flex; align-items: center; gap: 9px; color: #ddd; }
+.save-replay-choice input { width: auto; height: auto; accent-color: var(--blue); }
 .remove-option { height: 47px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border: 1px solid #3c3c3c; border-radius: 5px; background: #252525; text-align: left; }
 .remove-option small { color: #777; }
 .remove-option.danger { color: #ff6672; }
