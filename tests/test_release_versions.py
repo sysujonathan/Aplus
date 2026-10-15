@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_catalog_covers_each_pr_without_inventing_publications():
     catalog = r.read_catalog(ROOT)
-    assert [x['pr'] for x in catalog['history']] == list(range(1, 48))
+    assert [x['pr'] for x in catalog['history']] == list(range(1, 49))
     by_pr = {x['pr']: x for x in catalog['history']}
     assert by_pr[1]['version'] is None and by_pr[1]['status'] == 'not_released'
     assert by_pr[12]['included_in'] == by_pr[13]['included_in'] == 11
@@ -50,7 +50,9 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[45]['status'] == by_pr[46]['status'] == 'released'
     assert by_pr[45]['commit'] == '365de0a5f951f86673ab6222697a2690836237c9'
     assert by_pr[46]['commit'] == '8af35e9ca85201096505694caeb243a21464a577'
-    assert by_pr[47]['status'] == 'preview'
+    assert by_pr[47]['status'] == 'released'
+    assert by_pr[47]['commit'] == 'e968647fb02ffdf79b4854432ea9ce51f1f94e03'
+    assert by_pr[48]['status'] == 'preview'
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -77,7 +79,8 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.14.44-preview' not in text
     assert 'v2026.10.14.45-preview' not in text
     assert 'v2026.10.15.46-preview' not in text
-    assert 'v2026.10.15.47-preview' in text
+    assert 'v2026.10.15.47-preview' not in text
+    assert 'v2026.10.15.48-preview' in text
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'version', 'date', 'duplicate', 'status', 'sha', 'notes', 'build_pr', 'date_version', 'row'])
@@ -112,7 +115,7 @@ def test_exact_historical_main_and_current_preview_are_distinct():
     assert r.version_label(merged) == 'v2026.10.11.30'
     assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
-    assert r.version_label(preview) == 'v2026.10.15.47 · 预览版'
+    assert r.version_label(preview) == 'v2026.10.15.48 · 预览版'
     # A short hash and an unrelated revision must not be called PR29.
     assert r.identity(ROOT, target='18670c8')['version'] is None
     assert r.identity(ROOT, target='b'*40)['version'] is None
