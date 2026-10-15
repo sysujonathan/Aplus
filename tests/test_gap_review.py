@@ -210,11 +210,8 @@ with patch('workbench.gap_review_web.expected_day',return_value='2026-10-09'), p
     app.button(key='gap_pending').click().run()
     assert '待处理 5 只' in app.caption[0].value
     app.checkbox(key='gap_repeat').check().run()
-    next(b for b in app.button if b.label.startswith('继续补拉')).click().run()
-    assert not app.exception
-    requests=app.session_state['requests']
-    assert len(requests)==1 and requests[0]['spec']['source']=='tencent'
-    assert requests[0]['spec']['repair_codes']==['sh.600222']
+    assert next(b for b in app.button if b.label.startswith('继续补拉')).disabled
+    assert not app.exception and app.session_state['requests']==[]  # Archived source cannot download.
 
 
 @pytest.mark.skipif(os.name!='nt',reason='Windows native UI')

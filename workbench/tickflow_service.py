@@ -9,6 +9,7 @@ from .store import dumps
 from .sync import sync_stock
 from .provider_guard import ProviderGuard, ProviderError, error_detail
 from .sync_progress import sync_progress
+from .tickflow_recovery import request_with_recovery
 
 
 def sync_tickflow(service, job, spec):
@@ -45,6 +46,11 @@ def sync_tickflow(service, job, spec):
         else:
             codes=list(dict.fromkeys(spec['codes']))
         repair = set(spec.get('repair_codes') or [])
+        increments = set(spec.get('increment_codes') or [])
+        if increments:
+            if 'boards' not in spec or not increments.issubset(set(codes)):
+                raise ValueError('续做标的必须属于已核验的所选板块')
+            codes = [c for c in codes if c in increments]
         selective = bool(repair and spec.get('repair_scope') == 'scan' and not spec.get('force'))
         from .repair_outcomes import before_repair, remember_repairs
         repair_before=before_repair(service.store,'tickflow',repair)
@@ -59,6 +65,21 @@ def sync_tickflow(service, job, spec):
             confirmed_halts=proven_halts, repair_codes=sorted(repair), processed=0,
             timings=dict(planned_batch_requests=0,planned_batch_seconds=0,stock_processing_seconds=0))
         report['scope_reused']=report_scope_reused if 'boards' in spec else False
+        class RecoveringProvider:
+            def fetch(self, code, a, b):
+                cache = getattr(provider, 'cache', {})
+                if (code,a,b) in cache or any(c == code and left <= a <= b <= right
+                                              for c,left,right in cache):
+                    return provider.fetch(code,a,b)  # Pure in-memory access, no extra guard query.
+                return request_with_recovery(service, job, lambda:provider.fetch(code,a,b),
+                                             spec.get('transport_retry_budget'), report)
+        recovering = RecoveringProvider()
+        last_checkpoint = [0.0]
+        def checkpoint(force=False):
+            stamp = time.monotonic()
+            if force or stamp - last_checkpoint[0] >= 1:
+                service.store.execute('UPDATE jobs SET result=? WHERE id=?', (dumps(report), job))
+                last_checkpoint[0] = stamp
         groups={}
         for code in codes:
             service.check_stop(job)
@@ -88,7 +109,7 @@ def sync_tickflow(service, job, spec):
                 report['processed'] += 1
                 if report['processed'] % 10 == 0:
                     service.progress(job,report['processed'],len(codes),sync_progress('tickflow','cached',code))
-                    service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+                    checkpoint()
                 continue
             # First source switch takes a full same-source history, never a BaoStock tail.
             left=min(start,state['start']) if state else start
@@ -130,17 +151,21 @@ def sync_tickflow(service, job, spec):
                 service.progress(job,report['processed'],len(codes),
                                  sync_progress('tickflow',operation,f'{len(batch)}只',left,right))
                 try:
-                    batch_started=time.monotonic()
                     if operation != 'cached':
-                        provider.preload(batch,left,right)
-                        report['timings']['planned_batch_requests']+=1
-                    report['timings']['planned_batch_seconds']+=round(time.monotonic()-batch_started,3)
+                        def preload():
+                            report['timings']['planned_batch_requests']+=1
+                            stamp = time.monotonic()
+                            try:
+                                return provider.preload(batch,left,right)
+                            finally:
+                                report['timings']['planned_batch_seconds']+=round(time.monotonic()-stamp,3)
+                        request_with_recovery(service, job, preload, spec.get('transport_retry_budget'), report)
                 except (ProviderError,TimeoutError) as exc:
-                    report['cooldown']=ProviderGuard(service.store,'tickflow').failure(exc)
+                    report['cooldown']=getattr(exc,'_provider_guard_state',None) or ProviderGuard(service.store,'tickflow').failure(exc)
                     report['stop_reason']=str(exc); stopped=True
                     report['errors'].extend(dict(code=code,**error_detail(exc,'tickflow')) for code in batch)
                     report['processed'] += len(batch)
-                    break  # One bounded request; never restart a failed batch automatically.
+                    break  # Recovery exhausted/refused: no additional request.
                 save_started=time.monotonic()
                 for code in batch:
                     service.check_stop(job)
@@ -150,13 +175,13 @@ def sync_tickflow(service, job, spec):
                             restore_corrupt_snapshot(service.store,provider,code,left,right,job)
                         def requesting(op,a,b):
                             service.progress(job,report['processed'],len(codes),sync_progress('tickflow',op,code,a,b))
-                        did,outcome=sync_stock(service.store,lambda:provider,code,start,end,job,
+                        did,outcome=sync_stock(service.store,lambda:recovering,code,start,end,job,
                                               spec.get('force',False) or (code in repair and not selective),source='tickflow',batch_writes=True,
                                               on_request=requesting,
                                               repair_timeframe=spec.get('scan_timeframe','daily') if selective else None)
                         report[outcome]+=1; report['success']+=1; report['datasets'].append(did)
                     except (ProviderError,TimeoutError) as exc:
-                        state=ProviderGuard(service.store,'tickflow').failure(exc)
+                        state=getattr(exc,'_provider_guard_state',None) or ProviderGuard(service.store,'tickflow').failure(exc)
                         report['cooldown']=state; report['stop_reason']=str(exc); stopped=True
                         report['errors'].append(dict(code=code,**error_detail(exc,'tickflow')))
                         report['processed'] += 1
@@ -166,13 +191,15 @@ def sync_tickflow(service, job, spec):
                     report['processed'] += 1
                     # Keep the actual operation/range visible while saving,
                     # rather than replacing it with a generic target range.
-                    service.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
+                    checkpoint()
                 # Includes any same-source full-history refresh triggered by a
                 # changed overlap; do not mislabel all of this as pure disk IO.
                 report['timings']['stock_processing_seconds']+=round(time.monotonic()-save_started,3)
+                checkpoint(force=stopped)
                 if stopped: break
             if stopped: break
     report['remaining']=max(0,len(codes)-report['processed'])
+    checkpoint(force=True)
     remember_repairs(service.store,'tickflow',end,repair_before,report['datasets'])
     for did in report['datasets']:
         rows = service.store.rows('SELECT value FROM meta WHERE key=?', ('market_quality:'+did,))

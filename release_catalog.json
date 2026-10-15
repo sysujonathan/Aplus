@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.15.47",
-    "pr": 47,
+    "version": "2026.10.15.50",
+    "pr": 50,
     "date": "2026-10-15"
   },
   "history": [
@@ -580,7 +580,7 @@
       "pr": 47,
       "version": "2026.10.15.47",
       "date": "2026-10-15",
-      "status": "preview",
+      "status": "released",
       "title": "一键续做盘前与同日候选去重",
       "notes": [
         "已核验的同日行情直接复用，普通价格缺口自动定向补拉后扫描，中断后再点只续做未完成项。",
@@ -591,7 +591,44 @@
         "三源本地短保存统一协调，进度后台只读并在临时读取失败后自动恢复；单源失败保留处理数量和诊断，不再误显0/0。",
         "同步已发布PR45／46，验证MTR V36.3旧判断升级后重算；未变3K／GAP缓存经限定兼容核对后复用，旧观察不删除。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/47"
+      "url": "https://github.com/sysujonathan/Aplus/pull/47",
+      "commit": "e968647fb02ffdf79b4854432ea9ce51f1f94e03"
+    },
+    {
+      "pr": 48,
+      "version": "2026.10.15.48",
+      "date": "2026-10-15",
+      "status": "preview",
+      "title": "主线验收统一审批策略更新",
+      "notes": [
+        "独立更新审批改动，尚未合并；本分支未包含该PR实现。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/48"
+    },
+    {
+      "pr": 49,
+      "version": "2026.10.15.49",
+      "date": "2026-10-15",
+      "status": "preview",
+      "title": "接入高保真TV图表工作区",
+      "notes": [
+        "独立图表工作区改动，尚未合并；本分支未包含该PR实现。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/49"
+    },
+    {
+      "pr": 50,
+      "version": "2026.10.15.50",
+      "date": "2026-10-15",
+      "status": "preview",
+      "title": "TickFlow快速续做、断网受限恢复与腾讯历史更新退出",
+      "notes": [
+        "普通尾部续做走批量增量，仅实际中间缺日定向补拉；减少重复读文件、读取审计提交和大清单进度写入。",
+        "TickFlow明确临时传输故障遵守持久冷却后最多自动续做一次；403、429、黑名单及未知错误不重试，等待可终止。",
+        "部分扫描明确标注行情未齐未扫描，不混同无信号；已有判断继续复用，策略、历史观察和交易记录不改。",
+        "停用腾讯历史行情更新与补拉，旧行情、扫描和研究仍可读取；腾讯持仓即时报价不变。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/50"
     }
   ]
 }
