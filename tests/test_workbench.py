@@ -95,6 +95,32 @@ def test_shared_indicators_preserve_each_daily_strategy_result(store,frame,key):
     pd.testing.assert_frame_equal(shared,standalone)
 
 
+def test_declared_mtr_signal_quality_cannot_be_bypassed(frame):
+    class Detector:
+        @classmethod
+        def get_metadata(cls):
+            return {
+                'signal_column': 'signal_mtr',
+                'signal_close_position_column': 'mtr_signal_close_position',
+                'signal_close_position_min': 1.0,
+            }
+
+        def calculate_signals(self, enriched):
+            result = enriched.copy()
+            result['signal_mtr'] = False
+            result['mtr_signal_close_position'] = np.nan
+            result.loc[result.index[-1], 'signal_mtr'] = True
+            return result
+
+    class Spec:
+        @staticmethod
+        def instance():
+            return Detector()
+
+    with pytest.raises(ValueError, match='缺少合格光头阳线证明'):
+        calculate_prepared(Spec(), prepare_indicators(frame))
+
+
 @pytest.mark.parametrize('value,expected',[('600000','sh.600000'),('000001','sz.000001'),('300750','sz.300750'),('sh.600000','sh.600000')])
 def test_codes(value,expected):
     assert code_of(value)==expected
