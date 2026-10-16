@@ -19,6 +19,29 @@ from workbench.tickflow_integrity import integrity_report
 from gui.data import latest_scan_date, candidate_source_for_date, latest_market_dataset
 
 
+def legacy_sync_fixture(service, spec):
+    """Exercise the retired adapter with synthetic data, not the removed UI/API route.
+
+    Public Service rejection and archive readability are tested separately.
+    Keeping these parser/storage unit contracts protects old snapshot readers.
+    """
+    import uuid
+    from workbench.tencent_service import sync_tencent
+    from workbench.store import dumps, now
+    job = uuid.uuid4().hex[:16]
+    ProviderGuard(service.store, 'tencent').check()
+    service.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
+        (job, 'sync', 'running', now(), dumps(spec)))
+    service.cancel_flags[job] = threading.Event()
+    try:
+        result = sync_tencent(service, job, spec)
+        service.store.execute('UPDATE jobs SET status=?,finished=?,result=? WHERE id=?',
+            ('partial' if result.get('errors') else 'completed', now(), dumps(result), job))
+        return service.store.rows('SELECT * FROM jobs WHERE id=?', (job,))[0]
+    finally:
+        service.cancel_flags.pop(job, None)
+
+
 def response(code, frame, field='day'):
     symbol=code.replace('.','')
     rows=[[r.date,str(r.open),str(r.close),str(r.high),str(r.low),str(r.volume)]
@@ -156,7 +179,7 @@ def test_tencent_sync_then_scan_and_mixed_backtest_rejection(store,monkeypatch):
     monkeypatch.setattr('workbench.tencent_service.Tencent',Provider)
     monkeypatch.setattr('workbench.service.signal_at_end',lambda *a,**kw:None)
     try:
-        row=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+        row=legacy_sync_fixture(service,dict(source='tencent',boards=['沪深主板'],start=first,end=last))
         result=json.loads(row['result']); assert row['status']=='completed',row['message']
         did=result['datasets'][0]
         scan=wait_for(store,service.submit('scan',dict(source='tencent',boards=['沪深主板'],datasets=[did],
@@ -170,7 +193,7 @@ def test_tencent_sync_then_scan_and_mixed_backtest_rejection(store,monkeypatch):
         assert store.rows("SELECT value FROM meta WHERE key='tencent_integrity'")
         assert not store.rows("SELECT value FROM meta WHERE key='tickflow_integrity'")
         monkeypatch.setattr(Provider,'universe',lambda *a:pytest.fail('同日已核验目录不应重新请求'))
-        row=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+        row=legacy_sync_fixture(service,dict(source='tencent',boards=['沪深主板'],start=first,end=last))
         assert json.loads(row['result'])['catalog_reused'] and row['status']=='completed'
     finally:service.pool.shutdown()
 
@@ -191,7 +214,7 @@ def test_tencent_cache_hits_do_not_reset_network_failure_budget(store,monkeypatc
     monkeypatch.setattr('workbench.tencent_service.Tencent',Provider)
     service=Service(store)
     try:
-        row=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+        row=legacy_sync_fixture(service,dict(source='tencent',boards=['沪深主板'],start=first,end=last))
         result=json.loads(row['result'])
         assert row['status']=='partial' and result['skipped']==2
         assert calls==[codes[0],codes[2],codes[4]]
@@ -212,8 +235,7 @@ def test_tencent_sync_uses_short_atomic_stock_writes(store,monkeypatch):
     monkeypatch.setattr('workbench.tencent_service.sync_stock',fake_sync)
     service=Service(store)
     try:
-        row=wait_for(store,service.submit('sync',dict(source='tencent',codes=['sh.600000'],
-                                                       start=first,end=last)))
+        row=legacy_sync_fixture(service,dict(source='tencent',codes=['sh.600000'], start=first,end=last))
         assert row['status']=='completed',row['message']
         assert options and options[0]['batch_writes'] is True
     finally:service.pool.shutdown()
@@ -272,7 +294,7 @@ def test_tencent_isolated_failure_continues_but_outage_and_limits_stop(store,mon
     monkeypatch.setattr('workbench.tencent_service.Tencent',Provider)
     service=Service(store)
     try:
-        row=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+        row=legacy_sync_fixture(service,dict(source='tencent',boards=['沪深主板'],start=first,end=last))
         result=json.loads(row['result'])
         assert row['status']=='partial' and len(calls)==expected and len(set(calls))==expected
         assert bool(result.get('cooldown'))==limited
@@ -281,6 +303,6 @@ def test_tencent_isolated_failure_continues_but_outage_and_limits_stop(store,mon
         assert not ProviderGuard(store,'baostock').state()
         if not limited:
             calls.clear(); failures.clear()
-            retry=wait_for(store,service.submit('sync',dict(source='tencent',boards=['沪深主板'],start=first,end=last)))
+            retry=legacy_sync_fixture(service,dict(source='tencent',boards=['沪深主板'],start=first,end=last))
             assert retry['status']=='completed' and calls==['sh.600000']
     finally:service.pool.shutdown()

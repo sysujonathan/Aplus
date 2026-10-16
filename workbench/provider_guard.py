@@ -12,9 +12,12 @@ class ProviderError(RuntimeError):
         super().__init__(f'{source} · {operation}' + (f' · 错误码 {code}' if code else '') + ': ' + message)
 
     def detail(self):
-        return dict(source=self.source, operation=self.operation, error_code=self.code,
+        result = dict(source=self.source, operation=self.operation, error_code=self.code,
                     elapsed_seconds=self.elapsed, message=self.message, error=str(self),
                     retry_after=getattr(self,'retry_after',None))
+        if getattr(self, 'transient_transport', False):
+            result['transient_transport'] = True
+        return result
 
 
 def error_detail(exc, source, operation='sync'):

@@ -38,7 +38,8 @@ def render_gap_review(store, service, source, boards, day, periods, begin, busy)
         repair = repair_selection(review, selection)
         repeated = any(r['unchanged'] and r['code'] in repair for r in issues)
         confirmed = st.checkbox('确认重试已补拉无改善项', disabled=busy, key='gap_repeat') if repeated else True
-        if c.button(f'继续补拉（{len(repair)} 只）', disabled=busy or not repair or not confirmed):
+        from .sources import UPDATE_SOURCES
+        if c.button(f'继续补拉（{len(repair)} 只）', disabled=busy or source not in UPDATE_SOURCES or not repair or not confirmed):
             spec = dict(source=source, boards=boards, start=str(begin), end=day, force=False,
                         repair_codes=repair, scan_timeframe=tf, repair_scope='history' if historical else 'scan')
             try:

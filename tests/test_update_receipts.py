@@ -7,6 +7,7 @@ import pytest
 
 from tests.test_workbench import store, wait_for
 from tests.test_tickflow_scan_readiness import bars, scope
+from tests.test_tencent_history import legacy_sync_fixture
 from workbench.market import save_dataset, load_dataset
 from workbench.sources import save_coverage, coverage_state, directory_file
 from workbench.history_quality import describe_history, save_quality
@@ -46,7 +47,7 @@ def test_tencent_minor_catalog_omission_preserves_scope_and_resolves_on_retry(st
     service=Service(store)
     spec=dict(source='tencent',boards=['沪深主板'],start=first,end=last)
     try:
-        row=wait_for(store,service.submit('sync',spec)); result=json.loads(row['result'])
+        row=legacy_sync_fixture(service,spec); result=json.loads(row['result'])
         assert row['status']=='partial' and calls==['sh.600000']
         assert result['scan_readiness']['expected']==2 and result['scan_readiness']['ready']==1
         assert result['scan_readiness']['gaps'][0]['category']=='directory_pending'
@@ -56,7 +57,7 @@ def test_tencent_minor_catalog_omission_preserves_scope_and_resolves_on_retry(st
         save_dataset(store,'sh.600001',data,'tencent','不复权')
         assert audit_scope(store,['沪深主板'],last,source='tencent')['ready']==1
         returned.append('sh.600001'); calls.clear()
-        row=wait_for(store,service.submit('sync',spec))
+        row=legacy_sync_fixture(service,spec)
         assert row['status']=='completed',row['message']
         assert json.loads(row['result'])['directory_pending']==[]
         assert not coverage_state(store,'sh.600000','tickflow')

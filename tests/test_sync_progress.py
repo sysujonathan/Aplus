@@ -94,7 +94,8 @@ def test_tencent_service_shows_tail_instead_of_job_target(store, frame, monkeypa
         original(job, done, total, message)
     monkeypatch.setattr(service, 'progress', progress)
     try:
-        row = wait_for(store, service.submit('sync', dict(source='tencent', codes=['sh.600000'], start=first, end=last)))
+        from tests.test_tencent_history import legacy_sync_fixture
+        row = legacy_sync_fixture(service, dict(source='tencent', codes=['sh.600000'], start=first, end=last))
         assert row['status'] == 'completed', row['message']
         assert sync_progress('tencent', 'tail', 'sh.600000', mid, last) in messages
         assert not any('获取历史' in m or f'{first}～{last}' in m for m in messages)

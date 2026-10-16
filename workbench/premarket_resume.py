@@ -6,7 +6,7 @@ from .market import completed_date, latest_datasets
 from .readiness import audit_scope, expected_day
 from .repair_outcomes import before_repair, remember_repairs, unchanged_repairs
 from .sources import (SOURCES, FALLBACK_SOURCES, directory_date, directory_file, calendar_file,
-                      source_file)
+                      source_file, require_update_source)
 from .store import digest, dumps
 from .provider_guard import ProviderGuard, ProviderError, error_detail
 
@@ -77,18 +77,27 @@ def continue_sync(service, job, spec):
     """One bounded repair pass, then let the normal scan verify qualifications.
 
     Covered local work uses no vendor connection. Uncertified/new-day scope
-    still goes through original official preflight. Network failures/limits are
-    never retried within this invocation, nor is historical research expanded.
+    still goes through original official preflight. TickFlow transport recovery
+    is bounded to one attempt after guard expiry; explicit limits never retry.
     """
     store, source = service.store, spec.get('source', 'baostock')
+    require_update_source(source)
     asof = min(spec.get('end') or completed_date(), completed_date())
     tf = spec.get('scan_timeframe', 'daily')
     raw = dict(spec, resume=False)
     if spec.get('force') or spec.get('full_history') or spec.get('repair_codes') or 'boards' not in spec:
         return service._sync_once(job, raw)
+    raw['transport_retry_budget'] = {'used': False}
     service.check_stop(job)
     warm = certified_scope(store, source, asof)
-    if warm:
+    increment_codes = ordinary_update_codes(store, source, spec['boards'], asof) if warm else []
+    ordinary = bool(increment_codes)
+    cooling = ProviderGuard(store, source).state().get('until', 0) > time.time()
+    # Metadata only chooses the request planner, never authorizes a scan.
+    # Missing tails use ordinary batched increments, not full-file gap planning
+    # for thousands of stocks. Both routes still finish with the real audit.
+    ordinary = ordinary and not cooling
+    if warm and not ordinary:
         service.progress(job, 0, 0, f'{SOURCES[source]} · 检查已完成行情，只续做未齐部分')
         audit = audit_scope(store, spec['boards'], asof, source=source, timeframe=tf,
                             verify_files=True, check_stop=lambda: service.check_stop(job),
@@ -109,7 +118,10 @@ def continue_sync(service, job, spec):
             store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                           (source+'_integrity',dumps(integrity)))
     else:
-        result = service._sync_once(job, raw)
+        request = dict(raw, resume_scope=warm)
+        if ordinary:
+            request['increment_codes'] = increment_codes
+        result = service._sync_once(job, request)
         audit = result.get('scan_readiness')
         if not audit or not audit.get('scope_valid'):
             return result
@@ -120,14 +132,17 @@ def continue_sync(service, job, spec):
     failed = {e.get('code') for e in result.get('errors', []) if e.get('category') not in PRICE_GAPS}
     if result.get('cooldown') or result.get('remaining', 0) or result.get('network_failures', 0):
         codes = []
-    elif not warm:
+    elif not warm or ordinary:
         codes = [c for c in codes if c not in failed]
         # Tail/missing-dataset were just requested by ordinary sync. Only an
         # interior input hole requires a *different* interval after that stage.
         interior = {g['code'] for g in audit.get('gaps', []) if g.get('category') == 'input_gap'}
         codes = [c for c in codes if c in interior]
-    result['resume'] = dict(reused=audit['ready'], repair_codes=codes, unchanged=unchanged,
-                          scope_reused=warm)
+    reused = audit['ready'] if warm and not ordinary else result.get('skipped', 0)
+    if ordinary:
+        reused += len(set(audit['eligible_ids']) - set(result.get('datasets', [])))
+    result['resume'] = dict(reused=reused, repair_codes=codes, unchanged=unchanged,
+                          scope_reused=warm, ordinary_increment=ordinary)
     guard = ProviderGuard(store,source)
     state = guard.state()
     if codes and state.get('until',0) > time.time():
@@ -149,9 +164,37 @@ def continue_sync(service, job, spec):
             result['stop_reason'] = '补拉未完成：已保存行情保留，没有自动重试'
             return result
         remember_repairs(store, source, audit['expected_day'], before, repair.get('datasets', []))
+        repair['increment_summary'] = {key: result[key] for key in
+            ('requested','success','skipped','updated','downloaded','refreshed','timings') if key in result}
+        if 'transport_recovery' in result:
+            repair['transport_recovery'] = result['transport_recovery']
         repair['resume'] = result['resume']
         result = repair
-    elif warm:
+    elif warm and not ordinary:
         result['note'] = ('已完成行情直接复用；' +
                           ('其余问题保留，已补拉无改善的缺口不重复请求' if audit['gaps'] else '无需下载'))
     return result
+
+
+def ordinary_update_codes(store, source, boards, asof):
+    """Cheap routing hint. No price parsing, gap certification or scan approval."""
+    import pandas as pd
+    from .market import select_board_codes
+    from .gap_review import IDENTITIES
+    from .sync import tail_pending
+    day = expected_day(store, asof, source)
+    calendar = json.loads(calendar_file(store, source).read_text(encoding='utf-8'))
+    directory = pd.read_csv(directory_file(store, source), dtype=str)
+    statuses = dict(zip(directory.code, directory.tradeStatus)) if 'tradeStatus' in directory else {}
+    records = {r['code']: r for r in latest_datasets(store, source) if r['timeframe'] == 'daily'}
+    unchanged = set(unchanged_repairs(store, source, day, records))
+    codes = []
+    for code in select_board_codes(directory, boards):
+        if code in unchanged or (code in IDENTITIES and day >= IDENTITIES[code][0]):
+            continue
+        if str(statuses.get(code)) == '0':
+            continue
+        record = records.get(code)
+        if not record or (record['end'] < day and tail_pending(store, code, record['end'], day, source, calendar=calendar)):
+            codes.append(code)
+    return codes

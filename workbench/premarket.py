@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .market import BOARDS, board_of, completed_date, latest_datasets
 from .provider_guard import ProviderError, ProviderGuard, error_detail
-from .sources import SOURCES, isolate_tickflow_legacy
+from .sources import SOURCES, isolate_tickflow_legacy, require_update_source
 from .store import dumps, now
 from .premarket_store import PremarketStore
 
@@ -17,6 +17,8 @@ def validate_spec(spec):
     sources = spec.get('sources', [])
     if not sources or len(sources) != len(set(sources)) or any(s not in SOURCES for s in sources):
         raise ValueError('请至少选择一个有效数据源，不能重复')
+    for source in sources:
+        require_update_source(source)
     if not spec.get('boards') or any(b not in BOARDS for b in spec['boards']):
         raise ValueError('请选择有效板块')
     if not spec.get('strategies') or spec.get('timeframe') not in ('daily', 'weekly'):
@@ -53,7 +55,7 @@ def run_premarket(service, job, spec):
                     snapshot = copy.deepcopy(report)
                 text = ' · '.join(f'{SOURCES[s]} {i["phase"]} {i.get("progress",0)}/{i.get("total",0)}'
                                   + ('（逐股回退）' if '整日回退逐股' in i.get('message','') else '')
-                                  + (f'：{i.get("message", "")[:30]}' if i['phase']=='失败' else '')
+                                  + (f'：{i.get("message", "")[:75]}' if i['phase'] in ('失败','等待续做') else '')
                                   for s, i in snapshot['sources'].items())
                 done_sources = sum(i['phase'] in ('完成','部分完成','未完成','失败','已停止')
                                    for i in snapshot['sources'].values())
@@ -77,10 +79,16 @@ def run_premarket(service, job, spec):
             child = uuid.uuid4().hex[:16]
             stage_spec = dict(stage_spec, premarket_parent=job)
             proxy.cancel_flags = {child: stop}
+            last_progress = [0.0]
+            pending_progress = [None]
             def progress(_job, done, total, msg):
-                proxy.store.execute('UPDATE jobs SET progress=?,total=?,message=? WHERE id=?',
-                                    (done, total, msg, child))
-                display_phase = '核对缓存' if phase == '更新' and msg.startswith('核对已保存行情') else phase
+                pending_progress[0] = (done, total, msg, child)
+                stamp = time.monotonic()
+                if stamp - last_progress[0] >= 1 or (total and done >= total):
+                    proxy.store.execute('UPDATE jobs SET progress=?,total=?,message=? WHERE id=?', pending_progress[0])
+                    last_progress[0] = stamp
+                display_phase = ('等待续做' if phase == '更新' and '临时断网，等待' in msg else
+                                 '核对缓存' if phase == '更新' and msg.startswith('核对已保存行情') else phase)
                 notice(source, display_phase, done, total, msg)
             proxy.progress = progress
             proxy.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
@@ -89,6 +97,7 @@ def run_premarket(service, job, spec):
             with notice_lock:
                 receipt[kind+'_job'] = child
             started = time.monotonic()
+            metrics_before = proxy.store.metrics()
             try:
                 proxy.check_stop(child)
                 result = getattr(proxy, '_'+kind)(child, stage_spec)
@@ -104,13 +113,25 @@ def run_premarket(service, job, spec):
                 result, status, message = {'errors':[detail]}, 'failed', str(exc)
                 proxy.store.event(child,'一键盘前子任务异常',kind=kind,
                                   **detail,traceback=traceback.format_exc())
+            finally:
+                proxy.store.flush_reads()
+                if pending_progress[0]:
+                    proxy.store.execute('UPDATE jobs SET progress=?,total=?,message=? WHERE id=?', pending_progress[0])
             elapsed = time.monotonic() - started
+            result['local_io'] = {key: round(value - metrics_before[key], 4)
+                                  for key, value in proxy.store.metrics().items()}
             proxy.store.execute('UPDATE jobs SET status=?,finished=?,message=?,result=? WHERE id=?',
                                 (status, now(), message, dumps(result), child))
             with notice_lock:
                 receipt[kind+'_seconds'] = elapsed
                 receipt[kind+'_status'] = status
-                receipt[kind+'_result'] = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','resume','skipped','note','stop_reason') if k in result}
+                receipt[kind+'_result'] = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery') if k in result}
+                if result.get('resume'):
+                    receipt[kind+'_result']['resume'] = resume_summary(result['resume'])
+                if kind == 'scan':
+                    audits = result.get('coverage_by_timeframe', {}) or {'current': result.get('coverage', {})}
+                    excluded = {g['code'] for a in audits.values() for g in a.get('gaps', [])}
+                    receipt[kind+'_result']['not_scanned_count'] = len(excluded)
                 if result.get('errors'):
                     # Full diagnostics already live in the child receipt.
                     # Do not rewrite thousands of stock errors every .5s.
@@ -146,3 +167,12 @@ def run_premarket(service, job, spec):
     report['errors'] = [dict(source=s, error=i.get('message','未完成')) for s,i in report['sources'].items()
                         if i.get('scan_status') != 'completed']
     return report
+
+
+def resume_summary(resume):
+    """Parent progress stays bounded; full lists live only in the child receipt."""
+    result = {key: resume[key] for key in ('reused', 'scope_reused', 'ordinary_increment',
+              'repair_attempted', 'waiting_for_cooldown') if key in resume}
+    result.update(repair_count=len(resume.get('repair_codes', [])),
+                  unchanged_count=len(resume.get('unchanged', [])))
+    return result

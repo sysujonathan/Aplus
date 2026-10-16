@@ -13,7 +13,7 @@ from workbench.service import Service
 
 
 def multi_spec():
-    return dict(sources=['baostock','tickflow','tencent'], boards=['沪深主板'],
+    return dict(sources=['baostock','tickflow'], boards=['沪深主板'],
                 strategies=['STRATEGY_3K'], timeframe='daily', start='2024-01-01')
 
 
@@ -55,9 +55,9 @@ def test_sources_download_independently_and_fast_source_scans_before_slow_finish
         row = wait_for(store, job)
         assert row['status']=='completed', row['result']
         result = json.loads(row['result'])
-        assert set(result['sources']) == {'baostock','tickflow','tencent'}
+        assert set(result['sources']) == {'baostock','tickflow'}
         assert len({day for _, _, day in calls}) == 1
-        assert len(store.rows("SELECT id FROM jobs WHERE kind IN ('sync','scan')"))==6
+        assert len(store.rows("SELECT id FROM jobs WHERE kind IN ('sync','scan')"))==4
         assert store.rows("SELECT value FROM meta WHERE key='daily_market_source'")[0]['value']=='tencent'
         assert all(r['progress']==r['total']==1 for r in store.rows(
             "SELECT progress,total FROM jobs WHERE kind IN ('sync','scan')"))
@@ -98,7 +98,7 @@ def test_one_provider_cooldown_does_not_stop_other_sources_or_scan_its_old_cache
         row = wait_for(store, service.submit('premarket', multi_spec()))
         result = json.loads(row['result'])
         assert row['status']=='partial'
-        assert set(scans)=={'tickflow','tencent'}
+        assert set(scans)=={'tickflow'}
         assert result['sources']['baostock']['sync_status']=='failed'
         assert ProviderGuard(store,'baostock').state()['last_error']['error_code']=='429'
         assert not ProviderGuard(store,'tickflow').state()
