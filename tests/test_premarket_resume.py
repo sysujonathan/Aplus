@@ -47,7 +47,7 @@ def proxy(store, raw):
                            progress=lambda *_:None)
 
 
-@pytest.mark.parametrize('source',['baostock','tickflow','tencent'])
+@pytest.mark.parametrize('source',['baostock','tickflow'])
 def test_warm_complete_prices_use_zero_provider_requests_and_keep_data(store,frame,source):
     start,day,ids=seeded(store,frame,source)
     assert certified_scope(store,source,day)
@@ -59,7 +59,7 @@ def test_warm_complete_prices_use_zero_provider_requests_and_keep_data(store,fra
     assert store.rows('SELECT * FROM datasets')==snapshots
 
 
-@pytest.mark.parametrize('source',['baostock','tickflow','tencent'])
+@pytest.mark.parametrize('source',['baostock','tickflow'])
 def test_plain_interior_hole_is_repaired_once_then_scanned_without_manual_steps(store,frame,source,monkeypatch):
     start,day,ids=seeded(store,frame,source,holes=(100,))
     calls=[]
@@ -94,7 +94,7 @@ def test_plain_interior_hole_is_repaired_once_then_scanned_without_manual_steps(
         service.pool.shutdown()
 
 
-@pytest.mark.parametrize('source',['baostock','tickflow','tencent'])
+@pytest.mark.parametrize('source',['baostock','tickflow'])
 def test_unchanged_repair_is_not_a_loop_or_a_permission_to_scan(store,frame,source):
     start,day,ids=seeded(store,frame,source,holes=(100,))
     calls=[]
@@ -206,7 +206,7 @@ def test_unrelated_release_change_does_not_hide_identical_finished_hit(store,fra
     assert load_candidates(store,'daily','baostock',tuple(day.split('-')))[entry.id][0]['observation_id']=='old'
 
 
-@pytest.mark.parametrize('source',['tickflow','tencent'])
+@pytest.mark.parametrize('source',['tickflow'])
 def test_reused_prices_refresh_gap_receipt_for_current_board_without_download(store,frame,source):
     from workbench.gap_review import review_receipt
     start,day,_=seeded(store,frame,source,codes=('sh.600000','sz.300001'))

@@ -22,7 +22,7 @@ from .sync import sync_stock
 from .readiness import (audit_scope, expected_day, reusable_baostock_basics,
                         save_calendar, save_directory)
 from .sync_batch import sync_results
-from .sources import market_source, SOURCES, coverage_state, FALLBACK_SOURCES
+from .sources import market_source, SOURCES, coverage_state, FALLBACK_SOURCES, require_update_source
 from .provider_guard import ProviderGuard, ProviderError, access_limited, restricted, error_detail
 
 
@@ -62,8 +62,7 @@ class Service:
             verify_frozen()
         if kind=='sync':
             spec=dict(spec,source=spec.get('source') or market_source(self.store))
-            if spec['source'] not in SOURCES:
-                raise ValueError('未知日 K 数据源')
+            require_update_source(spec['source'])
             if not spec.get('resume'):
                 ProviderGuard(self.store,spec['source']).check()
         with self.lock:
@@ -162,12 +161,10 @@ class Service:
 
     def _sync_once(self, job,spec):
         source=spec.get('source','baostock')
+        require_update_source(source)
         ProviderGuard(self.store,source).check()
         if source=='tickflow':
             return self._sync_tickflow(job,spec)
-        if source=='tencent':
-            from .tencent_service import sync_tencent
-            return sync_tencent(self,job,spec)
         # end=None 表示“直到最新交易日”。completed_date() 返回字符串，不能与 None
         # 直接 min（会报 "'<' not supported between str and NoneType"），故先归一化。
         end = completed_date() if not spec.get('end') else min(spec['end'], completed_date())
@@ -220,6 +217,8 @@ class Service:
                         from .baostock_daily_batch import one_day_tail_candidates
                         active = [code for code in selected if code not in set(
                             directory.loc[directory.tradeStatus.astype(str) == '0', 'code'])]
+                        if spec.get('increment_codes'):
+                            active = [code for code in active if code in set(spec['increment_codes'])]
                         daily_batch_codes = one_day_tail_candidates(self.store, active, start, end)
                         # Two official requests replace thousands of single-stock
                         # tail requests only when the saving is material.
@@ -259,6 +258,11 @@ class Service:
             codes = select_board_codes(universe,spec['boards'])
         else:
             codes = list(dict.fromkeys(spec['codes']))
+        if spec.get('increment_codes'):
+            increments = set(spec['increment_codes'])
+            if 'boards' not in spec or not increments.issubset(codes):
+                raise ValueError('续做标的必须属于已核验的所选板块')
+            codes = [code for code in codes if code in increments]
         if spec.get('repair_codes'):
             # Explicit UI selection only; provider connection/protection unchanged.
             requested = set(spec['repair_codes'])

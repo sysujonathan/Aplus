@@ -106,6 +106,7 @@ class BaoStock:
                         exc=ProviderError(self.vendor,operation,error.get('message',error.get('error','未知错误')),
                                           error.get('error_code'),round(elapsed,3))
                         exc.retry_after=error.get('retry_after')
+                        exc.transient_transport = error.get('transient_transport') is True
                         raise exc
                     raise ProviderError(self.vendor,operation,str(error),elapsed=round(elapsed,3))
                 return response.get('data')

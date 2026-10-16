@@ -117,7 +117,7 @@ def test_local_failure_keeps_source_progress_diagnostics_and_other_sources(store
         assert row['status'] == 'partial'
         assert (item['phase'],item['progress'],item['total']) == ('失败',23,100)
         assert item['sync_result']['errors'][0]['error'] == 'database is locked'
-        assert all(report['sources'][s]['scan_status']=='completed' for s in ('baostock','tencent'))
+        assert report['sources']['baostock']['scan_status']=='completed'
         event = store.rows('SELECT detail FROM events WHERE job_id=? AND action=?',
                            (item['sync_job'],'一键盘前子任务异常'))
         assert 'OperationalError' in json.loads(event[0]['detail'])['traceback']

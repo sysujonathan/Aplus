@@ -98,7 +98,7 @@ def test_web_research_offers_all_shared_sources_and_keeps_csv_demo(tmp_path, mon
     app.sidebar.radio[0].set_value('回测研究').run()
     assert not app.exception
     selector = next(item for item in app.selectbox if item.label == '行情来源')
-    assert selector.options == ['真实行情 · ' + label for label in SOURCES.values()] + [
+    assert selector.options == ['真实行情 · BaoStock', '真实行情 · TickFlow', '历史只读 · 腾讯（已停用更新）'] + [
         '自行导入 · CSV', '演示行情 · 非真实市场']
     selector.set_value('tencent').run()
     assert not app.exception and not app.error

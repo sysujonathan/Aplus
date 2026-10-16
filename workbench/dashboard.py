@@ -10,7 +10,7 @@ from .readiness import audit_scope
 from .scope import selected_boards, save_boards, scan_datasets
 from .strategies import prepare
 from .store import dumps
-from .sources import SOURCES,market_source,set_market_source,FALLBACK_SOURCES
+from .sources import SOURCES,market_source,set_market_source,FALLBACK_SOURCES,UPDATE_SOURCES,RETIRED_MESSAGE
 
 TF = {'daily':'日线', 'weekly':'周线'}
 
@@ -50,6 +50,8 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
                             format_func=SOURCES.get,disabled=busy)
         if source!=market_source(store):
             set_market_source(store,source)
+        if source not in UPDATE_SOURCES:
+            st.info(RETIRED_MESSAGE)
         selected = selected_boards(store)
         columns = st.columns(4)
         boards = [name for col,name in zip(columns,BOARDS)
@@ -71,7 +73,7 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
         audits = [audit_scope(store,boards,str(end),ids,timeframe=tf,history_cache_only=True) for tf in periods]
         audit = audits[0]
         a,b,c = st.columns([1,1,3])
-        if a.button('同步市场数据',type='primary',disabled=busy):
+        if a.button('同步市场数据',type='primary',disabled=busy or source not in UPDATE_SOURCES):
             if not boards:
                 st.error('请至少勾选一个板块')
             elif begin > end:

@@ -10,7 +10,8 @@ import ttkbootstrap as ttk
 from ttkbootstrap.widgets import ToolTip
 
 from .theme import MUTED
-from workbench.sources import market_source, set_market_source, SOURCES
+from workbench.sources import (market_source, set_market_source, SOURCES, UPDATE_SOURCES,
+                               RETIRED_MESSAGE, update_selection)
 
 _LABEL_FG = MUTED
 _ALL = "全部"
@@ -114,6 +115,8 @@ def format_header_data_status(market_date, signal_date, boards, audit):
     ready = int((audit or {}).get("ready") or 0)
     coverage = f"{scope} {ready}/{expected}" if expected > 0 else f"{scope} 待核验"
     if (audit or {}).get('source') in SOURCES and (audit or {}).get('gaps'):
+        if signal_date and not pending:
+            scan_mark = '⚠部分'
         pending = sum(g.get('category') == 'quality_pending' for g in audit['gaps'])
         # The count already expresses usable/total. Details belong in the repair
         # entry; repeating exclusions here makes the persistent header wrap.
@@ -270,8 +273,8 @@ class ToolBar(ttk.Frame):
             ToolTip(self.btn_auto_menu, text='选择一键盘前使用的数据源。'),
         ]
         self._auto_sources_saved = store.premarket_sources() if store else None
-        initial = self._auto_sources_saved or [market_source(store) if store else 'baostock']
-        self.auto_source_vars = {s: tk.BooleanVar(value=s in initial) for s in SOURCES}
+        initial = update_selection(self._auto_sources_saved, market_source(store) if store else 'baostock')
+        self.auto_source_vars = {s: tk.BooleanVar(value=s in initial) for s in UPDATE_SOURCES}
         auto_menu = tk.Menu(self.btn_auto_menu, tearoff=0)
         auto_menu.add_command(label='一键盘前使用的数据源', state=tk.DISABLED)
         for source, variable in self.auto_source_vars.items():
@@ -783,6 +786,8 @@ class ToolBar(ttk.Frame):
             self._mkt_var.set("行情：未连接")
             self._header_data_var.set("行情 无 — · 信号 无 — · 范围待核验")
             return self._mkt_var.get()
+        if not self._job_id:
+            self.btn_sync.state(['disabled'] if self._display_source() not in UPDATE_SOURCES else ['!disabled'])
         from .data import latest_market_date, latest_scan_date
 
         if self._async_status_mode or self._job_kind == '一键盘前':
@@ -937,6 +942,9 @@ class ToolBar(ttk.Frame):
         self.set_status(f"缺口处理已保存：待处理 {count} 只 · 已忽略 {ignored} 只 · 可扫描 {audit.get('ready',0)} 只；仍只扫描数据合格股票")
 
     def _repair_tickflow(self,codes,timeframe=None,include_history=False):
+        if market_source(self.store) not in UPDATE_SOURCES:
+            self.set_status(RETIRED_MESSAGE)
+            return False
         if self._job_id or not codes or market_source(self.store) not in SOURCES:
             self.set_status('补拉未开始：请等待当前任务结束，并保持所选数据源')
             return False
@@ -949,6 +957,8 @@ class ToolBar(ttk.Frame):
         return bool(self._job_id)
 
     def _repair_block_reason(self, action='repair'):
+        if action == 'repair' and market_source(self.store) not in UPDATE_SOURCES:
+            return RETIRED_MESSAGE
         if self._source_pending:
             return '正在切换来源，切换完成后可查看补拉条件。'
         if self._job_id:
@@ -1014,7 +1024,7 @@ class ToolBar(ttk.Frame):
     def _apply_source(self, source):
         try:
             if not getattr(self, '_auto_sources_saved', None) and hasattr(self, 'auto_source_vars'):
-                for key, variable in self.auto_source_vars.items(): variable.set(key == source)
+                for key, variable in self.auto_source_vars.items(): variable.set(key in update_selection(None, source))
             self._sync_elapsed = self._scan_elapsed = None
             self._refresh_timing_status()
             # Date choices are source-owned too; changing only the selected
@@ -1022,7 +1032,9 @@ class ToolBar(ttk.Frame):
             self._load_date_options()
             self._select_latest_date()
             self._fire_date()
-            risk='；不复权，跨除权扫描／回测受影响' if source=='tencent' else ''
+            risk='；历史只读，已停用更新／补拉；一键只使用 BaoStock／TickFlow' if source=='tencent' else ''
+            if not self._job_id:
+                self.btn_sync.state(['disabled'] if source not in UPDATE_SOURCES else ['!disabled'])
             self.set_status(f'日 K 来源已切换为 {SOURCES[source]}；独立缓存，旧快照与旧回测保留'+risk)
         except Exception as exc:
             self.source_var.set(SOURCES[market_source(self.store)])
@@ -1064,7 +1076,7 @@ class ToolBar(ttk.Frame):
     def _save_auto_sources(self):
         sources = [s for s, variable in self.auto_source_vars.items() if variable.get()]
         if not sources:
-            for s in self._auto_sources_saved or [market_source(self.store)]:
+            for s in update_selection(self._auto_sources_saved, market_source(self.store)):
                 self.auto_source_vars[s].set(True)
             self.set_status('至少保留一个数据源')
             return
@@ -1074,6 +1086,9 @@ class ToolBar(ttk.Frame):
         self.set_status('一键盘前来源：' + '、'.join(SOURCES[s] for s in sources))
 
     def _on_sync(self, chained=False):
+        if self.store and market_source(self.store) not in UPDATE_SOURCES:
+            self.set_status(RETIRED_MESSAGE)
+            return
         if self._source_pending:
             self.set_status('正在切换来源，请切换完成后再更新行情')
             return
@@ -1342,11 +1357,13 @@ class ToolBar(ttk.Frame):
                 if resume:
                     text += f"；{SOURCES[s]}行情复用 {resume.get('reused',0)}"
                     if resume.get('repair_attempted'):
-                        text += f"／补拉 {len(resume.get('repair_codes',[]))} 只"
+                        text += f"／补拉 {resume.get('repair_count',len(resume.get('repair_codes',[])))} 只"
                     elif resume.get('waiting_for_cooldown'):
                         text += '／其余待冷却结束'
                 if 'reused' in scan_result:
                     text += f"，判断复用 {scan_result['reused']}／新计算 {scan_result.get('calculated',0)}"
+                if scan_result.get('not_scanned_count'):
+                    text += f"；{SOURCES[s]}行情未齐未扫描 {scan_result['not_scanned_count']} 只（不代表无信号）"
                 batch = sync_result.get('daily_batch', {})
                 if batch.get('fallback'):
                     text += f"；{SOURCES[s]}逐股回退 {batch['fallback']} 只"

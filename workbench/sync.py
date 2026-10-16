@@ -40,12 +40,13 @@ def local_history(store, code, job, coverage=None, source='baostock'):
     return frame, state
 
 
-def tail_pending(store, code, last, end, source='baostock'):
+def tail_pending(store, code, last, end, source='baostock', calendar=None):
     """Only explicit dated halts or verified closed sessions excuse absent bars."""
     if last >= end:
         return False
     try:
-        calendar = json.loads(calendar_file(store, source).read_text(encoding='utf-8'))
+        if calendar is None:
+            calendar = json.loads(calendar_file(store, source).read_text(encoding='utf-8'))
         if (not isinstance(calendar, dict) or
                 not calendar['start'] <= last <= end <= calendar['end']):
             return True

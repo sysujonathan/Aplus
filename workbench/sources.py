@@ -2,8 +2,23 @@
 import json
 
 SOURCES = {'baostock': 'BaoStock', 'tickflow': 'TickFlow', 'tencent': '腾讯'}
+UPDATE_SOURCES = ('baostock', 'tickflow')
+RETIRED_MESSAGE = '腾讯历史行情已停用更新与补拉；已有行情、扫描和研究记录仍可查看。请改用 BaoStock 或 TickFlow 更新。'
 FALLBACK_SOURCES = ('tickflow', 'tencent')
 ADJUSTMENTS = {'baostock':'前复权', 'tickflow':'前复权', 'tencent':'不复权'}
+
+
+def require_update_source(source):
+    if source not in SOURCES:
+        raise ValueError('未知日 K 数据源')
+    if source not in UPDATE_SOURCES:
+        raise ValueError(RETIRED_MESSAGE)
+
+
+def update_selection(saved, current='baostock'):
+    """Sanitize old preferences without deleting archived source facts."""
+    selected = [s for s in UPDATE_SOURCES if s in (saved or [current])]
+    return selected or [current if current in UPDATE_SOURCES else 'baostock']
 
 
 def source_file(store, name, source='baostock'):

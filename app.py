@@ -48,6 +48,7 @@ KIND = {'sync':'行情同步','scan':'策略匹配','backtest':'回测研究','v
 TF = {'daily':'日线','weekly':'周线','monthly':'月线'}
 SOURCE = {**{key: '真实行情 · ' + label for key, label in SOURCES.items()},
           'csv':'自行导入 · CSV','demo':'演示行情 · 非真实市场'}
+SOURCE['tencent'] = '历史只读 · 腾讯（已停用更新）'
 
 
 def submit(kind,spec):

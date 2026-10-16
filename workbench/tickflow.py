@@ -1,6 +1,7 @@
 """TickFlow free daily bars: explicit qfq, batch <=100, no implicit retry."""
 from datetime import date, datetime, timedelta, timezone
 import json
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -73,6 +74,11 @@ class TickFlowHTTP:
         except Exception as exc:
             code = str(exc.code) if isinstance(exc,urllib.error.HTTPError) else None
             error=ProviderError('tickflow',path,str(exc),code,round(time.monotonic()-started,3))
+            reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+            # Transport failures only, not HTTP refusals, certificate validation,
+            # malformed payloads or errors guessed from translated text.
+            error.transient_transport = code is None and isinstance(reason, (
+                TimeoutError, ssl.SSLEOFError, ConnectionResetError, ConnectionAbortedError))
             if isinstance(exc,urllib.error.HTTPError):
                 try:
                     error.retry_after=min(24*3600,max(0,float(exc.headers.get('Retry-After','0'))))
