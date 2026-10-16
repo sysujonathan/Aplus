@@ -39,36 +39,8 @@ PRESERVED_LOCAL_FILES = {"push.cmd"}
 MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
 DISCARDABLE_RELEASE_PATHS = {"README.md", "release_catalog.json"}
 
-# Release permission, not new strategy logic. Only these owner-approved byte
-# transitions are recognized. A candidate manifest cannot authorize its own
-# arbitrary code; every later strategy upgrade needs its own reviewed policy.
-APPROVED_FROZEN_TRANSITIONS = ({
-    "approval": {
-        "date": "2026-10-14", "strategy": "MTR_MASTER", "revision": "V36.3",
-        "reason": "User-approved bullish signal bar whose close equals its high",
-    },
-    "files": {
-        "core/strategies/mtr_strategy.py": (
-            "6d4335b15ef9865e32bd99186e66c5a688b0a8b915c3e5b50aae94c2e8a1a184",
-            "68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a"),
-        "core/strategies/mtr_structural_v35.py": (
-            "32b88d4ba919fbab86ee8a55b9efed13345538b10c2bb664c657ca13d9402c38",
-            "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e"),
-    },
-}, {
-    "approval": {
-        "date": "2026-10-14", "strategy": "MTR_MASTER", "revision": "V36.4",
-        "reason": "User-approved fix: setup without a qualifying signal bar cannot be published as an MTR candidate",
-    },
-    "files": {
-        "core/strategies/mtr_strategy.py": (
-            "68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a",
-            "69ca7d4f4924e1bfdec8ff97b2d68cb16dd11c9195d9a8fae838dffb10fec849"),
-        "core/strategies/mtr_structural_v35.py": (
-            "9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e",
-            "2ccbfa11c6da884f7c8ccc675fc754502c99590937955950f3d61d3635774cf2"),
-    },
-})
+# Official main plus its exact successful acceptance is the release authority.
+# Do not duplicate human release review in a client-side strategy allowlist.
 
 
 class UpdateError(ValueError):
@@ -331,13 +303,12 @@ def compatible_store_extension(before, after):
         return False
 
 
-def compatible_frozen_transition(root, current, target, changed):
-    """Verify an approved release transition using Git bytes, never imports/DB.
+def release_manifest_valid(root, target):
+    """Check target package integrity, not permission for a strategy change.
 
-    Both complete manifests must match their blobs. File lists, baseline source,
-    unrelated metadata and all other protected bytes stay identical. Exact
-    approved old/new fingerprints plus the appended approval record are needed;
-    CI and official-main identity are separately rechecked by the caller.
+    Official-main identity and exact acceptance are checked by check_version
+    and validate_plan. Allow skipped versions, any reviewed strategy/config
+    changes and an evolved manifest; never execute candidate code here.
     """
     def unique_keys(pairs):
         result = {}
@@ -347,14 +318,13 @@ def compatible_frozen_transition(root, current, target, changed):
             result[key] = value
         return result
 
-    def load(revision):
-        manifest = json.loads(run_git(root, 'show', f'{revision}:frozen_manifest.json',
+    try:
+        manifest = json.loads(run_git(root, 'show', f'{target}:frozen_manifest.json',
                                       binary=True), object_pairs_hook=unique_keys)
         if not isinstance(manifest, dict):
             raise ValueError('invalid manifest')
-        entries = manifest.pop('files')
-        approvals = manifest.pop('approved_strategy_updates', [])
-        if not isinstance(entries, list) or not entries or not isinstance(approvals, list):
+        entries = manifest['files']
+        if not isinstance(entries, list) or not entries:
             raise ValueError('invalid manifest records')
         files = {}
         for entry in entries:
@@ -367,28 +337,25 @@ def compatible_frozen_transition(root, current, target, changed):
                     or not DATA_SHA256.fullmatch(checksum)):
                 raise ValueError('invalid protected path or fingerprint')
             files[path] = checksum
-        return manifest, approvals, files
-
-    try:
-        old_meta, old_approvals, old = load(current)
-        new_meta, new_approvals, new = load(target)
-        if old_meta != new_meta or old.keys() != new.keys():
+        # Inspect the target tree, not the installed checkout or only changed
+        # paths. A valid checksum list must not silently omit protected files.
+        tree = run_git(root, 'ls-tree', '-r', '-z', '--full-tree', target,
+                       '--', 'core', 'config', binary=True)
+        protected = set()
+        for record in tree.split(b'\0'):
+            if not record:
+                continue
+            metadata, raw_path = record.split(b'\t', 1)
+            mode, kind, _oid = metadata.split()
+            if kind != b'blob' or mode not in {b'100644', b'100755'}:
+                return False  # No symlinks or embedded repositories in frozen code.
+            protected.add(raw_path.decode('utf-8', 'surrogateescape'))
+        if set(files) != protected:
             return False
-        delta = {path: (old[path], new[path]) for path in old if old[path] != new[path]}
-        sensitive = {p for p in changed if p == 'frozen_manifest.json'
-                     or p.startswith(('core/', 'config/'))}
-        if sensitive != set(delta) | {'frozen_manifest.json'}:
-            return False
-        approved = any(delta == rule['files'] and rule['approval'] not in old_approvals
-                       and new_approvals == old_approvals + [rule['approval']]
-                       for rule in APPROVED_FROZEN_TRANSITIONS)
-        if not approved:
-            return False
-        for revision, files in ((current, old), (target, new)):
-            for path, expected in files.items():
-                blob = run_git(root, 'show', f'{revision}:{path}', binary=True)
-                if hashlib.sha256(blob).hexdigest() != expected:
-                    return False
+        for path, expected in files.items():
+            blob = run_git(root, 'show', f'{target}:{path}', binary=True)
+            if hashlib.sha256(blob).hexdigest() != expected:
+                return False
         return True
     except (UpdateError, KeyError, TypeError, ValueError, RecursionError):
         return False
@@ -410,8 +377,8 @@ def compatible_target(root, current, target, local=None):
     if changed & MANUAL_FILES:
         raise ManualUpdateError("新版需要调整Python运行依赖或安装环境，请人工安装。", 'dependencies')
     if ('frozen_manifest.json' in changed or any(p.startswith(('core/', 'config/')) for p in changed)):
-        if not compatible_frozen_transition(root, current, target, changed):
-            raise ManualUpdateError("策略或配置变化不属于已核准的逐文件版本升级，请人工核对。", 'strategy')
+        if not release_manifest_valid(root, target):
+            raise ManualUpdateError("正式版文件与校验清单不一致，请等待项目负责人修复发布。", 'release_integrity')
     if 'workbench/store.py' in changed:
         try:
             before = run_git(root, 'show', f'{current}:workbench/store.py')

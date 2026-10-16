@@ -52,7 +52,9 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[46]['commit'] == '8af35e9ca85201096505694caeb243a21464a577'
     assert by_pr[47]['status'] == 'released'
     assert by_pr[47]['commit'] == 'e968647fb02ffdf79b4854432ea9ce51f1f94e03'
-    assert all(by_pr[n]['status'] == 'preview' for n in (48,49,50))
+    assert by_pr[48]['status'] == 'released'
+    assert by_pr[48]['commit'] == '0026048789cd7f793a6e845a074ccc853bc45777'
+    assert all(by_pr[n]['status'] == 'preview' for n in (49, 50))
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -81,6 +83,7 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.15.46-preview' not in text
     assert 'v2026.10.15.47-preview' not in text
     assert 'v2026.10.15.50-preview' in text
+    assert 'v2026.10.15.48-preview' not in text and 'v2026.10.15.48' in text
 
 
 @pytest.mark.parametrize('mutation', ['schema', 'version', 'date', 'duplicate', 'status', 'sha', 'notes', 'build_pr', 'date_version', 'row'])
@@ -116,6 +119,9 @@ def test_exact_historical_main_and_current_preview_are_distinct():
     assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
     assert r.version_label(preview) == 'v2026.10.15.50 · 预览版'
+    approved = r.identity(ROOT, target='0026048789cd7f793a6e845a074ccc853bc45777')
+    assert r.version_label(approved) == 'v2026.10.15.48'
+    assert approved['channel'] == 'main' and approved['notes']
     # A short hash and an unrelated revision must not be called PR29.
     assert r.identity(ROOT, target='18670c8')['version'] is None
     assert r.identity(ROOT, target='b'*40)['version'] is None
