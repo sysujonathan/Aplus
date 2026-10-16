@@ -18,6 +18,8 @@ def frame(dates, closes=None):
 
 
 def boot_for(store, data):
+    from workbench.market import save_dataset
+    save_dataset(store, 'sz.000001', data, 'test', 'qfq')
     return workspace_boot(store, dict(frame=data, record={'source': 'test', 'adjustment': 'qfq'},
                                      code='sz.000001', timeframe='daily'))
 
@@ -56,7 +58,7 @@ def test_first_period_that_closes_after_creation_can_trigger(
     from workbench.market import save_dataset
     save_dataset(store, 'sz.000001', extended, 'test', 'qfq')
     monkeypatch.setattr('workbench.market.completed_date', lambda: next_now[:10])
-    monitor = ChartAlertMonitor(Mock(), store)
+    monitor = ChartAlertMonitor(Mock(), store, clock=lambda: next_now)
     monitored = monitor._frame(boot['identity'], alert)
     _, event = evaluate_alert(alert, monitored, now=next_now)
     assert event is not None and event['bar'] == closed.date.iloc[-1]
@@ -86,7 +88,7 @@ def setup_open_editor(tmp_path):
     store = Store(tmp_path)
     initial = frame(['2026-01-05', '2026-01-06'])
     boot = boot_for(store, initial)
-    ChartBridge(store, boot).create_price_alert(10)
+    ChartBridge(store, boot, clock=lambda: '2026-01-06T20:00:00+08:00').create_price_alert(10)
     boot = boot_for(store, initial)
     bridge = ChartBridge(store, boot)
     state = dict(objects=[dict(id='t', type='trend', a=dict(index=0, value=9),

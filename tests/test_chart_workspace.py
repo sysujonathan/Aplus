@@ -200,6 +200,8 @@ def test_production_web_workspace_uses_real_context_and_persists_objects(tmp_pat
 def test_web_workspace_alert_is_forward_only_store_alert(tmp_path):
     store = Store(tmp_path)
     frame = bars()
+    from workbench.market import save_dataset
+    save_dataset(store, 'sz.000001', frame, 'baostock', '前复权')
     boot = workspace_boot(store, dict(
         frame=frame, record={'source': 'baostock', 'adjustment': '前复权'},
         code='sz.000001', name='平安银行', timeframe='daily'))
@@ -247,7 +249,9 @@ def test_aggregate_view_save_preserves_original_drawing_coordinates(tmp_path, ti
 @pytest.mark.parametrize('timeframe', ['daily', 'weekly', 'monthly'])
 def test_web_alert_uses_selected_period_and_its_last_completed_bar(tmp_path, timeframe):
     store = Store(tmp_path)
-    frame = bars(pd.bdate_range('2026-01-05', periods=8).strftime('%Y-%m-%d').tolist())
+    frame = bars(pd.bdate_range('2026-01-05', periods=20).strftime('%Y-%m-%d').tolist())
+    from workbench.market import save_dataset
+    save_dataset(store, 'sz.000001', frame, 's', 'unknown')
     boot = workspace_boot(store, dict(frame=frame, record={'source': 's'},
                                      code='sz.000001', timeframe='daily'))
     # Historical fixture: all three periods are closed at this explicit clock.
@@ -257,7 +261,7 @@ def test_web_alert_uses_selected_period_and_its_last_completed_bar(tmp_path, tim
     assert saved['timeframe'] == timeframe
     assert saved['cursor'] == boot['series'][timeframe][-1]['date']
     assert saved['events'] == result['alert']['events'] == []
-    if timeframe != 'daily':
+    if timeframe == 'monthly':
         assert saved['cursor'] != frame.date.iloc[-1]
 
 

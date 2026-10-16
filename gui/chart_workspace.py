@@ -836,11 +836,17 @@ class ChartWorkspaceDialog:
                         frequency=frequency_values[frequency.get()], expires=expiry.get().strip(),
                         enabled=enabled.get(),status='等待下一根已收盘 K 线')
                 else:
+                    from .chart_alerts import load_alert_frame
+                    moment = datetime.now(timezone.utc).isoformat()
+                    current = load_alert_frame(self.store, self.identity, dict(code=self.code,
+                        source=self.source, adjustment=self.adjustment, timeframe=self.timeframe), moment)
+                    if current is None or current.empty:
+                        raise ValueError('没有同来源、同复权的已完成正式行情，请更新行情后创建提醒')
                     item = create_alert(name=name.get(), code=self.code, source=self.source,
                         adjustment=self.adjustment, timeframe=self.timeframe, target=target_values[target.get()],
-                        condition=condition_values[condition.get()], value=float(value.get()), frame=self._render_frame(),
+                        condition=condition_values[condition.get()], value=float(value.get()), frame=current,
                         ema_length=int(ema_len.get()), frequency=frequency_values[frequency.get()],
-                        expires=expiry.get().strip())
+                        expires=expiry.get().strip(), active_after=moment)
                 doc = deepcopy(self.history.value)
                 doc['alerts'] = [item if old['id']==item['id'] else old for old in doc['alerts']]
                 if not alert: doc['alerts'].append(item)
@@ -859,11 +865,15 @@ class ChartWorkspaceDialog:
         if self.replay_index is not None: return
         doc = deepcopy(self.history.value); events = []
         now = datetime.now(timezone.utc).isoformat()
+        from .chart_alerts import load_alert_frame
         for index, alert in enumerate(doc['alerts']):
             if (alert['code'],alert['source'],alert['adjustment'],alert['timeframe']) != (
                     self.code,self.source,self.adjustment,self.timeframe):
                 continue
-            doc['alerts'][index], event = evaluate_alert(alert, self.frame, now=now)
+            frame = load_alert_frame(self.store, self.identity, alert, now)
+            if frame is None or frame.empty:
+                continue
+            doc['alerts'][index], event = evaluate_alert(alert, frame, now=now)
             if event: events.append(event)
         if doc['alerts'] != self.history.value['alerts']:
             self.history.value = validate_document(doc); self._save(); self.refresh_tree()

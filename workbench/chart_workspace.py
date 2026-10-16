@@ -93,6 +93,9 @@ def validate_document(value):
             raise ValueError('提醒必须记录行情来源和复权口径')
         if alert.get('expires'):
             pd.Timestamp(alert['expires'])
+        if alert.get('active_after'):
+            if pd.isna(pd.Timestamp(alert['active_after'])):
+                raise ValueError('提醒创建时间无效')
         if not isinstance(alert.get('events', []), list):
             raise ValueError('提醒记录无效')
     value['drawings'], value['alerts'] = drawings, alerts
@@ -173,7 +176,8 @@ def session_counts(frame):
 
 
 def create_alert(*, name, code, source, adjustment, timeframe, target, condition,
-                 value, frame, ema_length=20, frequency='bar_close', expires=None):
+                 value, frame, ema_length=20, frequency='bar_close', expires=None,
+                 active_after=None):
     """Create a forward-only alert. Existing history is seeded, never backfilled."""
     if frame is None or frame.empty:
         raise ValueError('创建提醒前需要真实行情')
@@ -183,6 +187,8 @@ def create_alert(*, name, code, source, adjustment, timeframe, target, condition
                  value=float(value), ema_length=int(ema_length), frequency=str(frequency),
                  expires=str(expires or ''), enabled=True, cursor=str(frame.date.iloc[-1]),
                  status='等待下一根已收盘 K 线', events=[])
+    if active_after is not None:
+        alert['active_after'] = str(active_after)
     validate_document({'revision': 0, 'settings': DEFAULT_SETTINGS,
                        'drawings': [], 'alerts': [alert]})
     return alert
@@ -282,6 +288,30 @@ def minute_frame(path, minutes=5):
     return frame
 
 
+def bar_close_time(stamp, timeframe):
+    """Market close watermark, using verified exchange days when available."""
+    candle = pd.Timestamp(stamp)
+    candle = (candle.tz_localize('Asia/Shanghai') if candle.tzinfo is None
+              else candle.tz_convert('Asia/Shanghai'))
+    if timeframe in ('5m', '1h', '4h'):
+        return candle + timedelta(minutes=5)
+    if timeframe == 'daily':
+        return candle.normalize() + timedelta(hours=19)
+    rule = {'weekly': 'W-FRI', 'monthly': 'M'}.get(timeframe)
+    if not rule:
+        raise ValueError('提醒周期无效')
+    from .exchange_calendar import is_trading_day
+    period = candle.tz_localize(None).to_period(rule)
+    day = period.end_time.normalize()
+    # Unknown calendar coverage retains the conservative calendar-end boundary.
+    while day >= period.start_time.normalize():
+        opened = is_trading_day(day.date())
+        if opened is not False:
+            break
+        day -= timedelta(days=1)
+    return day.tz_localize('Asia/Shanghai') + timedelta(hours=19)
+
+
 def bar_completed(stamp, timeframe, now):
     """Whether one bar is safely closed in Shanghai market time.
 
@@ -295,20 +325,7 @@ def bar_completed(stamp, timeframe, now):
             return result.tz_localize('Asia/Shanghai')
         return result.tz_convert('Asia/Shanghai')
 
-    candle, moment = local(stamp), local(now)
-    if timeframe in ('5m', '1h', '4h'):
-        close = candle + timedelta(minutes=5)
-    elif timeframe == 'daily':
-        close = candle.normalize() + timedelta(hours=19)
-    elif timeframe == 'weekly':
-        close = candle.tz_localize(None).to_period('W-FRI').end_time.normalize()
-        close = close.tz_localize('Asia/Shanghai') + timedelta(hours=19)
-    elif timeframe == 'monthly':
-        close = candle.tz_localize(None).to_period('M').end_time.normalize()
-        close = close.tz_localize('Asia/Shanghai') + timedelta(hours=19)
-    else:
-        raise ValueError('提醒周期无效')
-    return moment >= close
+    return local(now) >= bar_close_time(stamp, timeframe)
 
 
 def evaluate_alert(alert, frame, *, now, replay=False):
@@ -337,6 +354,12 @@ def evaluate_alert(alert, frame, *, now, replay=False):
         return updated, None
     # Creation seeds the cursor: older bars are not replayed as new alerts.
     updated['cursor'] = stamp
+    if alert.get('active_after') and (
+        bar_close_time(stamp, alert['timeframe']).tz_convert('UTC')
+        <= comparable(alert['active_after'])
+    ):
+        updated['status'] = '已跳过创建前收盘行情 ' + stamp
+        return updated, None
     series = closed.close.astype(float)
     threshold = (series.ewm(span=int(alert['ema_length']), adjust=False).mean()
                  if alert['target'] == 'ema' else pd.Series(float(alert['value']), index=series.index))

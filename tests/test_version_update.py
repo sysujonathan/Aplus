@@ -652,8 +652,12 @@ import tkinter as tk
 s=Store(Path(sys.argv[1])/'isolated')
 service=Service(s)
 w=AplusMainWindow(service=service,store=s)
-w.update()
 c=w.version_controller
+# Cancel the real startup check before processing GUI events: first paint can
+# take over four seconds on a loaded desktop, firing a real network check.
+w.after_cancel(c.startup_check_id)
+c.startup_check_id=None
+w.update()
 assert c.button.master is w.section_nav
 assert w.toolbar._on_scan_started == c.scan_hint
 height=w.chart.winfo_height()
@@ -662,7 +666,6 @@ def checker(*args,**kwargs):
     started.set(); done.wait(3)
     return dict(state='available', can_update=False, message='synthetic')
 c.checker=checker
-w.after_cancel(c.startup_check_id)
 before=time.monotonic(); c.startup_check()
 assert time.monotonic()-before < .5
 assert started.wait(2)

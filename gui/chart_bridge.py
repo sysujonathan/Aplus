@@ -8,7 +8,7 @@ import threading
 
 import pandas as pd
 
-from workbench.chart_workspace import bar_completed, create_alert, identity, validate_document
+from workbench.chart_workspace import create_alert, identity, validate_document
 
 
 def _edit_fields(document):
@@ -264,14 +264,19 @@ class ChartBridge:
         if not rows:
             raise ValueError("当前入口没有该周期的真实行情，无法创建提醒")
         moment = self._clock()
-        closed = [row for row in rows if bar_completed(row["date"], timeframe, moment)]
-        if not closed:
+        from .chart_alerts import load_alert_frame
+        frame = load_alert_frame(self.store, self.identity, dict(
+            code=self.boot['symbol'], source=self.boot['source'],
+            adjustment=self.boot['adjustment'], timeframe=timeframe), moment)
+        if frame is None:
+            raise ValueError('没有同来源、同复权的正式行情，请更新行情后创建提醒')
+        if frame.empty:
             raise ValueError("该周期尚无已完成 K 线，暂不能创建收盘提醒")
-        frame = pd.DataFrame(closed)
         alert = create_alert(
             name=name, code=self.boot["symbol"], source=self.boot["source"],
             adjustment=self.boot["adjustment"], timeframe=timeframe,
             target=target, condition=condition, value=float(value), frame=frame,
+            active_after=moment,
         )
         result = self._commit(lambda document: document["alerts"].append(alert))
         return {**result, "alert": _native(alert)}
