@@ -213,6 +213,11 @@ def test_single_chart_toolbar_option_and_wider_right_list_pane():
     assert right_list_width(1600) == 360
     assert right_list_width(2880) == 390
 
+    source = (ROOT / "gui" / "main_window.py").read_text(encoding="utf-8")
+    toolbar_source = (ROOT / "gui" / "toolbar.py").read_text(encoding="utf-8")
+    assert "layout_count=1" in source
+    assert 'tk.StringVar(value="1×1")' in toolbar_source
+
 
 def test_list_mousewheel_scrolls_only_the_hovered_tree():
     assert wheel_scroll_units(Mock(delta=120, num=None)) == -3

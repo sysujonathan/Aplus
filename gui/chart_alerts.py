@@ -8,15 +8,49 @@ from tkinter import messagebox
 
 import pandas as pd
 
-from workbench.chart_workspace import aggregate_minutes, evaluate_alert, validate_document
+from workbench.chart_workspace import (aggregate_minutes, bar_close_time, bar_completed,
+                                       evaluate_alert, validate_document)
+
+
+def load_alert_frame(store, chart_identity, alert, now):
+    """Read the official source, never a historical chart's display snapshot."""
+    timeframe = alert['timeframe']
+    if timeframe in ('5m', '1h', '4h'):
+        frame, _ = store.load_chart_series(chart_identity, '5m')
+        if frame is None:
+            return None
+        frame = frame if timeframe == '5m' else aggregate_minutes(frame, int(timeframe[:-1])*60)
+    else:
+        from .data import latest_market_dataset
+        from workbench.market import load_dataset
+        record = latest_market_dataset(store, alert['code'], 'daily', alert['source'])
+        if not record or str(record.get('adjustment')) != alert['adjustment']:
+            return None
+        frame, _ = load_dataset(store, record['id'])  # verifies immutable snapshot hash
+        frame = frame.loc[[bar_completed(day, 'daily', now) for day in frame.date]].reset_index(drop=True)
+        if timeframe in ('weekly', 'monthly') and not frame.empty:
+            from .chart_workspace import resample_daily
+            rule = {'weekly': 'W-FRI', 'monthly': 'M'}[timeframe]
+            coverage = frame.groupby(pd.to_datetime(frame.date).dt.to_period(rule)).date.max()
+            result = resample_daily(frame, timeframe)
+            # A Friday/month-end label does not prove its daily constituents exist.
+            frame = result.loc[[
+                str(coverage.loc[pd.Timestamp(day).to_period(rule)])
+                >= bar_close_time(day, timeframe).date().isoformat()
+                for day in result.date
+            ]].reset_index(drop=True)
+        elif timeframe not in ('daily', 'weekly', 'monthly'):
+            return None
+    return frame.loc[[bar_completed(day, timeframe, now) for day in frame.date]].reset_index(drop=True)
 
 
 class ChartAlertMonitor:
     """Checks local immutable snapshots while A++ is open; never sends messages."""
-    def __init__(self, root, store, interval_ms=60_000):
+    def __init__(self, root, store, interval_ms=60_000, *, clock=None):
         self.root, self.store, self.interval_ms = root, store, int(interval_ms)
         self.after_id = None
         self.last_error = None
+        self.clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
 
     def start(self):
         if self.store is not None and self.after_id is None:
@@ -42,7 +76,7 @@ class ChartAlertMonitor:
                     if frame is None or len(frame) < 2:
                         continue
                     revised['alerts'][index], event = evaluate_alert(
-                        alert, frame, now=datetime.now(timezone.utc).isoformat())
+                        alert, frame, now=self.clock())
                     if event: events.append(event)
                 if revised['alerts'] != doc['alerts']:
                     try: self.store.save_chart_document(key.split(':',1)[1], revised, doc['revision'])
@@ -64,23 +98,4 @@ class ChartAlertMonitor:
             self.after_id = self.root.after(self.interval_ms, self.poll)
 
     def _frame(self, chart_identity, alert):
-        timeframe = alert['timeframe']
-        if timeframe in ('5m','1h','4h'):
-            frame, _ = self.store.load_chart_series(chart_identity, '5m')
-            if frame is None: return None
-            return frame if timeframe == '5m' else aggregate_minutes(frame, int(timeframe[:-1])*60)
-        from .data import latest_market_dataset
-        from workbench.market import completed_date, load_dataset, weekly_bars
-        record = latest_market_dataset(self.store, alert['code'], 'daily', alert['source'])
-        if not record or str(record.get('adjustment')) != alert['adjustment']:
-            return None
-        frame, _ = load_dataset(self.store, record['id'])
-        frame = frame.loc[frame.date.le(completed_date())].reset_index(drop=True)
-        if timeframe == 'daily': return frame
-        if timeframe == 'weekly': return weekly_bars(frame, completed_date())
-        if timeframe == 'monthly':
-            from .chart_workspace import resample_daily
-            result = resample_daily(frame, 'monthly')
-            current = pd.Timestamp(completed_date()).to_period('M')
-            return result.loc[pd.to_datetime(result.date).dt.to_period('M').lt(current)].reset_index(drop=True)
-        return None
+        return load_alert_frame(self.store, chart_identity, alert, self.clock())

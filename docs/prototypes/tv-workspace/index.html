@@ -212,9 +212,9 @@
       <div class="modal-body">
         <label>标的<div class="select-row"><span class="badge sz">深</span><b>升达林业 · 002259</b><span>⌄</span></div></label>
         <label>条件<div class="condition-grid"><button class="active">价格</button><button>EMA 20</button></div></label>
-        <div class="field-row"><label><span>触发方式</span><div class="select-row"><span>向上穿越</span><span>⌄</span></div></label><label><span>价格</span><input value="5.20"></label></div>
+        <div class="field-row"><label><span>触发方式</span><div class="select-row"><span>向上穿越</span><span>⌄</span></div></label><label><span>价格</span><input id="alertPrice" value="5.20"></label></div>
         <label>触发频率<div class="select-row"><span>每根K线仅一次</span><span>⌄</span></div></label>
-        <label>名称<input value="002259 向上穿越 5.20"></label>
+        <label>名称<input id="alertName" value="002259 向上穿越 5.20"></label>
         <div class="notice"><b>本机收盘提醒</b><span>只在新K线收盘后判断；不会补发历史提醒，也不会发送外部消息。</span></div>
       </div>
       <footer><button class="secondary close-modal">取消</button><button class="primary" id="createAlert">创建</button></footer>
@@ -268,6 +268,7 @@
   <script>window.tvPrototypeV2 = true;</script>
   <script src="historical-bars-v2.js"></script>
   <script src="prototype.js"></script>
+  <script src="chart-coordinates.js"></script>
   <script src="prototype-interactions.js"></script>
 </body>
 </html>

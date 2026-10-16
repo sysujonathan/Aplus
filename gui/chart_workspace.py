@@ -31,10 +31,17 @@ from .theme import ACCENT, APP_BG, BORDER, CHART_BG, CONTROL_BG, MUTED, PANEL_BG
 
 TOOL_GLYPHS = dict(fib='≋', long='L↑', ray='↦', trend='╱', short='S↓', rectangle='□',
                    up='↑', down='↓', arrow='➚', path='⌁', channel='∥')
+DRAWING_LABELS = {**dict(TOOLS), 'text': '文字', 'ruler': '价格范围'}
 TF_LABELS = [('5m', '5分'), ('1h', '1小时'), ('4h', '4小时'),
              ('daily', '日'), ('weekly', '周'), ('monthly', '月')]
 CONDITION_LABELS = {'above': '高于', 'below': '低于', 'cross_up': '向上穿越',
                     'cross_down': '向下穿越', 'cross': '任意穿越'}
+
+
+def _ruler_readout(obj):
+    start, end = (float(point[1]) for point in obj['points'])
+    delta = end - start
+    return f'{delta:+.3f} ({delta / start * 100:+.2f}%)'
 
 
 def resample_daily(frame, timeframe):
@@ -409,6 +416,18 @@ class ChartWorkspaceDialog:
         elif kind in ('trend', 'arrow'):
             self.canvas.create_line(*points[0], *points[1], fill=color, width=width,
                                     arrow=tk.LAST if kind == 'arrow' else tk.NONE, tags=tag)
+        elif kind == 'ruler':
+            (x1, y1), (x2, y2) = points
+            self.canvas.create_rectangle(min(x1,x2), min(y1,y2), max(x1,x2), max(y1,y2),
+                                         outline=color, width=width, tags=tag)
+            self.canvas.create_line((x1+x2)/2, y1, (x1+x2)/2, y2,
+                                    fill=color, width=width, arrow=tk.BOTH, tags=tag)
+            self.canvas.create_text((x1+x2)/2, min(y1,y2)-5, text=_ruler_readout(obj),
+                                    fill=color, anchor=tk.S, tags=tag)
+        elif kind == 'text':
+            self.canvas.create_text(points[0][0]+4, points[0][1]+4,
+                                    text=obj.get('text') or '文字', fill=color, anchor=tk.NW,
+                                    font=('Microsoft YaHei UI', 11), tags=tag)
         elif kind == 'rectangle':
             self.canvas.create_rectangle(*points[0], *points[1], outline=color, width=width,
                                          fill='#331244', stipple='gray50', tags=tag)
@@ -435,7 +454,7 @@ class ChartWorkspaceDialog:
             text, _, _ = risk_readout(obj)
             self.canvas.create_text(x1+5, entry[1]-5, text=text, fill='white', anchor=tk.SW,
                                     font=('Microsoft YaHei UI', 9, 'bold'), tags=tag)
-        if obj.get('text'):
+        if kind != 'text' and obj.get('text'):
             self.canvas.create_text(points[0][0]+4, points[0][1]+4, text=obj['text'], fill=color,
                                     anchor=tk.NW, tags=tag)
         if selected:
@@ -817,11 +836,17 @@ class ChartWorkspaceDialog:
                         frequency=frequency_values[frequency.get()], expires=expiry.get().strip(),
                         enabled=enabled.get(),status='等待下一根已收盘 K 线')
                 else:
+                    from .chart_alerts import load_alert_frame
+                    moment = datetime.now(timezone.utc).isoformat()
+                    current = load_alert_frame(self.store, self.identity, dict(code=self.code,
+                        source=self.source, adjustment=self.adjustment, timeframe=self.timeframe), moment)
+                    if current is None or current.empty:
+                        raise ValueError('没有同来源、同复权的已完成正式行情，请更新行情后创建提醒')
                     item = create_alert(name=name.get(), code=self.code, source=self.source,
                         adjustment=self.adjustment, timeframe=self.timeframe, target=target_values[target.get()],
-                        condition=condition_values[condition.get()], value=float(value.get()), frame=self._render_frame(),
+                        condition=condition_values[condition.get()], value=float(value.get()), frame=current,
                         ema_length=int(ema_len.get()), frequency=frequency_values[frequency.get()],
-                        expires=expiry.get().strip())
+                        expires=expiry.get().strip(), active_after=moment)
                 doc = deepcopy(self.history.value)
                 doc['alerts'] = [item if old['id']==item['id'] else old for old in doc['alerts']]
                 if not alert: doc['alerts'].append(item)
@@ -840,11 +865,15 @@ class ChartWorkspaceDialog:
         if self.replay_index is not None: return
         doc = deepcopy(self.history.value); events = []
         now = datetime.now(timezone.utc).isoformat()
+        from .chart_alerts import load_alert_frame
         for index, alert in enumerate(doc['alerts']):
             if (alert['code'],alert['source'],alert['adjustment'],alert['timeframe']) != (
                     self.code,self.source,self.adjustment,self.timeframe):
                 continue
-            doc['alerts'][index], event = evaluate_alert(alert, self.frame, now=now)
+            frame = load_alert_frame(self.store, self.identity, alert, now)
+            if frame is None or frame.empty:
+                continue
+            doc['alerts'][index], event = evaluate_alert(alert, frame, now=now)
             if event: events.append(event)
         if doc['alerts'] != self.history.value['alerts']:
             self.history.value = validate_document(doc); self._save(); self.refresh_tree()
@@ -859,10 +888,10 @@ class ChartWorkspaceDialog:
         if not hasattr(self,'tree'): return
         selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
-        labels = dict(TOOLS)
+        labels = DRAWING_LABELS
         for obj in self.history.value['drawings']:
             state = ('隐藏' if not obj.get('visible',True) else '锁定' if obj.get('locked') else '显示')
-            self.tree.insert('',tk.END,iid='d:'+obj['id'],text=labels[obj['kind']],values=(state,))
+            self.tree.insert('',tk.END,iid='d:'+obj['id'],text=labels.get(obj['kind'], obj['kind']),values=(state,))
         for alert in self.history.value['alerts']:
             state = '启用' if alert.get('enabled') else '停用'
             self.tree.insert('',tk.END,iid='a:'+alert['id'],text='闹钟 · '+alert['name'],values=(state,))
@@ -944,6 +973,12 @@ class ChartWorkspaceDialog:
                     draw.line((min(pts[0][0],pts[1][0]),y,right,y),fill=color,width=width)
             elif kind=='ray': draw.line((*pts[0],right,pts[0][1]),fill=color,width=width)
             elif kind in ('trend','arrow'): draw.line((*pts[0],*pts[1]),fill=color,width=width)
+            elif kind=='ruler':
+                (x1,y1),(x2,y2)=pts
+                draw.rectangle((min(x1,x2),min(y1,y2),max(x1,x2),max(y1,y2)),outline=color,width=width)
+                draw.line(((x1+x2)/2,y1,(x1+x2)/2,y2),fill=color,width=width)
+                draw.text(((x1+x2)/2,min(y1,y2)-14),_ruler_readout(obj),fill=color,anchor='mm')
+            elif kind=='text': draw.text((pts[0][0]+4,pts[0][1]+4),obj.get('text') or '文字',fill=color)
             elif kind=='rectangle': draw.rectangle((*pts[0],*pts[1]),outline=color,width=width,fill='#33124466')
             elif kind in ('up','down'): draw.text(pts[0],'▲' if kind=='up' else '▼',fill=color,anchor='mm')
             elif kind=='path': draw.line([tuple(p) for p in pts],fill=color,width=width,joint='curve')
@@ -956,7 +991,7 @@ class ChartWorkspaceDialog:
                 draw.rectangle((x1,target[1],x2,entry[1]),fill='#1f9d7a66',outline='#1f9d7a')
                 draw.rectangle((x1,entry[1],x2,stop[1]),fill='#e34b5666',outline='#e34b56')
                 draw.text((x1+5,entry[1]-16),risk_readout(obj)[0],fill='white')
-            if obj.get('text'): draw.text((pts[0][0]+4,pts[0][1]+4),obj['text'],fill=color)
+            if kind!='text' and obj.get('text'): draw.text((pts[0][0]+4,pts[0][1]+4),obj['text'],fill=color)
         return image
 
     def save_snapshot(self):
@@ -1034,5 +1069,19 @@ class ChartWorkspaceDialog:
 
 
 def open_chart_workspace(parent, store, **context):
-    """Small integration seam used by candidate, holding and closed-trade charts."""
-    return ChartWorkspaceDialog(parent, store, **context)
+    """Open the production WebView; keep the Tk canvas as a safe local fallback."""
+    if os.environ.get('APLUS_TK_CHART_FALLBACK') != '1':
+        try:
+            from .chart_shell import launch_chart_workspace
+            process = launch_chart_workspace(store, **context)
+            if process is not None:
+                return process
+        except Exception as exc:
+            messagebox.showwarning(
+                '高保真图表暂不可用',
+                '本机 WebView 未能启动，已切换到兼容图表；行情和图形记录不受影响。\n\n' + str(exc),
+                parent=parent,
+            )
+    fallback = dict(context)
+    fallback.pop('context_kind', None)
+    return ChartWorkspaceDialog(parent, store, **fallback)
