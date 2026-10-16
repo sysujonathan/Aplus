@@ -127,10 +127,13 @@ def presentation(result, running=None):
             "cached": ("正在确认新版", "正在后台确认新版是否可安全更新，请稍候；确认通过后即可直接更新，当前版本可继续使用。", "正在确认新版"),
         }.get(reason, ("暂不能自动更新", "暂时无法确认可安全更新，请重新检查；若仍如此，请联系提供 Aplus 的同事，当前版本可继续使用。", "暂不能自动更新"))
         if reason == 'manual':
+            if result.get('manual_kind') == 'release_integrity':
+                title = '新版发布文件校验未通过'
+                message = '新版文件与发布校验记录不一致，暂不能安装。请继续使用当前版本，等待项目负责人修复；不需要你人工核准策略或修改文件。'
+                action_label = '等待新版修复'
             detail = {
                 'dependencies': '新版需要调整 Python 依赖或安装环境，软件不能替你直接安装这些内容。',
                 'data': '新版改变了数据保存或初始化程序，暂时无法确认与现有记录兼容。',
-                'strategy': '策略或配置文件变化未匹配已核准的版本，不能直接替换。',
             }.get(result.get('manual_kind'))
             if detail:
                 message = detail + '\n请联系提供 Aplus 的同事协助升级；等待或反复检查不会解锁。当前版本可继续使用，不要删除行情或交易记录。'
