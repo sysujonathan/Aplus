@@ -337,6 +337,21 @@ def release_manifest_valid(root, target):
                     or not DATA_SHA256.fullmatch(checksum)):
                 raise ValueError('invalid protected path or fingerprint')
             files[path] = checksum
+        # Inspect the target tree, not the installed checkout or only changed
+        # paths. A valid checksum list must not silently omit protected files.
+        tree = run_git(root, 'ls-tree', '-r', '-z', '--full-tree', target,
+                       '--', 'core', 'config', binary=True)
+        protected = set()
+        for record in tree.split(b'\0'):
+            if not record:
+                continue
+            metadata, raw_path = record.split(b'\t', 1)
+            mode, kind, _oid = metadata.split()
+            if kind != b'blob' or mode not in {b'100644', b'100755'}:
+                return False  # No symlinks or embedded repositories in frozen code.
+            protected.add(raw_path.decode('utf-8', 'surrogateescape'))
+        if set(files) != protected:
+            return False
         for path, expected in files.items():
             blob = run_git(root, 'show', f'{target}:{path}', binary=True)
             if hashlib.sha256(blob).hexdigest() != expected:
