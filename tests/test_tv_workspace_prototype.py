@@ -4,10 +4,48 @@ from __future__ import annotations
 from html.parser import HTMLParser
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import json
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTOTYPE = ROOT / 'docs' / 'prototypes' / 'tv-workspace'
+
+
+def test_production_cross_timeframe_behavior_in_javascript(tmp_path):
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('JavaScript 行为回归需要 Node.js（CI Windows 镜像提供）')
+    result = subprocess.run([node, str(ROOT / 'tests' / 'chart_timeframe_regression.cjs')],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = json.loads(result.stdout)
+    assert output['ok']
+    # Feed the actual JS snapshots into the actual Python/Store boundary.
+    import pandas as pd
+    from gui.chart_bridge import ChartBridge, workspace_boot
+    from workbench.store import Store
+
+    frame = pd.DataFrame([dict(date=date, open=10, high=11, low=9, close=10, volume=100)
+                          for date in output['dates']])
+    store = Store(tmp_path / 'js-store')
+    context = dict(frame=frame, record={'source': 's'}, code='sz.000001', timeframe='daily')
+    boot = workspace_boot(store, context)
+    bridge = ChartBridge(store, boot)
+    expected = None
+    for state in output['states']:
+        bridge.save_state(state)
+        stored = store.chart_document(boot['identity'])
+        coordinates = json.dumps([(obj['points'], obj['created_at']) for obj in stored['drawings']])
+        if expected is None:
+            expected = coordinates
+        assert coordinates == expected
+    reopened = workspace_boot(store, context)
+    assert reopened['drawings'][0]['a']['date'] == '2026-01-06'
+    assert reopened['drawings'][0]['a']['value'] == 10.123456789
 
 
 class _PrototypeParser(HTMLParser):

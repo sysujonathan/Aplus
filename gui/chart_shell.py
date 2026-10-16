@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -16,6 +17,55 @@ from .chart_bridge import ChartBridge, workspace_boot
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "docs" / "prototypes" / "tv-workspace"
+
+
+class ChartCloseGuard:
+    """Keep the page alive until its queued Store writes have acknowledged."""
+
+    def __init__(self, window, bridge):
+        self.window = window
+        self.allow_close = False
+        self.flushing = False
+        self._lock = threading.Lock()
+        bridge._close_window = self.finish
+        bridge._cancel_close = self.failed
+
+    def request(self):
+        with self._lock:
+            if self.allow_close:
+                return True
+            if not self.flushing:
+                self.flushing = True
+                threading.Thread(target=self._flush, daemon=True).start()
+        return False
+
+    def _flush(self):
+        try:
+            installed = self.window.evaluate_js(
+                "typeof window.aplusFlushAndClose === 'function' ? "
+                "(window.aplusFlushAndClose(), true) : false"
+            )
+            # No script means the chart has not accepted edits yet.
+            if not installed:
+                self.finish()
+        except Exception:
+            self.failed()
+
+    def failed(self):
+        self.cancel()
+        if self.window.create_confirmation_dialog(
+            "图表尚未确认保存", "最后的修改尚未确认保存。是否放弃未保存的修改并关闭？取消将保留窗口。"
+        ):
+            self.finish()
+
+    def finish(self):
+        with self._lock:
+            self.allow_close = True
+        self.window.destroy()
+
+    def cancel(self):
+        with self._lock:
+            self.flushing = False
 
 
 def webview_available():
@@ -64,7 +114,7 @@ def _materialize_page(session, boot):
     target = session.with_suffix("")
     target.mkdir(parents=True, exist_ok=True)
     for name in ("prototype.css", "historical-bars-v2.js", "prototype.js",
-                 "prototype-interactions.js"):
+                 "chart-coordinates.js", "prototype-interactions.js"):
         shutil.copyfile(ASSETS / name, target / name)
     chart_script = (target / "prototype.js").read_text(encoding="utf-8")
     chart_script = chart_script.replace("const bars = [", "const demoBars = [", 1)
@@ -102,6 +152,8 @@ def run_session(session_path):
         title = f"A++ 图表工作区 · {payload['boot']['name']} {payload['boot']['displaySymbol']}"
         window = webview.create_window(title, page.as_uri(), js_api=bridge, width=1500, height=940,
                                        min_size=(980, 620), background_color="#0b0b0b")
+        close_guard = ChartCloseGuard(window, bridge)
+        window.events.closing += close_guard.request
         window.events.loaded += lambda: _write_json(status, {"ready": True})
         webview.start(gui="edgechromium", debug=False, private_mode=True)
     except Exception as exc:

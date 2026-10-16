@@ -7,6 +7,8 @@ import pytest
 from gui.chart_renderer import render_chart
 from gui.chart_workspace import resample_daily
 from gui.chart_bridge import ChartBridge, workspace_boot
+from gui.chart_bridge import drawing_to_frontend
+from gui.chart_shell import ChartCloseGuard
 from workbench.chart_workspace import (
     History, aggregate_minutes, bar_completed, create_alert, document, evaluate_alert, identity,
     make_drawing, minute_frame, risk_readout, session_counts,
@@ -188,7 +190,7 @@ def test_production_web_workspace_uses_real_context_and_persists_objects(tmp_pat
     reopened = workspace_boot(store, dict(
         frame=frame, record={'source': 'baostock', 'adjustment': '前复权'},
         code='sz.000001', name='平安银行', timeframe='daily', context_kind='watch'))
-    assert reopened['drawings'][0]['a'] == {'index': 5, 'value': 10.1}
+    assert reopened['drawings'][0]['a'] == {'index': 5, 'value': 10.1, 'date': frame.date.iloc[5]}
     assert reopened['state']['toolbar']['left'] == '410px'
     assert reopened['state']['view']['count'] == 32
     assert store.rows('SELECT COUNT(*) AS n FROM observations')[0]['n'] == 0
@@ -206,3 +208,103 @@ def test_web_workspace_alert_is_forward_only_store_alert(tmp_path):
     saved = store.chart_document(boot['identity'])
     assert saved['alerts'][0]['name'] == '收盘突破'
     assert saved['alerts'][0]['events'] == []
+
+
+@pytest.mark.parametrize('timeframe', ['weekly', 'monthly'])
+def test_aggregate_view_save_preserves_original_drawing_coordinates(tmp_path, timeframe):
+    store = Store(tmp_path)
+    frame = bars(pd.bdate_range('2026-01-05', periods=45).strftime('%Y-%m-%d').tolist())
+    context = dict(frame=frame, record={'source': 's'}, code='sz.000001', timeframe='daily')
+    boot = workspace_boot(store, context)
+    value = store.chart_document(boot['identity'])
+    # Every supported point shape carries canonical coordinates, including path vertices.
+    for kind, points in [
+        ('trend', [['2026-01-06', 10.123456789], ['2026-01-12', 11.234567891]]),
+        ('path', [['2026-01-06', 10.1], ['2026-01-07', 11.2], ['2026-01-08', 12.3]]),
+        ('long', [['2026-01-06', 10.1]]),
+        ('channel', [['2026-01-06', 10], ['2026-01-14', 12], ['2026-01-07', 11.35]]),
+    ]:
+        value['drawings'].append(make_drawing(kind, points, created_at='2026-01-14',
+                                              settings=value['settings']))
+    store.save_chart_document(boot['identity'], value, 0)
+    original = store.chart_document(boot['identity'])['drawings']
+    boot = workspace_boot(store, context)
+    bridge = ChartBridge(store, boot)
+    dates = [pd.Timestamp(row['date']) for row in boot['series'][timeframe]]
+    objects = [drawing_to_frontend(obj, dates, timeframe) for obj in original]
+    if timeframe == 'weekly':
+        assert objects[0]['b']['index'] == 1  # Monday belongs to this Friday, not last Friday.
+    bridge.save_state({'timeframe': timeframe, 'objects': objects}, 1)
+    aggregate_saved = store.chart_document(boot['identity'])['drawings']
+    assert [(o['points'], o['created_at']) for o in aggregate_saved] == [
+        (o['points'], o['created_at']) for o in original]
+    daily_objects = workspace_boot(store, context)['drawings']
+    bridge.save_state({'timeframe': 'daily', 'objects': daily_objects}, 2)
+    assert [o['points'] for o in store.chart_document(boot['identity'])['drawings']] == [
+        o['points'] for o in original]
+
+
+@pytest.mark.parametrize('timeframe', ['daily', 'weekly', 'monthly'])
+def test_web_alert_uses_selected_period_and_its_last_bar(tmp_path, timeframe):
+    store = Store(tmp_path)
+    frame = bars(pd.bdate_range('2026-01-05', periods=8).strftime('%Y-%m-%d').tolist())
+    boot = workspace_boot(store, dict(frame=frame, record={'source': 's'},
+                                     code='sz.000001', timeframe='daily'))
+    result = ChartBridge(store, boot).create_price_alert(12.5, timeframe=timeframe)
+    saved = store.chart_document(boot['identity'])['alerts'][0]
+    assert saved['timeframe'] == timeframe
+    assert saved['cursor'] == boot['series'][timeframe][-1]['date']
+    assert saved['events'] == result['alert']['events'] == []
+    if timeframe != 'daily':
+        assert saved['cursor'] != frame.date.iloc[-1]
+
+
+def test_web_alert_rejects_unavailable_period_without_writing(tmp_path):
+    store = Store(tmp_path)
+    boot = workspace_boot(store, dict(frame=bars(), record={'source': 's'},
+                                     code='sz.000001', timeframe='daily'))
+    with pytest.raises(ValueError, match='该周期的真实行情'):
+        ChartBridge(store, boot).create_price_alert(12.5, timeframe='5m')
+    assert store.chart_document(boot['identity'])['revision'] == 0
+
+
+def test_chart_close_waits_for_frontend_ack_and_can_retry_failure(tmp_path):
+    import threading
+
+    class Window:
+        def __init__(self):
+            self.started = threading.Event()
+            self.destroyed = False
+            self.discard = False
+
+        def evaluate_js(self, script):
+            assert 'aplusFlushAndClose' in script
+            self.started.set()
+            return True
+
+        def destroy(self):
+            self.destroyed = True
+
+        def create_confirmation_dialog(self, title, message):
+            assert '放弃未保存' in message
+            return self.discard
+
+    store = Store(tmp_path)
+    bridge = ChartBridge(store, workspace_boot(store, dict(
+        frame=bars(), record={'source': 's'}, code='sz.000001', timeframe='daily')))
+    window = Window()
+    guard = ChartCloseGuard(window, bridge)
+    assert guard.request() is False
+    assert window.started.wait(2)
+    assert guard.request() is False and not window.destroyed
+    bridge.cancel_close()
+    assert not guard.flushing
+    assert guard.request() is False
+    bridge.finish_close()
+    assert window.destroyed and guard.request() is True
+    # Discarding an unsaved edit requires an explicit native-dialog confirmation.
+    other = Window()
+    other.discard = True
+    guard = ChartCloseGuard(other, bridge)
+    bridge.cancel_close()
+    assert other.destroyed and guard.request() is True

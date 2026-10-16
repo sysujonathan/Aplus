@@ -1,5 +1,6 @@
 /* TradingView interaction study and production A++ WebView behavior. */
 const chartBoot = window.APLUS_CHART_BOOT || {};
+const chartCoordinates = window.AplusChartCoordinates;
 const tvStateKey = chartBoot.production
   ? `aplus-tv-${chartBoot.identity}`
   : 'aplus-tv-prototype-002259-v3';
@@ -62,6 +63,7 @@ let undoStack = [];
 let redoStack = [];
 let bridgeRevision = Number(chartBoot.revision || 0);
 let bridgeSaveChain = Promise.resolve();
+let bridgeSaveFailed = false;
 viewCount = Math.min(DEFAULT_VISIBLE_BARS, bars.length);
 viewOffset = 0;
 if (initialPrototypeState.view) {
@@ -78,33 +80,61 @@ function loadPrototypeState() {
 
 function savePrototypeState() {
   try {
+    userObjects.forEach(object => chartCoordinates.capture(object, bars));
     const toolbar = document.querySelector('#favoriteTools');
     const state = {
-      objects: userObjects,
+      objects: structuredClone(userObjects),
       toolbar: { left: toolbar.style.left, top: toolbar.style.top },
       view: { count: viewCount, offset: viewOffset, priceZoom, priceCenterOffset },
       timeframe: activeTimeframeUnit
     };
-    localStorage.setItem(tvStateKey, JSON.stringify(state));
+    try { localStorage.setItem(tvStateKey, JSON.stringify(state)); } catch (_) { /* Store remains authoritative. */ }
     if (chartBoot.production && window.pywebview?.api?.save_state) {
       document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>正在保存到本机…';
       bridgeSaveChain = bridgeSaveChain.then(() => window.pywebview.api.save_state(state, bridgeRevision))
         .then(result => {
           bridgeRevision = Number(result.revision);
+          bridgeSaveFailed = false;
           document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>所有更改已保存到本机';
         }).catch(error => {
+          bridgeSaveFailed = true;
           document.querySelector('.save-state').textContent = `尚未保存：${error.message || error}`;
         });
     }
-  } catch (_) { /* local files can disable storage; the prototype still works. */ }
+    return bridgeSaveChain;
+  } catch (error) {
+    bridgeSaveFailed = true;
+    document.querySelector('.save-state').textContent = `尚未保存：${error.message || error}`;
+    return Promise.resolve();
+  }
 }
 
 function rememberObjects() {
+  userObjects.forEach(object => chartCoordinates.capture(object, bars));
   undoStack.push(structuredClone(userObjects));
   if (undoStack.length > 30) undoStack.shift();
   redoStack = [];
   updateUndoButtons();
 }
+
+let closingWorkspace = false;
+['pointerdown', 'keydown', 'input', 'change', 'click', 'wheel'].forEach(type =>
+  document.addEventListener(type, event => {
+    if (closingWorkspace) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, { capture: true, passive: false }));
+window.aplusFlushAndClose = async () => {
+  if (closingWorkspace) return;
+  closingWorkspace = true;
+  try {
+    await savePrototypeState();
+    if (bridgeSaveFailed) throw new Error('最后的修改尚未保存');
+    await window.pywebview.api.finish_close();
+  } catch (error) {
+    closingWorkspace = false;
+    try { await window.pywebview.api.cancel_close(); } catch (_) { /* Native guard also permits retry on bridge errors. */ }
+    showToast(`${error.message || error}，窗口已保留，请重试关闭`);
+  }
+};
 
 function updateUndoButtons() {
   document.querySelector('#undoAction').classList.toggle('muted', undoStack.length === 0);
@@ -291,12 +321,12 @@ function drawStrategyEvidence(ctx, view) {
   const plotRight = width - right;
   if (chartBoot.production) {
     const evidence = chartBoot.evidence || {};
-    const at = day => Math.max(0, bars.findIndex(row => String(row.date).slice(0, 10) === String(day || '').slice(0, 10)));
+    const at = day => chartCoordinates.indexForDate(bars, day, activeTimeframeUnit);
     const floor = Number(evidence.gap_floor);
     const top = Number(evidence.gap_top);
     const boIndex = at(evidence.bo_date);
     const setupIndex = at(evidence.h2_setup_date || evidence.setup_date || evidence.asof);
-    if (Number.isFinite(floor) && Number.isFinite(top) && top > floor) {
+    if (boIndex >= 0 && setupIndex >= 0 && Number.isFinite(floor) && Number.isFinite(top) && top > floor) {
       const gapLeft = Math.max(left, xGlobal(boIndex) - candleWidth * .55);
       const gapRight = Math.min(plotRight, xGlobal(Math.max(boIndex, setupIndex)) + candleWidth * .55);
       ctx.save();
@@ -311,7 +341,7 @@ function drawStrategyEvidence(ctx, view) {
       ctx.fillText('Gap', (gapLeft + gapRight) / 2, y((floor + top) / 2) + 4);
       ctx.restore();
       if (evidence.bo_high) callout(ctx, 'BO', xGlobal(boIndex), y(Number(evidence.bo_high)), xGlobal(boIndex - 3), y(Number(evidence.bo_high)) - 28);
-      if (evidence.h1_date && evidence.h1_high) callout(ctx, 'H1', xGlobal(at(evidence.h1_date)), y(Number(evidence.h1_high)), xGlobal(at(evidence.h1_date) - 3), y(Number(evidence.h1_high)) - 28);
+      if (at(evidence.h1_date) >= 0 && evidence.h1_high) callout(ctx, 'H1', xGlobal(at(evidence.h1_date)), y(Number(evidence.h1_high)), xGlobal(at(evidence.h1_date) - 3), y(Number(evidence.h1_high)) - 28);
       if (evidence.h2_high && (!replayActive || replayIndex >= setupIndex)) callout(ctx, 'H2', xGlobal(setupIndex), y(Number(evidence.h2_high)), xGlobal(setupIndex - 3), y(Number(evidence.h2_high)) - 32, true);
       callout(ctx, 'Gap Floor', gapLeft, y(floor), Math.max(left + 5, gapLeft - 32), y(floor) + 28);
       registerRect('strategy-evidence', gapLeft, y(top), gapRight, y(floor));
@@ -699,20 +729,24 @@ function moveObjectFromOriginal(object, original, start, point, handle) {
   if (!object || !original) return;
   if (handle) {
     const snapped = snapDrawingPoint(point);
-    if (handle === 'a') object.a = snapped;
-    else if (handle === 'b') object.b = snapped;
+    const edited = old => ({ ...snapped,
+      date: Math.round(snapped.index) === Math.round(old.index) && old.date
+        ? old.date : chartCoordinates.dateAt(bars, snapped.index) });
+    if (handle === 'a') object.a = edited(original.a);
+    else if (handle === 'b') object.b = edited(original.b || original.a);
     else if (handle === 'stop') object.stop = snapped.value;
     else if (handle.startsWith('point:')) {
-      const index = Number(handle.split(':')[1]); object.points[index] = snapped;
+      const index = Number(handle.split(':')[1]); object.points[index] = edited(original.points[index]);
       object.a = object.points[0]; object.b = object.points.at(-1);
     }
     return;
   }
   const deltaIndex = point.index - start.index;
   const deltaValue = point.value - start.value;
-  const movePoint = value => ({ index: value.index + deltaIndex, value: value.value + deltaValue });
+  const movePoint = value => chartCoordinates.move(value, deltaIndex, deltaValue, bars);
   object.a = movePoint(original.a);
   object.b = movePoint(original.b || original.a);
+  if (original.c) object.c = movePoint(original.c);
   if (original.points) object.points = original.points.map(movePoint);
   if (typeof original.stop === 'number') object.stop = original.stop + deltaValue;
 }
@@ -969,6 +1003,7 @@ function renderCoordinateSettings(object) {
     object[pointKey][control.dataset.coordinateField] = control.dataset.coordinateField === 'index'
       ? clamp(Number(control.value) - 1, 0, bars.length - 1)
       : Number(control.value);
+    if (control.dataset.coordinateField === 'index') delete object[pointKey].date;
     savePrototypeState(); renderWorkspace();
   }));
 }
@@ -1057,25 +1092,12 @@ document.querySelectorAll('.timeframes .disabled').forEach(button => button.addE
 function switchProductionTimeframe(timeframe, persist = true) {
   const target = chartBoot.series?.[timeframe];
   if (!chartBoot.production || !target?.length || timeframe === activeTimeframeUnit) return false;
-  const pointDate = point => point ? { date: bars[clamp(Math.round(point.index), 0, bars.length - 1)].date, value: point.value } : null;
-  const anchors = new Map(userObjects.map(object => [object.id, {
-    a: pointDate(object.a), b: pointDate(object.b),
-    points: (object.points || []).map(pointDate),
-    created: bars[clamp(Number(object.createdAtIndex ?? bars.length - 1), 0, bars.length - 1)].date
-  }]));
+  userObjects.forEach(object => chartCoordinates.capture(object, bars));
   bars.splice(0, bars.length, ...structuredClone(target));
-  const targetDates = bars.map(row => new Date(`${String(row.date).slice(0, 10)}T00:00:00`).getTime());
-  const remap = point => {
-    if (!point) return null;
-    const stamp = new Date(`${String(point.date).slice(0, 10)}T00:00:00`).getTime();
-    const index = targetDates.reduce((best, value, at) => Math.abs(value - stamp) < Math.abs(targetDates[best] - stamp) ? at : best, 0);
-    return { index, value: point.value };
-  };
-  userObjects.forEach(object => {
-    const saved = anchors.get(object.id); object.a = remap(saved.a); if (saved.b) object.b = remap(saved.b);
-    if (saved.points.length) object.points = saved.points.map(remap);
-    object.createdAtIndex = remap({ date: saved.created, value: 1 }).index;
-  });
+  userObjects.forEach(object => chartCoordinates.projectObject(object, bars, timeframe));
+  // Undo/redo snapshots carry canonical dates too; project them before restoring an edit.
+  [undoStack, redoStack].forEach(stack => stack.forEach(objects =>
+    objects.forEach(object => chartCoordinates.projectObject(object, bars, timeframe))));
   ema.splice(0, ema.length);
   bars.forEach((row, index) => ema.push(index ? row.close * (2 / 21) + ema[index - 1] * (19 / 21) : row.close));
   activeTimeframeUnit = timeframe; replayIndex = bars.length - 1;
@@ -1120,8 +1142,13 @@ document.querySelector('#createAlert').addEventListener('click', async () => {
   if (!Number.isFinite(value) || value <= 0) { showToast('请输入有效提醒价格'); return; }
   try {
     if (chartBoot.production && window.pywebview?.api?.create_price_alert) {
-      const result = await window.pywebview.api.create_price_alert(value, 'cross_up', name, 'price');
-      bridgeRevision = Number(result.revision); chartAlerts.push(result.alert); updateObjectTree();
+      const timeframe = activeTimeframeUnit;
+      const pending = bridgeSaveChain.then(() =>
+        window.pywebview.api.create_price_alert(value, 'cross_up', name, 'price', timeframe));
+      bridgeSaveChain = pending.then(result => {
+        bridgeRevision = Number(result.revision); chartAlerts.push(result.alert); updateObjectTree();
+      }).catch(error => { showToast(`提醒未保存：${error.message || error}`); });
+      await pending;
     }
     closeWorkspaceModal(); showToast(`提醒已保存：收盘价向上穿越 ${value.toFixed(2)}`);
   } catch (error) { showToast(`提醒未保存：${error.message || error}`); }
