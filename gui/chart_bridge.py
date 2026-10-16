@@ -4,10 +4,17 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import math
+import threading
 
 import pandas as pd
 
-from workbench.chart_workspace import create_alert, identity, validate_document
+from workbench.chart_workspace import bar_completed, create_alert, identity, validate_document
+
+
+def _edit_fields(document):
+    """Only alert progression may be merged over an open editor's revision."""
+    return deepcopy({key: value for key, value in document.items()
+                     if key not in ("revision", "alerts")})
 
 
 def _native(value):
@@ -175,6 +182,7 @@ def workspace_boot(store, context):
         "production": True, "identity": key, "revision": int(document["revision"]),
         "bars": rows, "drawings": state["objects"], "state": state,
         "settings": _native(settings), "alerts": _native(document["alerts"]),
+        "editBaseline": _native(_edit_fields(document)),
         "symbol": str(context["code"]), "displaySymbol": str(context["code"]).split(".")[-1],
         "name": str(context.get("name") or context["code"]), "source": source,
         "adjustment": adjustment, "timeframe": timeframe, "series": series,
@@ -189,7 +197,7 @@ def workspace_boot(store, context):
 class ChartBridge:
     """The exposed surface is intentionally small and never writes trade books."""
 
-    def __init__(self, store, boot):
+    def __init__(self, store, boot, *, clock=None):
         self.store = store
         self.boot = boot
         self.identity = boot["identity"]
@@ -197,26 +205,57 @@ class ChartBridge:
         self.revision = int(boot["revision"])
         self._close_window = None
         self._cancel_close = None
+        self._clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
+        self._baseline = deepcopy(boot.get("editBaseline"))
+        self._write_lock = threading.RLock()
 
     def bootstrap(self):
         return deepcopy(self.boot)
 
     def save_state(self, state, expected_revision=None):
-        expected = self.revision if expected_revision is None else int(expected_revision)
-        current = self.store.chart_document(self.identity)
-        document = deepcopy(current)
         rows = (self.boot.get("series") or {}).get(str(state.get("timeframe"))) or self.rows
-        document["drawings"] = [drawing_from_frontend(item, rows)
-                                for item in (state.get("objects") or [])]
-        document["settings"]["web_state"] = {
-            "toolbar": _native(state.get("toolbar") or {}),
-            "view": _native(state.get("view") or {}),
-            "timeframe": str(state.get("timeframe") or self.boot["timeframe"]),
-        }
-        document["revision"] = expected
-        self.revision = self.store.save_chart_document(self.identity, document, expected)
-        self.boot["revision"] = self.revision
-        return {"ok": True, "revision": self.revision}
+        drawings = [drawing_from_frontend(item, rows) for item in (state.get("objects") or [])]
+
+        def edit(document):
+            document["drawings"] = drawings
+            document["settings"]["web_state"] = {
+                "toolbar": _native(state.get("toolbar") or {}),
+                "view": _native(state.get("view") or {}),
+                "timeframe": str(state.get("timeframe") or self.boot["timeframe"]),
+            }
+        return self._commit(edit, expected_revision)
+
+    def _commit(self, edit, expected_revision=None):
+        """Rebase alert-only writes, retaining Store's atomic revision check."""
+        conflict = "另一图表窗口已保存修改，请重新打开后继续；本窗口修改仍保留"
+        with self._write_lock:
+            expected = self.revision if expected_revision is None else int(expected_revision)
+            if expected != self.revision:
+                raise ValueError(conflict)
+            for _ in range(3):
+                current = self.store.chart_document(self.identity)
+                revision = int(current["revision"])
+                if revision != expected and (
+                    self._baseline is None or _edit_fields(current) != self._baseline
+                ):
+                    raise ValueError(conflict)
+                document = deepcopy(current)
+                edit(document)
+                document = validate_document(document)
+                try:
+                    saved = self.store.save_chart_document(self.identity, document, revision)
+                except ValueError:
+                    # A monitor can advance again between read and CAS. A different
+                    # editor is rejected on the next comparison, never overwritten.
+                    if self.store.chart_document(self.identity)["revision"] == revision:
+                        raise
+                    continue
+                self.revision = int(saved)
+                self._baseline = _edit_fields(document)
+                self.boot["revision"] = self.revision
+                return {"ok": True, "revision": self.revision,
+                        "alerts": _native(document["alerts"])}
+            raise ValueError("提醒状态持续更新，请稍后重试保存；本窗口修改仍保留")
 
     def create_price_alert(self, value, condition="cross_up", name="", target="price",
                            timeframe=None):
@@ -224,18 +263,18 @@ class ChartBridge:
         rows = (self.boot.get("series") or {}).get(timeframe)
         if not rows:
             raise ValueError("当前入口没有该周期的真实行情，无法创建提醒")
-        frame = pd.DataFrame(rows)
+        moment = self._clock()
+        closed = [row for row in rows if bar_completed(row["date"], timeframe, moment)]
+        if not closed:
+            raise ValueError("该周期尚无已完成 K 线，暂不能创建收盘提醒")
+        frame = pd.DataFrame(closed)
         alert = create_alert(
             name=name, code=self.boot["symbol"], source=self.boot["source"],
             adjustment=self.boot["adjustment"], timeframe=timeframe,
             target=target, condition=condition, value=float(value), frame=frame,
         )
-        document = self.store.chart_document(self.identity)
-        expected = int(document["revision"])
-        document["alerts"].append(alert)
-        document["revision"] = expected
-        self.revision = self.store.save_chart_document(self.identity, document, expected)
-        return {"ok": True, "revision": self.revision, "alert": _native(alert)}
+        result = self._commit(lambda document: document["alerts"].append(alert))
+        return {**result, "alert": _native(alert)}
 
     def ping(self):
         return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}

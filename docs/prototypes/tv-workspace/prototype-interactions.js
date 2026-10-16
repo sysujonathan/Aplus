@@ -94,6 +94,7 @@ function savePrototypeState() {
       bridgeSaveChain = bridgeSaveChain.then(() => window.pywebview.api.save_state(state, bridgeRevision))
         .then(result => {
           bridgeRevision = Number(result.revision);
+          if (Array.isArray(result.alerts)) { chartAlerts = result.alerts; updateObjectTree(); }
           bridgeSaveFailed = false;
           document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>所有更改已保存到本机';
         }).catch(error => {
@@ -1146,7 +1147,10 @@ document.querySelector('#createAlert').addEventListener('click', async () => {
       const pending = bridgeSaveChain.then(() =>
         window.pywebview.api.create_price_alert(value, 'cross_up', name, 'price', timeframe));
       bridgeSaveChain = pending.then(result => {
-        bridgeRevision = Number(result.revision); chartAlerts.push(result.alert); updateObjectTree();
+        bridgeRevision = Number(result.revision);
+        if (Array.isArray(result.alerts)) chartAlerts = result.alerts;
+        else chartAlerts.push(result.alert);
+        updateObjectTree();
       }).catch(error => { showToast(`提醒未保存：${error.message || error}`); });
       await pending;
     }

@@ -245,12 +245,14 @@ def test_aggregate_view_save_preserves_original_drawing_coordinates(tmp_path, ti
 
 
 @pytest.mark.parametrize('timeframe', ['daily', 'weekly', 'monthly'])
-def test_web_alert_uses_selected_period_and_its_last_bar(tmp_path, timeframe):
+def test_web_alert_uses_selected_period_and_its_last_completed_bar(tmp_path, timeframe):
     store = Store(tmp_path)
     frame = bars(pd.bdate_range('2026-01-05', periods=8).strftime('%Y-%m-%d').tolist())
     boot = workspace_boot(store, dict(frame=frame, record={'source': 's'},
                                      code='sz.000001', timeframe='daily'))
-    result = ChartBridge(store, boot).create_price_alert(12.5, timeframe=timeframe)
+    # Historical fixture: all three periods are closed at this explicit clock.
+    result = ChartBridge(store, boot, clock=lambda: '2026-02-02T20:00:00+08:00').create_price_alert(
+        12.5, timeframe=timeframe)
     saved = store.chart_document(boot['identity'])['alerts'][0]
     assert saved['timeframe'] == timeframe
     assert saved['cursor'] == boot['series'][timeframe][-1]['date']
