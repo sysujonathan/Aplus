@@ -35,7 +35,8 @@ def validate_document(value):
     settings = {**DEFAULT_SETTINGS, **value.get('settings', {})}
     if not 1 <= int(settings['ema_length']) <= 500 or not -500 <= int(settings['ema_offset']) <= 500:
         raise ValueError('EMA 长度或偏移超出范围')
-    if settings['ema_source'] not in ('open', 'high', 'low', 'close'):
+    from .chart_indicators import EMA_SOURCES
+    if settings['ema_source'] not in EMA_SOURCES:
         raise ValueError('不支持的均线价格来源')
     if not 1 <= int(settings['count_interval']) <= 500:
         raise ValueError('计数间隔必须为 1～500')
@@ -48,7 +49,7 @@ def validate_document(value):
         if len(color) != 7 or color[0] != '#' or any(c not in '0123456789abcdefABCDEF' for c in color[1:]):
             raise ValueError('颜色须使用 #RRGGBB')
     levels = [float(n) for n in settings['fib_levels']]
-    if not levels or len(levels) > 20 or not all(math.isfinite(n) for n in levels):
+    if not levels or len(levels) > 24 or not all(math.isfinite(n) for n in levels):
         raise ValueError('斐波那契级别无效')
     settings['fib_levels'] = levels
     value['settings'] = settings
@@ -70,6 +71,15 @@ def validate_document(value):
             raise ValueError('绘图锚点数量不正确')
         if not 1 <= int(obj.get('width', 2)) <= 8:
             raise ValueError('线宽必须为 1～8')
+        web = obj.get('web') or {}
+        if kind in ('long', 'short'):
+            for key in ('account_size','risk_value','lot_size','leverage','point_value'):
+                if key in web and (not math.isfinite(float(web[key])) or float(web[key]) <= 0):
+                    raise ValueError('仓位分析输入必须为有限正数')
+            if web.get('risk_unit', 'cash') not in ('cash','percent'):
+                raise ValueError('仓位分析风险单位无效')
+            if str(web.get('qty_precision','default')) not in ('default', *map(str, range(9))):
+                raise ValueError('数量显示精度无效')
         for day, price in obj['points']:
             pd.Timestamp(day)
             if not math.isfinite(float(price)) or float(price) <= 0:
@@ -165,8 +175,19 @@ def risk_readout(obj):
         return '止损／目标方向无效', 0, 0
     ratio = reward/risk
     quantity = math.floor(float(obj['risk_budget'])/risk)
+    web = obj.get('web') or {}
+    lot = float(web.get('lot_size', 1))
+    if any(key in web for key in ('account_size','risk_value','lot_size','leverage')):
+        account = float(web.get('account_size', 1000))
+        point = float(web.get('point_value', 1))
+        risk_size = (float(web['risk_value']) * (account/100 if web.get('risk_unit') == 'percent' else 1)
+                     if 'risk_value' in web else float(obj['risk_budget']))
+        bounded = min(risk_size/(risk*point*lot), account*float(web.get('leverage',10000))/entry*point/lot)
+        digits = 0 if str(web.get('qty_precision','default')) == 'default' else int(web['qty_precision'])
+        quantity = math.floor(bounded * 10**digits + 1e-9) / 10**digits
+    unit = '股' if lot == 1 else '手（分析单位）'
     return (f'风险 {risk/entry:.2%} · 回报 {reward/entry:.2%} · R {ratio:.2f} · '
-            f'分析模拟数量 {quantity} 股 · 非交易建议'), ratio, quantity
+            f'分析模拟数量 {quantity:g} {unit} · 非交易建议'), ratio, quantity
 
 
 def session_counts(frame):

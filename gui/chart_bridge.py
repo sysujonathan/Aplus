@@ -48,6 +48,18 @@ def _bars(frame):
     return rows
 
 
+def _alert_expiry(value):
+    """datetime-local controls use the market timezone, never the host timezone."""
+    if not value:
+        return None
+    stamp = pd.Timestamp(value)
+    if pd.isna(stamp):
+        raise ValueError('提醒有效期无效')
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize('Asia/Shanghai')
+    return stamp.isoformat()
+
+
 def _resample(frame, rule):
     value = frame.loc[:, ("date", "open", "high", "low", "close", "volume")].copy()
     value.index = pd.to_datetime(value.pop("date"))
@@ -57,6 +69,31 @@ def _resample(frame, rule):
     ).dropna().reset_index()
     output["date"] = output["date"].dt.strftime("%Y-%m-%d")
     return output
+
+
+def _coordinate_dates(rows, timeframe):
+    """Extend the time axis, never the price series, into verified sessions.
+
+    Week/month labels are calendar periods. Daily labels require the published
+    exchange calendar; unpublished years deliberately remain unavailable.
+    """
+    from datetime import timedelta
+    from workbench.exchange_calendar import is_trading_day
+    first, last = pd.Timestamp(rows[0]['date']), pd.Timestamp(rows[-1]['date'])
+    if timeframe in ('weekly', 'monthly'):
+        rule = 'W-FRI' if timeframe == 'weekly' else 'ME'
+        return pd.date_range(first - pd.DateOffset(years=5), last + pd.DateOffset(years=5),
+                             freq=rule).strftime('%Y-%m-%d').tolist()
+    before, after = [], []
+    for direction, output, edge in ((-1, before, first.date()), (1, after, last.date())):
+        for offset in range(1, 367):
+            day = edge + timedelta(days=offset * direction)
+            opened = is_trading_day(day)
+            if opened is None:
+                break
+            if opened:
+                output.append(day.isoformat())
+    return list(reversed(before)) + [row['date'] for row in rows] + after
 
 
 def _nearest_index(dates, day):
@@ -167,6 +204,9 @@ def workspace_boot(store, context):
         "objects": [drawing_to_frontend(obj, dates, timeframe) for obj in document["drawings"]],
         "toolbar": deepcopy(saved.get("toolbar") or {}),
         "view": deepcopy(saved.get("view") or {}),
+        "indicators": deepcopy(saved.get("indicators") or {}),
+        "templates": deepcopy(saved.get("templates") or {}),
+        "replayDate": saved.get("replayDate"),
         "timeframe": saved.get("timeframe") or context.get("timeframe") or "daily",
     }
     payload = _native(context.get("payload") or {})
@@ -174,10 +214,21 @@ def workspace_boot(store, context):
     title = {"candidate": "策略匹配", "watch": "自选标的",
              "holding": "当前持仓", "closed": "已清仓"}.get(context_kind, "图表分析")
     latest = rows[-1]
+    from workbench.prices import tick_size
+    try:
+        price_step = tick_size(str(context['code']), latest['close'],
+                               instrument_type=context.get('instrument_type'))
+    except ValueError:
+        price_step = None  # Unknown instruments cannot borrow a stock tick.
     series = {timeframe: rows}
     if timeframe == "daily":
         series["weekly"] = _bars(_resample(frame, "W-FRI"))
         series["monthly"] = _bars(_resample(frame, "ME"))
+    from .chart_evidence import strategy_evidence
+    vectors = strategy_evidence(context)
+    from workbench.chart_workspace import bar_close_time
+    close_dates = {unit: {row['date']: str(bar_close_time(row['date'], unit).date()) for row in data}
+                   for unit, data in series.items()}
     return {
         "production": True, "identity": key, "revision": int(document["revision"]),
         "bars": rows, "drawings": state["objects"], "state": state,
@@ -186,12 +237,33 @@ def workspace_boot(store, context):
         "symbol": str(context["code"]), "displaySymbol": str(context["code"]).split(".")[-1],
         "name": str(context.get("name") or context["code"]), "source": source,
         "adjustment": adjustment, "timeframe": timeframe, "series": series,
+        "seriesCloseDates": close_dates,
+        "axisDates": {unit: _coordinate_dates(data, unit) for unit, data in series.items()},
         "contextKind": context_kind, "contextTitle": title,
         "strategyType": str(context.get("strategy_type") or ""), "evidence": payload,
+        "strategyEvidence": _native(vectors),
         "holdingLevels": _native(context.get("holding_levels") or ()),
         "tradeEvents": _native(context.get("replay_events") or ()),
         "latest": latest,
+        "priceStep": price_step,
     }
+
+
+def refresh_workspace_boot(store, boot):
+    """Read the document after the previous chart's flush, not at selection time."""
+    value = deepcopy(boot)
+    document = store.chart_document(value['identity'])
+    dates = [pd.Timestamp(row['date']) for row in value['bars']]
+    value['drawings'] = [drawing_to_frontend(obj, dates, value['timeframe']) for obj in document['drawings']]
+    saved = document['settings'].get('web_state') or {}
+    value.update(revision=document['revision'], settings=_native(document['settings']),
+                 alerts=_native(document['alerts']), editBaseline=_native(_edit_fields(document)))
+    value['state'] = dict(objects=value['drawings'], toolbar=deepcopy(saved.get('toolbar') or {}),
+        view=deepcopy(saved.get('view') or {}), timeframe=saved.get('timeframe') or value['timeframe'],
+        indicators=deepcopy(saved.get('indicators') or {}))
+    value['state']['templates'] = deepcopy(saved.get('templates') or {})
+    value['state']['replayDate'] = saved.get('replayDate')
+    return value
 
 
 class ChartBridge:
@@ -212,6 +284,12 @@ class ChartBridge:
     def bootstrap(self):
         return deepcopy(self.boot)
 
+    def read_alerts(self):
+        """Observe monitor progress without advancing this editor's CAS baseline."""
+        with self._write_lock:
+            document = self.store.chart_document(self.identity)
+            return {'alerts': _native(document['alerts'])}
+
     def save_state(self, state, expected_revision=None):
         rows = (self.boot.get("series") or {}).get(str(state.get("timeframe"))) or self.rows
         drawings = [drawing_from_frontend(item, rows) for item in (state.get("objects") or [])]
@@ -222,7 +300,14 @@ class ChartBridge:
                 "toolbar": _native(state.get("toolbar") or {}),
                 "view": _native(state.get("view") or {}),
                 "timeframe": str(state.get("timeframe") or self.boot["timeframe"]),
+                "indicators": _native(state.get('indicators') or {}),
+                "templates": _native(state.get('templates') or {}),
+                "replayDate": _native(state.get('replayDate')),
             }
+            for key in ('ema', 'ema_length', 'ema_source', 'ema_offset', 'ema_color',
+                        'bar_count', 'count_interval', 'count_color', 'count_size', 'magnet'):
+                if key in (state.get('indicators') or {}):
+                    document['settings'][key] = state['indicators'][key]
         return self._commit(edit, expected_revision)
 
     def _commit(self, edit, expected_revision=None):
@@ -258,7 +343,7 @@ class ChartBridge:
             raise ValueError("提醒状态持续更新，请稍后重试保存；本窗口修改仍保留")
 
     def create_price_alert(self, value, condition="cross_up", name="", target="price",
-                           timeframe=None):
+                           timeframe=None, ema_length=20, frequency='bar_close', expires=None):
         timeframe = str(timeframe or self.boot["timeframe"])
         rows = (self.boot.get("series") or {}).get(timeframe)
         if not rows:
@@ -277,12 +362,64 @@ class ChartBridge:
             adjustment=self.boot["adjustment"], timeframe=timeframe,
             target=target, condition=condition, value=float(value), frame=frame,
             active_after=moment,
+            ema_length=int(ema_length), frequency=frequency, expires=_alert_expiry(expires),
         )
         result = self._commit(lambda document: document["alerts"].append(alert))
         return {**result, "alert": _native(alert)}
 
+    def update_alert(self, alert_id, changes):
+        """Edit without replaying historical closes or losing monitor writes."""
+        allowed = {'name', 'condition', 'target', 'value', 'ema_length',
+                   'frequency', 'expires', 'enabled', 'timeframe'}
+        if not isinstance(changes, dict) or set(changes) - allowed:
+            raise ValueError('提醒设置包含未知字段')
+        patch = deepcopy(changes)
+        if 'enabled' in patch and not isinstance(patch['enabled'], bool):
+            raise ValueError('提醒启用状态无效')
+        if 'expires' in patch:
+            patch['expires'] = _alert_expiry(patch['expires'])
+
+        def edit(document):
+            current = next((item for item in document['alerts'] if item['id'] == alert_id), None)
+            if current is None:
+                raise ValueError('提醒已不存在，请重新打开对象树')
+            semantic = {'condition', 'target', 'value', 'ema_length', 'timeframe'}
+            reseed = any(key in patch and patch[key] != current.get(key) for key in semantic)
+            reseed |= patch.get('enabled') is True and not current.get('enabled', True)
+            candidate = {**current, **patch}
+            validate_document({**document, 'alerts': [candidate]})
+            if reseed:
+                from .chart_alerts import load_alert_frame
+                moment = self._clock()
+                frame = load_alert_frame(self.store, self.identity, candidate, moment)
+                if frame is None or frame.empty:
+                    raise ValueError('没有同来源、同复权的已收盘行情，无法更新提醒条件')
+                seeded = create_alert(name=candidate['name'], code=candidate['code'],
+                    source=candidate['source'], adjustment=candidate['adjustment'],
+                    timeframe=candidate['timeframe'], target=candidate['target'],
+                    condition=candidate['condition'], value=candidate['value'], frame=frame,
+                    ema_length=int(candidate['ema_length']), frequency=candidate['frequency'],
+                    expires=candidate.get('expires'), active_after=moment)
+                for key in ('cursor', 'active_after'):
+                    candidate[key] = seeded[key]
+            current.clear()
+            current.update(candidate)
+        return self._commit(edit)
+
+    def delete_alert(self, alert_id):
+        def edit(document):
+            if not any(item['id'] == alert_id for item in document['alerts']):
+                raise ValueError('提醒已不存在，请重新打开对象树')
+            document['alerts'] = [item for item in document['alerts'] if item['id'] != alert_id]
+        return self._commit(edit)
+
     def ping(self):
         return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
+
+    def copy_snapshot(self, data_url):
+        if not getattr(self, '_copy_snapshot', None):
+            raise RuntimeError('快照剪贴板尚未就绪')
+        return self._copy_snapshot(data_url)
 
     def finish_close(self):
         if self._close_window:

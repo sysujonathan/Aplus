@@ -763,7 +763,7 @@ class ChartWorkspaceDialog:
         ttk.Checkbutton(fields, text='EMA', variable=ema).grid(row=0, column=0, sticky=tk.W)
         ttk.Label(fields, text='长度').grid(row=0,column=1); ttk.Entry(fields,textvariable=length,width=7).grid(row=0,column=2)
         ttk.Label(fields, text='来源').grid(row=0,column=3); ttk.Combobox(fields,textvariable=source,
-            values=('open','high','low','close'),state='readonly',width=7).grid(row=0,column=4)
+            values=('open','high','low','close','volume','hl2','hlc3','ohlc4'),state='readonly',width=7).grid(row=0,column=4)
         ttk.Label(fields, text='偏移').grid(row=0,column=5); ttk.Entry(fields,textvariable=offset,width=7).grid(row=0,column=6)
         ttk.Button(fields, text='颜色', command=lambda: self._pick_color(settings, 'ema_color')).grid(row=0,column=7,padx=6)
         ttk.Checkbutton(fields, text='Bar Count', variable=count).grid(row=1,column=0,sticky=tk.W,pady=8)

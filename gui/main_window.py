@@ -159,6 +159,8 @@ class AplusMainWindow(ttk.Window):
             layout_count=1,
             on_page_state=self.toolbar.set_chart_page_status,
             on_active_item=self._on_chart_item_activated,
+            interactive=True,
+            on_layout_request=self._on_chart_layout,
         )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
 
@@ -321,6 +323,9 @@ class AplusMainWindow(ttk.Window):
         if self._closing or getattr(self, "_update_pending", False):
             return
         self._closing = True
+        if not getattr(self, '_flush_embedded_charts', lambda: True)():
+            self._closing = False
+            return
         if self.toolbar._job_id and self.service is not None:
             try:
                 self.service.cancel(self.toolbar._job_id)
@@ -333,8 +338,52 @@ class AplusMainWindow(ttk.Window):
                 pass
         self.destroy()
 
+    def _flush_embedded_charts(self):
+        # Native children must acknowledge their final save before Tk destroys
+        # their HWND parents. Never terminate a chart to hide a save failure.
+        if getattr(self, '_chart_exit_wait', False):
+            return False
+        import time
+        chart = getattr(self, 'chart', None)
+        hosts = chart.embedded_hosts() if chart else []
+        live = [host for host in hosts if not host.closed()]
+        self._chart_exit_wait = True
+        try:
+            for host in live:
+                host.request_close()
+            deadline = time.monotonic() + 15
+            while any(not host.closed() for host in live) and time.monotonic() < deadline:
+                self.update()
+                time.sleep(.03)
+        finally:
+            self._chart_exit_wait = False
+        if any(not host.closed() for host in live):
+            self._closing = False
+            messagebox.showwarning('图表仍在保存',
+                '图表尚未确认保存，主窗口已保留。请检查图表中的错误提示后再退出。', parent=self)
+            self._resume_embedded_charts()
+            return False
+        for host in hosts:
+            host.cleanup()
+        return True
+
+    def _resume_embedded_charts(self):
+        chart = getattr(self, 'chart', None)
+        if chart:
+            for slot in chart._slots:
+                if slot._code and slot._embedded is not None and slot._embedded.closed():
+                    slot._show_interactive()
+
+    def destroy(self):
+        if not self._flush_embedded_charts():
+            return False
+        super().destroy()
+        return True
+
     def _close_for_version_update(self):
         """Only called after Service has atomically reserved an idle update."""
+        if not getattr(self, '_flush_embedded_charts', lambda: True)():
+            raise RuntimeError('图表尚未确认保存，不能退出更新')
         self._closing = True
         self.service.pool.shutdown(wait=True)
         if self._tray_icon is not None:
@@ -500,6 +549,7 @@ class AplusMainWindow(ttk.Window):
 
     def _on_chart_layout(self, count):
         self.chart.set_layout(count)
+        self.toolbar.layout_var.set({1:'1×1',4:'2×2',6:'2×3',9:'3×3'}[count])
         self._status_text.set(f"K 线布局：{count} 格")
 
     def _on_chart_item_activated(self, observation_id):

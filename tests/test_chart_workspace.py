@@ -314,3 +314,23 @@ def test_chart_close_waits_for_frontend_ack_and_can_retry_failure(tmp_path):
     guard = ChartCloseGuard(other, bridge)
     bridge.cancel_close()
     assert other.destroyed and guard.request() is True
+
+
+@pytest.mark.parametrize('kind,target,stop', [('long',14,8),('short',6,12)])
+def test_native_position_analysis_matches_risk_lot_leverage_and_precision(kind,target,stop):
+    from workbench.chart_workspace import document, risk_readout, validate_document
+    value = document()
+    obj = make_drawing(kind,[['2026-10-15',10]],created_at='2026-10-15',settings=value['settings'])
+    obj['points'] = [['2026-10-15',10],['2026-10-15',stop],['2026-10-19',target],['2026-10-19',10]]
+    obj['web'] = dict(account_size=5000,risk_value=10,risk_unit='percent',leverage=1,lot_size=1)
+    text, ratio, quantity = risk_readout(obj)
+    assert ratio == 2 and quantity == 250 and '非交易建议' in text
+    obj['web']['leverage'] = .1
+    assert risk_readout(obj)[2] == 50
+    obj['web'].update(lot_size=3,qty_precision='2')
+    assert risk_readout(obj)[2] == 16.66
+    value['drawings'] = [obj]
+    assert validate_document(value)['drawings'][0]['web']['lot_size'] == 3
+    obj['web']['leverage'] = float('nan')
+    with pytest.raises(ValueError,match='有限正数'):
+        validate_document(value)

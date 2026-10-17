@@ -505,7 +505,7 @@ def test_gui_live_overlay_keeps_rows_selection_calendar_and_ledger(tmp_path, quo
                 autofill.assert_not_called()
             assert float(editor.stop.get()) == 9 and float(editor.tp1.get()) == 12
             editor.top.destroy()
-            chart = HoldingTradeChartDialog(root, store, page._selected_position())
+            chart = HoldingTradeChartDialog(root, store, page._selected_position(), interactive=False)
             root.update()
             assert tuple(map(int, chart.top.resizable())) == (1, 1)
             assert len([l for l in chart.data["levels"] if "成本" in l["label"]]) == 1
@@ -828,7 +828,7 @@ def test_holding_reference_background_keeps_gui_responsive_and_fails_visibly(tmp
         return bars()
     root = quote_window
     with patch("workbench.holding_chart.fetch_holding_reference", new=slow):
-        chart = HoldingTradeChartDialog(root, store, report(store, aid)["positions"][0])
+        chart = HoldingTradeChartDialog(root, store, report(store, aid)["positions"][0], interactive=False)
         try:
             assert entered.wait(2) and chart.data["reference_needed"]
             idle = Mock()
@@ -868,7 +868,7 @@ def test_closing_holding_chart_cancels_pending_reference_without_late_gui_write(
         assert cancel.is_set()
         return bars()
     with patch("workbench.holding_chart.fetch_holding_reference", new=slow):
-        chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0])
+        chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0], interactive=False)
         assert entered.wait(2)
         chart.close()
         assert chart._reference_cancel.is_set() and chart._reference_after is None

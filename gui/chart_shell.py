@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -73,10 +75,8 @@ def webview_available():
 
 
 def _write_json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
-    os.replace(temporary, path)
+    from .chart_embed import atomic_json
+    atomic_json(path, value)
 
 
 def launch_chart_workspace(store, **context):
@@ -113,8 +113,20 @@ def launch_chart_workspace(store, **context):
 def _materialize_page(session, boot):
     target = session.with_suffix("")
     target.mkdir(parents=True, exist_ok=True)
+    if boot is None:
+        page = target / 'index.html'
+        page.write_text('''<!doctype html><meta charset="utf-8"><style>
+body{background:#0b0b0b;color:#a9abb3;font:15px "Segoe UI";display:grid;place-items:center;height:95vh}
+</style><p>从候选或自选列表选择标的，在此图上继续分析</p><script>
+let switching=false;
+window.aplusSwitchContext=async()=>{if(switching)return;switching=true;try{
+ const r=await window.pywebview.api.activate_context();location.replace(location.pathname+'?chart='+r.token);
+}catch(e){switching=false;await window.pywebview.api.cancel_context_switch(String(e));}};
+window.aplusFlushAndClose=()=>window.pywebview.api.finish_close();</script>''', encoding='utf-8')
+        return page, target
     for name in ("prototype.css", "historical-bars-v2.js", "prototype.js",
-                 "chart-coordinates.js", "prototype-interactions.js"):
+                 "chart-coordinates.js", "chart-indicators.js", "chart-position.js", "drawing-settings.js",
+                 "prototype-interactions.js", "production-controls.js", "chart-palette.js"):
         shutil.copyfile(ASSETS / name, target / name)
     chart_script = (target / "prototype.js").read_text(encoding="utf-8")
     chart_script = chart_script.replace("const bars = [", "const demoBars = [", 1)
@@ -133,6 +145,14 @@ def _materialize_page(session, boot):
         f"<script>window.tvPrototypeV2 = true;window.APLUS_CHART_BOOT={encoded};</script>",
     )
     html = html.replace("A+ 图表工作台高保真原型", "A++ 图表工作区")
+    if boot.get('embedded'):
+        html = html.replace('<body>', '<body class="embedded">')
+    # The same slot reloads after switching symbols. Give changed assets new
+    # URLs so WebView cannot combine cached old scripts with a fresh document.
+    build = hashlib.sha256(b''.join(path.read_bytes() for path in sorted(target.iterdir())
+                                   if path.suffix in {'.js', '.css'})).hexdigest()[:16]
+    html = re.sub(r'((?:src|href)=")([^"?]+\.(?:js|css))"',
+                  lambda match: f'{match[1]}{match[2]}?build={build}"', html)
     page = target / "index.html"
     page.write_text(html, encoding="utf-8")
     return page, target
@@ -143,19 +163,57 @@ def run_session(session_path):
     status = session.with_suffix(".status.json")
     generated = None
     try:
+        payload = json.loads(session.read_text(encoding="utf-8"))
+        if payload.get('parent_hwnd'):
+            from .chart_embed import adopt_parent_dpi
+            adopt_parent_dpi(payload['parent_hwnd'])
         import webview
         from workbench.store import Store
-        payload = json.loads(session.read_text(encoding="utf-8"))
         store = Store(payload["runtime_root"])
-        bridge = ChartBridge(store, payload["boot"])
-        page, generated = _materialize_page(session, payload["boot"])
-        title = f"A++ 图表工作区 · {payload['boot']['name']} {payload['boot']['displaySymbol']}"
+        embedded = bool(payload.get('parent_hwnd'))
+        if embedded:
+            from .chart_embed import ChartSessionBridge, run_embedded_transport
+            bridge = ChartSessionBridge(store, payload['boot'], lambda boot: _materialize_page(session, boot))
+            bridge.active_token = payload.get('token', 0)
+        else:
+            bridge = ChartBridge(store, payload["boot"])
+        page, generated = _materialize_page(session, bridge.bootstrap())
+        title = 'A++ 主图' if embedded else f"A++ 图表工作区 · {payload['boot']['name']} {payload['boot']['displaySymbol']}"
         window = webview.create_window(title, page.as_uri(), js_api=bridge, width=1500, height=940,
-                                       min_size=(980, 620), background_color="#0b0b0b")
+                                       min_size=(200, 200) if embedded else (980, 620),
+                                       frameless=embedded, easy_drag=False, hidden=embedded,
+                                       background_color="#0b0b0b")
         close_guard = ChartCloseGuard(window, bridge)
+        from .chart_snapshot import copy_chart_png
+        bridge._copy_snapshot = lambda data: copy_chart_png(data, int(window.native.Handle.ToInt64()))
+        if embedded:
+            def cancelled():
+                close_guard.failed()
+                if not close_guard.allow_close:
+                    _write_json(status, {'ready': True, 'closeCancelled': True})
+            bridge._cancel_close = cancelled
         window.events.closing += close_guard.request
-        window.events.loaded += lambda: _write_json(status, {"ready": True})
-        webview.start(gui="edgechromium", debug=False, private_mode=True)
+        def loaded():
+            if embedded:
+                bridge.busy = False
+            _write_json(status, {'ready': True, 'token': getattr(bridge, 'active_token', 0)})
+            if embedded and bridge.close_requested:
+                # A close requested during page replacement must flush the new
+                # page too; the old document was already acknowledged.
+                close_guard.cancel()
+                window.destroy()
+        window.events.loaded += loaded
+        def start_embedded():
+            try:
+                window.events.loaded.wait()
+                # Parent before showing, so no detached window flashes on stock selection.
+                from .chart_embed import NativeChild
+                native = NativeChild(int(window.native.Handle.ToInt64()), payload['parent_hwnd'])
+                window.show()
+                run_embedded_transport(window, bridge, session, payload['parent_hwnd'], native)
+            except Exception as exc:
+                _write_json(status, {'ready': False, 'error': str(exc)})
+        webview.start(start_embedded if embedded else None, gui="edgechromium", debug=False, private_mode=True)
     except Exception as exc:
         _write_json(status, {"ready": False, "error": str(exc)})
         raise
