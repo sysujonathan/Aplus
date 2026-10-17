@@ -337,8 +337,8 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .replay-calendar button.active { background: var(--blue); color: white; }
 .replay-calendar button:disabled { color: #4a4a4a; }
 .replay-start-modal .first-available { margin-right: auto; }
-.save-replay-choice { display: flex; align-items: center; gap: 9px; color: #ddd; }
-.save-replay-choice input { width: auto; height: auto; accent-color: var(--blue); }
+.modal-body>label.save-replay-choice { display: flex; align-items: center; gap: 9px; color: #ddd; }
+.save-replay-choice input { flex:0 0 16px; width:16px; height:16px; padding:0; margin:0; accent-color: var(--blue); }
 .remove-option { height: 47px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border: 1px solid #3c3c3c; border-radius: 5px; background: #252525; text-align: left; }
 .remove-option small { color: #777; }
 .remove-option.danger { color: #ff6672; }

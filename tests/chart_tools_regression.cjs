@@ -72,6 +72,32 @@ for(const type of ['fib','long','ray','trend','short','rectangle','up','down','a
   if(drawing.c){context.moveObjectFromOriginal(edited,drawing,{}, {index:2,value:45},'c');assert.equal(edited.c.value,45);assert.deepEqual(edited.b,drawing.b);}
   if(drawing.points){context.moveObjectFromOriginal(edited,drawing,{}, {index:2,value:45},'point:1');assert.equal(edited.points[1].value,45);assert.deepEqual(edited.points[0],drawing.points[0]);}
   if(drawing.stop){context.moveObjectFromOriginal(edited,drawing,{}, {index:2,value:38.5},'stop');assert.equal(edited.stop,38.5);assert.deepEqual(edited.b,drawing.b);}
+  if(['long','short'].includes(type)){
+    const right=structuredClone(drawing);
+    context.moveObjectFromOriginal(right,drawing,{}, {index:2,value:44.25},'right');
+    assert.equal(right.b.date,'2026-10-14');assert.equal(right.b.value,drawing.b.value);
+    assert.deepEqual(right.a,drawing.a);assert.equal(right.stop,drawing.stop);
+    const target=structuredClone(drawing);
+    context.moveObjectFromOriginal(target,drawing,{}, {index:2,value:44.25},'target');
+    assert.equal(target.b.value,44.25);assert.equal(target.b.date,drawing.b.date);
+    assert.deepEqual(target.a,drawing.a);assert.equal(target.stop,drawing.stop);
+  }
+  if(type==='rectangle')for(const handle of ['rect-ab','rect-ba','rect-a-x','rect-b-x','rect-a-y','rect-b-y']){
+    const corner=structuredClone(drawing);
+    context.moveObjectFromOriginal(corner,drawing,{}, {index:2,value:44.25},handle);
+    if(handle==='rect-ab'){
+      assert.equal(corner.a.date,'2026-10-14');assert.equal(corner.a.value,40);
+      assert.equal(corner.b.date,'2026-10-13');assert.equal(corner.b.value,44.25);
+    }else if(handle==='rect-ba'){
+      assert.equal(corner.b.date,'2026-10-14');assert.equal(corner.b.value,42);
+      assert.equal(corner.a.date,'2026-10-12');assert.equal(corner.a.value,44.25);
+    }else{
+      const [,key,axis]=handle.split('-'),other=key==='a'?'b':'a';
+      assert.deepEqual(corner[other],drawing[other]);
+      assert.equal(corner[key].date,axis==='x'?'2026-10-14':drawing[key].date);
+      assert.equal(corner[key].value,axis==='y'?44.25:drawing[key].value);
+    }
+  }
   assert.equal(JSON.stringify(drawing),before,`${type}: the gesture cannot mutate its undo snapshot`);
 }
 context.magnetEnabled=true;
@@ -124,6 +150,14 @@ paths=[];context.channel.c.value=25;context.selectedId='channel';
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);
 assert.deepEqual(paths[2].points,[[0,20],[10,30]]);
 assert.ok(handles.some(h=>h.handle==='c'&&h.x===5&&h.y===25));
+handles=[];
+context.drawSelectionHandles(ctx,{id:'rect-handles',type:'rectangle'},10,20,30,40);
+assert.equal(handles.length,8,'rectangle must expose four corners and four edge controls');
+handles=[];
+context.drawSelectionHandles(ctx,{id:'risk-handles',type:'long',stop:5},10,20,30,40);
+assert.deepEqual(handles.map(h=>h.handle),['a','right','target','stop']);
+assert.deepEqual(handles.find(h=>h.handle==='right'),{handle:'right',x:30,y:20});
+assert.deepEqual(handles.find(h=>h.handle==='target'),{handle:'target',x:10,y:40});
 context.channel.showMiddle=false;context.selectedId=null;paths=[];
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);assert.equal(paths.length,2);
 context.channel.channelLevels=[{value:-.25,enabled:true,color:'#ff9800',width:3,dash:'dashed'},
@@ -184,19 +218,35 @@ context.userObjects=[];context.selectedId=null;context.drawUserObject=realDrawOb
 context.bars=Array.from({length:300},(_,index)=>({date:new Date(Date.UTC(2025,0,index+1)).toISOString().slice(0,10),
   open:39,high:41,low:38,close:40,volume:100}));
 Object.assign(context,{replayIndex:299,replayActive:false,viewCount:204,viewOffset:0,savePrototypeState(){}});
-vm.runInContext(['zoomAround','panChart'].map(extract).join('\n'),context);
+vm.runInContext(['zoomAround','panChart','panLimits'].map(extract).join('\n'),context);
 vm.runInContext('calculateEma();renderWorkspace()',context);
 for(const ratio of [.2,.5,.8]){
   const before=context.canvas._view;
-  const anchor=before.begin+ratio*(context.viewCount+before.futureSpace)-.5;
+  const anchor=before.begin+ratio*(context.viewCount+context.RIGHT_MARGIN_BARS)-.5;
   vm.runInContext(`zoomAround(.75,${ratio})`,context);
   const after=context.canvas._view;
-  const projected=after.begin+ratio*(context.viewCount+after.futureSpace)-.5;
+  const projected=after.begin+ratio*(context.viewCount+context.RIGHT_MARGIN_BARS)-.5;
   assert.ok(Math.abs(projected-anchor)<.6,'zoom cannot lose the hovered bar through right-margin drift');
 }
 Object.assign(context,{replayIndex:49,replayActive:true,viewCount:18,viewOffset:0});
 vm.runInContext('renderWorkspace();panChart(5)',context);
-assert.equal(context.canvas._view.end,45);assert.equal(context.canvas._view.begin,27);
+assert.equal(context.canvas._view.end,50);assert.equal(context.canvas._view.begin,27);
+// Panning consumes blank space, not candle width, and can expose future time
+// labels without adding market prices or revealing a replay's hidden candles.
+context.chartCoordinates.configure({daily:Array.from({length:350},(_,n)=>new Date(Date.UTC(2025,0,n+1)).toISOString().slice(0,10))});
+Object.assign(context,{replayIndex:299,replayActive:false,viewCount:204,viewOffset:0});
+vm.runInContext('renderWorkspace()',context);
+const panWidth=context.canvas._view.candleWidth,oldLastX=context.canvas._view.xGlobal(299);
+vm.runInContext('panChart(-20)',context);
+assert.equal(context.viewOffset,-20);assert.equal(context.canvas._view.candleWidth,panWidth);
+assert.ok(Math.abs(context.canvas._view.xGlobal(299)-(oldLastX-20*panWidth))<1e-8);
+assert.equal(context.bars.length,300,'future time space cannot create synthetic candles');
+vm.runInContext('panChart(44)',context);
+assert.equal(context.canvas._view.candleWidth,panWidth);
+assert.equal(context.canvas._view.end,288);
+Object.assign(context,{replayIndex:49,replayActive:true,viewCount:18,viewOffset:0});
+vm.runInContext('renderWorkspace();panChart(-10)',context);
+assert.ok(context.canvas._view.rows.every(row=>row.date<=context.bars[49].date));
 // Hiding a layer is reversible and cannot disable the user's EMA configuration.
 Object.assign(context,{rememberObjects(){},syncWorkspaceControls(){},savePrototypeState(){},
   renderWorkspace(){},updateObjectTree(){}});
@@ -231,4 +281,19 @@ const alphaHost={querySelectorAll:selector=>selector==='[data-setting]'?[alphaCo
 const alphaObject={alpha:1};context.bindDrawingStyle(alphaHost,alphaObject);
 assert.equal(Number(alphaControl.value),100);
 alphaControl.value='32';alphaChange();assert.equal(alphaObject.alpha,.32);
+// Export carries the replay cutoff (not the future Friday label), and narrow
+// chart slots put OHLC on a separate row instead of clipping it behind a title.
+context.document={querySelector:element,createElement:()=>({getContext:()=>ctx})};
+context.canvas={width:600,height:400};context.window={devicePixelRatio:1};
+context.selectedId='keep-selection';context.renderWorkspace=()=>{};
+context.replayActive=true;context.replayCutoffDate='2026-08-12';
+context.chartBoot={source:'test-source',adjustment:'qfq'};
+element('.instrument-title b').textContent='Test instrument';
+element('.ohlc').textContent='OHLC';
+context.indicatorSettings.ema=false;labels=[];
+vm.runInContext(extract('cleanSnapshotCanvas'),context);
+const exported=vm.runInContext('cleanSnapshotCanvas()',context);
+assert.equal(exported.height,468);
+assert.ok(labels.includes('回放截至 2026-08-12 · test-source · qfq'));
+assert.equal(context.selectedId,'keep-selection','export cannot clear the selected drawing');
 console.log(JSON.stringify({ok:true}));

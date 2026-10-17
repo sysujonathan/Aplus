@@ -104,7 +104,8 @@ viewCount = Math.min(DEFAULT_VISIBLE_BARS, bars.length);
 viewOffset = 0;
 if (initialPrototypeState.view) {
   viewCount = clamp(Number(initialPrototypeState.view.count) || DEFAULT_VISIBLE_BARS, 18, bars.length);
-  viewOffset = clamp(Number(initialPrototypeState.view.offset) || 0, 0, bars.length - viewCount);
+  const limits=panLimits();
+  viewOffset = clamp(Number(initialPrototypeState.view.offset) || 0, limits.min, limits.max);
   priceZoom = clamp(Number(initialPrototypeState.view.priceZoom) || 1, .45, 7);
   priceCenterOffset = Number(initialPrototypeState.view.priceCenterOffset) || 0;
 }
@@ -198,9 +199,16 @@ function updateUndoButtons() {
 function clamp(value, min, max) { return Math.max(Math.min(min, max), Math.min(max, value)); }
 function visibleWindow() {
   const maxEnd = Math.min(replayIndex + 1, bars.length);
-  const end = clamp(Math.round(maxEnd - viewOffset), Math.min(viewCount, maxEnd), maxEnd);
-  const begin = Math.max(0, end - viewCount);
+  const begin = Math.max(0, Math.round(maxEnd - viewCount - viewOffset));
+  const end = Math.min(maxEnd, begin + viewCount + RIGHT_MARGIN_BARS);
   return { begin, end, data: bars.slice(begin, end) };
+}
+
+function panLimits() {
+  const maxEnd=Math.min(replayIndex+1,bars.length);
+  const calendar=chartCoordinates.bounds(bars,activeTimeframeUnit);
+  const future=Math.max(0,calendar.max-(maxEnd-1)-RIGHT_MARGIN_BARS);
+  return {min:-Math.min(Math.floor(viewCount*.8),future),max:Math.max(0,maxEnd-viewCount)};
 }
 
 function dashPattern(style) {
@@ -326,7 +334,7 @@ function renderWorkspace() {
   const high = rawCenter + span / 2;
   const y = value => top + (high - value) / (high - low) * plotHeight;
   const futureSpace = Math.max(0, RIGHT_MARGIN_BARS - viewOffset);
-  const candleWidth = plotWidth / Math.max(1, viewCount + futureSpace);
+  const candleWidth = plotWidth / Math.max(1, viewCount + RIGHT_MARGIN_BARS);
   const xGlobal = globalIndex => xFor(globalIndex - visible.begin, left, candleWidth);
   canvas._view = { rows, begin: visible.begin, end: visible.end, left, right, top, bottom, width, height, plotWidth, plotHeight, y, low, high, candleWidth, xGlobal, futureSpace };
   hitRegions = [];
@@ -727,7 +735,15 @@ function drawSelectionHandles(ctx, object, ax, ay, bx, by) {
   if (object.type === 'path' && object.points?.length) {
     points = object.points.map((point, index) => ({ x: canvas._view.xGlobal(point.index), y: canvas._view.y(point.value), handle: `point:${index}` }));
   }
-  if (['long', 'short'].includes(object.type)) points.push({ x: bx, y: canvas._view.y(object.stop), handle: 'stop' });
+  if (['long', 'short'].includes(object.type)) points = [
+    {x:ax,y:ay,handle:'a'}, {x:bx,y:ay,handle:'right'},
+    {x:ax,y:by,handle:'target'}, {x:ax,y:canvas._view.y(object.stop),handle:'stop'}
+  ];
+  if (object.type === 'rectangle') points.push(
+    {x:ax,y:by,handle:'rect-ab'}, {x:bx,y:ay,handle:'rect-ba'},
+    {x:ax,y:(ay+by)/2,handle:'rect-a-x'}, {x:bx,y:(ay+by)/2,handle:'rect-b-x'},
+    {x:(ax+bx)/2,y:ay,handle:'rect-a-y'}, {x:(ax+bx)/2,y:by,handle:'rect-b-y'}
+  );
   if (object.type === 'channel' && object.c) points.push({x:canvas._view.xGlobal(object.c.index), y:canvas._view.y(object.c.value), handle:'c'});
   points.forEach(({ x, y: yy, handle }) => {
     ctx.beginPath(); ctx.arc(x, yy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -899,24 +915,20 @@ function finishPath(point) {
 function zoomAround(factor, ratio) {
   const view = canvas._view;
   if (!view) return;
-  const anchorIndex = view.begin + ratio * (viewCount + view.futureSpace) - .5;
+  const anchorIndex = view.begin + ratio * (viewCount + RIGHT_MARGIN_BARS) - .5;
   const maxCount = Math.min(bars.length, replayIndex + 1);
   const nextCount = clamp(Math.round(viewCount * factor), 18, maxCount);
-  const withoutMargin = anchorIndex + (1 - ratio) * nextCount + .5;
   const maxEnd = Math.min(bars.length,replayIndex+1);
-  // Near the right edge the reserved blank bars shrink with offset. Solve the
-  // same coordinate equation used by the renderer, including that margin.
-  const endWithMargin = maxEnd-withoutMargin >= RIGHT_MARGIN_BARS ? withoutMargin
-    : (withoutMargin + ratio*(maxEnd-RIGHT_MARGIN_BARS))/(1+ratio);
-  const nextEnd = clamp(Math.round(endWithMargin),nextCount,maxEnd);
+  const begin = anchorIndex-ratio*(nextCount+RIGHT_MARGIN_BARS)+.5;
   viewCount = nextCount;
-  viewOffset = Math.min(replayIndex + 1, bars.length) - nextEnd;
+  const limits=panLimits();
+  viewOffset = clamp(Math.round(maxEnd-nextCount-begin),limits.min,limits.max);
   renderWorkspace(); savePrototypeState();
 }
 
 function panChart(barDelta) {
-  const maxOffset = Math.max(0, Math.min(replayIndex + 1, bars.length) - viewCount);
-  viewOffset = clamp(viewOffset + Math.round(barDelta), 0, maxOffset);
+  const limits=panLimits();
+  viewOffset = clamp(viewOffset + Math.round(barDelta), limits.min, limits.max);
   renderWorkspace(); savePrototypeState();
 }
 
@@ -963,17 +975,20 @@ function applyZoomSelection(start, end, zoomOut) {
   const widthFraction = clamp(Math.abs(end.x - start.x) / view.plotWidth, .08, 1);
   const centerIndex = (start.index + end.index) / 2;
   const nextCount = zoomOut
-    ? clamp(Math.round(viewCount / widthFraction), 18, replayIndex + 1)
-    : clamp(Math.round(Math.abs(end.index - start.index)), 18, replayIndex + 1);
-  let nextEnd = Math.round(centerIndex + nextCount / 2);
-  nextEnd = clamp(nextEnd, nextCount, replayIndex + 1);
+    ? clamp(Math.round((viewCount+RIGHT_MARGIN_BARS)/widthFraction)-RIGHT_MARGIN_BARS,18,replayIndex+1)
+    : clamp(Math.round(Math.abs(end.index-start.index))-RIGHT_MARGIN_BARS,18,replayIndex+1);
   viewCount = nextCount;
-  viewOffset = Math.min(replayIndex + 1, bars.length) - nextEnd;
+  const limits=panLimits(),begin=centerIndex-(nextCount+RIGHT_MARGIN_BARS)/2;
+  viewOffset=clamp(Math.round(Math.min(replayIndex+1,bars.length)-nextCount-begin),limits.min,limits.max);
   const heightFraction = clamp(Math.abs(end.y - start.y) / view.plotHeight, .08, 1);
   const desiredCenter = (start.value + end.value) / 2;
-  const currentCenter = (view.high + view.low) / 2;
-  priceCenterOffset += desiredCenter - currentCenter;
-  priceZoom = clamp(priceZoom * (zoomOut ? heightFraction : 1 / heightFraction), .45, 7);
+  const rows=visibleWindow().data;
+  const priceLow=Math.min(...rows.map(row=>row.low)),priceHigh=Math.max(...rows.map(row=>row.high));
+  const padding=Math.max(priceHigh-priceLow,Math.abs(priceHigh)*.02,.01)*.08;
+  const rawSpan=priceHigh-priceLow+2*padding;
+  const targetSpan=(view.high-view.low)*(zoomOut?1/heightFraction:heightFraction);
+  priceCenterOffset=desiredCenter-(priceHigh+priceLow)/2;
+  priceZoom=clamp(rawSpan/targetSpan,.45,7);
   exitDrawingMode(); hideZoomSelection(); renderWorkspace(); savePrototypeState();
   showToast(zoomOut ? '已按框选区域缩小' : '已放大到框选区域');
 }
@@ -987,6 +1002,16 @@ function moveObjectFromOriginal(object, original, start, point, handle) {
         ? old.date : chartCoordinates.dateAt(bars, snapped.index, activeTimeframeUnit) });
     if (handle === 'a') object.a = edited(original.a);
     else if (handle === 'b') object.b = edited(original.b || original.a);
+    else if (handle === 'right') object.b = {...edited(original.b),value:original.b.value};
+    else if (handle === 'target') object.b = {...original.b,value:snapped.value};
+    else if (handle === 'rect-ab') {
+      object.a = {...edited(original.a),value:original.a.value};object.b = {...original.b,value:snapped.value};
+    } else if (handle === 'rect-ba') {
+      object.b = {...edited(original.b),value:original.b.value};object.a = {...original.a,value:snapped.value};
+    } else if (handle.startsWith('rect-')) {
+      const [,key,axis]=handle.split('-');
+      object[key] = axis==='x'?{...edited(original[key]),value:original[key].value}:{...original[key],value:snapped.value};
+    }
     else if (handle === 'c' && original.c) object.c = edited(original.c);
     else if (handle === 'stop') object.stop = snapped.value;
     else if (handle.startsWith('point:')) {
@@ -1058,10 +1083,11 @@ canvas.addEventListener('pointermove', event => {
     renderWorkspace();
   } else if (gesture.mode === 'time-scale') {
     const next = clamp(Math.round(gesture.startCount * Math.exp(dx / 230)), 18, replayIndex + 1);
-    viewCount = next; viewOffset = clamp(viewOffset, 0, Math.max(0, bars.length - next)); renderWorkspace();
+    viewCount = next;const limits=panLimits();viewOffset=clamp(viewOffset,limits.min,limits.max);renderWorkspace();
   } else if (gesture.mode === 'pan' && gesture.moved) {
     const candle = Math.max(.01, canvas._view.candleWidth);
-    viewOffset = clamp(gesture.startOffset + Math.round(dx / candle), 0, Math.max(0, Math.min(replayIndex + 1, bars.length) - viewCount));
+    const limits=panLimits();
+    viewOffset = clamp(gesture.startOffset + Math.round(dx / candle), limits.min, limits.max);
     renderWorkspace();
   } else if (gesture.mode === 'zoom-box') {
     showZoomSelection(gesture.start, point);
@@ -1435,7 +1461,7 @@ function switchProductionTimeframe(timeframe, persist = true) {
   activeTimeframeUnit = timeframe; replayIndex = lastVisible;
   calculateEma();
   if (replayActive && typeof updateReplayUi === 'function') updateReplayUi();
-  viewCount = Math.min(DEFAULT_VISIBLE_BARS, bars.length); viewOffset = 0; priceZoom = 1; priceCenterOffset = 0;
+  viewCount = Math.min(DEFAULT_VISIBLE_BARS, replayIndex+1, bars.length); viewOffset = 0; priceZoom = 1; priceCenterOffset = 0;
   document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === timeframe));
   const period = timeframe === 'weekly' ? '1周' : timeframe === 'monthly' ? '1月' : '1天';
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
@@ -1766,14 +1792,19 @@ replaySpeedMenu.querySelectorAll('[data-replay-speed]').forEach(button => button
 document.addEventListener('click', event => { if (!event.target.closest('.replay-speed-wrap')) replaySpeedMenu.classList.remove('visible'); });
 function cleanSnapshotCanvas() {
   const selection=selectedId;selectedId=null;renderWorkspace();
-  try {const result=document.createElement('canvas'),ratio=window.devicePixelRatio||1,header=32;
+  try {const result=document.createElement('canvas'),ratio=window.devicePixelRatio||1;
+    const narrow=canvas.width/ratio<800,header=narrow?68:50;
     result.width=canvas.width;result.height=canvas.height+Math.round(header*ratio);
     const ctx=result.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);
     ctx.fillStyle=css('--bg');ctx.fillRect(0,0,result.width/ratio,result.height/ratio);
     ctx.drawImage(canvas,0,header,canvas.width/ratio,canvas.height/ratio);
     ctx.fillStyle='#d1d4dc';ctx.font='12px "Microsoft YaHei",sans-serif';ctx.textAlign='left';
     ctx.fillText(document.querySelector('.instrument-title b').textContent,10,20);
-    ctx.font='11px "Microsoft YaHei",sans-serif';ctx.fillText(document.querySelector('.ohlc').textContent,300,20);
+    ctx.font='11px "Microsoft YaHei",sans-serif';
+    ctx.fillText(document.querySelector('.ohlc').textContent,narrow?10:300,narrow?38:20);
+    const asof=replayActive?`回放截至 ${replayCutoffDate || bars[replayIndex].date}`:`行情截至 ${bars.at(-1).date}`;
+    const provenance=[asof,chartBoot.source,chartBoot.adjustment].filter(Boolean).join(' · ');
+    ctx.fillStyle='#9a9ca3';ctx.fillText(provenance,10,narrow?56:38);
     if(indicatorSettings.ema&&indicatorSettings.indicators_visible!==false&&indicatorSettings['ema_'+activeTimeframeUnit]!==false){const rect=document.querySelector('.indicator-legend').getBoundingClientRect(),plot=wrap.getBoundingClientRect();
       const name=indicatorSettings.ema_inputs===false?'EMA':`EMA ${indicatorSettings.ema_length} ${indicatorSettings.ema_source}`;
       const value=indicatorSettings.ema_values===false?'':document.querySelector('.ema-value').textContent;
@@ -1802,7 +1833,8 @@ async function copyCurrentChartSnapshot() {
 }
 document.querySelector('#snapshot').addEventListener('click', copyCurrentChartSnapshot);
 document.querySelector('#downloadSnapshot').addEventListener('click', () => {
-  const link = document.createElement('a'); link.download = `Aplus-${chartBoot.displaySymbol || '002259'}-${String(bars.at(-1).date).slice(0, 10)}.png`; link.href = document.querySelector('#snapshotImage').src; link.click(); closeWorkspaceModal();
+  const day=replayActive?replayCutoffDate||bars[replayIndex].date:bars.at(-1).date;
+  const link = document.createElement('a'); link.download = `Aplus-${chartBoot.displaySymbol || '002259'}-${String(day).slice(0, 10)}.png`; link.href = document.querySelector('#snapshotImage').src; link.click(); closeWorkspaceModal();
 });
 document.querySelectorAll('.candidate').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.candidate').forEach(item => item.classList.remove('active')); button.classList.add('active'); if (!button.textContent.includes('升达林业')) showToast('静态原型仅嵌入 002259 真实日线');
@@ -1898,7 +1930,7 @@ function applyProductionContext() {
   if (restoredTimeframe !== chartBoot.timeframe && switchProductionTimeframe(restoredTimeframe, false)) {
     const savedView = initialPrototypeState.view || {};
     viewCount = clamp(Number(savedView.count) || DEFAULT_VISIBLE_BARS, 18, bars.length);
-    viewOffset = clamp(Number(savedView.offset) || 0, 0, Math.max(0, bars.length - viewCount));
+    const limits=panLimits();viewOffset=clamp(Number(savedView.offset)||0,limits.min,limits.max);
     priceZoom = clamp(Number(savedView.priceZoom) || 1, .45, 7);
     priceCenterOffset = Number(savedView.priceCenterOffset) || 0;
   }

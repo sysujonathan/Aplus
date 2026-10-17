@@ -332,7 +332,13 @@ function chartControlMenu(title, choices) {
 }
 function setChartType(type) {
   rememberObjects();indicatorSettings.chart_type=type;savePrototypeState();renderWorkspace();
+  syncChartTypeButtons();
 }
+function syncChartTypeButtons(){
+  document.querySelector('[title="折线"]').classList.toggle('active-box',indicatorSettings.chart_type==='line');
+  document.querySelector('[title="K线类型"]').classList.toggle('active-box',indicatorSettings.chart_type!=='line');
+}
+syncChartTypeButtons();
 document.querySelector('[title="折线"]').addEventListener('click',()=>setChartType('line'));
 document.querySelector('[title="K线类型"]').addEventListener('click',()=>chartControlMenu('图表类型',[
   {label:`${indicatorSettings.chart_type!=='line'?'✓ ':''}蜡烛图`,action:()=>setChartType('candles')},
