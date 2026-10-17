@@ -2,10 +2,11 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/prototype-interactions.js'),'utf8');
 function extract(name){const start=source.indexOf(`function ${name}(`);assert.ok(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2);}
-let current=[],paths=[],labels=[],handles=[];
+let current=[],paths=[],labels=[],handles=[],rectangles=[];
 const ctx=new Proxy({
   beginPath(){current=[];},moveTo(x,y){current.push([x,y]);},lineTo(x,y){current.push([x,y]);},
   stroke(){paths.push({points:structuredClone(current),color:ctx.strokeStyle});},
+  strokeRect(...args){rectangles.push(args);},
   fillText(text){labels.push(text);},measureText(text){return {width:String(text).length*6};},
 },{get(target,key){return key in target?target[key]:(()=>{});}});
 const elements=new Map();
@@ -101,6 +102,40 @@ for(const type of ['fib','long','ray','trend','short','rectangle','up','down','a
   assert.equal(JSON.stringify(drawing),before,`${type}: the gesture cannot mutate its undo snapshot`);
 }
 context.magnetEnabled=true;
+// A hidden drawing (including one excluded by replay or timeframe) must not
+// leave its quick-settings toolbar on the chart. Use the renderer's visibility
+// predicate so the graphic and its editing controls share the same boundary.
+Object.assign(context,{drawingsVisible:true,objectVisibleAtTimeframe:()=>true});
+vm.runInContext(extract('drawingVisibleInWorkspace'),context);
+const visibilityObject={createdAtDate:'2026-10-13',visible:true};
+assert.equal(context.drawingVisibleInWorkspace(visibilityObject),true);
+context.drawingsVisible=false;
+assert.equal(context.drawingVisibleInWorkspace(visibilityObject),false);
+context.drawingsVisible=true;
+assert.equal(context.drawingVisibleInWorkspace({...visibilityObject,visible:false}),false);
+context.objectVisibleAtTimeframe=()=>false;
+assert.equal(context.drawingVisibleInWorkspace(visibilityObject),false);
+context.objectVisibleAtTimeframe=()=>true;context.replayActive=true;context.replayCutoffDate='2026-10-12';
+assert.equal(context.drawingVisibleInWorkspace(visibilityObject),false);
+context.replayCutoffDate='2026-10-13';
+assert.equal(context.drawingVisibleInWorkspace(visibilityObject),true);
+context.replayActive=false;context.replayCutoffDate=null;
+assert.match(extract('renderWorkspace'),/classList\.toggle\('visible', visibleObjects\.some/);
+// Quick settings must stay out of the price plot even when a selected point
+// moves through the previous click position; it must not steal the next drag.
+const selectionElements=new Map();
+context.userObjects=[{id:'movable',type:'ray',color:'#fff',width:2}];
+context.wrap={clientWidth:1000,clientHeight:600};
+context.document={querySelector:key=>{if(!selectionElements.has(key))selectionElements.set(key,
+  {style:{},classList:{add(){},remove(){}},textContent:''});return selectionElements.get(key);}};
+context.updateObjectTree=()=>{};context.renderWorkspace=()=>{};
+vm.runInContext(extract('selectObject'),context);
+context.selectObject('movable',900,200);
+const quickBar=selectionElements.get('#selectedObject');
+assert.ok(Number.parseFloat(quickBar.style.top)+36<42,'quick controls must remain above the first plotted price');
+const fixedToolbar=JSON.stringify(quickBar.style);
+context.selectObject('movable',900,100);
+assert.equal(JSON.stringify(quickBar.style),fixedToolbar,'moving the selected anchor cannot move editing controls into its path');
 const positionMetrics=context.AplusPositionMetrics.metrics;
 const model={type:'long',a:{index:0,value:10},b:{index:3,value:14},stop:8,
   account_size:5000,risk_value:10,risk_unit:'percent',lot_size:1,leverage:1};
@@ -142,7 +177,7 @@ const prefix=mtfDaily.slice(0,3),prefixWeekly=indicators.aggregate(prefix,'weekl
 const blindMtf=indicators.mergeTimeframe(indicators.average(prefixWeekly.map(row=>row.close),2),prefixWeekly,prefix,
   'weekly','daily',mtfCloses,'2026-01-07',false);
 assert.deepEqual(Array.from(blindMtf),[null,null,30]);
-vm.runInContext(['dashPattern','drawUserObject','drawSelectionHandles','drawArrowHead','calculateEma','clamp','visibleWindow','objectVisibleAtTimeframe'].map(extract).join('\n'),context);
+vm.runInContext(['dashPattern','drawUserObject','drawSelectionHandles','drawArrowHead','calculateEma','clamp','visibleWindow','objectVisibleAtTimeframe','timeAxisTicks'].map(extract).join('\n'),context);
 context.channel={id:'channel',type:'channel',a:{index:0,value:10},b:{index:10,value:20},c:{index:5,value:22},color:'#fff',width:2,fill:false};
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);
 assert.deepEqual(paths.slice(0,3).map(p=>p.points),[[[0,10],[10,20]],[[0,13.5],[10,23.5]],[[0,17],[10,27]]]);
@@ -158,6 +193,42 @@ context.drawSelectionHandles(ctx,{id:'risk-handles',type:'long',stop:5},10,20,30
 assert.deepEqual(handles.map(h=>h.handle),['a','right','target','stop']);
 assert.deepEqual(handles.find(h=>h.handle==='right'),{handle:'right',x:30,y:20});
 assert.deepEqual(handles.find(h=>h.handle==='target'),{handle:'target',x:10,y:40});
+context.selectedId=null;
+context.pathDrawing={id:'path',type:'path',a:{index:0,value:10},b:{index:10,value:15},
+  points:[{index:0,value:10},{index:5,value:20},{index:10,value:15}],color:'#fff'};
+paths=[];vm.runInContext('drawUserObject(ctx,testView,pathDrawing)',context);
+assert.equal(paths.length,1,'legacy polylines cannot silently gain an arrow');
+context.pathDrawing.path_version=1;
+paths=[];vm.runInContext('drawUserObject(ctx,testView,pathDrawing)',context);
+assert.equal(paths.length,2,'new Path drawings end in an arrow');
+assert.deepEqual(paths[1].points[0],[10,15]);
+context.pathDrawing.startStyle='arrow';context.pathDrawing.endStyle='none';
+paths=[];vm.runInContext('drawUserObject(ctx,testView,pathDrawing)',context);
+assert.equal(paths.length,2);assert.deepEqual(paths[1].points[0],[0,10]);
+const pathFinish=vm.createContext({structuredClone,Math,Date,activeDrawingTool:'path',
+  draftPoints:[{index:0,value:10},{index:1,value:11}],draftCursor:{index:2,value:999},
+  bars:[{date:'2026-10-12'},{date:'2026-10-13'}],replayActive:false,replayIndex:1,
+  userObjects:[],drawingTemplates:{path:{closed:true,fill:true}},
+  rememberObjects(){},savePrototypeState(){},updateObjectTree(){},selectObject(){},
+  exitDrawingMode(){},showToast(){},renderWorkspace(){},snapDrawingPoint:p=>p});
+vm.runInContext(extract('finishPath'),pathFinish);
+assert.equal(pathFinish.finishPath(),true,'Escape completes the placed path vertices');
+assert.equal(pathFinish.userObjects[0].points.length,2,'Escape cannot add the unplaced hover point');
+assert.equal(pathFinish.userObjects[0].endStyle,'arrow');
+assert.equal(pathFinish.userObjects[0].fill,undefined,'a legacy polygon template cannot turn new Path drawings into polygons');
+assert.equal(pathFinish.userObjects[0].closed,undefined);
+// Rectangle extension is independent of the direction in which its anchors
+// were drawn. Fill, border and midpoint use the same geometric boundaries.
+context.selectedId=null;
+for(const [extendLeft,extendRight,left,right] of [[false,false,20,80],[true,false,0,80],[false,true,20,100],[true,true,0,100]]){
+  context.extendedRectangle={id:'extended',type:'rectangle',a:{index:80,value:20},b:{index:20,value:40},
+    color:'#fff',fill:false,showMiddle:true,extendLeft,extendRight};
+  rectangles=[];paths=[];
+  vm.runInContext('drawUserObject(ctx,testView,extendedRectangle)',context);
+  assert.deepEqual(rectangles,[[left,20,right-left,20]]);
+  assert.deepEqual(paths.at(-1).points,[[left,30],[right,30]]);
+  assert.equal(context.extendedRectangle.a.index,80,'extension must not rewrite canonical anchors');
+}
 context.channel.showMiddle=false;context.selectedId=null;paths=[];
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);assert.equal(paths.length,2);
 context.channel.channelLevels=[{value:-.25,enabled:true,color:'#ff9800',width:3,dash:'dashed'},
@@ -200,6 +271,14 @@ assert.ok(context.canvas._view.low>35,'production scale must follow this symbol'
 const averagePath=paths.find(p=>p.color==='#ff9800');
 assert.equal(averagePath.points.length,1,'negative offset cannot reveal the next future EMA');
 assert.equal(element('.ema-value').textContent,'—');
+assert.ok(Number.parseFloat(element('#chartNavControls').style.bottom)-8>=context.canvas._view.bottom,
+  'navigation including its animation must not cover the time-axis drag area');
+context.wrap.getBoundingClientRect=()=>({width:1000,height:240});
+vm.runInContext('renderWorkspace()',context);
+assert.ok(Number.parseFloat(element('#chartNavControls').style.bottom)-8>=context.canvas._view.bottom,
+  'compact grid slots must also keep navigation clear of the time axis');
+context.wrap.getBoundingClientRect=()=>({width:1000,height:600});
+vm.runInContext('renderWorkspace()',context);
 context.indicatorSettings.chart_type='line';paths=[];
 vm.runInContext('renderWorkspace()',context);
 const closeLine=paths.find(p=>p.color==='#2962ff');
@@ -207,6 +286,22 @@ assert.equal(closeLine.points.length,2,'line view must show only the two exposed
 assert.ok(closeLine.points.every(point=>point[1]>=context.canvas._view.top),
   'a hidden future close cannot enter the displayed line');
 context.indicatorSettings.chart_type='candles';
+const axisContext=vm.createContext({Math,Number,String,viewCount:40,RIGHT_MARGIN_BARS:12,
+  activeTimeframeUnit:'daily',bars:[],chartCoordinates:context.chartCoordinates});
+axisContext.bars=Array.from({length:240},(_,i)=>({date:new Date(Date.UTC(2022,0,3+i)).toISOString().slice(0,10)}));
+vm.runInContext(extract('timeAxisTicks'),axisContext);
+const wideAxis={begin:0,candleWidth:24,width:1000,right:60,xGlobal:i=>(i+.5)*24};
+const dayTicks=axisContext.timeAxisTicks(wideAxis);
+assert.ok(dayTicks.some(tick=>/^\d{1,2}$/.test(tick.label)),'zoomed daily views must show day numbers');
+axisContext.activeTimeframeUnit='weekly';axisContext.viewCount=204;
+axisContext.bars=Array.from({length:240},(_,i)=>({date:new Date(Date.UTC(2022,0,3+i*7)).toISOString().slice(0,10)}));
+const weeklyTicks=axisContext.timeAxisTicks({...wideAxis,candleWidth:4,xGlobal:i=>(i+.5)*4});
+assert.ok(weeklyTicks.some(tick=>/^20\d{2}$/.test(tick.label)),'multi-year views need year labels');
+assert.ok(weeklyTicks.every((tick,i)=>!i||tick.x-weeklyTicks[i-1].x>=60),'month labels cannot collide in weekly views');
+axisContext.activeTimeframeUnit='monthly';
+axisContext.bars=Array.from({length:240},(_,i)=>({date:new Date(Date.UTC(2010, i+1, 0)).toISOString().slice(0,10)}));
+const monthTicks=axisContext.timeAxisTicks({...wideAxis,candleWidth:4,xGlobal:i=>(i+.5)*4});
+assert.ok(monthTicks.every(tick=>/^20\d{2}$/.test(tick.label)),'compressed monthly views use readable year marks');
 const objectDrawOrder=[],realDrawObject=context.drawUserObject;
 context.drawUserObject=(_ctx,_view,object)=>objectDrawOrder.push(object.id);
 context.userObjects=[{id:'chosen',type:'trend',a:{index:0,value:39},b:{index:1,value:41},createdAtIndex:0},

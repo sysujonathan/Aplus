@@ -125,7 +125,7 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .chart-watermark { position: absolute; left: 18px; bottom: 49px; color: #fff; font-size: 30px; font-weight: 900; opacity: .9; letter-spacing: -4px; }
 .replay-watermark { position: absolute; display: none; z-index: 2; left: 50%; top: 42%; transform: translate(-50%, -50%); color: rgba(118,121,128,.12); font-size: clamp(74px, 9vw, 142px); font-weight: 700; pointer-events: none; }
 .replay-watermark.visible { display: block; }
-.chart-nav-controls { position: absolute; z-index: 11; left: calc(50% - 23px); bottom: 64px; display: flex; gap: 8px; opacity: 0; transform: translate(-50%, 8px); transition: opacity .12s, transform .12s; pointer-events: none; }
+.chart-nav-controls { position: absolute; z-index: 11; left: calc(50% - 23px); bottom: 86px; display: flex; gap: 8px; opacity: 0; transform: translate(-50%, 8px); transition: opacity .12s, transform .12s; pointer-events: none; }
 .chart-nav-controls.visible { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 .chart-nav-controls button { width: 28px; height: 28px; border: 0; border-radius: 4px; background: #2a2a2a; box-shadow: 0 3px 10px #0008; color: #d9d9dc; font-size: 22px; line-height: 1; }
 .chart-nav-controls button:hover { background: #444; color: white; }
@@ -426,6 +426,7 @@ body.embedded .modal {max-width:calc(100vw - 30px);max-height:calc(100vh - 20px)
 .position-stats {position:relative;border:0;padding:0;margin:15px 0}
 .position-stats summary {display:flex;justify-content:space-between;align-items:center;list-style:none;border:1px solid #434651;border-radius:4px;min-height:34px;padding:0 10px;cursor:pointer;color:#d1d4dc}
 .position-stats summary::-webkit-details-marker {display:none}
+.rectangle-extend {flex:1;margin:0}
 .stats-menu {position:absolute;top:37px;left:0;right:0;z-index:12;background:#1e222d;border:1px solid #434651;border-radius:5px;box-shadow:0 6px 22px #0008;padding:8px;max-height:290px;overflow-y:auto}
 #objectNameInput {min-width:0;max-width:240px;height:30px;margin:0;padding:3px 7px;background:#171717;color:#d1d4dc;border:1px solid #2962ff;border-radius:3px}
 #renameObject {margin-left:4px;margin-right:auto;width:25px;background:transparent;color:#b2b5be}

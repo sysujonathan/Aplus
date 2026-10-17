@@ -299,8 +299,46 @@ function hitRegion(x, y) {
 }
 function hitObject(x, y) { return hitRegion(x, y)?.id || null; }
 
+function drawingVisibleInWorkspace(object) {
+  return Boolean(object && drawingsVisible && object.visible !== false && objectVisibleAtTimeframe(object) &&
+    (!replayActive || (object.createdAtDate || bars[object.createdAtIndex ?? bars.length - 1]?.date) <=
+      (replayCutoffDate || bars[replayIndex]?.date)));
+}
+
+function timeAxisTicks(view) {
+  const candidates=[];
+  const stride=[1,2,5,10,20,50,100].find(step=>step>=72/view.candleWidth)||100;
+  let previous=null;
+  try{previous=chartCoordinates.dateAt(bars,view.begin-1,activeTimeframeUnit);}catch(_error){/* Start of verified dates. */}
+  for(let offset=0;offset<Math.ceil(viewCount+RIGHT_MARGIN_BARS);offset++){
+    const index=view.begin+offset;
+    let day;
+    try{day=chartCoordinates.dateAt(bars,index,activeTimeframeUnit);}catch(_error){break;}
+    const x=view.xGlobal(index);
+    if(x>view.width-view.right-28)break;
+    const newYear=previous&&day.slice(0,4)!==previous.slice(0,4);
+    const newMonth=!previous||day.slice(0,7)!==previous.slice(0,7);
+    let label=null,priority=0;
+    if(newYear || (offset===0&&activeTimeframeUnit==='monthly')){label=day.slice(0,4);priority=3;}
+    else if((newMonth||offset===0)&&(activeTimeframeUnit!=='monthly'||view.candleWidth>=36)){
+      label=`${Number(day.slice(5,7))}月`;priority=2;
+    }else if(activeTimeframeUnit==='daily'&&view.candleWidth>=9&&index%stride===0){
+      label=String(Number(day.slice(8,10)));priority=1;
+    }
+    if(label)candidates.push({index,x,label,priority,date:day});
+    previous=day;
+  }
+  const selected=[];
+  candidates.sort((a,b)=>b.priority-a.priority||a.index-b.index).forEach(tick=>{
+    if(selected.every(other=>Math.abs(tick.x-other.x)>=60))selected.push(tick);
+  });
+  return selected.sort((a,b)=>a.index-b.index);
+}
+
 function renderWorkspace() {
   if (typeof syncWorkspaceControls === 'function') syncWorkspaceControls();
+  const visibleObjects = userObjects.filter(drawingVisibleInWorkspace);
+  document.querySelector('#selectedObject').classList.toggle('visible', visibleObjects.some(item => item.id === selectedId));
   const rect = wrap.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.round(rect.width * ratio));
@@ -312,6 +350,8 @@ function renderWorkspace() {
   const right = 61;
   const compact = height < 260;
   const bottom = compact ? 52 : 76;
+  // Keep even the hidden-state 8px animation clear of the time-axis hit area.
+  document.querySelector('#chartNavControls').style.bottom = `${bottom + 10}px`;
   const top = compact ? 20 : 42;
   const left = 8;
   const plotWidth = width - right - left;
@@ -353,13 +393,8 @@ function renderWorkspace() {
     ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
     ctx.fillText(chartPrice(value), width - right + 8, py + 4);
   }
-  const monthMarks = [];
-  rows.forEach((row, index) => {
-    const month = row.date.slice(5, 7);
-    if ((index === 0 || rows[index - 1].date.slice(5, 7) !== month)) monthMarks.push({ index, label: `${Number(month)}月` });
-  });
-  monthMarks.forEach(mark => {
-    const px = Math.round(xFor(mark.index, left, candleWidth)) + .5;
+  timeAxisTicks(canvas._view).forEach(mark => {
+    const px = Math.round(mark.x) + .5;
     ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, height - bottom); ctx.stroke();
     ctx.fillText(mark.label, px + 5, height - (compact ? 33 : 52));
   });
@@ -423,8 +458,6 @@ function renderWorkspace() {
 
   if (indicatorSettings.strategy_visible !== false && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view);
   if (drawingsVisible) {
-    const visibleObjects=userObjects.filter(item=>item.visible!==false&&objectVisibleAtTimeframe(item)&&(!replayActive||
-      (item.createdAtDate || bars[item.createdAtIndex??bars.length-1]?.date) <= (replayCutoffDate || bars[replayIndex].date)));
     const selectedDrawing=visibleObjects.find(item=>item.id===selectedId);
     visibleObjects.filter(item=>item!==selectedDrawing).forEach(item=>drawUserObject(ctx,canvas._view,item));
     if(selectedDrawing)drawUserObject(ctx,canvas._view,selectedDrawing);
@@ -612,17 +645,26 @@ function drawUserObject(ctx, view, object, draft = false) {
     if(object.fill){ctx.save();ctx.fillStyle=object.backgroundColor||object.color;ctx.globalAlpha=(object.backgroundAlpha??.13)*(object.alpha??1);ctx.fill();ctx.restore();registerPolygon(object.id,screens);}
     ctx.stroke();
     screens.slice(1).forEach(([x, yy], index) => registerSegment(object.id, screens[index][0], screens[index][1], x, yy));
+    const distinctFrom = (origin, candidates) => candidates.find(point => Math.hypot(point[0]-origin[0],point[1]-origin[1])>.01);
+    const first=screens[0],last=screens.at(-1);
+    ctx.save();ctx.setLineDash([]);
+    const next=distinctFrom(first,screens.slice(1));
+    if(object.startStyle==='arrow'&&next)drawArrowHead(ctx,...next,...first);
+    const previous=distinctFrom(last,screens.slice(0,-1).reverse());
+    if((object.endStyle||(object.path_version?'arrow':'none'))==='arrow'&&previous)drawArrowHead(ctx,...previous,...last);
+    ctx.restore();
   } else if (object.type === 'ray') {
     ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(plotRight, ay); ctx.stroke();
     registerSegment(object.id, ax, ay, plotRight, ay);
     if (object.showPrice !== false) {ctx.font='11px Segoe UI';ctx.textAlign='right';ctx.fillText(chartPrice(object.a.value),plotRight-6,ay-6);}
   } else if (object.type === 'rectangle') {
-    const endX=object.extendRight?plotRight:bx;
-    if (object.fill !== false) { ctx.globalAlpha = (object.backgroundAlpha ?? .13)*(object.alpha ?? 1);ctx.fillStyle=object.backgroundColor||object.color; ctx.fillRect(ax, ay, endX - ax, by - ay); }
-    ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1); ctx.strokeRect(ax, ay, endX - ax, by - ay);
+    const startX=object.extendLeft?left:Math.min(ax,bx);
+    const endX=object.extendRight?plotRight:Math.max(ax,bx);
+    if (object.fill !== false) { ctx.globalAlpha = (object.backgroundAlpha ?? .13)*(object.alpha ?? 1);ctx.fillStyle=object.backgroundColor||object.color; ctx.fillRect(startX, ay, endX - startX, by - ay); }
+    ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1); ctx.strokeRect(startX, ay, endX - startX, by - ay);
     if(object.showMiddle){ctx.save();ctx.strokeStyle=object.middleColor||object.color;ctx.lineWidth=object.middleWidth||1;
-      ctx.setLineDash(dashPattern(object.middleDash||'dashed'));ctx.beginPath();ctx.moveTo(ax,(ay+by)/2);ctx.lineTo(endX,(ay+by)/2);ctx.stroke();ctx.restore();}
-    registerRect(object.id, ax, ay, endX, by);
+      ctx.setLineDash(dashPattern(object.middleDash||'dashed'));ctx.beginPath();ctx.moveTo(startX,(ay+by)/2);ctx.lineTo(endX,(ay+by)/2);ctx.stroke();ctx.restore();}
+    registerRect(object.id, startX, ay, endX, by);
   } else if (object.type === 'fib') {
     ensureFibSettings(object);
     const startX = object.fibExtend === 'left' || object.fibExtend === 'both' ? left : Math.min(ax, bx);
@@ -777,8 +819,10 @@ function selectObject(id, x, y, refreshTree = true) {
   }
   const toolbar = document.querySelector('#selectedObject');
   toolbar.classList.add('visible');
-  toolbar.style.left = `${clamp(x + 12, 8, wrap.clientWidth - 190)}px`;
-  toolbar.style.top = `${clamp(y - (['long','short'].includes(object.type)?90:52), 54, wrap.clientHeight - 90)}px`;
+  // Keep editing controls above the price plot. A toolbar tied to the last
+  // click can cover an endpoint when that endpoint is dragged toward it.
+  toolbar.style.left = `${Math.max(8, wrap.clientWidth - 190)}px`;
+  toolbar.style.top = '0px';
   document.querySelector('#quickWidth').textContent = `${object.width || 2}px`;
   document.querySelector('.color-swatch').style.background = object.color || '#2962ff';
   if(refreshTree)updateObjectTree();
@@ -899,16 +943,19 @@ function placeDrawing(point) {
   exitDrawingMode();
 }
 
-function finishPath(point) {
+function finishPath(point = null) {
   if (activeDrawingTool !== 'path' || draftPoints.length < 2) return false;
-  const snapped = snapDrawingPoint(point);
+  const snapped = point ? snapDrawingPoint(point) : draftPoints.at(-1);
   const points = [...draftPoints];
   if (Math.abs(points.at(-1).index - snapped.index) > .2 || Math.abs(points.at(-1).value - snapped.value) > .01) points.push(snapped);
   rememberObjects();
-  const object = { id: `path-${Date.now()}`, type: 'path', a: points[0], b: points.at(-1), points, color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, createdAtIndex: replayActive ? replayIndex : bars.length - 1,
+  const object = { id: `path-${Date.now()}`, type: 'path', a: points[0], b: points.at(-1), points, color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, startStyle:'none',endStyle:'arrow',createdAtIndex: replayActive ? replayIndex : bars.length - 1,
     createdAtDate: replayActive ? replayCutoffDate || bars[replayIndex].date : bars.at(-1).date };
   Object.assign(object,structuredClone(drawingTemplates.path || {}));
-  userObjects.push(object); savePrototypeState(); updateObjectTree(); selectObject(object.id, point.x, point.y);
+  // Old polyline objects/templates keep their saved geometry. New drawings use
+  // the Path tool seen in the trader's favourites, rather than closing a shape.
+  object.path_version=1;delete object.closed;delete object.fill;
+  userObjects.push(object); savePrototypeState(); updateObjectTree(); selectObject(object.id, point?.x || 0, point?.y || 0);
   exitDrawingMode(); showToast('多段折线已保存到当前标的'); renderWorkspace(); return true;
 }
 
@@ -1266,21 +1313,30 @@ function renderToolSpecificSettings(object) {
   const host=document.querySelector('#toolSpecificSettings');
   const marker=['up','down','text'].includes(object.type);
   let extra='';
-  if(object.type==='rectangle'||object.type==='path')extra=`
+  if(object.type==='rectangle'||(object.type==='path'&&!object.path_version))extra=`
     <div class="setting-row"><label><input type="checkbox" data-setting="fill" ${object.fill===true||(object.type==='rectangle'&&object.fill!==false)?'checked':''}>背景</label><input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}"></div>
     <label>背景不透明度<input type="range" data-setting="backgroundAlpha" min="0" max="100" value="${Math.round((object.backgroundAlpha??.13)*100)}"></label>`;
   if(object.type==='rectangle')extra+=`
     <div class="setting-row"><label><input type="checkbox" data-setting="showMiddle" ${object.showMiddle?'checked':''}>中线</label><input type="color" data-setting="middleColor" value="${object.middleColor||object.color}">
     <select data-setting="middleWidth" aria-label="中线线宽">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(object.middleWidth||1)?'selected':''}>${n}px</option>`).join('')}</select>
-    <select data-setting="middleDash" aria-label="中线线型">${[['solid','实线'],['dashed','虚线'],['dotted','点线']].map(([key,label])=>`<option value="${key}" ${(object.middleDash||'dashed')===key?'selected':''}>${label}</option>`).join('')}</select></div>
-    <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>向右延伸</label>`;
+    <select data-setting="middleDash" aria-label="中线线型">${[['solid','实线'],['dashed','虚线'],['dotted','点线']].map(([key,label])=>`<option value="${key}" ${(object.middleDash||'dashed')===key?'selected':''}>${label}</option>`).join('')}</select></div>`;
   if(object.type==='ray')extra='<label><input type="checkbox" data-setting="showPrice" '+(object.showPrice===false?'':'checked')+'>价格标签</label>';
-  if(object.type==='path')extra+=`<label><input type="checkbox" data-setting="closed" ${object.closed?'checked':''}>封闭图形</label><p class="notice">${object.points?.length||2} 个转折点，可逐点拖动；双击结束绘制。</p>`;
+  if(object.type==='path')extra+=`${!object.path_version?`<label><input type="checkbox" data-setting="closed" ${object.closed?'checked':''}>兼容封闭图形</label>`:''}
+    <div class="setting-row"><span>起点／终点</span>${['startStyle','endStyle'].map(key=>`<select data-setting="${key}" aria-label="${key==='startStyle'?'起点':'终点'}样式">${[['none','普通'],['arrow','箭头']].map(([value,label])=>`<option value="${value}" ${(object[key]||(key==='endStyle'&&object.path_version?'arrow':'none'))===value?'selected':''}>${label}</option>`).join('')}</select>`).join('')}</div>
+    <p class="notice">路径 · ${object.points?.length||2} 个转折点，可逐点拖动；双击或 Esc 结束绘制。</p>`;
   if(object.type==='ruler')extra='<label><input type="checkbox" data-setting="showLabel" '+(object.showLabel===false?'':'checked')+'>价格、涨跌幅和K线数</label>';
   if(object.type==='text')extra=`<textarea data-setting="text" aria-label="笔记内容">${escapeChartHtml(object.text||'')}</textarea>`;
-  host.innerHTML=`<div class="tool-setting-stack">${marker?paletteSettings(object):commonLineSettings(object)}
+  const extensionLabel=()=>object.extendLeft?(object.extendRight?'双向延伸':'向左延伸'):object.extendRight?'向右延伸':'不要扩大';
+  const extension=object.type==='rectangle'?`<div class="setting-row"><span>延伸</span><details class="position-stats rectangle-extend"><summary><span data-extension-label>${extensionLabel()}</span><span>⌄</span></summary><div class="stats-menu">
+    <label><input type="checkbox" data-setting="extendLeft" ${object.extendLeft?'checked':''}>向左延伸</label>
+    <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>向右延伸</label>
+    </div></details></div>`:'';
+  host.innerHTML=`<div class="tool-setting-stack">${extension}${marker?paletteSettings(object):commonLineSettings(object,object.type==='rectangle'?'边框':'线条')}
     <label>不透明度<input type="range" data-setting="alpha" min="0" max="100" value="${Math.round((object.alpha??1)*100)}"></label>${extra}</div>`;
   bindDrawingStyle(host,object);
+  host.querySelectorAll('.rectangle-extend input').forEach(control=>control.addEventListener('change',()=>{
+    host.querySelector('[data-extension-label]').textContent=extensionLabel();
+  }));
 }
 
 function renderCoordinateSettings(object) {
@@ -1961,6 +2017,7 @@ window.addEventListener('keydown', event => {
   if (event.key === 'Escape') {
     const menus=document.querySelectorAll('.chart-context-menu.show');
     if(menus.length){menus.forEach(menu=>menu.classList.remove('show'));return;}
+    if(!modalOpen&&!editingText&&finishPath()){event.preventDefault();return;}
     cancelChartGesture();
     draftAnchor = null; draftCursor = null; draftPoints = []; activeDrawingTool = null; hideZoomSelection();
     if(objectSettingsSnapshot)closeObjectSettings(true);else closeWorkspaceModal();

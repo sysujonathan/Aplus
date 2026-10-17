@@ -44,6 +44,12 @@ def _ruler_readout(obj):
     return f'{delta:+.3f} ({delta / start * 100:+.2f}%)'
 
 
+def _path_ends(obj):
+    web = obj.get('web') or {}
+    return (web.get('startStyle') == 'arrow',
+            web.get('endStyle', 'arrow' if web.get('path_version') else 'none') == 'arrow')
+
+
 def resample_daily(frame, timeframe):
     """Create display-only weekly/monthly OHLC from real daily bars."""
     if timeframe == 'daily':
@@ -437,7 +443,10 @@ class ChartWorkspaceDialog:
                                     font=('Segoe UI Symbol', 18, 'bold'), tags=tag)
         elif kind == 'path':
             flat = [n for point in points for n in point]
-            self.canvas.create_line(*flat, fill=color, width=width, smooth=False, tags=tag)
+            start, end = _path_ends(obj)
+            self.canvas.create_line(*flat, fill=color, width=width, smooth=False,
+                                    arrow=tk.BOTH if start and end else tk.FIRST if start else tk.LAST if end else tk.NONE,
+                                    tags=tag)
         elif kind == 'channel':
             a, b, c = points; dx, dy = c[0]-a[0], c[1]-a[1]
             self.canvas.create_line(*a, *b, fill=color, width=width, tags=tag)
@@ -981,7 +990,15 @@ class ChartWorkspaceDialog:
             elif kind=='text': draw.text((pts[0][0]+4,pts[0][1]+4),obj.get('text') or '文字',fill=color)
             elif kind=='rectangle': draw.rectangle((*pts[0],*pts[1]),outline=color,width=width,fill='#33124466')
             elif kind in ('up','down'): draw.text(pts[0],'▲' if kind=='up' else '▼',fill=color,anchor='mm')
-            elif kind=='path': draw.line([tuple(p) for p in pts],fill=color,width=width,joint='curve')
+            elif kind=='path':
+                draw.line([tuple(p) for p in pts],fill=color,width=width,joint='curve')
+                start, end = _path_ends(obj)
+                for enabled, tip, previous in ((start,pts[0],pts[1]),(end,pts[-1],pts[-2])):
+                    if enabled:
+                        angle=math.atan2(tip[1]-previous[1],tip[0]-previous[0])
+                        for offset in (-.45,.45):
+                            wing=(tip[0]-12*math.cos(angle+offset),tip[1]-12*math.sin(angle+offset))
+                            draw.line((tuple(tip),wing),fill=color,width=width)
             elif kind=='channel':
                 a,b,c=pts; dx,dy=c[0]-a[0],c[1]-a[1]
                 draw.line((a,b),fill=color,width=width); draw.line((c,(b[0]+dx,b[1]+dy)),fill=color,width=width)
