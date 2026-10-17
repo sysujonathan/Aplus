@@ -39,12 +39,17 @@ class WatchPanel(ttk.Frame):
         self._drag_origin = None
         self._dragging = False
 
+        heading = ttk.Frame(self)
+        heading.pack(fill=tk.X, pady=(0, 6))
+        self.add_button = ttk.Button(heading, text='+', width=3, command=self._add_manual,
+                                     bootstyle='primary-outline')
+        self.add_button.pack(side=tk.RIGHT)
         ttk.Label(
-            self,
+            heading,
             text="关注列表",
             font=("Microsoft YaHei", 10, "bold"),
             foreground=TEXT,
-        ).pack(anchor=tk.W, padx=2, pady=(0, 6))
+        ).pack(side=tk.LEFT, padx=2)
 
         self.tree_host = ttk.Frame(self)
         self.tree_host.pack(fill=tk.BOTH, expand=True)
@@ -117,23 +122,29 @@ class WatchPanel(ttk.Frame):
         from .data import code_names, latest_market_dataset
 
         names = code_names(self.store)
+        names = {**{r['key'][len('watch_name:'):]: r['value'] for r in self.store.rows(
+            "SELECT key,value FROM meta WHERE key LIKE 'watch_name:%'")}, **names}
         for number, r in enumerate(rows, 1):
             code = r["code"]
             state = r["state"] if r["state"] else "关注中"
             timeframe = r["timeframe"] or "daily"
             # 关注的是股票；旧 observation 只保存当初为什么关注。K 线始终
             # 指向本项目正式行情源的最新快照，且不会读取工程 A 数据源。
-            market = latest_market_dataset(self.store, code, timeframe=timeframe)
+            from workbench.watch_history import chart_source
+            manual = not r['observation_id']
+            source = chart_source(self.store, code) if manual else None
+            market = latest_market_dataset(self.store, code, timeframe=timeframe, source=source)
             item = {
                 "code": code,
                 "name": names.get(code, ""),
                 "observation_id": r["observation_id"],
-                "source": (market or {}).get("source") or r["source"] or "unknown",
+                "source": (market or {}).get("source") or source or r["source"] or "unknown",
                 "strategy": r["strategy"],
                 "timeframe": timeframe,
                 "market_dataset_id": (market or {}).get("id"),
                 "market_asof": (market or {}).get("end"),
                 "anchor_asof": r["asof"],
+                "manual": manual,
             }
             self._display_rows.append(item)
             iid = self.tree.insert(
@@ -141,8 +152,8 @@ class WatchPanel(ttk.Frame):
                 values=(
                     number,
                     numeric_stock_code(code),
-                    item["name"],
-                    r["strategy"] or "",
+                    item["name"] + (' · 手动' if manual else ''),
+                    r["strategy"] or "手动关注",
                     (r["asof"] or "")[:10],
                     state,
                     r["wnotes"] or "",
@@ -155,6 +166,26 @@ class WatchPanel(ttk.Frame):
     def rows(self):
         """按关注列表当前顺序提供 K 线分页数据。"""
         return [dict(row) for row in self._display_rows]
+
+    def select_code(self, code):
+        for iid, value in self.tree._codes.items():
+            if value == code:
+                self.tree.selection_set(iid)
+                self.tree.focus(iid)
+                self.tree.see(iid)
+                return True
+        return False
+
+    def _add_manual(self):
+        if self.store is not None:
+            ManualWatchDialog(self, self.store, self._manual_added)
+
+    def _manual_added(self, code):
+        self.reload()
+        self.select_code(code)
+        if self.on_select:
+            row = next(r for r in self._display_rows if r['code'] == code)
+            self.on_select(code, row['observation_id'])
 
     def select_observation(self, observation_id):
         for iid, value in self.tree._obs.items():
@@ -259,7 +290,10 @@ class WatchPanel(ttk.Frame):
                 label=st, command=lambda s=st: self._change_state(code, obs_id, s)
             )
         state_label = "计划状态…"
-        menu.add_cascade(label=state_label, menu=state_menu)
+        if obs_id:
+            menu.add_cascade(label=state_label, menu=state_menu)
+        else:
+            menu.add_command(label='手动关注 · 仅看K图', state=tk.DISABLED)
         menu.add_separator()
         menu.add_command(label="结束关注", command=lambda: self._end_watch(code))
         menu.tk_popup(event.x_root, event.y_root)
@@ -349,6 +383,77 @@ class WatchPanel(ttk.Frame):
             messagebox.showerror("结束关注失败", str(exc), parent=self)
             return
         self.reload()
+
+
+class ManualWatchDialog(tk.Toplevel):
+    """A security and optional note, never a trading-plan form."""
+
+    def __init__(self, parent, store, on_added):
+        super().__init__(parent)
+        from .data import StockNameLookup, code_names
+        self.store, self.on_added = store, on_added
+        self.lookup = StockNameLookup(code_names(store))
+        self.title('添加关注')
+        self.transient(parent.winfo_toplevel())
+        self.resizable(False, False)
+        self.query = tk.StringVar()
+        self.notes = tk.StringVar()
+        body = ttk.Frame(self, padding=16)
+        body.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(body, text='输入股票 / ETF 代码或名称').pack(anchor=tk.W)
+        self.entry = ttk.Entry(body, textvariable=self.query, width=38)
+        self.entry.pack(fill=tk.X, pady=8)
+        self.matches = tk.Listbox(body, height=5, exportselection=False)
+        self.matches.pack(fill=tk.X)
+        self.matches.bind('<<ListboxSelect>>', self._choose)
+        self.entry.bind('<KeyRelease>', self._suggest)
+        ttk.Label(body, text='备注（可不填）').pack(anchor=tk.W, pady=(12, 4))
+        ttk.Entry(body, textvariable=self.notes).pack(fill=tk.X)
+        self.error = tk.StringVar(value='只加入关注，不扫描、不建立交易计划。')
+        ttk.Label(body, textvariable=self.error, wraplength=360).pack(anchor=tk.W, pady=10)
+        actions = ttk.Frame(body)
+        actions.pack(fill=tk.X)
+        ttk.Button(actions, text='加入关注', command=self._save).pack(side=tk.RIGHT)
+        ttk.Button(actions, text='取消', command=self.destroy, bootstyle='secondary').pack(side=tk.RIGHT, padx=8)
+        self.bind('<Return>', lambda _event: self._save())
+        self.bind('<Escape>', lambda _event: self.destroy())
+        self.entry.focus_set()
+        self._suggestions = []
+
+    def _suggest(self, _event=None):
+        query = self.query.get().strip()
+        if query.isdigit():
+            self._suggestions = [(c, n) for c, n in self.lookup.names.items()
+                                 if c.split('.')[-1].startswith(query)][:8] if query else []
+        else:
+            self._suggestions = self.lookup.suggest(query)
+        self.matches.delete(0, tk.END)
+        for code, name in self._suggestions:
+            self.matches.insert(tk.END, code + ' ' + name)
+
+    def _choose(self, _event=None):
+        selected = self.matches.curselection()
+        if selected:
+            code, name = self._suggestions[selected[0]]
+            self.query.set(code + ' ' + name)
+
+    def _save(self):
+        from workbench.market import code_of
+        query = self.query.get().strip()
+        try:
+            try:
+                code = code_of(query.split()[0] if query else '')
+            except ValueError:
+                exact = [(c, n) for c, n in self.lookup.names.items() if n == query]
+                if len(exact) != 1:
+                    raise ValueError('请输入六位代码，或从匹配列表中选择一个标的')
+                code = exact[0][0]
+            code = self.store.add_manual_watch(code, self.lookup.names.get(code, ''), self.notes.get())
+        except ValueError as exc:
+            self.error.set(str(exc))
+            return
+        self.on_added(code)
+        self.destroy()
 
 
 class _PlanDialog:

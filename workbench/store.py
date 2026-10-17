@@ -443,6 +443,24 @@ class Store:
             raise ValueError('关注记录不存在')
         self.event(None, '更新关注' if active else '结束关注', code=code, notes=notes)
 
+    def add_manual_watch(self, code, name='', notes=''):
+        """Watch a security without inventing an observation or a trade plan."""
+        from .market import code_of
+        code = code_of(code)
+        if any(not isinstance(v, str) or len(v) > limit or any(ord(c) < 32 for c in v)
+               for v, limit in ((name, 80), (notes, 500))):
+            raise ValueError('名称或备注过长，或含不可见字符')
+        with self.atomic_write():
+            # Empty observation_id is an explicit manual origin, not a fake
+            # scan. Re-adding preserves an existing strategy anchor and notes.
+            self.execute('INSERT INTO watchlist VALUES(?,?,?,1,?,?) ON CONFLICT(code) DO UPDATE SET '
+                         'active=1,updated=excluded.updated', (code, '', notes.strip(), now(), now()))
+            if name.strip():
+                self.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                             ('watch_name:' + code, name.strip()))
+            self.event(None, '手动加入关注', code=code)
+        return code
+
     def list_accounts(self, active_only=True):
         sql = "SELECT * FROM accounts"
         if active_only:
