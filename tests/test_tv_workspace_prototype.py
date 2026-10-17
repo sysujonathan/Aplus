@@ -15,6 +15,16 @@ ROOT = Path(__file__).resolve().parents[1]
 PROTOTYPE = ROOT / 'docs' / 'prototypes' / 'tv-workspace'
 
 
+def test_production_tool_geometry_and_blind_rendering_in_javascript():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('JavaScript 行为回归需要 Node.js')
+    result = subprocess.run([node, str(ROOT / 'tests' / 'chart_tools_regression.cjs')],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)['ok']
+
+
 def test_production_cross_timeframe_behavior_in_javascript(tmp_path):
     node = shutil.which('node')
     if not node:
@@ -89,12 +99,13 @@ def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():
     assert script.count('"date":"2026-') >= 70
     assert '2025-10-20' in history and '2026-06-18' in history
     assert "ctx.setLineDash([6, 4])" in script
-    assert "ctx.strokeStyle = '#2962ff'" in script
-    assert "ctx.fillStyle = '#fff'" in script
+    assert "ctx.strokeStyle = '#cbd5e1'" in script
+    assert "callout(ctx, 'Gap'," in script
     assert '--blue: #2962ff' in style
     assert '5分钟行情接入后可用' in (PROTOTYPE / 'index.html').read_text(encoding='utf-8')
     assert "ctx.setLineDash([6, 4])" in interactions
-    assert "ctx.strokeStyle = '#2962ff'" in interactions
+    assert "ctx.strokeStyle = '#cbd5e1'" in interactions
+    assert "callout(ctx, 'Gap'," in interactions
 
 
 def test_prototype_contains_tradingview_interaction_contract():
@@ -117,7 +128,8 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert "mode: region.handle ? 'object-handle' : 'object-move'" in script
     assert 'snapDrawingPoint' in script and 'row.open, row.high, row.low, row.close' in script
     assert 'exitDrawingMode()' in script
-    assert 'drawingPalette' in script and 'data-color=' in script
+    assert '选择完整色板' in script
+    assert 'chartPaletteColors' in (PROTOTYPE / 'chart-palette.js').read_text(encoding='utf-8')
     assert "object.type === 'up' || object.type === 'down'" in script
     assert 'ClipboardItem' in script and 'navigator.clipboard.write' in script
     assert 'DEFAULT_VISIBLE_BARS = 204' in script

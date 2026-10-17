@@ -122,19 +122,14 @@ function drawOverlays(ctx, v) {
   ctx.strokeStyle = '#f23645'; ctx.lineWidth = 1.3;
   ctx.beginPath(); ctx.moveTo(px(20), y(3.43)); ctx.lineTo(px(70), y(5.34)); ctx.stroke();
 
-  // Original GAP H2 language restored: blue dashed outline, no fill, solid floor.
+  // Strategy annotations stay neutral, separate from candle and drawing colors.
   const gapLeft = Math.max(left, px(57) - candleWidth * .55);
   const gapRight = Math.min(plotRight, px(64) + candleWidth * .55);
   ctx.save();
-  ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2; ctx.globalAlpha = .72;
+  ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 1.2; ctx.globalAlpha = .6;
   ctx.setLineDash([6, 4]); ctx.strokeRect(gapLeft, y(4.56), gapRight - gapLeft, y(4.38) - y(4.56));
   ctx.setLineDash([]); ctx.globalAlpha = .6;
   ctx.beginPath(); ctx.moveTo(gapLeft, y(4.38)); ctx.lineTo(plotRight, y(4.38)); ctx.stroke();
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1;
-  ctx.fillRect((gapLeft + gapRight) / 2 - 19, y(4.47) - 10, 38, 20);
-  ctx.strokeRect((gapLeft + gapRight) / 2 - 19, y(4.47) - 10, 38, 20);
-  ctx.fillStyle = '#2962ff'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText('Gap', (gapLeft + gapRight) / 2, y(4.47) + 4);
   ctx.restore();
 
   // Neutral strategy callouts and leader lines.
@@ -142,6 +137,7 @@ function drawOverlays(ctx, v) {
   callout(ctx, 'H1', px(58), y(4.45), px(55), y(4.72));
   callout(ctx, 'H2', px(70), y(5.19), px(67), y(5.48), true);
   callout(ctx, 'Gap Floor', gapLeft, y(4.38), gapLeft - 32, y(4.18));
+  callout(ctx, 'Gap', (gapLeft + gapRight) / 2, y(4.47), (gapLeft + gapRight) / 2 + 28, y(4.56) - 18);
 
   // Fibonacci retracement kept as a trader drawing layer.
   const fibStart = px(21), fibEnd = Math.min(plotRight, px(60));
@@ -177,35 +173,63 @@ function drawOverlays(ctx, v) {
 }
 
 function callout(ctx, label, x, y, tx, ty, dashed = false) {
+  const view = canvas._view;
+  if (view && (x<view.left || x>view.width-view.right || y<view.top || y>view.height-view.bottom)) return;
   ctx.save();
+  ctx.font = '12px Segoe UI';
+  const width = ctx.measureText(label).width + 10;
+  if(view){
+    tx=Math.max(view.left+width/2+4,Math.min(view.width-view.right-width/2-4,tx));
+    ty=Math.max(view.top+22,Math.min(view.height-view.bottom-5,ty));
+    for(let n=0;n<12;n++){
+      const box={left:tx-width/2,top:ty-17,right:tx+width/2,bottom:ty+3};
+      if(!strategyLabelBoxes.some(other=>box.left<other.right+4&&box.right>other.left-4&&box.top<other.bottom+4&&box.bottom>other.top-4)){
+        strategyLabelBoxes.push(box);break;
+      }
+      if(ty-24>view.top+22)ty-=24;
+      else tx=Math.max(view.left+width/2+4,tx-width-8);
+    }
+  }
   ctx.strokeStyle = '#cbd5e1'; ctx.fillStyle = '#cbd5e1'; ctx.lineWidth = .9;
   if (dashed) ctx.setLineDash([4, 4]);
-  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke();
+  const distance=Math.hypot(tx-x,ty-y)||1,gap=dashed||label==='Gap'?5:0;
+  ctx.beginPath(); ctx.moveTo(x+(tx-x)*gap/distance,y+(ty-y)*gap/distance); ctx.lineTo(tx, ty); ctx.stroke();
   ctx.setLineDash([]); ctx.font = '12px Segoe UI'; ctx.textAlign = 'center';
-  const width = ctx.measureText(label).width + 10;
-  ctx.fillStyle = 'rgba(31,38,48,.94)'; ctx.fillRect(tx - width / 2, ty - 17, width, 20);
+  ctx.fillStyle = '#171717'; ctx.fillRect(tx - width / 2, ty - 17, width, 20);
   ctx.fillStyle = '#cbd5e1'; ctx.fillText(label, tx, ty - 3);
   ctx.restore();
 }
 
 function priceTag(ctx, value, py, color, width, right) {
   ctx.fillStyle = color; ctx.fillRect(width - right, py - 10, right, 20);
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(value, width - right / 2, py + 4);
+  const hex=String(color).replace('#','');
+  const light=hex.length===6 && .299*parseInt(hex.slice(0,2),16)+.587*parseInt(hex.slice(2,4),16)+.114*parseInt(hex.slice(4,6),16)>150;
+  ctx.fillStyle = light?'#111':'#fff'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(value, width - right / 2, py + 4);
 }
 
 function drawLastPrice(ctx, value, y, width, right) {
   const py = y(value);
   ctx.save(); ctx.strokeStyle = '#e6e6e6'; ctx.globalAlpha = .85; ctx.setLineDash([2, 4]);
   ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(width - right, py); ctx.stroke(); ctx.restore();
-  priceTag(ctx, value.toFixed(2), py, '#f3f3f3', width, right);
-  ctx.fillStyle = '#111'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(value.toFixed(2), width - right / 2, py + 4);
+  const formatted=typeof chartPrice==='function'?chartPrice(value):value.toFixed(2);
+  priceTag(ctx, formatted, py, '#f3f3f3', width, right);
+  ctx.fillStyle = '#111'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(formatted, width - right / 2, py + 4);
 }
 
 function updateReadout(row) {
-  document.querySelector('#openValue').textContent = row.open.toFixed(2);
-  document.querySelector('#highValue').textContent = row.high.toFixed(2);
-  document.querySelector('#lowValue').textContent = row.low.toFixed(2);
-  document.querySelector('#closeValue').textContent = row.close.toFixed(2);
+  const format=value=>typeof chartPrice==='function'?chartPrice(value):Number(value).toFixed(2);
+  document.querySelector('#openValue').textContent = format(row.open);
+  document.querySelector('#highValue').textContent = format(row.high);
+  document.querySelector('#lowValue').textContent = format(row.low);
+  document.querySelector('#closeValue').textContent = format(row.close);
+  const index = bars.indexOf(row);
+  const previous = index > 0 ? bars[index - 1].close : row.open;
+  const change = row.close - previous;
+  const node = document.querySelector('.ohlc .positive, .ohlc .negative');
+  if (node) {
+    node.textContent = `${change >= 0 ? '+' : ''}${format(change)} (${previous ? (change / previous * 100).toFixed(2) : '0.00'}%)`;
+    node.className = change >= 0 ? 'positive' : 'negative';
+  }
 }
 
 function showToast(message) {
