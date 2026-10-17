@@ -143,6 +143,12 @@ def check_native_refresh():
     service = SimpleNamespace(cancel=Mock())
     bar = ToolBar(root, store=st, service=service, on_date_change=lambda *args: dates.append(market_source(st)))
     bar.pack(fill='x'); root.update()
+    # Initial status is now asynchronous too. Finish it before isolating the
+    # subsequent source-switch requests; don't count it as an extra switch.
+    initial_deadline = time.monotonic()+3
+    while bar._status_snapshot is None and time.monotonic()<initial_deadline:
+        root.update(); time.sleep(.01)
+    assert bar._status_snapshot is not None
     spec = dumps(multi_spec())
     st.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',('parent','premarket','running','now',spec))
     bar._job_id, bar._job_kind = 'parent','一键盘前'
@@ -172,7 +178,12 @@ def check_native_refresh():
         ticks.append(time.monotonic()); root.after(10,tick)
     root.after(10,tick)
     try:
-        with patch('gui.background_status.load_status',side_effect=slow_status):
+        # Startup already constructed the reader with its loader binding.
+        # Inject the slow audit into that same reader, keeping the real queue,
+        # writer wait, cancellation and Tk polling behavior under test.
+        with patch('gui.background_status.load_status',side_effect=slow_status), \
+             patch.object(bar._status_reader, 'load',
+                          side_effect=lambda context, check: slow_status(st.root, context, check)):
             bar.source_var.set('TickFlow')
             bar._source_changed()
             assert bar._source_pending and writer.in_transaction

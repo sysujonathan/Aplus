@@ -183,7 +183,9 @@ class ToolBar(ttk.Frame):
         self._auto_sync_elapsed = None
         self._sync_elapsed = None
         self._scan_elapsed = None
-        self._async_status_mode = False
+        # The first screen must not wait for thousands of status receipts.
+        # Display summaries never replace the Service's scan-time audit.
+        self._async_status_mode = True
         self._source_pending = False
         self._source_reader = self._status_reader = None
         self._job_reader = self._job_poll = None
@@ -423,7 +425,7 @@ class ToolBar(ttk.Frame):
         self._load_date_options()
         self._select_latest_date()
         # 常驻行情健康状态（只读，不依赖任务）
-        self._load_market_status()
+        self._initial_status = self.after_idle(self._load_market_status)
 
         self._status = tk.StringVar(value=self._mkt_var.get())
         # 右上角始终保留数据版本和分项用时；底部只承担当前进度、结果和临时提示。
@@ -467,6 +469,9 @@ class ToolBar(ttk.Frame):
     def _cancel_responsive(self, event):
         if event.widget is not self:
             return
+        if getattr(self, '_initial_status', None):
+            self.after_cancel(self._initial_status)
+            self._initial_status = None
         for value, trace in self._layout_traces:
             value.trace_remove("write", trace)
         self._layout_traces = []

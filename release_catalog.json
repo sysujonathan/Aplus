@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "build": {
-    "version": "2026.10.17.51",
-    "pr": 51,
+    "version": "2026.10.17.53",
+    "pr": 53,
     "date": "2026-10-17"
   },
   "history": [
@@ -612,18 +612,19 @@
       "pr": 49,
       "version": "2026.10.15.49",
       "date": "2026-10-15",
-      "status": "preview",
+      "status": "released",
       "title": "接入高保真TV图表工作区",
       "notes": [
-        "独立图表工作区改动，尚未合并；本分支未包含该PR实现。"
+        "高保真TV图表工作区已合入主线，候选、关注与持仓共用画线、周期切换及本机提醒；分析草稿与交易记录分离。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/49"
+      "url": "https://github.com/sysujonathan/Aplus/pull/49",
+      "commit": "9ae9b9e4398415fadd1e051750d9db2058bdd4e6"
     },
     {
       "pr": 50,
       "version": "2026.10.15.50",
       "date": "2026-10-15",
-      "status": "preview",
+      "status": "released",
       "title": "TickFlow快速续做、断网受限恢复与腾讯历史更新退出",
       "notes": [
         "普通尾部续做走批量增量，仅实际中间缺日定向补拉；减少重复读文件、读取审计提交和大清单进度写入。",
@@ -631,20 +632,47 @@
         "部分扫描明确标注行情未齐未扫描，不混同无信号；已有判断继续复用，策略、历史观察和交易记录不改。",
         "停用腾讯历史行情更新与补拉，旧行情、扫描和研究仍可读取；腾讯持仓即时报价不变。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/50"
+      "url": "https://github.com/sysujonathan/Aplus/pull/50",
+      "commit": "704334c7b1e52baef444e468e568504f3ceb7dfe"
     },
     {
       "pr": 51,
       "version": "2026.10.17.51",
       "date": "2026-10-17",
-      "status": "preview",
+      "status": "released",
       "title": "恢复GAP H2灰白标注与深色标签",
       "notes": [
         "GAP区域、Floor、标签与引线恢复统一灰白色、深色标签底，去除蓝字白底框。",
         "保留缺口无填充几何、形态日期和计划价位，新增中性色及区域中心锚点回归。",
-        "本项单独评审，TV主工作区与交互迭代另行验收；尚未合并，不作为已发布功能。"
+        "本项已合入主线；TV主工作区与交互迭代独立追溯，不改变策略计算。"
       ],
-      "url": "https://github.com/sysujonathan/Aplus/pull/51"
+      "url": "https://github.com/sysujonathan/Aplus/pull/51",
+      "commit": "bd6b1951dc86a4d4bc73e93cb71b23987734f4f9"
+    },
+    {
+      "pr": 52,
+      "version": "2026.10.17.52",
+      "date": "2026-10-17",
+      "status": "preview",
+      "title": "默认主图接入完整TV分析工作区与逐项验收",
+      "notes": [
+        "独立草稿PR，尚未合入主线；本次启动与手动关注改动不包含该分支实现。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/52"
+    },
+    {
+      "pr": 53,
+      "version": "2026.10.17.53",
+      "date": "2026-10-17",
+      "status": "preview",
+      "title": "启动首屏提速、默认最大化与手动关注K图",
+      "notes": [
+        "启动默认最大化，完整性后台只读核对，盘后、迭代与交易管理页面按需加载；不放宽实际扫描前的检查。",
+        "关注列表增加加号，按代码或名称添加股票／ETF与可选备注，没有扫描信号也能看K图，不新增交易计划。",
+        "优先使用同源本地行情，缺少时只获取当前标的；独立K图缓存不进入盘前行情仓、扫描资格或交易账本。",
+        "按需获取仍遵守全局冷却、单连接和请求间隔；业务任务优先，取消旧取图并在后台等待连接安全释放。"
+      ],
+      "url": "https://github.com/sysujonathan/Aplus/pull/53"
     }
   ]
 }

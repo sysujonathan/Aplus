@@ -37,6 +37,9 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         ) == "center"
         from gui.chart_renderer import render_chart
         image = render_chart(h2_bars, {}, '', {})
+        # Production now starts maximized. Restore before exercising exact
+        # geometry sizes, otherwise Windows ignores the requested client size.
+        window.state('normal')
         window.geometry('1600x1000')
         window.update()
         for count in (1,4,6,9):
