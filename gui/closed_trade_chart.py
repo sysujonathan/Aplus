@@ -47,10 +47,14 @@ def render_closed_chart(data, *, size=None, viewport=(None, 0, 1.0)):
 
 
 class ClosedTradeChartDialog:
-    def __init__(self, parent, store, row, *, data=None):
+    def __init__(self, parent, store, row, *, data=None, interactive=True):
         # Fail before creating a modal window, so the caller can show an error.
         self.data = load_closed_chart(store, row) if data is None else data
         self.store = store
+        self._interactive = interactive
+        self._embedded = None
+        self._embedded_data = None
+        self._closing_chart = False
         self.top = tk.Toplevel(parent)
         self.top.title(f'K 线买卖点 · {self.data["name"]} {self.data["code"]}')
         self.top.configure(bg=APP_BG)
@@ -60,6 +64,9 @@ class ClosedTradeChartDialog:
         self.top.geometry(f'{min(1200, self.top.winfo_screenwidth()-80)}x'
                           f'{min(800, self.top.winfo_screenheight()-100)}')
         self.top.minsize(720, 480)
+        if interactive and self.top.tk.call('tk', 'windowingsystem') == 'win32':
+            # Keep candles usable on high-DPI displays; users can restore freely.
+            self.top.state('zoomed')
         self.top.grab_set()
         self._after = None
         self._photo = None
@@ -131,6 +138,8 @@ class ClosedTradeChartDialog:
         self.navigation.bars, self.navigation.offset, self.navigation.price_scale = self._initial_viewport
 
     def reset_view(self, _event=None):
+        if self._embedded is not None and self._embedded.navigate():
+            return 'break'
         self.navigation.reset(False)
         self._set_initial_view()
         self.schedule()
@@ -141,6 +150,8 @@ class ClosedTradeChartDialog:
         if not selected:
             return
         day = self.data["events"][int(selected[0])]["date"]
+        if self._embedded is not None and self._embedded.navigate(day):
+            return
         frame = self.data["frame"]
         if not frame.date.eq(day).any():
             return
@@ -160,12 +171,44 @@ class ClosedTradeChartDialog:
         if min(size) < 100:
             return
         try:
+            from .chart_embed import EmbeddedChartHost
+            if self._interactive and EmbeddedChartHost.available():
+                self._show_interactive()
+                return
             image = render_closed_chart(self.data, size=size, viewport=self.navigation.viewport)
             self._photo = ImageTk.PhotoImage(image, master=self.top)
             self.chart.configure(image=self._photo, text="")
             self.navigation.accept(image)
+            self._show_interactive()
         except Exception as exc:
             self.chart.configure(image="", text=f"K 线绘制失败：{exc}")
+
+    def _workspace_context(self):
+        return dict(frame=self.data['frame'],
+            record={**self.data.get('dataset', {}), 'timeframe': 'daily'},
+            code=self.data['code'], name=self.data['name'], timeframe='daily',
+            holding_levels=self.data.get('levels', ()), replay_events=self.data.get('events', ()),
+            context_kind='holding' if self.data.get('holding') else 'closed')
+
+    def _show_interactive(self):
+        if not self._interactive or self._embedded_data is self.data:
+            return
+        from .chart_embed import EmbeddedChartHost
+        if not EmbeddedChartHost.available():
+            self.readout.set('交互主图不可用，当前为兼容预览；请核对 WebView2 环境')
+            return
+        try:
+            if self._embedded is None:
+                self._embedded = EmbeddedChartHost(self.chart, self.store,
+                    self._embedded_error)
+            self._embedded.show(self._workspace_context())
+            self._embedded_data = self.data
+        except Exception as exc:
+            self._embedded_error(str(exc))
+
+    def _embedded_error(self, error):
+        self.readout.set('交互主图未就绪：' + error + '；可重开图表重试')
+        self.chart.configure(image='', text='交互图表加载失败；关闭后重开可重试。\n' + error)
 
     def _destroyed(self, event):
         if event.widget is self.top and self._after:
@@ -174,25 +217,42 @@ class ClosedTradeChartDialog:
 
     def open_workspace(self):
         from .chart_workspace import open_chart_workspace
-        open_chart_workspace(self.top, self.store, frame=self.data['frame'],
-            record={**self.data.get('dataset', {}), 'timeframe': 'daily'},
-            code=self.data['code'], name=self.data['name'], timeframe='daily',
-            holding_levels=self.data.get('levels', ()), replay_events=self.data.get('events', ()),
-            context_kind='holding' if self.data.get('holding') else 'closed',
+        open_chart_workspace(self.top, self.store, **self._workspace_context(),
             title=f"A++ 图表工作区 · {self.data['name']} {self.data['code']}")
 
     def close(self):
-        self.top.destroy()
+        if self._closing_chart:
+            return
+        self._closing_chart = True
+        if self._embedded is None or self._embedded.closed():
+            self.top.destroy()
+            return
+        self._embedded.request_close()
+        import time
+        deadline = time.monotonic() + 15
+        def check():
+            if not self.top.winfo_exists():
+                return
+            if self._embedded.closed():
+                self._embedded.cleanup()
+                self.top.destroy()
+            elif time.monotonic() >= deadline:
+                self._closing_chart = False
+                self.readout.set('图表尚未确认保存，窗口已保留；请检查后再关闭')
+            else:
+                self.top.after(100, check)
+        check()
 
 
 class HoldingTradeChartDialog(ClosedTradeChartDialog):
-    def __init__(self, parent, store, row, *, quote=None, data=None):
+    def __init__(self, parent, store, row, *, quote=None, data=None, interactive=True):
         from workbench.holding_chart import load_holding_chart
         self._reference_cancel = threading.Event()
         self._reference_after = None
         self._reference_results = queue.Queue()
         super().__init__(parent, store, row,
-                         data=data if data is not None else load_holding_chart(store, row, quote=quote))
+                         data=data if data is not None else load_holding_chart(store, row, quote=quote),
+                         interactive=interactive)
         self.top.title(f'持仓图 · {self.data["name"]} {self.data["code"]}')
         if self.data.get("reference_needed"):
             self._start_reference()

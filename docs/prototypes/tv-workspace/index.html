@@ -14,6 +14,14 @@
     <symbol id="i-path" viewBox="0 0 24 24"><path d="M4 18c4-9 7 0 11-8 1-2 3-3 5-4"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="6" r="1.5"/></symbol>
     <symbol id="i-polyline" viewBox="0 0 28 28"><path d="M2 21 9 14l7 5 10-11"/><circle cx="9" cy="14" r="2"/><circle cx="16" cy="19" r="2"/><path d="M21 8h5v5"/></symbol>
     <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v14M9 19h6"/></symbol>
+    <symbol id="i-long" viewBox="0 0 28 28"><path d="M3 4h22M3 24h22M8 10v9h6"/><circle cx="3" cy="4" r="1.5"/><circle cx="3" cy="24" r="1.5"/></symbol>
+    <symbol id="i-short" viewBox="0 0 28 28"><path d="M3 4h22M3 24h22M18 10c-8-5-10 4-4 4s4 8-4 4"/><circle cx="3" cy="4" r="1.5"/><circle cx="3" cy="24" r="1.5"/></symbol>
+    <symbol id="i-ray" viewBox="0 0 28 28"><path d="M6 14h20"/><circle cx="4" cy="14" r="2"/></symbol>
+    <symbol id="i-rectangle" viewBox="0 0 28 28"><path d="M5 5h18v18H5z"/><circle cx="5" cy="5" r="1.5"/><circle cx="23" cy="5" r="1.5"/><circle cx="5" cy="23" r="1.5"/><circle cx="23" cy="23" r="1.5"/></symbol>
+    <symbol id="i-up" viewBox="0 0 28 28"><path d="m14 3 10 12h-7v10h-6V15H4L14 3Z"/></symbol>
+    <symbol id="i-down" viewBox="0 0 28 28"><path d="m14 25 10-12h-7V3h-6v10H4l10 12Z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 28 28"><path d="m4 24 8-13 3 2 8-9-2 9-3-1-9 10-5 2Z"/></symbol>
+    <symbol id="i-channel" viewBox="0 0 28 28"><path d="M3 20 21 3M7 25 25 8"/><circle cx="3" cy="20" r="1.5"/><circle cx="21" cy="3" r="1.5"/><circle cx="7" cy="25" r="1.5"/><circle cx="25" cy="8" r="1.5"/></symbol>
     <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 10h.01M16 10h.01M8 14c2 3 6 3 8 0"/></symbol>
     <symbol id="i-ruler" viewBox="0 0 24 24"><path d="m5 19-2-2L17 3l4 4L7 21l-2-2Z"/><path d="m13 7 2 2m-5 1 2 2m-5 1 2 2"/></symbol>
     <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="m15 15 6 6M10 7v6M7 10h6"/></symbol>
@@ -57,7 +65,7 @@
       <button class="icon-button active-box" title="K线类型"><svg><use href="#i-candle"/></svg><span class="caret">⌄</span></button>
       <span class="divider"></span>
       <button class="icon-label" title="技术指标"><svg><use href="#i-indicator"/></svg><span>指标</span><span class="caret">⌄</span></button>
-      <button class="icon-button" title="图表布局"><svg><use href="#i-layout"/></svg></button>
+      <button class="icon-button" id="openChartLayout" title="图表布局"><svg><use href="#i-layout"/></svg></button>
       <span class="divider"></span>
       <button class="icon-button" id="openAlert" title="创建提醒"><svg><use href="#i-alarm"/></svg></button>
       <button class="icon-button" id="startReplay" title="K线回放"><svg><use href="#i-replay"/></svg></button>
@@ -85,10 +93,10 @@
         <button class="tool" id="zoomOut" data-tool="zoomOut" title="缩小"><svg><use href="#i-zoom-out"/></svg></button>
         <button class="tool magnet on" data-tool="magnet" aria-pressed="true" title="磁铁模式：吸附最近K线的OHLC"><svg><use href="#i-magnet"/></svg></button>
         <button class="tool" data-tool="lock" title="锁定所有图形"><svg><use href="#i-lock"/></svg></button>
-        <button class="tool" id="toggleDrawings" title="隐藏所有图形"><svg><use href="#i-eye"/></svg><span class="sub">⌄</span></button>
+        <div class="visibility-tool"><button class="tool" id="toggleDrawings" title="隐藏／显示上次选择的内容"><svg><use href="#i-eye"/></svg></button><button id="visibilityMenuButton" aria-label="选择隐藏内容">›</button></div>
         <span class="left-spacer"></span>
         <button class="tool" id="removeObjects" title="移除对象"><svg><use href="#i-trash"/></svg></button>
-        <button class="tool"><svg><use href="#i-star"/></svg></button>
+        <button class="tool" id="toggleFavorites" title="显示／隐藏收藏工具栏"><svg><use href="#i-star"/></svg></button>
       </aside>
 
       <section class="chart-column">
@@ -115,16 +123,16 @@
           <div class="favorite-tools" id="favoriteTools" aria-label="常用绘图工具">
             <button class="drag-handle" id="favoriteDragHandle" title="拖动收藏工具栏" aria-label="拖动收藏工具栏"><i></i><i></i><i></i><i></i><i></i><i></i></button>
             <button data-favorite="fib" title="斐波那契回撤"><svg><use href="#i-fib"/></svg></button>
-            <button data-favorite="long" title="多头仓位"><span class="position-icon">L</span></button>
-            <button data-favorite="ray" title="水平射线"><span class="ray-icon">—•</span></button>
+            <button data-favorite="long" title="多头仓位"><svg><use href="#i-long"/></svg></button>
+            <button data-favorite="ray" title="水平射线"><svg><use href="#i-ray"/></svg></button>
             <button data-favorite="trend" title="趋势线"><svg><use href="#i-trend"/></svg></button>
-            <button data-favorite="short" title="空头仓位"><span class="position-icon">S</span></button>
-            <button data-favorite="rectangle" title="矩形"><span class="rectangle-icon"></span></button>
-            <button data-favorite="up" title="向上箭头"><span class="arrow-up">⇧</span></button>
-            <button data-favorite="down" title="向下箭头"><span class="arrow-down">⇩</span></button>
-            <button data-favorite="arrow" title="箭头"><span class="diag-arrow">↗</span></button>
+            <button data-favorite="short" title="空头仓位"><svg><use href="#i-short"/></svg></button>
+            <button data-favorite="rectangle" title="矩形"><svg><use href="#i-rectangle"/></svg></button>
+            <button data-favorite="up" title="向上箭头"><svg><use href="#i-up"/></svg></button>
+            <button data-favorite="down" title="向下箭头"><svg><use href="#i-down"/></svg></button>
+            <button data-favorite="arrow" title="箭头"><svg><use href="#i-arrow"/></svg></button>
             <button data-favorite="path" title="多段折线"><svg><use href="#i-polyline"/></svg></button>
-            <button data-favorite="channel" title="平行通道"><span class="channel-icon">∥</span></button>
+            <button data-favorite="channel" title="平行通道"><svg><use href="#i-channel"/></svg></button>
           </div>
 
           <div class="selected-object" id="selectedObject" aria-label="所选图形快捷设置">
@@ -137,25 +145,25 @@
           <div class="chart-watermark">A+</div>
           <div class="replay-watermark" id="replayWatermark">回放</div>
           <div class="chart-nav-controls" id="chartNavControls" aria-label="图表视图控制">
-            <button id="navZoomOut" title="缩小时间范围" aria-label="缩小时间范围">−</button>
-            <button id="navZoomIn" title="放大时间范围" aria-label="放大时间范围">＋</button>
-            <button id="navMoveLeft" title="向左移动到更早K线" aria-label="向左移动到更早K线">‹</button>
-            <button id="navMoveRight" title="向右移动到更新K线" aria-label="向右移动到更新K线">›</button>
-            <button id="navReset" title="重置图表视图：204根K线并保留右侧空间" aria-label="重置图表视图">↻</button>
+            <button id="navZoomOut" title="缩小时间范围" aria-label="缩小时间范围"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+            <button id="navZoomIn" title="放大时间范围" aria-label="放大时间范围"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></button>
+            <button id="navMoveLeft" title="向左移动到更早K线" aria-label="向左移动到更早K线"><svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg></button>
+            <button id="navMoveRight" title="向右移动到更新K线" aria-label="向右移动到更新K线"><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg></button>
+            <button id="navReset" title="重置图表视图：204根K线并保留右侧空间" aria-label="重置图表视图"><svg viewBox="0 0 24 24"><path d="M8 5a8 8 0 1 1-4 7M8 1v6H2"/></svg></button>
           </div>
           <div class="rangebar">
             <nav><button>1天</button><button>5天</button><button>1个月</button><button>3个月</button><button>6个月</button><button>YTD</button><button>1年</button><button>5年</button><button>全部</button></nav>
             <span class="clock">20:38:26 UTC+8</span><button class="adj">ADJ</button>
           </div>
           <div class="replaybar" id="replayBar">
-            <button class="replay-date-button" id="replayDatePicker" title="选择日期"><span class="calendar-glyph">↔</span><span id="replayDate">选择日期</span><span>⌄</span></button>
+            <button class="replay-date-button" id="replayDatePicker" title="选择日期"><svg viewBox="0 0 24 24"><path d="M3 6h18v15H3ZM7 3v6M17 3v6M3 11h18M7 16h10m-7-3-3 3 3 3m4-6 3 3-3 3"/></svg><span id="replayDate">选择日期</span><span>⌄</span></button>
             <span class="replay-divider"></span>
-            <button id="replayPlay" class="replay-control" title="播放 Shift +">▶</button>
-            <button id="replayStep" class="replay-control" title="向前一根K线">▷|</button>
+            <button id="replayPlay" class="replay-control" title="播放 Shift + ↓" aria-label="播放回放"><svg viewBox="0 0 24 24"><path d="m7 4 12 8-12 8Z"/></svg></button>
+            <button id="replayStep" class="replay-control" title="向前一根K线 Shift + →" aria-label="回放向前一根K线"><svg viewBox="0 0 24 24"><path d="m5 4 11 8L5 20ZM19 4v16"/></svg></button>
             <div class="replay-speed-wrap"><button id="replaySpeed" class="replay-text-button" title="回放速度">1x</button><div class="replay-speed-menu" id="replaySpeedMenu"></div></div>
-            <button id="replayInterval" class="replay-text-button" title="回放更新周期">天</button>
+            <div class="replay-speed-wrap"><button id="replayInterval" class="replay-text-button" title="回放更新周期" aria-expanded="false">天</button><div class="replay-speed-menu" id="replayIntervalMenu" role="menu"></div></div>
             <span class="replay-divider"></span>
-            <button id="replayToLatest" class="replay-control" title="更新到最后一根K线">|▷</button>
+            <button id="replayToLatest" class="replay-control" title="更新到最后一根K线" aria-label="更新到最后一根K线"><svg viewBox="0 0 24 24"><path d="M4 4v16M20 4v16M8 4l9 8-9 8Z"/></svg></button>
             <span class="replay-spacer"></span>
             <button id="exitReplay" title="退出K线回放"><svg><use href="#i-close"/></svg></button>
           </div>
@@ -211,21 +219,52 @@
       <header><b>创建提醒</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
       <div class="modal-body">
         <label>标的<div class="select-row"><span class="badge sz">深</span><b>升达林业 · 002259</b><span>⌄</span></div></label>
-        <label>条件<div class="condition-grid"><button class="active">价格</button><button>EMA 20</button></div></label>
-        <div class="field-row"><label><span>触发方式</span><div class="select-row"><span>向上穿越</span><span>⌄</span></div></label><label><span>价格</span><input id="alertPrice" value="5.20"></label></div>
-        <label>触发频率<div class="select-row"><span>每根K线仅一次</span><span>⌄</span></div></label>
+        <label>条件<select id="alertTarget"><option value="price">价格</option><option value="ema">收盘价与 EMA（独立收盘价计算）</option></select></label>
+        <div class="field-row"><label>触发方式<select id="alertCondition"><option value="cross_up">向上穿越</option><option value="cross_down">向下穿越</option><option value="cross">穿越</option><option value="above">高于</option><option value="below">低于</option></select></label><label>价格<input id="alertPrice" type="number" step="any" value="5.20"></label></div>
+        <label>EMA 长度<input id="alertEmaLength" type="number" min="1" max="500" value="20"></label>
+        <label>周期<select id="alertTimeframe"><option value="daily">日</option><option value="weekly">周</option><option value="monthly">月</option></select></label>
+        <label>触发频率<select id="alertFrequency"><option value="bar_close">每根已收盘K线一次</option><option value="once">仅一次</option></select></label>
+        <label>到期时间（上海时间，可空）<input id="alertExpires" type="datetime-local"></label>
         <label>名称<input id="alertName" value="002259 向上穿越 5.20"></label>
-        <div class="notice"><b>本机收盘提醒</b><span>只在新K线收盘后判断；不会补发历史提醒，也不会发送外部消息。</span></div>
+        <div class="notice"><b>本机收盘提醒</b><span>只在新K线收盘后判断；不会补发历史提醒，也不会发送外部消息。EMA 提醒使用所选提醒周期、收盘价和此处长度独立计算，不跟随图上 EMA 的来源、偏移、平滑或计算周期。</span></div>
       </div>
       <footer><button class="secondary close-modal">取消</button><button class="primary" id="createAlert">创建</button></footer>
     </section>
 
+    <section class="modal" id="emaModal">
+      <header><b>EMA</b><button class="close-modal" aria-label="关闭EMA设置">×</button></header>
+      <nav class="modal-tabs" id="emaTabs"><button class="active" data-ema-tab="inputs">输入</button><button data-ema-tab="style">样式</button><button data-ema-tab="visibility">可见范围</button></nav>
+      <div class="modal-body ema-tab-panel active" data-ema-panel="inputs">
+        <label>长度<input id="emaLength" type="number" min="1" max="500" value="20"></label>
+        <label>来源<select id="emaSource"><option value="close">收盘价</option><option value="open">开盘价</option><option value="high">最高价</option><option value="low">最低价</option><option value="volume">成交量</option><option value="hl2">(H+L)/2</option><option value="hlc3">(H+L+C)/3</option><option value="ohlc4">(O+H+L+C)/4</option></select></label>
+        <label>偏移<input id="emaOffset" type="number" min="-500" max="500" value="0"></label>
+        <div class="setting-section-title">平滑</div>
+        <label>类型<select id="emaSmoothing"><option value="none">无</option><option value="sma">SMA</option><option value="sma_bb">SMA + 布林带</option><option value="ema">EMA</option><option value="rma">SMMA (RMA)</option><option value="wma">WMA</option><option value="vwma">VWMA</option></select></label>
+        <label>长度<input id="emaSmoothLength" type="number" min="1" max="500" value="14"></label>
+        <label>布林带标准差<input id="emaBbDeviation" type="number" min="0.001" max="50" step="0.1" value="2"></label>
+        <div class="setting-section-title">计算</div>
+        <label>周期<select id="emaTimeframe"><option value="chart">图表</option><option value="daily">1天</option><option value="weekly">1周</option><option value="monthly">1月</option></select></label>
+        <label><input id="emaWaitClose" type="checkbox" checked>等待周期收盘</label>
+      </div>
+      <div class="modal-body ema-tab-panel" data-ema-panel="style"><label>颜色<input id="emaColor" type="color" value="#ff9800"></label><div id="emaPalette" class="drawing-palette"></div><label>线宽<input id="emaWidth" type="number" min="1" max="8" value="1.5" step="0.5"></label>
+        <label><input id="emaSmoothVisible" type="checkbox" checked>平滑线<input id="emaSmoothColor" type="color" value="#fdd835"></label>
+        <label><input id="emaBbVisible" type="checkbox" checked>布林带<input id="emaBbUpperColor" type="color" value="#26a69a"><input id="emaBbLowerColor" type="color" value="#26a69a"></label>
+        <label>布林带背景<input id="emaBbFillColor" type="color" value="#26a69a"><input id="emaBbFillAlpha" type="range" min="0" max="100" value="10" aria-label="布林带背景不透明度"></label>
+        <label>精度<select id="emaPrecision"><option value="default">系统预设</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label><label><input id="emaPriceLabels" type="checkbox" checked>价格坐标标签</label><label><input id="emaValues" type="checkbox" checked>状态行的值</label><label><input id="emaInputs" type="checkbox" checked>状态行的输入</label></div>
+      <div class="modal-body ema-tab-panel" data-ema-panel="visibility"><label><input id="emaVisible" type="checkbox" checked>显示 EMA</label><label><input id="emaDaily" type="checkbox" checked>日</label><label><input id="emaWeekly" type="checkbox" checked>周</label><label><input id="emaMonthly" type="checkbox" checked>月</label><p class="notice">分钟周期待真实数据源接入</p></div>
+      <footer><button class="secondary close-modal">取消</button><button class="primary" id="saveEmaSettings">确认</button></footer>
+    </section>
+
+    <section class="modal" id="chartLayoutModal"><header><b>图表布局</b><button class="close-modal">×</button></header><div class="modal-body layout-choices"><button data-chart-layout="1">单图</button><button data-chart-layout="4">4 图</button><button data-chart-layout="6">6 图</button><button data-chart-layout="9">9 图</button><p id="layoutAvailability"></p></div></section>
+
     <section class="modal object-modal" id="objectModal">
-      <header><b id="objectModalTitle">斐波那契回撤</b><span class="rename-glyph" title="重命名">✎</span><button id="closeObjectSettings"><svg><use href="#i-close"/></svg></button></header>
-      <nav class="modal-tabs" id="objectTabs"><button class="active" data-tab="style">样式</button><button data-tab="coordinates">坐标</button><button data-tab="visibility">可见范围</button></nav>
+      <header><b id="objectModalTitle">斐波那契回撤</b><input id="objectNameInput" aria-label="图形名称" maxlength="60" hidden><button class="rename-glyph" id="renameObject" title="重命名" aria-label="重命名图形">✎</button><button id="closeObjectSettings"><svg><use href="#i-close"/></svg></button></header>
+      <nav class="modal-tabs" id="objectTabs"><button data-tab="inputs" hidden>输入</button><button class="active" data-tab="style">样式</button><button data-tab="text" hidden>文本</button><button data-tab="coordinates">坐标</button><button data-tab="visibility">可见范围</button></nav>
+      <div class="modal-body object-tab-panel" data-panel="inputs"><div id="positionInputs"></div></div>
       <div class="modal-body object-tab-panel active" data-panel="style">
         <div id="toolSpecificSettings"></div>
       </div>
+      <div class="modal-body object-tab-panel" data-panel="text"><div id="drawingTextSettings"></div></div>
       <div class="modal-body object-tab-panel" data-panel="coordinates">
         <div id="coordinateSettings"></div>
       </div>
@@ -238,7 +277,7 @@
     <section class="modal snapshot-modal" id="snapshotModal">
       <header><b>生成快照</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
       <div class="snapshot-preview"><img id="snapshotImage" alt="图表快照预览"></div>
-      <div class="snapshot-options"><label><input type="checkbox" checked>包含图形与策略证据</label><label><input type="checkbox">包含右侧决策栏</label></div>
+      <p class="notice">图片保留当前可见的图形、指标和策略证据。</p>
       <footer><button class="secondary close-modal">取消</button><button class="primary" id="downloadSnapshot">保存 PNG</button></footer>
     </section>
 
@@ -246,6 +285,12 @@
       <header><b>移除对象</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
       <div class="modal-body"><p>选择要从当前标的图表移除的内容。策略证据为只读，不会被删除。</p><button class="remove-option">移除所有图形 <small>4 个已保存对象</small></button><button class="remove-option">移除所有指标 <small>EMA 20</small></button><button class="remove-option danger">移除图形与指标</button></div>
       <footer><button class="secondary close-modal">取消</button></footer>
+    </section>
+
+    <section class="modal confirm-modal" id="chartControlModal">
+      <header><b id="chartControlTitle"></b><button class="close-modal" aria-label="关闭图表菜单"><svg><use href="#i-close"/></svg></button></header>
+      <div class="modal-body" id="chartControlBody"></div>
+      <footer><button class="secondary close-modal">关闭</button></footer>
     </section>
 
     <section class="modal replay-start-modal" id="replayStartModal">
@@ -260,15 +305,22 @@
 
     <section class="modal confirm-modal" id="replayExitModal">
       <header><b>离开当前回放？</b><button class="close-modal"><svg><use href="#i-close"/></svg></button></header>
-      <div class="modal-body"><p>您可以保存此回放，以便稍后继续。</p><label class="save-replay-choice"><input id="saveReplayChoice" type="checkbox" checked>保存此回放</label></div>
+      <div class="modal-body"><p>您可以保存此回放，以便稍后继续。</p><label class="save-replay-choice"><input id="saveReplayChoice" type="checkbox">保存此回放</label></div>
       <footer><button class="primary" id="leaveReplay">离开</button><button class="secondary close-modal">留下</button></footer>
     </section>
   </div>
 
+  <div class="chart-context-menu" id="visibilityMenu"><button data-hide-scope="drawings">隐藏／显示所有图形</button><button data-hide-scope="indicators">隐藏／显示所有指标</button><button data-hide-scope="strategy">隐藏／显示策略证据</button><button data-hide-scope="all">隐藏／显示全部</button></div>
+  <div class="chart-context-menu" id="templateMenu"><button data-template-action="apply">应用保存的模板</button><button data-template-action="save">保存当前设置为模板</button></div>
   <script>window.tvPrototypeV2 = true;</script>
   <script src="historical-bars-v2.js"></script>
   <script src="prototype.js"></script>
   <script src="chart-coordinates.js"></script>
+  <script src="chart-indicators.js"></script>
+  <script src="chart-position.js"></script>
+  <script src="drawing-settings.js"></script>
   <script src="prototype-interactions.js"></script>
+  <script src="production-controls.js"></script>
+  <script src="chart-palette.js"></script>
 </body>
 </html>
