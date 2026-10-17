@@ -172,7 +172,7 @@ def test_gap_h2_h1_marker_uses_neutral_colors_in_gui_adapter():
     plt.close(figure)
 
 
-def test_gap_h2_restores_blue_outline_while_leaders_remain_neutral():
+def test_gap_h2_region_floor_label_and_leader_are_all_neutral():
     figure, axis = plt.subplots()
     try:
         axis.set_xlim(-1, 4)
@@ -198,7 +198,8 @@ def test_gap_h2_restores_blue_outline_while_leaders_remain_neutral():
         draw_h2(axis, plot, plan)
 
         gap, = axis.patches
-        assert to_hex(gap.get_edgecolor()).upper() == GAP_COLOR
+        assert GAP_COLOR == '#CBD5E1'
+        assert to_hex(gap.get_edgecolor()).upper() == '#CBD5E1'
         assert gap.get_facecolor()[3] == 0
         assert gap.get_linestyle() == '--'
         assert gap.get_linewidth() == pytest.approx(1.2)
@@ -207,7 +208,9 @@ def test_gap_h2_restores_blue_outline_while_leaders_remain_neutral():
         assert floor.get_linestyle() == '-'
         label = next(text for text in axis.texts if text.get_text() == 'Gap')
         assert to_hex(label.get_color()).upper() == GAP_COLOR
-        assert to_hex(label.get_bbox_patch().get_edgecolor()).upper() == GAP_COLOR
+        assert to_hex(label.get_bbox_patch().get_facecolor()).upper() == CONTROL_BG
+        assert to_hex(label.arrow_patch.get_edgecolor()).upper() == '#CBD5E1'
+        assert label.arrow_patch.shrinkB == 5
         assert any(
             to_hex(text.arrow_patch.get_edgecolor()).upper() == ANNOTATION
             for text in axis.texts if text.get_text() == 'BO'

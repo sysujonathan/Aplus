@@ -5,7 +5,7 @@ from workbench.h2_plan import STATE_LABELS
 from .theme import ACCENT, ANNOTATION, BORDER, CONTROL_BG, MUTED, STOP, TARGET, TEXT
 
 
-GAP_COLOR = '#2962FF'
+GAP_COLOR = ANNOTATION
 
 
 def draw_h2(ax, plot, plan):
@@ -60,9 +60,8 @@ def draw_h2(ax, plot, plan):
         mark('H2', trigger_day, trigger_high, TARGET, (0, 30))
     floor, top = plan.get('gap_floor'), plan.get('gap_top')
     if floor is not None:
-        # Keep the frozen strategy's original gap visual language.  This blue
-        # level belongs to the gap area itself; BO/H1/H2 leaders stay neutral
-        # so they cannot be confused with candle direction.
+        # The display adapter follows the trader's neutral annotation rule;
+        # frozen strategy geometry stays unchanged.
         ax.axhline(floor, color=GAP_COLOR, linestyle='-', linewidth=1, alpha=.5)
     if floor is not None and top is not None and top > floor:
         bo = dates.index(plan['bo_date']) if plan.get('bo_date') in dates else 0
@@ -73,14 +72,17 @@ def draw_h2(ax, plot, plan):
                 linewidth=1.2, facecolor='none', edgecolor=GAP_COLOR,
                 linestyle='--', alpha=.6,
             ))
-            ax.text(
-                (bo + setup) / 2, (floor + top) / 2, 'Gap',
+            ax.annotate(
+                'Gap', xy=((bo + setup) / 2, (floor + top) / 2),
+                xytext=(28, 18), textcoords='offset points',
                 color=GAP_COLOR, fontsize=9, fontweight='normal',
                 ha='center', va='center',
                 bbox=dict(
-                    boxstyle='square,pad=0.2', facecolor='white',
-                    edgecolor=GAP_COLOR, alpha=.8,
+                    boxstyle='round,pad=0.15', facecolor=CONTROL_BG,
+                    edgecolor='none', alpha=.9,
                 ),
+                arrowprops=dict(arrowstyle='-', color=ANNOTATION, lw=.9,
+                                shrinkA=2, shrinkB=5), annotation_clip=True,
             )
     for gap in plan.get('prior_open_gaps', []):
         if gap['date'] in dates:

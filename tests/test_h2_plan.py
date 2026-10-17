@@ -353,7 +353,11 @@ def test_chart_annotations_point_to_candle_centers(h2_spec, h2_bars):
     assert by_label['←Entry'] == (len(dates) - 1, 11.41)
     assert by_label['SL1'] == (dates.index(plan['sl1_reference_date']), 10.29)
     assert not {'H2', 'H2信号', 'H2触发'} & by_label.keys()
-    assert all(float(x).is_integer() for _, (x, _) in annotations)
+    # Candle leaders stay on integer candle centers. The newly restored Gap
+    # leader points to the geometric center of the area, which may be between bars.
+    assert all(float(x).is_integer() for label, (x, _) in annotations if label != 'Gap')
+    assert by_label['Gap'] == ((dates.index(plan['bo_date']) + dates.index(plan['h2_setup_date'])) / 2,
+                               (plan['gap_floor'] + plan['gap_top']) / 2)
     assert image.width > 500
     pd.testing.assert_frame_equal(calculated, before)
 
