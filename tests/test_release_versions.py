@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_catalog_covers_each_pr_without_inventing_publications():
     catalog = r.read_catalog(ROOT)
-    assert [x['pr'] for x in catalog['history']] == list(range(1, 51))
+    assert [x['pr'] for x in catalog['history']] == list(range(1, 52))
     by_pr = {x['pr']: x for x in catalog['history']}
     assert by_pr[1]['version'] is None and by_pr[1]['status'] == 'not_released'
     assert by_pr[12]['included_in'] == by_pr[13]['included_in'] == 11
@@ -54,7 +54,8 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[47]['commit'] == 'e968647fb02ffdf79b4854432ea9ce51f1f94e03'
     assert by_pr[48]['status'] == 'released'
     assert by_pr[48]['commit'] == '0026048789cd7f793a6e845a074ccc853bc45777'
-    assert all(by_pr[n]['status'] == 'preview' for n in (49, 50))
+    assert all(by_pr[n]['status'] == 'preview' for n in (49, 50, 51))
+    assert by_pr[51]['version'] == '2026.10.17.51'
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -118,7 +119,7 @@ def test_exact_historical_main_and_current_preview_are_distinct():
     assert r.version_label(merged) == 'v2026.10.11.30'
     assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
-    assert r.version_label(preview) == 'v2026.10.15.50 · 预览版'
+    assert r.version_label(preview) == 'v2026.10.17.51 · 预览版'
     approved = r.identity(ROOT, target='0026048789cd7f793a6e845a074ccc853bc45777')
     assert r.version_label(approved) == 'v2026.10.15.48'
     assert approved['channel'] == 'main' and approved['notes']
