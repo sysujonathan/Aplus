@@ -3,6 +3,26 @@ const positionStatNames={tp_price:'TP价格偏移',tp_percent:'TP百分比偏移
   tp_amount:'TP金额',tp_pl:'TP PL',pnl:'开盘/收盘损益',quantity:'数量',ratio:'风险/回报比',
   sl_price:'SL价格偏移',sl_percent:'SL百分比偏移',sl_ticks:'SL tick偏移',sl_amount:'SL金额',sl_pl:'SL PL'};
 let lastObjectTab=null;
+function materializeFibUniformColor(object) {
+  // Old documents used a persistent override. Editing a level must preserve
+  // the other levels' visible style before replacing that legacy override.
+  if (!object.fibUseOneColor) return;
+  object.fibLevels.forEach(level => {
+    level.color = object.fibSingleColor || object.color;
+    level.alpha = object.fibSingleAlpha ?? 1;
+  });
+  object.fibUseOneColor = false;
+}
+function assignFibUniformColor(object, color) {
+  materializeFibUniformColor(object);
+  object.fibSingleColor = color;
+  object.fibLevels.forEach(level => { level.color = color; });
+}
+function assignFibUniformAlpha(object, alpha) {
+  materializeFibUniformColor(object);
+  object.fibSingleAlpha = alpha;
+  object.fibLevels.forEach(level => { level.alpha = alpha; });
+}
 function chartPrice(value,precision='default') {
   const decimals=precision==='default' ? (chartBoot.priceStep?String(chartBoot.priceStep).split('.')[1]?.length||0:2) : Number(precision);
   return Number(value).toFixed(Math.max(0,Math.min(8,decimals)));
@@ -56,6 +76,7 @@ function bindDrawingStyle(host,object) {
       if(ratio)value/=100;
       if(typeof value==='number'&&(!Number.isFinite(value)||(ratio?value<0:value<=0)||value>500)){showToast('请输入有效数值');return;}
       rememberObjects();object[control.dataset.setting]=value;savePrototypeState();renderWorkspace();
+      if(host.querySelector('[data-stroke-preview]'))refreshFibStylePreviews(object);
     });
   });
   host.querySelectorAll('[data-color]').forEach(button=>button.onclick=()=>{
@@ -75,15 +96,15 @@ function renderChannelSettings(object) {
     enabled:value===0||value===1||(value===.5&&object.showMiddle!==false),
     color:object.color,width:object.width||1,dash:value===.5?'dashed':object.dash||'solid'}));
   const host=document.querySelector('#toolSpecificSettings');
-  host.innerHTML=`${commonLineSettings(object)}
-    <div class="channel-levels">${object.channelLevels.map((level,index)=>`<div class="channel-level-row" data-channel-index="${index}">
-      <input type="checkbox" data-channel-field="enabled" aria-label="启用 ${level.value} 通道线" ${level.enabled?'checked':''} ${[0,1].includes(level.value)?'disabled':''}>
-      <input type="number" step="any" data-channel-field="value" aria-label="通道比例" value="${level.value}" ${[0,1].includes(level.value)?'disabled':''}>
-      <input type="color" data-channel-field="color" aria-label="通道线颜色" value="${level.color||object.color}">
-      <select data-channel-field="width" aria-label="通道线宽">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(level.width||1)?'selected':''}>${n}px</option>`).join('')}</select>
-      <select data-channel-field="dash" aria-label="通道线型">${[['solid','实线'],['dashed','虚线'],['dotted','点线']].map(([key,label])=>`<option value="${key}" ${(level.dash||'solid')===key?'selected':''}>${label}</option>`).join('')}</select></div>`).join('')}</div>
-    <label><input type="checkbox" data-setting="extendLeft" ${object.extendLeft?'checked':''}>向左延伸</label>
-    <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>向右延伸</label>
+  const boundary=index=>object.channelLevels.length===7?[1,5].includes(index):[0,object.channelLevels.length-1].includes(index);
+  const extensionLabel=()=>object.extendLeft?(object.extendRight?'双向延伸':'延伸左边线条'):object.extendRight?'延伸右边线条':'不要扩大';
+  host.innerHTML=`<div class="channel-levels">${object.channelLevels.map((level,index)=>`<div class="channel-level-row ${level.enabled?'':'disabled'}" data-channel-index="${index}">
+      ${boundary(index)?'<span></span>':`<input type="checkbox" data-channel-field="enabled" aria-label="启用 ${level.value} 通道线" ${level.enabled?'checked':''}>`}
+      <input type="number" step="any" data-channel-field="value" aria-label="通道比例 ${index+1}" value="${level.value}" ${level.enabled?'':'disabled'}>
+      <span class="stroke-preview-button" data-stroke-preview="channel"><i class="stroke-preview-color" style="background:${level.color||object.color}"></i><i class="stroke-preview-line" style="border-top-width:${level.width||1}px;border-top-style:${level.dash||'solid'}"></i><input type="color" data-channel-field="color" data-stroke-width="width" data-stroke-dash="dash" aria-label="通道比例 ${level.value} 颜色、粗细和线型" value="${level.color||object.color}" ${level.enabled?'':'disabled'}></span></div>`).join('')}</div>
+    <div class="setting-row"><span>延伸</span><details class="position-stats"><summary><span data-channel-extension-label>${extensionLabel()}</span><span>⌄</span></summary><div class="stats-menu">
+      <label><input type="checkbox" data-setting="extendLeft" ${object.extendLeft?'checked':''}>延伸左边线条</label>
+      <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>延伸右边线条</label></div></details></div>
     <div class="setting-row"><label><input type="checkbox" data-setting="fill" ${object.fill===false?'':'checked'}>背景</label>
     <input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}"></div>`;
   bindDrawingStyle(host,object);
@@ -94,8 +115,12 @@ function renderChannelSettings(object) {
       const value=control.type==='checkbox'?control.checked:['value','width'].includes(key)?Number(control.value):control.value;
       if(typeof value==='number'&&(!Number.isFinite(value)||Math.abs(value)>100)){renderChannelSettings(object);return;}
       rememberObjects();level[key]=value;savePrototypeState();renderWorkspace();
+      if(key==='enabled')renderChannelSettings(object);else refreshFibStylePreviews(object);
     });
   });
+  host.querySelectorAll('[data-setting="extendLeft"],[data-setting="extendRight"]').forEach(control=>control.addEventListener('change',()=>{
+    host.querySelector('[data-channel-extension-label]').textContent=extensionLabel();
+  }));
 }
 function renderTrendSettings(object) {
   const host=document.querySelector('#toolSpecificSettings');

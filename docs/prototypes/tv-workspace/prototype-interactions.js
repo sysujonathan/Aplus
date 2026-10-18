@@ -1273,7 +1273,7 @@ function openWorkspaceModal(id) {
 function closeWorkspaceModal() { document.querySelector('#modalBackdrop').classList.remove('show'); }
 
 function commonLineSettings(object, label = '线条') {
-  return `<div class="setting-row line-setting-row"><span>${label}</span><input type="color" data-setting="color" value="${object.color||'#2962ff'}" aria-label="选择完整色板"><select data-setting="width" aria-label="线宽"><option value="1">1 px</option><option value="2">2 px</option><option value="3">3 px</option><option value="4">4 px</option></select><select data-setting="dash" aria-label="线型"><option value="solid">实线</option><option value="dashed">虚线</option><option value="dotted">点线</option></select></div>`;
+  return `<div class="setting-row line-setting-row"><span>${object.type==='ray'?'线形图':label}</span><span class="stroke-preview-button" data-stroke-preview="line"><i class="stroke-preview-color" style="background:${object.color||'#2962ff'}"></i><i class="stroke-preview-line" style="border-top-width:${object.width||1}px;border-top-style:${object.dash||'solid'}"></i><input type="color" data-setting="color" data-stroke-width="width" data-stroke-dash="dash" value="${object.color||'#2962ff'}" aria-label="${object.type==='ray'?'射线':label}颜色、粗细和线型"></span></div>`;
 }
 
 function paletteSettings(object) {
@@ -1284,6 +1284,35 @@ function commitObjectSetting(object, key, value) {
   rememberObjects(); object[key] = value; savePrototypeState(); renderWorkspace();
 }
 
+function refreshFibStylePreviews(object) {
+  const host = document.querySelector('#toolSpecificSettings');
+  host.querySelectorAll('[data-fib-level-color]').forEach(input => {
+    input.value = object.fibUseOneColor ? object.fibSingleColor || object.color : object.fibLevels[Number(input.dataset.fibLevelColor)].color;
+  });
+  host.querySelectorAll('[data-stroke-preview]').forEach(button => {
+    const trend = button.dataset.strokePreview === 'trend';
+    const line = button.querySelector('.stroke-preview-line');
+    if(button.dataset.strokePreview==='channel'){
+      const level=object.channelLevels[Number(button.closest('[data-channel-index]').dataset.channelIndex)];
+      line.style.borderTopWidth=(level.width||1)+'px';line.style.borderTopStyle=level.dash||'solid';
+      button.querySelector('.stroke-preview-color').style.background=level.color||object.color;return;
+    }
+    if(button.dataset.strokePreview==='line'){
+      line.style.borderTopWidth=(object.width||1)+'px';line.style.borderTopStyle=object.dash||'solid';
+      button.querySelector('.stroke-preview-color').style.background=object.color;return;
+    }
+    line.style.borderTopWidth = (object[trend ? 'fibTrendWidth' : 'fibHorizontalWidth'] || object.width || 1) + 'px';
+    line.style.borderTopStyle = object[trend ? 'fibTrendDash' : 'fibHorizontalDash'] || (trend ? 'dashed' : object.dash || 'solid');
+    if(button.dataset.fibStroke==='fibHorizontalWidth')line.style.borderTopStyle='solid';
+    if(button.dataset.fibStroke==='fibHorizontalDash')line.style.borderTopWidth='1px';
+    if (trend) {
+      button.classList.toggle('disabled', !object.fibTrendLine);
+      button.querySelector('input').disabled = !object.fibTrendLine;
+      button.querySelector('.stroke-preview-color').style.background = object.color;
+    }
+  });
+}
+
 function renderFibSettings(object) {
   ensureFibSettings(object);
   const host = document.querySelector('#toolSpecificSettings');
@@ -1291,14 +1320,14 @@ function renderFibSettings(object) {
     <label class="fib-level-cell ${level.enabled ? '' : 'disabled'}">
       <input type="checkbox" data-fib-level-enabled="${index}" ${level.enabled ? 'checked' : ''} aria-label="启用 ${level.value} 水平位">
       <input type="number" step="any" data-fib-level-value="${index}" value="${level.value}" ${level.enabled ? '' : 'disabled'} aria-label="水平位 ${level.value}">
-      <input type="color" data-fib-level-color="${index}" value="${level.color}" ${level.enabled ? '' : 'disabled'} aria-label="水平位 ${level.value} 颜色">
+      <input type="color" data-fib-level-color="${index}" value="${object.fibUseOneColor ? object.fibSingleColor || object.color : level.color}" ${level.enabled ? '' : 'disabled'} aria-label="水平位 ${level.value} 颜色">
     </label>`).join('');
   host.innerHTML = `<div class="fib-setting-stack">
-    <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibTrendLine" ${object.fibTrendLine ? 'checked' : ''}>趋势线</label><input type="color" data-fib-setting="color" value="${object.color || '#4caf50'}" aria-label="趋势线颜色"><select data-fib-setting="fibTrendWidth" aria-label="趋势线粗细">${[1,2,3,4].map(n=>`<option value="${n}">${n} px</option>`).join('')}</select><select data-fib-setting="fibTrendDash" aria-label="趋势线线型"><option value="solid">实线</option><option value="dashed">虚线</option><option value="dotted">点线</option></select></div>
-    <div class="fib-setting-row"><b>水平线</b><select data-fib-setting="fibHorizontalWidth" aria-label="水平线粗细"><option value="1">1 px</option><option value="2">2 px</option><option value="3">3 px</option><option value="4">4 px</option></select><select data-fib-setting="fibHorizontalDash" aria-label="水平线线型"><option value="solid">实线</option><option value="dashed">虚线</option><option value="dotted">点线</option></select></div>
+    <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibTrendLine" ${object.fibTrendLine ? 'checked' : ''}>趋势线</label><span class="stroke-preview-button" data-stroke-preview="trend"><i class="stroke-preview-color"></i><i class="stroke-preview-line"></i><input type="color" data-fib-setting="color" data-stroke-width="fibTrendWidth" data-stroke-dash="fibTrendDash" value="${object.color || '#4caf50'}" aria-label="趋势线颜色、粗细和线型"></span></div>
+    <div class="fib-setting-row"><b>水平线</b><button type="button" class="stroke-preview-button" data-stroke-preview="horizontal" data-fib-stroke="fibHorizontalWidth" aria-label="水平线粗细"><i class="stroke-preview-line"></i></button><button type="button" class="stroke-preview-button stroke-dash-button" data-stroke-preview="horizontal" data-fib-stroke="fibHorizontalDash" aria-label="水平线线型"><i class="stroke-preview-line"></i></button></div>
     <div class="fib-setting-row"><b>延伸</b><select class="fib-wide-select" data-fib-setting="fibExtend" aria-label="延伸方式"><option value="none">不要扩大</option><option value="left">向左延伸</option><option value="right">向右延伸</option><option value="both">双向延伸</option></select></div>
     <div class="fib-level-grid">${levels}</div>
-    <div class="fib-setting-row"><b>使用一种颜色</b><input type="color" data-fib-setting="fibSingleColor" value="${object.fibSingleColor || object.color || '#4caf50'}" aria-label="斐波那契单一颜色"><label class="switch"><input type="checkbox" data-fib-setting="fibUseOneColor" ${object.fibUseOneColor ? 'checked' : ''}><i></i></label></div>
+    <div class="fib-setting-row"><b>使用一种颜色</b><input type="color" data-fib-setting="fibSingleColor" value="${object.fibSingleColor || object.color || '#4caf50'}" aria-label="斐波那契单一颜色"></div>
     <div class="fib-setting-row"><label><input type="checkbox" data-fib-setting="fibBackground" ${object.fibBackground ? 'checked' : ''}>背景</label><input type="range" min="0" max="100" data-fib-setting="fibBackgroundAlpha" value="${Math.round((object.fibBackgroundAlpha ?? .12) * 100)}" aria-label="背景透明度"><span>${Math.round((object.fibBackgroundAlpha ?? .12) * 100)}%</span></div>
     <div class="fib-setting-row compact"><label><input type="checkbox" data-fib-setting="fibReverse" ${object.fibReverse ? 'checked' : ''}>反手</label></div>
     <div class="fib-setting-row compact"><label><input type="checkbox" data-fib-setting="fibShowPrices" ${object.fibShowPrices === false ? '' : 'checked'}>价格</label></div>
@@ -1312,6 +1341,10 @@ function renderFibSettings(object) {
     const control = host.querySelector(`[data-fib-setting="${key}"]`);
     if (control) control.value = String(object[key] ?? ({ fibTrendDash: 'dashed', fibTrendWidth: object.width || 1, fibHorizontalWidth: object.width || 1, fibHorizontalDash: object.dash || 'solid' }[key] || ''));
   });
+  refreshFibStylePreviews(object);
+  host.querySelectorAll('[data-fib-stroke]').forEach(button => {
+    button.onclick = () => window.openChartStrokePicker(object, button.dataset.fibStroke, button);
+  });
   host.querySelectorAll('[data-fib-level-enabled]').forEach(control => control.addEventListener('change', () => {
     const index = Number(control.dataset.fibLevelEnabled); rememberObjects(); object.fibLevels[index].enabled = control.checked;
     savePrototypeState(); renderFibSettings(object); renderWorkspace();
@@ -1320,14 +1353,17 @@ function renderFibSettings(object) {
     const index = Number(control.dataset.fibLevelValue); commitObjectSetting(object.fibLevels[index], 'value', Number(control.value));
   }));
   host.querySelectorAll('[data-fib-level-color]').forEach(control => control.addEventListener('change', () => {
-    const index = Number(control.dataset.fibLevelColor); rememberObjects();object.fibLevels[index].color = control.value; savePrototypeState(); renderWorkspace();
+    const index = Number(control.dataset.fibLevelColor); rememberObjects();materializeFibUniformColor(object);object.fibLevels[index].color = control.value; refreshFibStylePreviews(object);savePrototypeState(); renderWorkspace();
   }));
   host.querySelectorAll('[data-fib-setting]').forEach(control => control.addEventListener('change', () => {
     const key = control.dataset.fibSetting;
     let value = control.type === 'checkbox' ? control.checked : control.value;
     if (key === 'fibHorizontalWidth' || key === 'fibTrendWidth' || key === 'fibFontSize') value = Number(value);
     if (key === 'fibBackgroundAlpha') value = Number(value) / 100;
-    commitObjectSetting(object, key, value);
+    if (key === 'fibSingleColor') {
+      rememberObjects();assignFibUniformColor(object, value);savePrototypeState();renderWorkspace();
+    } else commitObjectSetting(object, key, value);
+    refreshFibStylePreviews(object);
     if (key === 'color') document.querySelector('.color-swatch').style.background = value;
   }));
 }
@@ -1359,7 +1395,7 @@ function renderToolSpecificSettings(object) {
     <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>向右延伸</label>
     </div></details></div>`:'';
   host.innerHTML=`<div class="tool-setting-stack">${extension}${marker?paletteSettings(object):commonLineSettings(object,object.type==='rectangle'?'边框':'线条')}
-    ${marker?'':`<label>不透明度<input type="range" data-setting="alpha" min="0" max="100" value="${Math.round((object.alpha??1)*100)}"></label>`}${extra}</div>`;
+    ${marker||object.type==='ray'?'':`<label>不透明度<input type="range" data-setting="alpha" min="0" max="100" value="${Math.round((object.alpha??1)*100)}"></label>`}${extra}</div>`;
   bindDrawingStyle(host,object);
   host.querySelectorAll('.rectangle-extend input').forEach(control=>control.addEventListener('change',()=>{
     host.querySelector('[data-extension-label]').textContent=extensionLabel();
@@ -1434,6 +1470,7 @@ function openObjectSettings() {
   userObjects.forEach(item=>chartCoordinates.capture(item,bars,activeTimeframeUnit));
   objectSettingsHistory = {objects:structuredClone(userObjects),dirty:false};
   document.querySelector('#objectModal').classList.toggle('fib-object-modal', object.type === 'fib');
+  document.querySelector('#objectModal').dataset.toolType = object.type;
   document.querySelector('#objectModalTitle').textContent = object.name || toolNames[object.type] || '图形设置';
   document.querySelector('#objectNameInput').hidden = true;
   document.querySelector('#objectModalTitle').hidden = false;

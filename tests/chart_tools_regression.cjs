@@ -1,11 +1,19 @@
 /* Real renderer checks: channel geometry, tool settings, price range, blind EMA. */
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/prototype-interactions.js'),'utf8');
+const paletteContext=vm.createContext({window:{addEventListener(){}},document:{addEventListener(){}}});
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-palette.js'),'utf8'),paletteContext);
+for(const hex of ['#ffffff','#000000','#ff0000','#00ff00','#0000ff','#abcdef','#123456']){
+  const {h,s,v}=paletteContext.chartHsvFromHex(hex);
+  assert.equal(paletteContext.chartHexFromHsv(h,s,v),hex,'custom color editor must round-trip arbitrary saved colors');
+}
+assert.equal(paletteContext.chartHexFromHsv(360,1,1),'#ff0000');
+assert.equal(paletteContext.chartHexFromHsv(120,0,.5),'#808080');
 function extract(name){const start=source.indexOf(`function ${name}(`);assert.ok(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2);}
 let current=[],paths=[],labels=[],handles=[],rectangles=[];
 const ctx=new Proxy({
   beginPath(){current=[];},moveTo(x,y){current.push([x,y]);},lineTo(x,y){current.push([x,y]);},
-  stroke(){paths.push({points:structuredClone(current),color:ctx.strokeStyle});},
+  stroke(){paths.push({points:structuredClone(current),color:ctx.strokeStyle,width:ctx.lineWidth,alpha:ctx.globalAlpha});},
   strokeRect(...args){rectangles.push(args);},
   fillText(text){labels.push(text);},measureText(text){return {width:String(text).length*6};},
 },{get(target,key){return key in target?target[key]:(()=>{});}});
@@ -24,6 +32,25 @@ const context=vm.createContext({structuredClone,console,window:{},ctx,testView:v
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-indicators.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-position.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/drawing-settings.js'),'utf8'),context);
+// A uniform color is a one-time assignment, not a sticky override. Old saved
+// overrides must keep their appearance until the trader edits a level.
+const legacyFib={type:'fib',color:'#00bcd4',fibUseOneColor:true,fibSingleColor:'#f23645',fibSingleAlpha:.4,
+  fibLevels:[{enabled:true,color:'#ffffff',alpha:1},{enabled:false,color:'#2962ff',alpha:.2}]};
+const legacyBefore=JSON.stringify(legacyFib),editedFib=structuredClone(legacyFib);
+context.materializeFibUniformColor(editedFib);
+editedFib.fibLevels[0].color='#089981';editedFib.fibLevels[0].alpha=.7;
+assert.equal(editedFib.fibUseOneColor,false);
+assert.deepEqual(editedFib.fibLevels,[{enabled:true,color:'#089981',alpha:.7},{enabled:false,color:'#f23645',alpha:.4}]);
+assert.equal(JSON.stringify(legacyFib),legacyBefore,'cancel restores the original document snapshot unchanged');
+context.assignFibUniformColor(editedFib,'#ff9800');
+assert.ok(editedFib.fibLevels.every(level=>level.color==='#ff9800'),'global color also updates disabled levels');
+assert.deepEqual(editedFib.fibLevels.map(level=>level.alpha),[.7,.4],'color edits do not erase independently configured opacity');
+context.assignFibUniformAlpha(editedFib,.25);
+assert.ok(editedFib.fibLevels.every(level=>level.alpha===.25));
+const reopenedFib=JSON.parse(JSON.stringify(editedFib));
+reopenedFib.fibLevels[1].color='#ffffff';
+assert.equal(reopenedFib.fibLevels[0].color,'#ff9800');
+assert.equal(reopenedFib.fibUseOneColor,false,'reopening must not reactivate a uniform override');
 context.window={};
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-coordinates.js'),'utf8'),context);
 context.chartCoordinates=context.window.AplusChartCoordinates;
@@ -293,11 +320,13 @@ for(const [extendLeft,extendRight,left,right] of [[false,false,20,80],[true,fals
 }
 context.channel.showMiddle=false;context.selectedId=null;paths=[];
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);assert.equal(paths.length,2);
-context.channel.channelLevels=[{value:-.25,enabled:true,color:'#ff9800',width:3,dash:'dashed'},
+context.channel.channelLevels=[{value:-.25,enabled:true,color:'#ff9800',width:3,dash:'dashed',alpha:.3},
   {value:0,enabled:true},{value:.25,enabled:false},{value:1,enabled:true},{value:1.25,enabled:true}];
 paths=[];vm.runInContext('drawUserObject(ctx,testView,channel)',context);
 assert.deepEqual(paths.map(p=>p.points),[[[0,7.5],[10,17.5]],[[0,10],[10,20]],[[0,20],[10,30]],[[0,22.5],[10,32.5]]]);
 assert.equal(paths[0].color,'#ff9800');
+assert.equal(paths[0].width,3);assert.equal(paths[0].alpha,.3,'a channel level uses its own opacity');
+assert.equal(paths[1].width,2);assert.equal(paths[1].alpha,1,'editing one level does not change its neighbor');
 vm.runInContext(extract('registerPolygon'),context);
 context.channel.fill=true;context.hitRegions=[];
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);
@@ -434,7 +463,7 @@ wheelHandler({...wheel,shiftKey:true});assert.equal(panCall,-16);
 let alphaChange;
 const alphaControl={type:'range',dataset:{setting:'alpha'},value:'100',
   addEventListener:(_event,handler)=>{alphaChange=handler;}};
-const alphaHost={querySelectorAll:selector=>selector==='[data-setting]'?[alphaControl]:[]};
+const alphaHost={querySelector:()=>null,querySelectorAll:selector=>selector==='[data-setting]'?[alphaControl]:[]};
 const alphaObject={alpha:1};context.bindDrawingStyle(alphaHost,alphaObject);
 assert.equal(Number(alphaControl.value),100);
 alphaControl.value='32';alphaChange();assert.equal(alphaObject.alpha,.32);
