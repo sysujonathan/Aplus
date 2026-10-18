@@ -14,7 +14,7 @@ class ChartItem:
 
     code: str
     name: str
-    observation_id: str
+    observation_id: str | None
     source: str
     mode: ChartMode
     strategy: str | None = None
@@ -22,6 +22,7 @@ class ChartItem:
     market_dataset_id: str | None = None
     market_asof: str | None = None
     anchor_asof: str | None = None
+    manual: bool = False
 
 
 def chart_items(rows, mode: ChartMode):
@@ -30,13 +31,14 @@ def chart_items(rows, mode: ChartMode):
     for row in rows or []:
         value: Mapping = row
         observation_id = value.get("observation_id")
-        if not observation_id:
+        manual = mode == 'watch' and bool(value.get('manual'))
+        if not observation_id and not manual:
             continue
         result.append(
             ChartItem(
                 code=str(value.get("code") or ""),
                 name=str(value.get("name") or ""),
-                observation_id=str(observation_id),
+                observation_id=str(observation_id) if observation_id else None,
                 source=str(value.get("source") or "unknown"),
                 mode=mode,
                 strategy=value.get("strategy"),
@@ -44,6 +46,7 @@ def chart_items(rows, mode: ChartMode):
                 market_dataset_id=value.get("market_dataset_id"),
                 market_asof=value.get("market_asof"),
                 anchor_asof=value.get("anchor_asof"),
+                manual=manual,
             )
         )
     return result

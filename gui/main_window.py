@@ -7,14 +7,11 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs
-from .afterhours import AfterhoursPage
-from .strategy_iteration import StrategyIterationPage
 from .chart_items import ChartItem, chart_items
 from .chart_panel import ChartGrid
 from .data import REALTIME_MARKET_SOURCE
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
-from .trade_management import TradeManagementFrame
 from .theme import (
     ACCENT,
     ACCENT_HOVER,
@@ -82,6 +79,10 @@ class AplusMainWindow(ttk.Window):
         self.store = store
         self.geometry("1600x1000")
         self.minsize(1280, 760)
+        try:
+            self.state('zoomed')
+        except tk.TclError:
+            pass  # Non-Windows test desktops may not support zoomed.
         self._tf_var = tk.StringVar(value="daily")
         self._tray_icon = None
         self._tray_actions = queue.SimpleQueue()
@@ -198,15 +199,6 @@ class AplusMainWindow(ttk.Window):
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
                   foreground=MUTED).pack(side=tk.RIGHT)
 
-        self.afterhours = AfterhoursPage(self.page_host, self.service, self.store)
-        self.afterhours.grid(row=0, column=0, sticky=tk.NSEW)
-        self._pages["afterhours"] = self.afterhours
-        self.strategy_iteration = StrategyIterationPage(self.page_host,self.service,self.store)
-        self.strategy_iteration.grid(row=0,column=0,sticky=tk.NSEW)
-        self._pages['strategy'] = self.strategy_iteration
-        self.trade_management = TradeManagementFrame(self.page_host, self.store)
-        self.trade_management.grid(row=0, column=0, sticky=tk.NSEW)
-        self._pages["other"] = self.trade_management
         self._switch_section("premarket")
         self.bind("<Configure>", self._resize_layout)
 
@@ -237,21 +229,51 @@ class AplusMainWindow(ttk.Window):
         ).pack(anchor=tk.W)
         return page
 
+    def _section(self, key):
+        """Construct hidden business pages only when actually requested."""
+        if key not in self._pages:
+            if key == 'afterhours':
+                from .afterhours import AfterhoursPage
+                page = AfterhoursPage(self.page_host, self.service, self.store)
+            elif key == 'strategy':
+                from .strategy_iteration import StrategyIterationPage
+                page = StrategyIterationPage(self.page_host, self.service, self.store)
+            elif key == 'other':
+                from .trade_management import TradeManagementFrame
+                page = TradeManagementFrame(self.page_host, self.store)
+            else:
+                raise ValueError('未知业务页面')
+            page.grid(row=0, column=0, sticky=tk.NSEW)
+            self._pages[key] = page
+        return self._pages[key]
+
+    @property
+    def afterhours(self):
+        return self._section('afterhours')
+
+    @property
+    def strategy_iteration(self):
+        return self._section('strategy')
+
+    @property
+    def trade_management(self):
+        return self._section('other')
+
     def _switch_section(self, key):
-        if key == "other" and hasattr(self, "trade_management"):
+        self._section(key)
+        if key == "other":
             # Mask before raising the page, not after revealing the old frame.
             self.trade_management.hide_private_values()
         if key == 'strategy':
             self.strategy_iteration.refresh()
         if key == 'afterhours':
             self.afterhours.refresh()
-        for name, page in self._pages.items():
-            if name == key:
-                page.tkraise()
-            self._section_buttons[name].configure(
+        self._pages[key].tkraise()
+        for name, button in self._section_buttons.items():
+            button.configure(
                 bootstyle="primary" if name == key else "secondary"
             )
-        if key == "other" and hasattr(self, "trade_management"):
+        if key == "other":
             self.trade_management.reload()
 
     def _setup_tray(self):
@@ -352,6 +374,11 @@ class AplusMainWindow(ttk.Window):
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):
+        current = self.chart.current_item()
+        if self._chart_mode == 'watch' and current and current.manual:
+            self.on_watch_selected(current.code)
+            self.toolbar.date_label.configure(text='截至周' if tf == 'weekly' else '交易日')
+            return
         self._cur_date = self.toolbar.selected_date()
         self._candidate_source = self._source_for_current_date(tf)
         self.chart.set_timeframe(tf)
@@ -460,6 +487,17 @@ class AplusMainWindow(ttk.Window):
     def on_watch_selected(self, code, observation_id=None):
         if not code or self.store is None:
             return
+        rows = self.watch.rows()
+        manual = next((r for r in rows if r['code'] == code and r.get('manual')), None)
+        if manual:
+            items = chart_items([{**r, 'timeframe': self._tf_var.get()} if r.get('manual') else r
+                                 for r in rows], 'watch')
+            index = next(i for i, item in enumerate(items) if item.code == code)
+            self._chart_mode = 'watch'
+            self.toolbar.set_chart_source('关注')
+            self.chart.set_items(items, selected_index=index)
+            self._status_text.set(f'手动关注：{code} · K图按需加载，不运行策略扫描')
+            return
         if not observation_id:
             from .data import latest_observation
 
@@ -504,6 +542,9 @@ class AplusMainWindow(ttk.Window):
 
     def _on_chart_item_activated(self, observation_id):
         if observation_id is not None:
+            if str(observation_id).startswith('watch:'):
+                self.watch.select_code(observation_id[len('watch:'):])
+                return
             if self._chart_mode == "watch":
                 self.watch.select_observation(observation_id)
             else:
@@ -513,6 +554,11 @@ class AplusMainWindow(ttk.Window):
         self.chart.highlight_drop(root_x, root_y)
 
     def _on_watch_drop(self, code, observation_id, root_x, root_y):
+        manual = next((r for r in self.watch.rows() if r['code'] == code and r.get('manual')), None)
+        if manual:
+            value = {**manual, 'timeframe': self._tf_var.get()}
+            self.chart.replace_at_point(chart_items([value], 'watch')[0], root_x, root_y)
+            return
         if not observation_id and code and self.store is not None:
             from .data import latest_observation
 

@@ -122,6 +122,7 @@ def test_native_gap_button_uses_selected_day_and_does_not_count_scope_error(tmp_
 
 
 def check_toolbar():
+    import time
     import ttkbootstrap as ttk
     from unittest.mock import patch
     from gui.toolbar import ToolBar
@@ -149,11 +150,22 @@ def check_toolbar():
                 st.execute('INSERT INTO meta VALUES(?,?)', (source + '_integrity', json.dumps(receipt)))
         with patch('workbench.market.completed_date', return_value='2026-10-10'):
             bar = ToolBar(root, store=st)
+            def await_status():
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    root.update()
+                    snapshot = bar._status_snapshot
+                    if snapshot and snapshot[0] == bar._status_key():
+                        return
+                    time.sleep(.01)
+                raise AssertionError('后台完整性未返回当前选择')
             for source in SOURCES:
                 set_market_source(st, source)
+                bar.source_var.set(SOURCES[source])
                 for var, value in zip((bar.year_var, bar.month_var, bar.day_var), ('2026', '10', '09')):
                     var.set(value)
                 bar._fire_date()
+                await_status()
                 assert bar._tickflow_audit['expected_day'] == '2026-10-09'
                 assert bar.btn_integrity.cget('text') == '缺口分类', (source, bar._tickflow_audit, bar.btn_integrity.cget('text'))
                 with patch('gui.tickflow_integrity.show_integrity') as show:
@@ -179,9 +191,11 @@ def check_toolbar():
                 # Broad date filters use the current completed trading day.
                 bar.day_var.set('全部')
                 bar._fire_date()
+                await_status()
                 assert bar._tickflow_audit['expected_day'] == '2026-10-09'
                 with patch('workbench.market.completed_date', return_value='2026-10-12'):
                     bar._load_market_status()
+                    await_status()
                     assert not bar._tickflow_audit['scope_valid']
                     assert bar.btn_integrity.cget('text') == '范围待核验'
                     with patch('gui.tickflow_integrity.show_integrity') as show:
