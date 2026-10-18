@@ -233,11 +233,14 @@ function renderPositionStyle(object) {
 function renderDrawingTextSettings(object) {
   const host=document.querySelector('#drawingTextSettings');
   const defaultFont=object.type==='trend'?14:12;
+  const marker=['up','down'].includes(object.type)||Boolean(object.arrow_marker_version);
   host.innerHTML=`<div class="drawing-text-toolbar"><input type="color" data-setting="textColor" value="${object.textColor||object.color||'#2962ff'}"><select data-setting="fontSize" data-numeric="true">${[10,11,12,14,16,20,24,28,32,40].map(n=>`<option value="${n}" ${n===(object.fontSize||defaultFont)?'selected':''}>${n}</option>`).join('')}</select><label><input type="checkbox" data-setting="textBold" ${object.textBold?'checked':''}><b>B</b></label><label><input type="checkbox" data-setting="textItalic" ${object.textItalic?'checked':''}><i>I</i></label></div>
     <textarea data-setting="text" placeholder="添加文字" rows="4">${escapeChartHtml(object.text||'')}</textarea>
-    <div class="setting-row"><span>文字对齐</span><select data-setting="textVertical"><option value="top">顶部</option><option value="middle">中间</option><option value="bottom">底部</option></select><select data-setting="textAlign"><option value="left">左</option><option value="center">中心</option><option value="right">右</option></select></div>`;
-  host.querySelector('[data-setting="textVertical"]').value=object.textVertical||'top';
-  host.querySelector('[data-setting="textAlign"]').value=object.textAlign||(object.type==='ray'?'right':'center');
+    ${marker?'':`<div class="setting-row"><span>文字对齐</span><select data-setting="textVertical"><option value="top">顶部</option><option value="middle">中间</option><option value="bottom">底部</option></select><select data-setting="textAlign"><option value="left">左</option><option value="center">中心</option><option value="right">右</option></select></div>`}`;
+  if(!marker){
+    host.querySelector('[data-setting="textVertical"]').value=object.textVertical||'top';
+    host.querySelector('[data-setting="textAlign"]').value=object.textAlign||(object.type==='ray'?'right':'center');
+  }
   bindDrawingStyle(host,object);
 }
 

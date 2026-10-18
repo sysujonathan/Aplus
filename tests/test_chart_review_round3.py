@@ -177,3 +177,29 @@ def test_holiday_week_closes_on_verified_last_trading_day(tmp_path):
     assert not bar_completed('2026-06-19', 'weekly', '2026-06-18T18:59:59+08:00')
     assert load_alert_frame(store, boot['identity'], spec, '2026-06-18T19:00:00+08:00').date.tolist() == [
         '2026-06-12', '2026-06-19']
+
+
+def test_compatibility_alert_cannot_notify_when_progress_save_conflicts(tmp_path, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+    import gui.chart_workspace as workspace
+    store = Store(tmp_path)
+    data = bars(['2026-10-14','2026-10-15'])
+    save_dataset(store, 'sz.000001', data, 'test', 'qfq')
+    boot = setup(store, data)
+    ChartBridge(store, boot, clock=lambda:'2026-10-15T20:00:00+08:00').create_price_alert(10)
+    before = deepcopy(store.chart_document(boot['identity']))
+    data = pd.concat([data, bars(['2026-10-16'],[11])], ignore_index=True)
+    save_dataset(store, 'sz.000001', data, 'test', 'qfq')
+    owner = SimpleNamespace(replay_index=None, history=SimpleNamespace(value=deepcopy(before)),
+        store=store, identity=boot['identity'], code='sz.000001', source='test', adjustment='qfq',
+        top=Mock(), _save=Mock(return_value=False), refresh_tree=Mock())
+    monkeypatch.setattr(workspace, 'datetime', Mock(now=lambda *_:datetime.fromisoformat('2026-10-16T20:00:00+08:00')))
+    warning = Mock()
+    monkeypatch.setattr(workspace.messagebox, 'showwarning', warning)
+    workspace.ChartWorkspaceDialog.check_alerts(owner, silent=True)
+    owner._save.assert_called_once()
+    assert owner.history.value == before
+    assert store.chart_document(boot['identity']) == before
+    warning.assert_not_called()
+    owner.top.bell.assert_not_called()

@@ -334,19 +334,19 @@ def test_watch_panel_passes_updated_plan_and_title(h2_spec, h2_bars, high, low, 
 
 
 def test_chart_annotations_point_to_candle_centers(h2_spec, h2_bars):
-    from matplotlib.axes import Axes
+    from matplotlib.text import Annotation
     latest = append_bar(h2_bars, 11.4, 10.3)
     plan = signal_at_end(h2_spec, latest)
     instance, calculated = calculate(h2_spec, latest)
     before = calculated.copy(deep=True)
-    real_annotate = Axes.annotate
+    real_draw = Annotation.draw
     annotations = []
 
-    def capture(ax, label, *args, **kwargs):
-        annotations.append((label, kwargs['xy']))
-        return real_annotate(ax, label, *args, **kwargs)
+    def capture(annotation, renderer):
+        annotations.append((annotation.get_text(), annotation.xy))
+        return real_draw(annotation, renderer)
 
-    with patch.object(Axes, 'annotate', capture):
+    with patch.object(Annotation, 'draw', capture):
         image = render_chart(calculated, plan, '', instance.get_metadata())
     dates = calculated.tail(120).date.tolist()
     by_label = dict(annotations)

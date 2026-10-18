@@ -40,6 +40,20 @@ def test_switch_reads_document_after_outgoing_flush_not_selection_time(tmp_path)
     assert stale['drawings'] == []
 
 
+def test_manual_watch_display_period_keeps_daily_coordinates_and_saved_analysis(tmp_path):
+    from gui.chart_bridge import refresh_workspace_boot
+    store, frame, _ = setup(tmp_path)
+    context = dict(frame=frame, code='sz.000001', timeframe='daily', display_timeframe='weekly',
+                   record={'source':'test','adjustment':'qfq'}, context_kind='watch')
+    boot = workspace_boot(store, context)
+    assert boot['timeframe'] == 'daily' and boot['state']['timeframe'] == 'weekly'
+    assert len(boot['series']['daily']) == len(frame)
+    assert refresh_workspace_boot(store, boot)['state']['timeframe'] == 'weekly'
+    ChartBridge(store, boot).save_state(dict(timeframe='monthly',objects=[]))
+    assert workspace_boot(store, context)['state']['timeframe'] == 'monthly'
+    assert refresh_workspace_boot(store, boot)['state']['timeframe'] == 'monthly'
+
+
 def test_indicator_and_visibility_options_survive_detached_and_embedded_reopen(tmp_path):
     store, frame, boot = setup(tmp_path)
     bridge = ChartBridge(store, boot)

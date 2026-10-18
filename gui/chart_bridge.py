@@ -207,7 +207,7 @@ def workspace_boot(store, context):
         "indicators": deepcopy(saved.get("indicators") or {}),
         "templates": deepcopy(saved.get("templates") or {}),
         "replayDate": saved.get("replayDate"),
-        "timeframe": saved.get("timeframe") or context.get("timeframe") or "daily",
+        "timeframe": saved.get("timeframe") or context.get("display_timeframe") or context.get("timeframe") or "daily",
     }
     payload = _native(context.get("payload") or {})
     context_kind = str(context.get("context_kind") or "candidate")
@@ -237,6 +237,7 @@ def workspace_boot(store, context):
         "symbol": str(context["code"]), "displaySymbol": str(context["code"]).split(".")[-1],
         "name": str(context.get("name") or context["code"]), "source": source,
         "adjustment": adjustment, "timeframe": timeframe, "series": series,
+        "displayTimeframe": str(context.get('display_timeframe') or timeframe),
         "seriesCloseDates": close_dates,
         "axisDates": {unit: _coordinate_dates(data, unit) for unit, data in series.items()},
         "contextKind": context_kind, "contextTitle": title,
@@ -259,7 +260,7 @@ def refresh_workspace_boot(store, boot):
     value.update(revision=document['revision'], settings=_native(document['settings']),
                  alerts=_native(document['alerts']), editBaseline=_native(_edit_fields(document)))
     value['state'] = dict(objects=value['drawings'], toolbar=deepcopy(saved.get('toolbar') or {}),
-        view=deepcopy(saved.get('view') or {}), timeframe=saved.get('timeframe') or value['timeframe'],
+        view=deepcopy(saved.get('view') or {}), timeframe=saved.get('timeframe') or value.get('displayTimeframe') or value['timeframe'],
         indicators=deepcopy(saved.get('indicators') or {}))
     value['state']['templates'] = deepcopy(saved.get('templates') or {})
     value['state']['replayDate'] = saved.get('replayDate')

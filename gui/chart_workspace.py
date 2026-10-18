@@ -50,6 +50,19 @@ def _path_ends(obj):
             web.get('endStyle', 'arrow' if web.get('path_version') else 'none') == 'arrow')
 
 
+def _arrow_marker_points(a, b):
+    length = math.hypot(b[0]-a[0], b[1]-a[1])
+    if length < .01:
+        return [a, b]
+    ux, uy = (b[0]-a[0])/length, (b[1]-a[1])/length
+    head = min(48, length*.4)
+    wing, shaft = head*.625, head*.625*.45
+    base = (b[0]-ux*head, b[1]-uy*head)
+    def side(offset):
+        return (base[0]-uy*offset, base[1]+ux*offset)
+    return [a, side(shaft), side(wing), b, side(-wing), side(-shaft)]
+
+
 def resample_daily(frame, timeframe):
     """Create display-only weekly/monthly OHLC from real daily bars."""
     if timeframe == 'daily':
@@ -69,7 +82,7 @@ class ChartWorkspaceDialog:
 
     def __init__(self, parent, store, *, frame, record, code, name='', timeframe='daily',
                  payload=None, metadata=None, strategy=None, strategy_type='',
-                 instrument_type=None, holding_levels=(), replay_events=(), title=''):
+                 instrument_type=None, holding_levels=(), replay_events=(), title='', display_timeframe=None):
         self.store, self.code, self.name = store, str(code), str(name or '')
         self.record = dict(record or {})
         self.source = str(self.record.get('source') or 'unknown')
@@ -127,8 +140,12 @@ class ChartWorkspaceDialog:
         self.top.bind('<Escape>', self._escape)
         self._build()
         self._load_saved_intraday()
-        self.schedule_render()
-        self._alert_after = None
+        display = (saved['settings'].get('web_state') or {}).get('timeframe') or display_timeframe
+        if display in ('daily', 'weekly', 'monthly') and display != self.timeframe:
+            self.change_timeframe(display)
+        else:
+            self.schedule_render()
+        self._alert_after = self.top.after(3_000, self._scheduled_alert_check)
 
     @property
     def value(self):
@@ -419,6 +436,9 @@ class ChartWorkspaceDialog:
                                         fill=color, anchor=tk.SW, tags=tag)
         elif kind == 'ray':
             x, y = points[0]; self.canvas.create_line(x, y, x_right, y, fill=color, width=width, tags=tag)
+        elif kind == 'arrow' and (obj.get('web') or {}).get('arrow_marker_version'):
+            polygon = _arrow_marker_points(*points[:2])
+            self.canvas.create_polygon(*[n for point in polygon for n in point], fill=color, outline=color, tags=tag)
         elif kind in ('trend', 'arrow'):
             self.canvas.create_line(*points[0], *points[1], fill=color, width=width,
                                     arrow=tk.LAST if kind == 'arrow' else tk.NONE, tags=tag)
@@ -867,8 +887,18 @@ class ChartWorkspaceDialog:
 
     def _scheduled_alert_check(self):
         self._alert_after = None
-        self.check_alerts(silent=True)
-        if not self._closed: self._alert_after = self.top.after(60_000, self._scheduled_alert_check)
+        try:
+            self.check_alerts(silent=True)
+            self._last_alert_error = None
+        except Exception as exc:
+            error = str(exc)
+            self.status.set('本轮提醒检查暂停：' + error)
+            if error != getattr(self, '_last_alert_error', None):
+                self._last_alert_error = error
+                messagebox.showwarning('A++ 提醒检查暂停', error + '\n\n当前图形仍保留，下轮重新核对已保存行情。', parent=self.top)
+        finally:
+            if not self._closed:
+                self._alert_after = self.top.after(60_000, self._scheduled_alert_check)
 
     def check_alerts(self, *, silent=False):
         if self.replay_index is not None: return
@@ -876,8 +906,8 @@ class ChartWorkspaceDialog:
         now = datetime.now(timezone.utc).isoformat()
         from .chart_alerts import load_alert_frame
         for index, alert in enumerate(doc['alerts']):
-            if (alert['code'],alert['source'],alert['adjustment'],alert['timeframe']) != (
-                    self.code,self.source,self.adjustment,self.timeframe):
+            if (alert['code'],alert['source'],alert['adjustment']) != (
+                    self.code,self.source,self.adjustment):
                 continue
             frame = load_alert_frame(self.store, self.identity, alert, now)
             if frame is None or frame.empty:
@@ -885,7 +915,12 @@ class ChartWorkspaceDialog:
             doc['alerts'][index], event = evaluate_alert(alert, frame, now=now)
             if event: events.append(event)
         if doc['alerts'] != self.history.value['alerts']:
-            self.history.value = validate_document(doc); self._save(); self.refresh_tree()
+            previous = self.history.value
+            self.history.value = validate_document(doc)
+            if not self._save():
+                self.history.value = previous
+                return  # Another editor still owns the revision; do not notify uncommitted events.
+            self.refresh_tree()
         if events:
             messagebox.showwarning('A++ 行情提醒', '\n'.join(
                 f"{event['text']} · {event['bar']} · 收盘 {event['price']:.3f}" for event in events), parent=self.top)
@@ -981,6 +1016,8 @@ class ChartWorkspaceDialog:
                     y=pts[0][1]+(pts[1][1]-pts[0][1])*float(level)
                     draw.line((min(pts[0][0],pts[1][0]),y,right,y),fill=color,width=width)
             elif kind=='ray': draw.line((*pts[0],right,pts[0][1]),fill=color,width=width)
+            elif kind=='arrow' and (obj.get('web') or {}).get('arrow_marker_version'):
+                draw.polygon(_arrow_marker_points(*pts[:2]), fill=color)
             elif kind in ('trend','arrow'): draw.line((*pts[0],*pts[1]),fill=color,width=width)
             elif kind=='ruler':
                 (x1,y1),(x2,y2)=pts

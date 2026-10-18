@@ -177,7 +177,7 @@ const prefix=mtfDaily.slice(0,3),prefixWeekly=indicators.aggregate(prefix,'weekl
 const blindMtf=indicators.mergeTimeframe(indicators.average(prefixWeekly.map(row=>row.close),2),prefixWeekly,prefix,
   'weekly','daily',mtfCloses,'2026-01-07',false);
 assert.deepEqual(Array.from(blindMtf),[null,null,30]);
-vm.runInContext(['dashPattern','drawUserObject','drawSelectionHandles','drawArrowHead','calculateEma','clamp','visibleWindow','objectVisibleAtTimeframe','timeAxisTicks'].map(extract).join('\n'),context);
+vm.runInContext(['dashPattern','drawUserObject','drawSelectionHandles','arrowMarkerPoints','drawArrowHead','calculateEma','clamp','visibleWindow','objectVisibleAtTimeframe','timeAxisTicks'].map(extract).join('\n'),context);
 context.channel={id:'channel',type:'channel',a:{index:0,value:10},b:{index:10,value:20},c:{index:5,value:22},color:'#fff',width:2,fill:false};
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);
 assert.deepEqual(paths.slice(0,3).map(p=>p.points),[[[0,10],[10,20]],[[0,13.5],[10,23.5]],[[0,17],[10,27]]]);
@@ -217,6 +217,68 @@ assert.equal(pathFinish.userObjects[0].points.length,2,'Escape cannot add the un
 assert.equal(pathFinish.userObjects[0].endStyle,'arrow');
 assert.equal(pathFinish.userObjects[0].fill,undefined,'a legacy polygon template cannot turn new Path drawings into polygons');
 assert.equal(pathFinish.userObjects[0].closed,undefined);
+// TV risk tools are placed with one click, with independent right/target/stop
+// handles afterwards. New marker arrows differ from saved legacy line arrows.
+const creation=vm.createContext({structuredClone,Math,Date,activeDrawingTool:null,
+  draftAnchor:null,draftCursor:null,draftPoints:[],pendingDrawingText:null,
+  onePointTools:new Set(['ray','up','down','text']),
+  bars:[{date:'2026-10-12'}],replayActive:false,replayIndex:0,activeTimeframeUnit:'daily',
+  chartBoot:{priceStep:.01},chartCoordinates:{bounds:()=>({min:0,max:100})},
+  canvas:{_view:{high:30,low:10,plotHeight:400,candleWidth:5}},
+  userObjects:[],drawingTemplates:{arrow:{arrow_marker_version:0}},
+  rememberObjects(){},savePrototypeState(){},updateObjectTree(){},selectObject(){},
+  exitDrawingMode(){this.activeDrawingTool=null;},showToast(){},renderWorkspace(){},
+  toolNames:{long:'多头仓位',short:'空头仓位',arrow:'箭头标记',up:'向上箭头',down:'向下箭头'},
+  snapDrawingPoint:p=>structuredClone(p)});
+vm.runInContext(['clamp','normalizeDrawingPrice','placeDrawing'].map(extract).join('\n'),creation);
+for(const type of ['long','short','up','down']){
+  creation.activeDrawingTool=type;creation.draftAnchor=null;
+  const before=creation.userObjects.length;
+  creation.placeDrawing({index:8,value:20});
+  assert.equal(creation.userObjects.length,before+1,`${type} needs only one click`);
+  const object=creation.userObjects.at(-1);
+  if(['long','short'].includes(type)){
+    assert.equal(object.b.index,38);
+    assert.equal(Math.abs(object.b.value-object.a.value),Math.abs(object.stop-object.a.value));
+    assert.equal(type==='long'?object.b.value>20:object.b.value<20,true);
+  }else assert.equal(object.fontSize,14);
+}
+creation.activeDrawingTool='arrow';creation.draftAnchor=null;
+const beforeMarker=creation.userObjects.length;
+creation.placeDrawing({index:4,value:19});assert.equal(creation.userObjects.length,beforeMarker);
+creation.placeDrawing({index:12,value:23});
+assert.equal(creation.userObjects.at(-1).arrow_marker_version,1);
+assert.equal(creation.userObjects.at(-1).fontSize,16);
+assert.equal(creation.userObjects.at(-1).color,'#f23645');
+creation.canvas._view.plotHeight=428; // pixel distance is not an exact tick
+creation.activeDrawingTool='long';creation.draftAnchor=null;creation.placeDrawing({index:8,value:5.21});
+const tickRisk=creation.userObjects.at(-1);
+assert.equal(Math.round((tickRisk.b.value-5.21)*100),Math.round((5.21-tickRisk.stop)*100));
+const beforeInvalid=creation.userObjects.length;
+creation.activeDrawingTool='short';creation.draftAnchor=null;creation.placeDrawing({index:8,value:.01});
+assert.equal(creation.userObjects.length,beforeInvalid,'an impossible positive-price risk box cannot be persisted');
+const markerPolygon=context.arrowMarkerPoints(0,0,200,0);
+assert.equal(markerPolygon.length,6);assert.deepEqual(Array.from(markerPolygon[0]),[0,0]);
+assert.deepEqual(Array.from(markerPolygon[3]),[200,0]);
+assert.ok(markerPolygon.some(point=>point[1]>20)&&markerPolygon.some(point=>point[1]<-20));
+assert.ok(context.arrowMarkerPoints(10,10,10,10).flat().every(Number.isFinite));
+// Bulk removal protects locked analysis by default; explicit inclusion is a
+// persisted preference, and the whole mutation keeps one undo snapshot.
+const removalHistory=[];
+const removal=vm.createContext({structuredClone,userObjects:[{id:'free'},{id:'locked',locked:true}],
+  indicatorSettings:{ema:true,lock_drawings:false},selectedId:'free',
+  document:{querySelector:()=>({classList:{remove(){}}})},
+  rememberObjects(){removalHistory.push(structuredClone(removal.userObjects));},
+  savePrototypeState(){},updateObjectTree(){},renderWorkspace(){}});
+vm.runInContext(extract('removeChartObjects'),removal);
+removal.removeChartObjects('drawings');
+assert.deepEqual(removal.userObjects.map(o=>o.id),['locked']);assert.equal(removal.indicatorSettings.ema,true);
+assert.equal(removalHistory[0].length,2);
+removal.indicatorSettings.remove_locked=true;removal.removeChartObjects('all');
+assert.equal(removal.userObjects.length,0);assert.equal(removal.indicatorSettings.ema,false);
+removal.userObjects=[{id:'free'}];removal.indicatorSettings={ema:true,lock_drawings:true};
+removal.removeChartObjects('all');assert.equal(removal.userObjects.length,1);
+assert.equal(removal.indicatorSettings.ema,false);
 // Rectangle extension is independent of the direction in which its anchors
 // were drawn. Fill, border and midpoint use the same geometric boundaries.
 context.selectedId=null;

@@ -23,7 +23,7 @@ const focusIndex = index => {
 const toolNames = {
   fib: '斐波那契回撤', long: '多头仓位', ray: '水平射线', trend: '趋势线',
   short: '空头仓位', rectangle: '矩形', up: '向上箭头', down: '向下箭头',
-  arrow: '箭头', path: '多段折线', channel: '平行通道', text: '文字', ruler: '价格范围'
+  arrow: '箭头标记', path: '多段折线', channel: '平行通道', text: '文字', ruler: '价格范围'
 };
 const onePointTools = new Set(['ray', 'up', 'down', 'text']);
 const fibLevelDefaults = [
@@ -466,8 +466,9 @@ function renderWorkspace() {
       b: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftPoints[1] : draftCursor,
       c: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftCursor : undefined,
       points: activeDrawingTool === 'path' ? [...draftPoints, draftCursor] : undefined,
+      arrow_marker_version: activeDrawingTool === 'arrow' ? 1 : undefined,
       stop: draftAnchor.value - Math.abs(draftCursor.value - draftAnchor.value) * .55,
-      color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
+      color: activeDrawingTool === 'arrow' ? '#f23645' : '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
     }, true);
   }
   if (replayActive) drawReplayBoundary(ctx, canvas._view);
@@ -622,7 +623,13 @@ function drawUserObject(ctx, view, object, draft = false) {
   ctx.setLineDash(dashPattern(object.dash));
   ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1);
 
-  if (['trend', 'arrow', 'ruler'].includes(object.type)) {
+  if (object.type === 'arrow' && object.arrow_marker_version) {
+    const polygon = arrowMarkerPoints(ax, ay, bx, by);
+    ctx.setLineDash([]);ctx.beginPath();
+    polygon.forEach(([x,yy],index)=>index?ctx.lineTo(x,yy):ctx.moveTo(x,yy));
+    ctx.closePath();ctx.fill();registerPolygon(object.id,polygon);
+    registerSegment(object.id,ax,ay,bx,by);
+  } else if (['trend', 'arrow', 'ruler'].includes(object.type)) {
     const slope = (by-ay)/((bx-ax)||1);
     const startX = object.type==='trend' && object.extendLeft ? left : ax;
     const endX = object.type==='trend' && object.extendRight ? plotRight : bx;
@@ -761,6 +768,16 @@ function drawUserObject(ctx, view, object, draft = false) {
   ctx.restore();
 }
 
+function arrowMarkerPoints(ax, ay, bx, by) {
+  const length=Math.hypot(bx-ax,by-ay);
+  if(length<.01)return [[ax,ay],[bx,by]];
+  const ux=(bx-ax)/length,uy=(by-ay)/length;
+  const head=Math.min(48,length*.4),wing=head*.625,shaft=wing*.45;
+  const base=[bx-ux*head,by-uy*head];
+  const side=offset=>[base[0]-uy*offset,base[1]+ux*offset];
+  return [[ax,ay],side(shaft),side(wing),[bx,by],side(-wing),side(-shaft)];
+}
+
 function drawArrowHead(ctx, ax, ay, bx, by) {
   const angle = Math.atan2(by - ay, bx - ax);
   ctx.beginPath();
@@ -824,6 +841,7 @@ function selectObject(id, x, y, refreshTree = true) {
   toolbar.style.left = `${Math.max(8, wrap.clientWidth - 190)}px`;
   toolbar.style.top = '0px';
   document.querySelector('#quickWidth').textContent = `${object.width || 2}px`;
+  document.querySelector('#quickWidth').hidden = ['up','down','text'].includes(object.type) || Boolean(object.arrow_marker_version);
   document.querySelector('.color-swatch').style.background = object.color || '#2962ff';
   if(refreshTree)updateObjectTree();
   else document.querySelectorAll('[data-object-id]').forEach(row=>row.classList.toggle('selected',row.dataset.objectId===id));
@@ -861,7 +879,7 @@ function startTool(type, button) {
   document.querySelectorAll('.tool[data-tool]:not(.magnet):not([data-tool="lock"]), [data-favorite]').forEach(item => item.classList.remove('active'));
   if (button) button.classList.add('active');
   canvas.classList.toggle('drawing', Boolean(activeDrawingTool));
-  const instruction = type === 'path' ? '依次单击转折点，双击完成' : (type === 'zoom' || type === 'zoomOut') ? '在图上拖框选择区域' : onePointTools.has(type) ? '在图上单击放置' : '依次单击起点和终点';
+  const instruction = type === 'path' ? '依次单击转折点，双击完成' : (type === 'zoom' || type === 'zoomOut') ? '在图上拖框选择区域' : onePointTools.has(type)||['long','short'].includes(type) ? '在图上单击放置' : '依次单击起点和终点';
   showToast(activeDrawingTool ? `${toolNames[type] || button?.title}：${instruction}` : `${button?.title || '十字光标'}已选择`);
   renderWorkspace();
 }
@@ -897,7 +915,7 @@ function placeDrawing(point) {
     draftAnchor = snapped;
     draftCursor = { ...draftAnchor };
     if (activeDrawingTool === 'path') { draftPoints = [draftAnchor]; renderWorkspace(); return; }
-    if (!onePointTools.has(activeDrawingTool)) { renderWorkspace(); return; }
+    if (!onePointTools.has(activeDrawingTool) && !['long','short'].includes(activeDrawingTool)) { renderWorkspace(); return; }
   }
   if (activeDrawingTool === 'path') {
     const last = draftPoints.at(-1);
@@ -924,16 +942,25 @@ function placeDrawing(point) {
   if (object.type === 'channel') object.c = snapped;
   if (object.type==='up')object.color='#089981';
   if (object.type==='down')object.color='#f23645';
+  if (['up','down'].includes(object.type))object.fontSize=14;
+  if (object.type==='arrow')Object.assign(object,{arrow_marker_version:1,color:'#f23645',fontSize:16});
   if (object.type === 'long' || object.type === 'short') {
-    const distance=Math.max(Math.abs(object.b.value-object.a.value), object.a.value*.01);
-    object.b.value=object.a.value+(object.type==='long'?distance:-distance);
-    object.stop=object.a.value+(object.type==='long'?-1:1)*distance*.55;
+    const view=canvas._view,limits=chartCoordinates.bounds(bars,activeTimeframeUnit);
+    const distance=normalizeDrawingPrice(Math.min(object.a.value*.9,Math.max(Number(chartBoot.priceStep)||.000001,
+      (view.high-view.low)*Math.min(110,view.plotHeight*.25)/view.plotHeight)));
+    object.b={index:clamp(object.a.index+Math.max(1,Math.round(150/view.candleWidth)),limits.min,limits.max),
+      value:normalizeDrawingPrice(object.a.value+(object.type==='long'?distance:-distance))};
+    object.stop=object.a.value+(object.type==='long'?-1:1)*distance;
     Object.assign(object,{position_version:1,account_size:1000,risk_value:25,risk_unit:'percent',
       lot_size:1,leverage:10000,qty_precision:'default',risk_budget:250,alwaysShowStats:false,color:'#787b86',width:1});
     object.stop=normalizeDrawingPrice(object.stop);
+    if(Math.min(object.b.value,object.stop)<=0||object.b.value===object.a.value||object.stop===object.a.value){
+      exitDrawingMode();renderWorkspace();showToast('当前价格无法放置有效的初始目标和止损，请调整放置价格');return;
+    }
   }
   rememberObjects();
   Object.assign(object,structuredClone(drawingTemplates[object.type] || {}));
+  if(object.type==='arrow')object.arrow_marker_version=1;
   if (object.type === 'text' && pendingDrawingText) object.text = pendingDrawingText;
   userObjects.push(object);
   draftAnchor = null; draftCursor = null;
@@ -1308,10 +1335,10 @@ function renderFibSettings(object) {
 function renderToolSpecificSettings(object) {
   if(object.type==='fib'){renderFibSettings(object);return;}
   if(['long','short'].includes(object.type)){renderPositionStyle(object);return;}
-  if(['trend','arrow'].includes(object.type)){renderTrendSettings(object);return;}
+  if(object.type==='trend'||(object.type==='arrow'&&!object.arrow_marker_version)){renderTrendSettings(object);return;}
   if(object.type==='channel'){renderChannelSettings(object);return;}
   const host=document.querySelector('#toolSpecificSettings');
-  const marker=['up','down','text'].includes(object.type);
+  const marker=['up','down','text'].includes(object.type)||Boolean(object.arrow_marker_version);
   let extra='';
   if(object.type==='rectangle'||(object.type==='path'&&!object.path_version))extra=`
     <div class="setting-row"><label><input type="checkbox" data-setting="fill" ${object.fill===true||(object.type==='rectangle'&&object.fill!==false)?'checked':''}>背景</label><input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}"></div>
@@ -1332,7 +1359,7 @@ function renderToolSpecificSettings(object) {
     <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>向右延伸</label>
     </div></details></div>`:'';
   host.innerHTML=`<div class="tool-setting-stack">${extension}${marker?paletteSettings(object):commonLineSettings(object,object.type==='rectangle'?'边框':'线条')}
-    <label>不透明度<input type="range" data-setting="alpha" min="0" max="100" value="${Math.round((object.alpha??1)*100)}"></label>${extra}</div>`;
+    ${marker?'':`<label>不透明度<input type="range" data-setting="alpha" min="0" max="100" value="${Math.round((object.alpha??1)*100)}"></label>`}${extra}</div>`;
   bindDrawingStyle(host,object);
   host.querySelectorAll('.rectangle-extend input').forEach(control=>control.addEventListener('change',()=>{
     host.querySelector('[data-extension-label]').textContent=extensionLabel();
@@ -1533,14 +1560,37 @@ document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button =
 }));
 document.querySelector('#openAlert').addEventListener('click', () => openWorkspaceModal('alertModal'));
 document.querySelector('#openObject').addEventListener('click', openObjectSettings);
-document.querySelector('#removeObjects').addEventListener('click', () => {
+function refreshRemoveMenu() {
   const options=document.querySelectorAll('#removeModal .remove-option');
-  options[0].querySelector('small').textContent=`${userObjects.length} 个图形`;
-  options[1].querySelector('small').textContent=indicatorSettings.ema?`EMA ${indicatorSettings.ema_length}`:'无指标';
+  const count=userObjects.length,indicators=indicatorSettings.ema?1:0;
+  options[0].textContent=`移除${count}个绘图`;
+  options[1].textContent=`移除${indicators}个指标`;
+  options[2].textContent=`移除${count}个绘图和${indicators}个指标`;
   options[0].disabled=userObjects.length===0;
   options[1].disabled=!indicatorSettings.ema;
   options[2].disabled=userObjects.length===0&&!indicatorSettings.ema;
-  openWorkspaceModal('removeModal');
+  document.querySelector('#removeLockedDrawings').checked=Boolean(indicatorSettings.remove_locked);
+}
+function positionRemoveMenu() {
+  const menu=document.querySelector('#removeModal');
+  if(!menu.classList.contains('show'))return;
+  const rect=document.querySelector('#removeObjects').getBoundingClientRect();
+  menu.style.left=`${clamp(rect.right+4,8,innerWidth-menu.offsetWidth-8)}px`;
+  menu.style.top=`${clamp(rect.bottom-menu.offsetHeight,8,innerHeight-menu.offsetHeight-8)}px`;
+}
+window.addEventListener('resize',positionRemoveMenu);
+document.querySelector('#removeObjects').addEventListener('click', event => {
+  event.stopPropagation();refreshRemoveMenu();
+  document.querySelector('#removeModal').classList.toggle('show');positionRemoveMenu();
+});
+document.querySelector('#removeLockedDrawings').addEventListener('change', event=>{
+  indicatorSettings.remove_locked=event.target.checked;savePrototypeState();refreshRemoveMenu();
+});
+document.addEventListener('click',event=>{
+  if(!event.target.closest('#removeModal,#removeObjects'))document.querySelector('#removeModal').classList.remove('show');
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape')document.querySelector('#removeModal').classList.remove('show');
 });
 document.querySelectorAll('.close-modal').forEach(button => button.addEventListener('click', closeWorkspaceModal));
 document.querySelector('#closeObjectSettings').addEventListener('click', () => closeObjectSettings(false));
@@ -1557,12 +1607,15 @@ document.querySelector('#objectTemplate').addEventListener('click', () => {
 });
 document.querySelectorAll('[data-template-action]').forEach(button => button.addEventListener('click', () => {
   const object = objectAtSelection();if(!object)return;
-  const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked']);
+  const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked','arrow_marker_version','path_version']);
   if (button.dataset.templateAction === 'save') {
     drawingTemplates[object.type] = structuredClone(Object.fromEntries(Object.entries(object).filter(([key])=>!excluded.has(key))));
     savePrototypeState();showToast('绘图模板已保存到本机');
   } else if(drawingTemplates[object.type]) {
-    rememberObjects();Object.assign(object,structuredClone(drawingTemplates[object.type]));
+    rememberObjects();
+    const versions={arrow_marker_version:object.arrow_marker_version,path_version:object.path_version};
+    Object.assign(object,structuredClone(drawingTemplates[object.type]));
+    for(const [key,value] of Object.entries(versions)){if(value===undefined)delete object[key];else object[key]=value;}
     renderToolSpecificSettings(object);renderVisibilitySettings(object);
     if(['long','short'].includes(object.type))renderPositionInputs(object);
     if(['trend','ray','channel','rectangle','path','arrow'].includes(object.type))renderDrawingTextSettings(object);
@@ -1650,12 +1703,17 @@ document.querySelector('#togglePanel').addEventListener('click', () => {
   indicatorSettings.sidebar_open = !document.querySelector('#rightPanel').classList.contains('collapsed');
   savePrototypeState();setTimeout(renderWorkspace, 190);
 });
-document.querySelectorAll('.remove-option').forEach((button, index) => button.addEventListener('click', () => {
+function removeChartObjects(scope) {
+  if(!['drawings','indicators','all'].includes(scope))return;
   rememberObjects();
-  if (index === 0 || index === 2) userObjects = [];
-  if (index === 1 || index === 2) indicatorSettings.ema = false;
-  selectedId = null; document.querySelector('#selectedObject').classList.remove('visible'); closeWorkspaceModal(); savePrototypeState(); updateObjectTree(); renderWorkspace();
-}));
+  if(scope!=='indicators')userObjects=userObjects.filter(object=>!indicatorSettings.remove_locked&&
+    (object.locked||indicatorSettings.lock_drawings));
+  if(scope!=='drawings')indicatorSettings.ema=false;
+  selectedId=null;document.querySelector('#selectedObject').classList.remove('visible');
+  document.querySelector('#removeModal').classList.remove('show');
+  savePrototypeState();updateObjectTree();renderWorkspace();
+}
+document.querySelectorAll('[data-remove-scope]').forEach(button=>button.addEventListener('click',()=>removeChartObjects(button.dataset.removeScope)));
 
 const replaySpeeds = [10, 7, 5, 3, 1, .5, .3, .2, .1];
 

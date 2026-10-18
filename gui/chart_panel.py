@@ -76,6 +76,8 @@ class ChartPanel(native_ttk.Frame):
         self._workspace_request = None
         self._embedded = None
         self._interactive = interactive
+        self._manual_controller = None
+        self.bind('<Destroy>', self._destroy_manual, add='+')
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
@@ -113,6 +115,8 @@ class ChartPanel(native_ttk.Frame):
             borderwidth=0, padx=8, cursor="hand2",
         )
         self._analysis_btn.pack(side=tk.RIGHT, fill=tk.Y)
+        self._history_btn = tk.Button(self.header, text='更新K线', command=self._refresh_manual,
+                                      bg=CONTROL_BG, fg=TEXT, borderwidth=0, padx=5, cursor='hand2')
 
         self.readout = tk.StringVar(value='移到 K 线上查看开、高、低、收')
         self.readout_frame = native_ttk.Frame(self, style='ChartBody.TFrame', height=42)
@@ -205,6 +209,7 @@ class ChartPanel(native_ttk.Frame):
             self._analysis_btn.configure(bg=DROP_TARGET)
 
     def show_placeholder(self, title="空位"):
+        self._cancel_manual()
         self.readout.set('移到 K 线上查看开、高、低、收')
         self._code = None
         self._observation_id = None
@@ -229,6 +234,7 @@ class ChartPanel(native_ttk.Frame):
         market_asof=None,
         anchor_asof=None,
     ):
+        self._cancel_manual()
         self.store = store
         self._workspace_request = dict(observation_id=observation_id,
             market_dataset_id=market_dataset_id, mode=mode, market_asof=market_asof,
@@ -357,6 +363,32 @@ class ChartPanel(native_ttk.Frame):
             self._title_var.set("加载失败")
             self.chart_label.configure(image="", text=f"图表加载失败：{exc}")
             self._analysis_btn.configure(state=tk.DISABLED)
+
+    def _cancel_manual(self):
+        controller = getattr(self, '_manual_controller', None)
+        if controller is not None:
+            controller.close()
+            self._manual_controller = None
+        if hasattr(self, '_history_btn'):
+            self._history_btn.pack_forget()
+
+    def _destroy_manual(self, event):
+        if event.widget is self:
+            self._cancel_manual()
+
+    def _refresh_manual(self):
+        if self._manual_controller is not None:
+            self._manual_controller.refresh()
+
+    def show_manual(self, store, item):
+        self.show_placeholder(item.name or item.code)
+        self.store, self._code, self._tf = store, item.code, item.timeframe or self._tf
+        self._title_var.set(f'{item.code} {item.name} · 手动关注 · K图准备中…')
+        self.chart_label.configure(text='正在读取本地K图；没有缓存时仅获取这一只标的…')
+        self._tv_btn.configure(state=tk.NORMAL)
+        self._history_btn.pack(side=tk.RIGHT, fill=tk.Y)
+        from .watch_chart import WatchChartController
+        self._manual_controller = WatchChartController(self, item)
 
     def _activate(self, _event=None):
         if self._on_activate:
@@ -508,7 +540,7 @@ class ChartGrid(ttk.Frame):
         self._render_page()
         item = self.current_item()
         if item and self._on_active_item:
-            self._on_active_item(item.observation_id)
+            self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
 
     def focus_observation(self, observation_id):
         if not observation_id:
@@ -538,7 +570,7 @@ class ChartGrid(ttk.Frame):
     def replace_slot(self, slot_index, item):
         if not isinstance(item, ChartItem):
             raise TypeError("替换图格需要 ChartItem")
-        if not item.observation_id or not 0 <= int(slot_index) < len(self._slots):
+        if not (item.observation_id or item.manual) or not 0 <= int(slot_index) < len(self._slots):
             return False
         slot_index = int(slot_index)
         while len(self._display_items) < len(self._slots):
@@ -639,6 +671,9 @@ class ChartGrid(ttk.Frame):
         self._show_item(self._slots[index], item)
 
     def _show_item(self, slot, item):
+        if item.manual:
+            slot.show_manual(self.store, item)
+            return
         slot.show_observation(
             self.store,
             item.observation_id,
@@ -653,7 +688,7 @@ class ChartGrid(ttk.Frame):
         self._refresh_active_styles()
         item = self.current_item()
         if item and self._on_active_item:
-            self._on_active_item(item.observation_id)
+            self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
 
     def _refresh_active_styles(self):
         for index, slot in enumerate(self._slots):

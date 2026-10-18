@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_catalog_covers_each_pr_without_inventing_publications():
     catalog = r.read_catalog(ROOT)
-    assert [x['pr'] for x in catalog['history']] == list(range(1, 53))
+    assert [x['pr'] for x in catalog['history']] == list(range(1, 54))
     by_pr = {x['pr']: x for x in catalog['history']}
     assert by_pr[1]['version'] is None and by_pr[1]['status'] == 'not_released'
     assert by_pr[12]['included_in'] == by_pr[13]['included_in'] == 11
@@ -61,6 +61,9 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[51]['commit'] == 'bd6b1951dc86a4d4bc73e93cb71b23987734f4f9'
     assert by_pr[52]['status'] == 'preview'
     assert by_pr[51]['version'] == '2026.10.17.51'
+    assert by_pr[53]['status'] == 'released'
+    assert by_pr[53]['commit'] == '9f32bff91bd27c70de3a0286fdf200857caf1ca8'
+    assert 'commit' not in by_pr[52]
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -91,6 +94,7 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.15.50-preview' not in text
     assert 'v2026.10.15.49-preview' not in text
     assert 'v2026.10.17.52-preview' in text
+    assert 'v2026.10.17.53-preview' not in text and 'v2026.10.17.53' in text
     assert 'v2026.10.15.48-preview' not in text and 'v2026.10.15.48' in text
 
 

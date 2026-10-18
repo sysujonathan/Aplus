@@ -689,6 +689,8 @@ def test_page_entry_hides_account_calendar_before_raise_and_quotes_do_not_reveal
             main = SimpleNamespace(trade_management=page,
                 _pages={"premarket": Mock(), "other": page},
                 _section_buttons={"premarket": Mock(), "other": Mock()})
+            # Bind the real lazy-page resolver; keep all masking assertions.
+            main._section = lambda key: AplusMainWindow._section(main, key)
             AplusMainWindow._switch_section(main, "premarket")
             with patch.object(page, "tkraise", side_effect=lambda: (
                 pytest.fail("Private values were raised") if page._show_fund_values else None)):

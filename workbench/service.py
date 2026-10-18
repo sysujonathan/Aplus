@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+from contextlib import contextmanager
 import json
 import threading
 import time
@@ -70,6 +71,9 @@ class Service:
                 raise ValueError('正在准备版本更新，请完成更新或取消后再开始任务')
             if self.store.rows("SELECT id FROM jobs WHERE status IN ('running','queued')"):
                 raise ValueError('已有任务正在运行。请等待结束或停止后再开始，避免争用行情连接')
+            for key, pending in self.cancel_flags.items():
+                if key.startswith('chart:'):
+                    pending.set()  # Explicit business work takes priority.
             job = uuid.uuid4().hex[:16]
             self.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
                                (job,kind,'queued',now(),dumps(spec)))
@@ -89,6 +93,22 @@ class Service:
         with self.lock:
             self._code_update_reserved = False
 
+    @contextmanager
+    def chart_access(self, cancel_event):
+        """An on-demand chart read must finish before code can be replaced."""
+        key = 'chart:' + uuid.uuid4().hex
+        with self.lock:
+            if self._code_update_reserved:
+                raise ValueError('正在准备软件更新，请完成更新后再获取K图')
+            if any(not key.startswith('chart:') for key in self.cancel_flags):
+                raise ValueError('盘前或研究任务正在进行；先保留本地K图，任务结束后可更新K线')
+            self.cancel_flags[key] = cancel_event
+        try:
+            yield
+        finally:
+            with self.lock:
+                self.cancel_flags.pop(key, None)
+
     def cancel(self, job):
         if job in self.cancel_flags:
             self.cancel_flags[job].set()
@@ -101,6 +121,7 @@ class Service:
         self.store.execute("UPDATE jobs SET status='running' WHERE id=?", (job,))
         self.store.event(job, '开始任务', kind=kind, settings=spec)
         try:
+            self._wait_for_chart_reads(job)
             report = getattr(self,'_'+kind)(job,spec)
             state = 'partial' if report.get('errors') or report.get('complete') is False else 'completed'
             if self.cancel_flags[job].is_set():
@@ -126,6 +147,19 @@ class Service:
             self.store.event(job,'任务结束',self.store.path)
             with self.lock:
                 self.cancel_flags.pop(job,None)
+
+    def _wait_for_chart_reads(self, job):
+        """Do not race a cancelled on-demand read for the vendor OS lease."""
+        deadline = time.monotonic() + 30
+        while True:
+            with self.lock:
+                active = any(key.startswith('chart:') for key in self.cancel_flags)
+            if not active:
+                return
+            if self.cancel_flags[job].wait(.05):
+                raise InterruptedError('已停止等待关注K图连接释放')
+            if time.monotonic() >= deadline:
+                raise ValueError('关注K图连接尚未安全释放，本次任务未发出行情请求，请稍后再试')
 
     def check_stop(self, job):
         if self.cancel_flags[job].is_set():
