@@ -51,7 +51,14 @@ def render_changelog(text, catalog):
                 text.insert(tk.END, "\n")
                 rules.append(frame)
                 for widget in (frame, line):
-                    widget.bind("<MouseWheel>", lambda e: text.event_generate("<MouseWheel>", delta=e.delta))
+                    # High-DPI scaling (e.g. 200%) makes Tk ignore the
+                    # event_generate() synthesized <MouseWheel>, so the text
+                    # area would not scroll while the pointer is over the
+                    # separator. Scroll it directly instead.
+                    widget.bind(
+                        "<MouseWheel>",
+                        lambda e: text.yview_scroll(-1 if e.delta > 0 else 1, "units"),
+                    )
 
     def resize_rules(event=None):
         width = max(80, text.winfo_width() - 2 * int(text.cget("padx")) - 8)
