@@ -149,4 +149,3 @@ window.openChartWidthPicker = () => {
   });
   document.body.append(popup);positionChartPicker(popup,document.querySelector('#quickWidth'));
 };
-
