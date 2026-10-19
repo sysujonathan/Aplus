@@ -344,7 +344,8 @@ class ChartBridge:
             raise ValueError("提醒状态持续更新，请稍后重试保存；本窗口修改仍保留")
 
     def create_price_alert(self, value, condition="cross_up", name="", target="price",
-                           timeframe=None, ema_length=20, frequency='bar_close', expires=None):
+                           timeframe=None, ema_length=20, frequency='bar_close', expires=None,
+                           upper=None, lower=None, bars=1):
         timeframe = str(timeframe or self.boot["timeframe"])
         rows = (self.boot.get("series") or {}).get(timeframe)
         if not rows:
@@ -364,6 +365,7 @@ class ChartBridge:
             target=target, condition=condition, value=float(value), frame=frame,
             active_after=moment,
             ema_length=int(ema_length), frequency=frequency, expires=_alert_expiry(expires),
+            upper=upper, lower=lower, bars=bars,
         )
         result = self._commit(lambda document: document["alerts"].append(alert))
         return {**result, "alert": _native(alert)}
@@ -371,7 +373,7 @@ class ChartBridge:
     def update_alert(self, alert_id, changes):
         """Edit without replaying historical closes or losing monitor writes."""
         allowed = {'name', 'condition', 'target', 'value', 'ema_length',
-                   'frequency', 'expires', 'enabled', 'timeframe'}
+                   'frequency', 'expires', 'enabled', 'timeframe', 'upper', 'lower', 'bars'}
         if not isinstance(changes, dict) or set(changes) - allowed:
             raise ValueError('提醒设置包含未知字段')
         patch = deepcopy(changes)
@@ -384,7 +386,8 @@ class ChartBridge:
             current = next((item for item in document['alerts'] if item['id'] == alert_id), None)
             if current is None:
                 raise ValueError('提醒已不存在，请重新打开对象树')
-            semantic = {'condition', 'target', 'value', 'ema_length', 'timeframe'}
+            semantic = {'condition', 'target', 'value', 'ema_length', 'timeframe',
+                        'upper', 'lower', 'bars'}
             reseed = any(key in patch and patch[key] != current.get(key) for key in semantic)
             reseed |= patch.get('enabled') is True and not current.get('enabled', True)
             candidate = {**current, **patch}
@@ -400,7 +403,9 @@ class ChartBridge:
                     timeframe=candidate['timeframe'], target=candidate['target'],
                     condition=candidate['condition'], value=candidate['value'], frame=frame,
                     ema_length=int(candidate['ema_length']), frequency=candidate['frequency'],
-                    expires=candidate.get('expires'), active_after=moment)
+                    expires=candidate.get('expires'), active_after=moment,
+                    upper=candidate.get('upper'), lower=candidate.get('lower'),
+                    bars=candidate.get('bars', 1))
                 for key in ('cursor', 'active_after'):
                     candidate[key] = seeded[key]
             current.clear()

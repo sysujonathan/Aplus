@@ -235,6 +235,7 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .condition-grid button { height: 38px; border: 0; background: #171717; color: #aaa; }
 .condition-grid button.active { background: #333; color: #fff; }
 .field-row { display: grid; grid-template-columns: 1.6fr 1fr; gap: 11px; }
+.field-unit { align-self: end; min-height: 40px; display: flex; align-items: center; padding: 0 3px; color: #858585; font-size: 12px; }
 .modal input { width: 100%; outline: none; }
 .modal input:focus { border-color: var(--blue); }
 .notice { display: grid; gap: 4px; padding: 10px; border-radius: 5px; background: #18233b; color: #8facff; font-size: 11px; line-height: 1.5; }
@@ -398,7 +399,8 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .stroke-preview-button {position:relative;display:inline-flex;align-items:center;justify-content:center;gap:7px;width:74px;height:34px;flex:0 0 auto;padding:5px;border:1px solid #555;border-radius:6px;background:#262626;color:#d1d4dc;cursor:pointer}
 .stroke-preview-line {display:block;flex:1;min-width:24px;border-top:1px solid currentColor}
 .stroke-preview-color {width:24px;height:24px;flex:0 0 24px;border-radius:2px}
-.fib-setting-row .stroke-preview-button input[type="color"],.line-setting-row .stroke-preview-button input[type="color"],.channel-level-row .stroke-preview-button input[type="color"] {position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;margin:0}
+.stroke-preview-button input[type="color"] {position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;margin:0}
+.fill-preview-button {width:42px}.fill-preview-button .stroke-preview-color {width:20px;height:20px}
 .stroke-preview-button.disabled {opacity:.4;cursor:default}.stroke-preview-button.disabled input {cursor:default}
 .stroke-dash-button {width:34px}
 .chart-stroke-picker {position:fixed;z-index:1500;padding:5px;border:1px solid #454545;border-radius:6px;background:#202020;box-shadow:0 5px 24px #0009;color:#d1d4dc}

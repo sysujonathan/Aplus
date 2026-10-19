@@ -58,6 +58,51 @@ def test_closed_bar_alert_is_forward_only_deduplicated_and_replay_safe():
     assert event is None and replayed['cursor'] == '2026-01-06'
 
 
+@pytest.mark.parametrize('condition,closes,kwargs', [
+    ('enter_channel', [8, 8, 10], {'upper': 11, 'lower': 9}),
+    ('exit_channel', [10, 10, 12], {'upper': 11, 'lower': 9}),
+    ('inside_channel', [10, 10, 10.5], {'upper': 11, 'lower': 9}),
+    ('outside_channel', [10, 10, 12], {'upper': 11, 'lower': 9}),
+    ('rise', [8, 9, 11], {'value': 2, 'bars': 2}),
+    ('fall', [12, 11, 9], {'value': 2, 'bars': 2}),
+    ('rise_pct', [100, 100, 111], {'value': 10, 'bars': 2}),
+    ('fall_pct', [100, 100, 89], {'value': 10, 'bars': 2}),
+])
+def test_tv_channel_and_movement_alerts_use_completed_bars(condition, closes, kwargs):
+    dates = ['2026-01-05', '2026-01-06', '2026-01-07']
+    seed = bars(dates=dates[:2], closes=closes[:2])
+    alert = create_alert(name='高级提醒', code='sz.000001', source='s', adjustment='qfq',
+        timeframe='daily', target='price', condition=condition,
+        value=kwargs.get('value', 10), frame=seed, upper=kwargs.get('upper'),
+        lower=kwargs.get('lower'), bars=kwargs.get('bars', 1))
+    updated, event = evaluate_alert(alert, bars(dates=dates, closes=closes),
+                                    now='2026-01-07T20:00:00+08:00')
+    assert event['bar'] == '2026-01-07'
+    assert event['price'] == closes[-1] and updated['cursor'] == '2026-01-07'
+
+
+def test_tv_advanced_alert_fields_are_validated():
+    frame = bars(closes=[9, 10])
+    with pytest.raises(ValueError, match='上下轨'):
+        create_alert(name='坏通道', code='sz.000001', source='s', adjustment='qfq',
+            timeframe='daily', target='price', condition='enter_channel', value=10,
+            frame=frame, upper=9, lower=10)
+    with pytest.raises(ValueError, match='K线数量'):
+        create_alert(name='坏回看', code='sz.000001', source='s', adjustment='qfq',
+            timeframe='daily', target='price', condition='rise', value=1,
+            frame=frame, bars=0)
+
+
+def test_basic_ema_alert_keeps_close_crossing_ema_semantics():
+    seed = bars(dates=['2026-01-05', '2026-01-06'], closes=[10, 9])
+    alert = create_alert(name='上穿EMA', code='sz.000001', source='s', adjustment='qfq',
+        timeframe='daily', target='ema', condition='cross_up', value=99,
+        frame=seed, ema_length=2)
+    extended = bars(dates=['2026-01-05', '2026-01-06', '2026-01-07'], closes=[10, 9, 11])
+    _, event = evaluate_alert(alert, extended, now='2026-01-07T20:00:00+08:00')
+    assert event['bar'] == '2026-01-07' and event['price'] == 11
+
+
 def test_intraday_alert_waits_for_close_and_checks_latest_completed_prefix():
     frame = bars(dates=['2026-10-12 14:45:00', '2026-10-12 14:50:00'], closes=[9, 9.5])
     alert = create_alert(name='上穿10', code='sz.000001', source='s', adjustment='qfq',

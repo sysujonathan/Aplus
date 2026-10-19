@@ -229,8 +229,8 @@ function syncIndicatorLegend() {
 syncIndicatorLegend();
 renderWorkspace();
 document.querySelector('#alertTarget').addEventListener('change', event => {
-  document.querySelector('#alertPrice').disabled = event.target.value === 'ema';
   document.querySelector('#alertEmaLength').disabled = event.target.value !== 'ema';
+  syncAlertConditionFields();
 });
 document.querySelector('#alertTarget').dispatchEvent(new Event('change'));
 
@@ -240,13 +240,23 @@ window.openAlertEditor = id => {
   document.querySelector('#alertModal header b').textContent = alert ? '编辑提醒' : '创建提醒';
   document.querySelector('#createAlert').textContent = alert ? '保存' : '创建';
   const fields = {alertName:'name', alertPrice:'value', alertCondition:'condition',
-    alertTarget:'target', alertEmaLength:'ema_length', alertFrequency:'frequency', alertTimeframe:'timeframe'};
-  if (alert) for (const [id, key] of Object.entries(fields)) document.getElementById(id).value = alert[key];
-  else document.querySelector('#alertTimeframe').value = activeTimeframeUnit;
+    alertTarget:'target', alertEmaLength:'ema_length', alertFrequency:'frequency', alertTimeframe:'timeframe',
+    alertUpper:'upper',alertLower:'lower',alertBars:'bars'};
+  const currentPrice=Number(document.querySelector('#alertPrice').value)||Number(bars.at(-1)?.close)||1;
+  document.querySelector('#alertUpper').value=chartPrice(alert?.upper??currentPrice*1.01);
+  document.querySelector('#alertLower').value=chartPrice(alert?.lower??currentPrice*.99);
+  document.querySelector('#alertBars').value=alert?.bars??1;
+  if (alert) for (const [id, key] of Object.entries(fields)) {
+    if (alert[key] != null) document.getElementById(id).value = alert[key];
+  }
+  else {
+    document.querySelector('#alertTimeframe').value = activeTimeframeUnit;
+  }
   const expires = alert?.expires ? new Date(alert.expires) : null;
   document.querySelector('#alertExpires').value = expires ?
     new Date(expires.getTime() + 8 * 3600000).toISOString().slice(0, 16) : '';
   document.querySelector('#alertTarget').dispatchEvent(new Event('change'));
+  syncAlertConditionFields();
   renderAlertStatus(alert);
   openWorkspaceModal('alertModal');
 };

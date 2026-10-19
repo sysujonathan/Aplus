@@ -32,6 +32,13 @@ const context=vm.createContext({structuredClone,console,window:{},ctx,testView:v
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-indicators.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-position.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/drawing-settings.js'),'utf8'),context);
+for(const [object,expected] of [
+  [{type:'trend'},{fontSize:14,vertical:'top',horizontal:'center'}],
+  [{type:'ray'},{fontSize:12,vertical:'bottom',horizontal:'right'}],
+  [{type:'rectangle'},{fontSize:14,vertical:'middle',horizontal:'center'}],
+  [{type:'channel'},{fontSize:14,vertical:'top',horizontal:'left'}],
+  [{type:'arrow',arrow_marker_version:1},{fontSize:16,vertical:'top',horizontal:'center'}],
+])assert.deepEqual({...context.drawingTextDefaults(object)},expected,`${object.type} text defaults must match TV`);
 // A uniform color is a one-time assignment, not a sticky override. Old saved
 // overrides must keep their appearance until the trader edits a level.
 const legacyFib={type:'fib',color:'#00bcd4',fibUseOneColor:true,fibSingleColor:'#f23645',fibSingleAlpha:.4,
@@ -311,11 +318,12 @@ assert.equal(removal.indicatorSettings.ema,false);
 context.selectedId=null;
 for(const [extendLeft,extendRight,left,right] of [[false,false,20,80],[true,false,0,80],[false,true,20,100],[true,true,0,100]]){
   context.extendedRectangle={id:'extended',type:'rectangle',a:{index:80,value:20},b:{index:20,value:40},
-    color:'#fff',fill:false,showMiddle:true,extendLeft,extendRight};
+    color:'#fff',alpha:.8,fill:false,showMiddle:true,middleAlpha:.25,extendLeft,extendRight};
   rectangles=[];paths=[];
   vm.runInContext('drawUserObject(ctx,testView,extendedRectangle)',context);
   assert.deepEqual(rectangles,[[left,20,right-left,20]]);
   assert.deepEqual(paths.at(-1).points,[[left,30],[right,30]]);
+  assert.equal(paths.at(-1).alpha,.2,'rectangle midpoint combines its own and border opacity');
   assert.equal(context.extendedRectangle.a.index,80,'extension must not rewrite canonical anchors');
 }
 context.channel.showMiddle=false;context.selectedId=null;paths=[];

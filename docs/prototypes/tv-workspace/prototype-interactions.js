@@ -670,6 +670,7 @@ function drawUserObject(ctx, view, object, draft = false) {
     if (object.fill !== false) { ctx.globalAlpha = (object.backgroundAlpha ?? .13)*(object.alpha ?? 1);ctx.fillStyle=object.backgroundColor||object.color; ctx.fillRect(startX, ay, endX - startX, by - ay); }
     ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1); ctx.strokeRect(startX, ay, endX - startX, by - ay);
     if(object.showMiddle){ctx.save();ctx.strokeStyle=object.middleColor||object.color;ctx.lineWidth=object.middleWidth||1;
+      ctx.globalAlpha=(object.middleAlpha??1)*(object.alpha??1);
       ctx.setLineDash(dashPattern(object.middleDash||'dashed'));ctx.beginPath();ctx.moveTo(startX,(ay+by)/2);ctx.lineTo(endX,(ay+by)/2);ctx.stroke();ctx.restore();}
     registerRect(object.id, startX, ay, endX, by);
   } else if (object.type === 'fib') {
@@ -1292,6 +1293,17 @@ function refreshFibStylePreviews(object) {
   host.querySelectorAll('[data-stroke-preview]').forEach(button => {
     const trend = button.dataset.strokePreview === 'trend';
     const line = button.querySelector('.stroke-preview-line');
+    if(button.dataset.strokePreview==='background'){
+      const enabled=['rectangle','channel'].includes(object.type)?object.fill!==false:object.fill===true;
+      button.classList.toggle('disabled',!enabled);button.querySelector('input').disabled=!enabled;
+      button.querySelector('.stroke-preview-color').style.background=object.backgroundColor||object.color;return;
+    }
+    if(button.dataset.strokePreview==='middle'){
+      const enabled=Boolean(object.showMiddle);
+      button.classList.toggle('disabled',!enabled);button.querySelector('input').disabled=!enabled;
+      line.style.borderTopWidth=(object.middleWidth||1)+'px';line.style.borderTopStyle=object.middleDash||'dashed';
+      button.querySelector('.stroke-preview-color').style.background=object.middleColor||object.color;return;
+    }
     if(button.dataset.strokePreview==='channel'){
       const level=object.channelLevels[Number(button.closest('[data-channel-index]').dataset.channelIndex)];
       line.style.borderTopWidth=(level.width||1)+'px';line.style.borderTopStyle=level.dash||'solid';
@@ -1377,12 +1389,9 @@ function renderToolSpecificSettings(object) {
   const marker=['up','down','text'].includes(object.type)||Boolean(object.arrow_marker_version);
   let extra='';
   if(object.type==='rectangle'||(object.type==='path'&&!object.path_version))extra=`
-    <div class="setting-row"><label><input type="checkbox" data-setting="fill" ${object.fill===true||(object.type==='rectangle'&&object.fill!==false)?'checked':''}>背景</label><input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}"></div>
-    <label>背景不透明度<input type="range" data-setting="backgroundAlpha" min="0" max="100" value="${Math.round((object.backgroundAlpha??.13)*100)}"></label>`;
+    <div class="setting-row"><label><input type="checkbox" data-setting="fill" ${object.fill===true||(object.type==='rectangle'&&object.fill!==false)?'checked':''}>背景</label><span class="stroke-preview-button fill-preview-button" data-stroke-preview="background"><i class="stroke-preview-color" style="background:${object.backgroundColor||object.color}"></i><input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}" aria-label="背景颜色和不透明度"></span></div>`;
   if(object.type==='rectangle')extra+=`
-    <div class="setting-row"><label><input type="checkbox" data-setting="showMiddle" ${object.showMiddle?'checked':''}>中线</label><input type="color" data-setting="middleColor" value="${object.middleColor||object.color}">
-    <select data-setting="middleWidth" aria-label="中线线宽">${[1,2,3,4].map(n=>`<option value="${n}" ${n===(object.middleWidth||1)?'selected':''}>${n}px</option>`).join('')}</select>
-    <select data-setting="middleDash" aria-label="中线线型">${[['solid','实线'],['dashed','虚线'],['dotted','点线']].map(([key,label])=>`<option value="${key}" ${(object.middleDash||'dashed')===key?'selected':''}>${label}</option>`).join('')}</select></div>`;
+    <div class="setting-row"><label><input type="checkbox" data-setting="showMiddle" ${object.showMiddle?'checked':''}>中线</label><span class="stroke-preview-button" data-stroke-preview="middle"><i class="stroke-preview-color" style="background:${object.middleColor||object.color}"></i><i class="stroke-preview-line" style="border-top-width:${object.middleWidth||1}px;border-top-style:${object.middleDash||'dashed'}"></i><input type="color" data-setting="middleColor" data-stroke-width="middleWidth" data-stroke-dash="middleDash" value="${object.middleColor||object.color}" aria-label="中线颜色、粗细和线型"></span></div>`;
   if(object.type==='ray')extra='<label><input type="checkbox" data-setting="showPrice" '+(object.showPrice===false?'':'checked')+'>价格标签</label>';
   if(object.type==='path')extra+=`${!object.path_version?`<label><input type="checkbox" data-setting="closed" ${object.closed?'checked':''}>兼容封闭图形</label>`:''}
     <div class="setting-row"><span>起点／终点</span>${['startStyle','endStyle'].map(key=>`<select data-setting="${key}" aria-label="${key==='startStyle'?'起点':'终点'}样式">${[['none','普通'],['arrow','箭头']].map(([value,label])=>`<option value="${value}" ${(object[key]||(key==='endStyle'&&object.path_version?'arrow':'none'))===value?'selected':''}>${label}</option>`).join('')}</select>`).join('')}</div>
@@ -1394,9 +1403,9 @@ function renderToolSpecificSettings(object) {
     <label><input type="checkbox" data-setting="extendLeft" ${object.extendLeft?'checked':''}>向左延伸</label>
     <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>向右延伸</label>
     </div></details></div>`:'';
-  host.innerHTML=`<div class="tool-setting-stack">${extension}${marker?paletteSettings(object):commonLineSettings(object,object.type==='rectangle'?'边框':'线条')}
-    ${marker||object.type==='ray'?'':`<label>不透明度<input type="range" data-setting="alpha" min="0" max="100" value="${Math.round((object.alpha??1)*100)}"></label>`}${extra}</div>`;
+  host.innerHTML=`<div class="tool-setting-stack">${extension}${marker?paletteSettings(object):commonLineSettings(object,object.type==='rectangle'?'边框':'线条')}${extra}</div>`;
   bindDrawingStyle(host,object);
+  refreshFibStylePreviews(object);
   host.querySelectorAll('.rectangle-extend input').forEach(control=>control.addEventListener('change',()=>{
     host.querySelector('[data-extension-label]').textContent=extensionLabel();
   }));
@@ -1668,18 +1677,42 @@ document.querySelector('#modalBackdrop').addEventListener('click', event => {
   if (document.querySelector('#objectModal').classList.contains('show')) closeObjectSettings(true);
   else closeWorkspaceModal();
 });
+function alertConditionKind(condition=document.querySelector('#alertCondition').value) {
+  if(['enter_channel','exit_channel','inside_channel','outside_channel'].includes(condition))return 'channel';
+  if(['rise','fall','rise_pct','fall_pct'].includes(condition))return 'movement';
+  return 'level';
+}
+function syncAlertConditionFields() {
+  const condition=document.querySelector('#alertCondition').value;
+  const kind=['enter_channel','exit_channel','inside_channel','outside_channel'].includes(condition)?'channel':
+    ['rise','fall','rise_pct','fall_pct'].includes(condition)?'movement':'level';
+  document.querySelector('#alertChannelFields').hidden=kind!=='channel';
+  document.querySelector('#alertMovementFields').hidden=kind!=='movement';
+  document.querySelector('#alertValueField').hidden=kind==='channel';
+  document.querySelector('#alertValueTitle').textContent=condition.endsWith('_pct')?'幅度（%）':kind==='movement'?'幅度':'价格';
+  document.querySelector('#alertPrice').disabled=kind==='level'&&document.querySelector('#alertTarget').value==='ema';
+}
+document.querySelector('#alertCondition').addEventListener('change',syncAlertConditionFields);
 document.querySelector('#createAlert').addEventListener('click', async () => {
   const value = Number(document.querySelector('#alertPrice').value);
   const name = document.querySelector('#alertName').value.trim();
-  if (!Number.isFinite(value) || value <= 0) { showToast('请输入有效提醒价格'); return; }
+  const condition=document.querySelector('#alertCondition').value;
+  const kind=['enter_channel','exit_channel','inside_channel','outside_channel'].includes(condition)?'channel':
+    ['rise','fall','rise_pct','fall_pct'].includes(condition)?'movement':'level';
+  const upper=Number(document.querySelector('#alertUpper').value),lower=Number(document.querySelector('#alertLower').value);
+  const lookback=Number(document.querySelector('#alertBars').value);
+  if (kind!=='channel'&&(!Number.isFinite(value)||value<=0)) { showToast('请输入有效提醒数值'); return; }
+  if (kind==='channel'&&(!Number.isFinite(upper)||!Number.isFinite(lower)||lower<=0||upper<=lower)) { showToast('上轨必须高于下轨，且都大于零'); return; }
+  if (kind==='movement'&&(!Number.isInteger(lookback)||lookback<1||lookback>500)) { showToast('回看K线数量必须为 1～500'); return; }
   try {
     if (typeof editingAlertId !== 'undefined' && editingAlertId) {
       await window.writeAlertChange('update_alert', editingAlertId, {
-        name, value, condition:document.querySelector('#alertCondition').value,
+        name, value, condition,
         target:document.querySelector('#alertTarget').value,
         timeframe:document.querySelector('#alertTimeframe').value,
         ema_length:Number(document.querySelector('#alertEmaLength').value),
         frequency:document.querySelector('#alertFrequency').value,
+        upper, lower, bars:lookback,
         expires:document.querySelector('#alertExpires').value || null});
       editingAlertId = null; closeWorkspaceModal(); showToast('提醒设置已保存'); return;
     }
@@ -1688,11 +1721,11 @@ document.querySelector('#createAlert').addEventListener('click', async () => {
       const pending = bridgeSaveChain.then(() => {
         if (bridgeSaveFailed) throw new Error('请先保存当前图表修改');
         return window.pywebview.api.create_price_alert(value,
-          document.querySelector('#alertCondition')?.value || 'cross_up', name,
+          condition || 'cross_up', name,
           document.querySelector('#alertTarget')?.value || 'price', timeframe,
           Number(document.querySelector('#alertEmaLength')?.value || 20),
           document.querySelector('#alertFrequency')?.value || 'bar_close',
-          document.querySelector('#alertExpires')?.value || null);
+          document.querySelector('#alertExpires')?.value || null, upper, lower, lookback);
       });
       bridgeSaveChain = pending.then(result => {
         bridgeRevision = Number(result.revision);
@@ -2073,7 +2106,9 @@ function applyProductionContext() {
   if (alertSymbol) alertSymbol.textContent = `${chartBoot.name} · ${display}`;
   document.querySelector('#alertPrice').value = chartPrice(latest.close);
   document.querySelector('#alertPrice').step = chartBoot.priceStep || 'any';
-  document.querySelector('#alertName').value = `${display} 向上穿越 ${chartPrice(latest.close)}`;
+  document.querySelector('#alertUpper').step = chartBoot.priceStep || 'any';
+  document.querySelector('#alertLower').step = chartBoot.priceStep || 'any';
+  document.querySelector('#alertName').value = `${display} 穿越 ${chartPrice(latest.close)}`;
   document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === chartBoot.timeframe));
   activeTimeframeUnit = chartBoot.timeframe;
   userObjects.forEach(object=>chartCoordinates.projectObject(object,bars,activeTimeframeUnit));

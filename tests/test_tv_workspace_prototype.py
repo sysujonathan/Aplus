@@ -130,6 +130,15 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert 'exitDrawingMode()' in script
     assert '选择完整色板' in script
     assert 'chartPaletteColors' in (PROTOTYPE / 'chart-palette.js').read_text(encoding='utf-8')
+    assert 'data-stroke-preview="middle"' in script
+    assert 'data-stroke-preview="background"' in script
+    assert 'data-setting="backgroundAlpha"' not in script
+    assert 'data-setting="middleWidth"' not in script
+    assert 'middleAlpha' in script
+    assert 'aria-label="通道背景颜色和不透明度"' in (PROTOTYPE / 'drawing-settings.js').read_text(encoding='utf-8')
+    assert 'value="enter_channel"' in html and 'value="rise_pct"' in html
+    assert 'id="alertChannelFields"' in html and 'id="alertMovementFields"' in html
+    assert 'syncAlertConditionFields' in script and 'upper, lower, lookback' in script
     assert "object.type === 'up' || object.type === 'down'" in script
     assert 'ClipboardItem' in script and 'navigator.clipboard.write' in script
     assert 'DEFAULT_VISIBLE_BARS = 204' in script

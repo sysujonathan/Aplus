@@ -82,9 +82,9 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null) => 
   const emaKey=({emaColor:'ema_alpha',emaSmoothColor:'ema_smooth_alpha',emaBbUpperColor:'ema_bb_upper_alpha',emaBbLowerColor:'ema_bb_lower_alpha',emaBbFillColor:'ema_bb_fill_alpha'})[input.id];
   const isEma=Boolean(emaKey),emaAlphaField=input.id==='emaColor'?'alpha':input.id+'Alpha';
   const key = input.dataset.setting || input.dataset.fibSetting || 'color';
-  const alphaKey = ({backgroundColor:'backgroundAlpha',targetColor:'targetAlpha',stopColor:'stopAlpha',textColor:'textAlpha',fibSingleColor:'fibSingleAlpha'})[key] ||
+  const alphaKey = ({backgroundColor:'backgroundAlpha',middleColor:'middleAlpha',targetColor:'targetAlpha',stopColor:'stopAlpha',textColor:'textAlpha',fibSingleColor:'fibSingleAlpha'})[key] ||
     (object?.type === 'fib' && key === 'color' ? 'fibTrendAlpha' : 'alpha');
-  const alpha = (level && object.type==='fib' && object.fibUseOneColor ? object.fibSingleAlpha ?? 1 : level?.alpha) ?? (isEma ? Number(document.querySelector('#emaModal').dataset[emaAlphaField] ?? indicatorSettings[emaKey] ?? 1) : object?.[alphaKey]) ?? 1;
+  const alpha = (level && object.type==='fib' && object.fibUseOneColor ? object.fibSingleAlpha ?? 1 : level?.alpha) ?? (isEma ? Number(document.querySelector('#emaModal').dataset[emaAlphaField] ?? indicatorSettings[emaKey] ?? 1) : object?.[alphaKey]) ?? (key==='backgroundColor'?(object?.type==='channel'?.1:.13):1);
   popup.innerHTML = '<div class="chart-color-grid"></div><div class="chart-custom-swatches"></div><button type="button" class="custom-color-add" aria-label="添加自定义颜色">＋</button>' +
     '<label class="color-alpha-row">不透明度<input aria-label="颜色不透明度" type="range" min="0" max="100"><input aria-label="不透明度百分比" type="number" min="0" max="100">%</label>';
   const applyColor = color => {

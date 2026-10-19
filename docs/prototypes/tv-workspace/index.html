@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>A+ 图表工作台高保真原型</title>
-  <link rel="stylesheet" href="prototype.css">
+  <link rel="stylesheet" href="prototype.css?v=20261019-1">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true">
@@ -220,13 +220,15 @@
       <div class="modal-body">
         <label>标的<div class="select-row"><span class="badge sz">深</span><b>升达林业 · 002259</b><span>⌄</span></div></label>
         <label>条件<select id="alertTarget"><option value="price">价格</option><option value="ema">收盘价与 EMA（独立收盘价计算）</option></select></label>
-        <div class="field-row"><label>触发方式<select id="alertCondition"><option value="cross_up">向上穿越</option><option value="cross_down">向下穿越</option><option value="cross">穿越</option><option value="above">高于</option><option value="below">低于</option></select></label><label>价格<input id="alertPrice" type="number" step="any" value="5.20"></label></div>
+        <div class="field-row"><label>触发方式<select id="alertCondition"><option value="cross">穿越</option><option value="cross_up">向上穿越</option><option value="cross_down">向下穿越</option><option value="above">高于</option><option value="below">低于</option><option value="enter_channel">进入通道</option><option value="exit_channel">离开通道</option><option value="inside_channel">通道内部</option><option value="outside_channel">通道外部</option><option value="rise">上涨</option><option value="fall">下跌</option><option value="rise_pct">上涨%</option><option value="fall_pct">下跌%</option></select></label><label id="alertValueField"><span id="alertValueTitle">价格</span><input id="alertPrice" type="number" step="any" value="5.20"></label></div>
+        <div class="field-row" id="alertChannelFields" hidden><label>上轨<input id="alertUpper" type="number" step="any" value="5.30"></label><label>下轨<input id="alertLower" type="number" step="any" value="5.10"></label></div>
+        <div class="field-row" id="alertMovementFields" hidden><label>回看 K 线<input id="alertBars" type="number" min="1" max="500" step="1" value="1"></label><span class="field-unit">根已收盘 K 线</span></div>
         <label>EMA 长度<input id="alertEmaLength" type="number" min="1" max="500" value="20"></label>
         <label>周期<select id="alertTimeframe"><option value="daily">日</option><option value="weekly">周</option><option value="monthly">月</option></select></label>
         <label>触发频率<select id="alertFrequency"><option value="bar_close">每根已收盘K线一次</option><option value="once">仅一次</option></select></label>
         <label>到期时间（上海时间，可空）<input id="alertExpires" type="datetime-local"></label>
         <label>名称<input id="alertName" value="002259 向上穿越 5.20"></label>
-        <div class="notice"><b>本机收盘提醒</b><span>只在新K线收盘后判断；不会补发历史提醒，也不会发送外部消息。EMA 提醒使用所选提醒周期、收盘价和此处长度独立计算，不跟随图上 EMA 的来源、偏移、平滑或计算周期。</span></div>
+        <div class="notice"><b>本机收盘提醒</b><span>只在新K线收盘后判断；通道与涨跌条件也只使用已收盘 K 线，不会补发历史提醒或发送外部消息。EMA 提醒使用所选提醒周期、收盘价和此处长度独立计算，不跟随图上 EMA 的来源、偏移、平滑或计算周期。</span></div>
       </div>
       <footer><button class="secondary close-modal">取消</button><button class="primary" id="createAlert">创建</button></footer>
     </section>
@@ -319,9 +321,9 @@
   <script src="chart-coordinates.js"></script>
   <script src="chart-indicators.js"></script>
   <script src="chart-position.js"></script>
-  <script src="drawing-settings.js"></script>
-  <script src="prototype-interactions.js"></script>
-  <script src="production-controls.js"></script>
-  <script src="chart-palette.js"></script>
+  <script src="drawing-settings.js?v=20261019-1"></script>
+  <script src="prototype-interactions.js?v=20261019-1"></script>
+  <script src="production-controls.js?v=20261019-1"></script>
+  <script src="chart-palette.js?v=20261019-1"></script>
 </body>
 </html>

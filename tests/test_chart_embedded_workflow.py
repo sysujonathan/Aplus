@@ -198,8 +198,26 @@ def test_alert_edit_disable_reenable_delete_keep_forward_watermark_and_events(tm
     assert store.chart_document(boot['identity'])['alerts'] == []
 
 
+def test_advanced_alert_fields_survive_bridge_create_edit_and_reseed(tmp_path):
+    store, _, boot = setup(tmp_path)
+    clock = ['2026-10-15T20:00:00+08:00']
+    bridge = ChartBridge(store, boot, clock=lambda: clock[0])
+    channel = bridge.create_price_alert(10, condition='enter_channel', upper=12,
+                                        lower=10, timeframe='daily')['alert']
+    assert channel['upper'] == 12 and channel['lower'] == 10
+    clock[0] = '2026-10-16T20:00:00+08:00'
+    movement = bridge.update_alert(channel['id'], {
+        'condition': 'rise_pct', 'value': 3.5, 'bars': 4})['alerts'][0]
+    assert movement['condition'] == 'rise_pct' and movement['bars'] == 4
+    assert movement['active_after'] == clock[0]
+    reopened = store.chart_document(boot['identity'])['alerts'][0]
+    assert reopened['condition'] == 'rise_pct' and reopened['bars'] == 4
+
+
 @pytest.mark.parametrize('changes', [{'cursor': '2026-10-19'}, {'enabled': 'false'},
-    {'value': float('nan')}, {'target': 'order'}, {'timeframe': '5s'}])
+    {'value': float('nan')}, {'target': 'order'}, {'timeframe': '5s'},
+    {'condition': 'enter_channel', 'upper': 9, 'lower': 10},
+    {'condition': 'rise', 'bars': 0}])
 def test_invalid_alert_mutations_do_not_write(tmp_path, changes):
     store, _, boot = setup(tmp_path)
     bridge = ChartBridge(store, boot, clock=lambda: '2026-10-15T20:00:00+08:00')

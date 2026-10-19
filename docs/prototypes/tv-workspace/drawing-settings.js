@@ -106,8 +106,9 @@ function renderChannelSettings(object) {
       <label><input type="checkbox" data-setting="extendLeft" ${object.extendLeft?'checked':''}>延伸左边线条</label>
       <label><input type="checkbox" data-setting="extendRight" ${object.extendRight?'checked':''}>延伸右边线条</label></div></details></div>
     <div class="setting-row"><label><input type="checkbox" data-setting="fill" ${object.fill===false?'':'checked'}>背景</label>
-    <input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}"></div>`;
+    <span class="stroke-preview-button fill-preview-button" data-stroke-preview="background"><i class="stroke-preview-color" style="background:${object.backgroundColor||object.color}"></i><input type="color" data-setting="backgroundColor" value="${object.backgroundColor||object.color}" aria-label="通道背景颜色和不透明度"></span></div>`;
   bindDrawingStyle(host,object);
+  refreshFibStylePreviews(object);
   host.querySelectorAll('[data-channel-field]').forEach(control=>{
     const level=object.channelLevels[Number(control.closest('[data-channel-index]').dataset.channelIndex)];
     control.addEventListener('change',()=>{
@@ -255,16 +256,25 @@ function renderPositionStyle(object) {
     savePrototypeState();renderWorkspace();
   }));
 }
+function drawingTextDefaults(object) {
+  if(object.type==='ray')return {fontSize:12,vertical:'bottom',horizontal:'right'};
+  if(object.type==='rectangle')return {fontSize:14,vertical:'middle',horizontal:'center'};
+  if(object.type==='channel')return {fontSize:14,vertical:'top',horizontal:'left'};
+  if(object.type==='trend'||(object.type==='arrow'&&!object.arrow_marker_version))
+    return {fontSize:14,vertical:'top',horizontal:'center'};
+  return {fontSize:object.type==='arrow'?16:14,vertical:'top',horizontal:'center'};
+}
 function renderDrawingTextSettings(object) {
   const host=document.querySelector('#drawingTextSettings');
-  const defaultFont=object.type==='trend'?14:12;
+  const defaults=drawingTextDefaults(object);
   const marker=['up','down'].includes(object.type)||Boolean(object.arrow_marker_version);
-  host.innerHTML=`<div class="drawing-text-toolbar"><input type="color" data-setting="textColor" value="${object.textColor||object.color||'#2962ff'}"><select data-setting="fontSize" data-numeric="true">${[10,11,12,14,16,20,24,28,32,40].map(n=>`<option value="${n}" ${n===(object.fontSize||defaultFont)?'selected':''}>${n}</option>`).join('')}</select><label><input type="checkbox" data-setting="textBold" ${object.textBold?'checked':''}><b>B</b></label><label><input type="checkbox" data-setting="textItalic" ${object.textItalic?'checked':''}><i>I</i></label></div>
+  const verticalOptions=[['top','顶部'],['middle',object.type==='rectangle'?'内部':'中间'],['bottom','底部']];
+  host.innerHTML=`<div class="drawing-text-toolbar"><input type="color" data-setting="textColor" value="${object.textColor||object.color||'#2962ff'}"><select data-setting="fontSize" data-numeric="true">${[10,11,12,14,16,20,24,28,32,40].map(n=>`<option value="${n}" ${n===(object.fontSize||defaults.fontSize)?'selected':''}>${n}</option>`).join('')}</select><label><input type="checkbox" data-setting="textBold" ${object.textBold?'checked':''}><b>B</b></label><label><input type="checkbox" data-setting="textItalic" ${object.textItalic?'checked':''}><i>I</i></label></div>
     <textarea data-setting="text" placeholder="添加文字" rows="4">${escapeChartHtml(object.text||'')}</textarea>
-    ${marker?'':`<div class="setting-row"><span>文字对齐</span><select data-setting="textVertical"><option value="top">顶部</option><option value="middle">中间</option><option value="bottom">底部</option></select><select data-setting="textAlign"><option value="left">左</option><option value="center">中心</option><option value="right">右</option></select></div>`}`;
+    ${marker?'':`<div class="setting-row"><span>文字对齐</span><select data-setting="textVertical">${verticalOptions.map(([value,label])=>`<option value="${value}">${label}</option>`).join('')}</select><select data-setting="textAlign"><option value="left">左</option><option value="center">中心</option><option value="right">右</option></select></div>`}`;
   if(!marker){
-    host.querySelector('[data-setting="textVertical"]').value=object.textVertical||'top';
-    host.querySelector('[data-setting="textAlign"]').value=object.textAlign||(object.type==='ray'?'right':'center');
+    host.querySelector('[data-setting="textVertical"]').value=object.textVertical||defaults.vertical;
+    host.querySelector('[data-setting="textAlign"]').value=object.textAlign||defaults.horizontal;
   }
   bindDrawingStyle(host,object);
 }
@@ -299,7 +309,8 @@ function drawPositionStats(ctx,object,result,x1,x2,y) {
 
 function drawAttachedText(ctx,view,object) {
   const a={x:view.xGlobal(object.a.index),y:view.y(object.a.value)},b={x:view.xGlobal((object.b||object.a).index),y:view.y((object.b||object.a).value)};
-  const horizontal=object.textAlign||'center',vertical=object.textVertical||'top',size=Number(object.fontSize||(object.type==='trend'?14:12));
+  const defaults=drawingTextDefaults(object);
+  const horizontal=object.textAlign||defaults.horizontal,vertical=object.textVertical||defaults.vertical,size=Number(object.fontSize||defaults.fontSize);
   let px=horizontal==='left'?Math.min(a.x,b.x):horizontal==='right'?Math.max(a.x,b.x):(a.x+b.x)/2;
   let py=(a.y+b.y)/2;
   if(object.type==='ray'){px=horizontal==='right'?view.width-view.right-6:horizontal==='left'?a.x+6:(a.x+view.width-view.right)/2;py=a.y;}

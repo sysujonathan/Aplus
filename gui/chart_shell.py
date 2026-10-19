@@ -151,7 +151,7 @@ window.aplusFlushAndClose=()=>window.pywebview.api.finish_close();</script>''', 
     # URLs so WebView cannot combine cached old scripts with a fresh document.
     build = hashlib.sha256(b''.join(path.read_bytes() for path in sorted(target.iterdir())
                                    if path.suffix in {'.js', '.css'})).hexdigest()[:16]
-    html = re.sub(r'((?:src|href)=")([^"?]+\.(?:js|css))"',
+    html = re.sub(r'((?:src|href)=")([^"?]+\.(?:js|css))(?:\?[^"}]+)?"',
                   lambda match: f'{match[1]}{match[2]}?build={build}"', html)
     page = target / "index.html"
     page.write_text(html, encoding="utf-8")
