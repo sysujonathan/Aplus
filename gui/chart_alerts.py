@@ -27,7 +27,12 @@ def load_alert_frame(store, chart_identity, alert, now):
         record = latest_market_dataset(store, alert['code'], 'daily', alert['source'])
         official = (load_dataset(store, record['id'])
                     if record and str(record.get('adjustment')) == alert['adjustment'] else None)
-        cached = cached_history(store, alert['code'], alert['source'], alert['adjustment'])
+        try:
+            cached = cached_history(store, alert['code'], alert['source'], alert['adjustment'])
+        except (OSError, ValueError):
+            # A disposable watch-chart cache must never suppress a verified
+            # official snapshot or abort every other alert in this poll.
+            cached = None
         candidates = [item for item in (official, cached) if item is not None]
         if not candidates:
             return None

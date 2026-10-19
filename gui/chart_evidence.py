@@ -13,7 +13,7 @@ from .chart_annotations import (GAP_STRATEGIES, annotation_kwargs, gap_annotatio
     info_panel_lines, marker_specs, owns_risk_lines, restyle_strategy_annotations,
     signal_context, trend_specs)
 from .chart_renderer import serialized_render
-from .theme import ANNOTATION, STOP, TARGET
+from .theme import STOP, TARGET
 
 
 @serialized_render
@@ -57,7 +57,11 @@ def strategy_evidence(context):
     try:
         ax.set_xlim(-.5, len(source)-.5)
         ax.set_ylim(float(source.low.min())*.85, float(source.high.max())*1.15)
-        strategy.annotate_chart(ax, source, kind, **annotation_kwargs(payload, info))
+        annotation_result = strategy.annotate_chart(
+            ax, source, kind, **annotation_kwargs(payload, info)
+        )
+        if isinstance(annotation_result, int) and not isinstance(annotation_result, bool):
+            facts = info_panel_lines(payload, info, source, open_gap_count=annotation_result)
         restyle_strategy_annotations(ax, kind, set())
         for line in ax.lines:
             x, y = line.get_xdata(), line.get_ydata()
@@ -87,13 +91,12 @@ def strategy_evidence(context):
                     b=position, color=to_hex(text.get_color()), size=float(text.get_fontsize()),
                     align=text.get_horizontalalignment(), vertical=text.get_verticalalignment(),
                     leader=bool(arrow and text.arrow_patch)))
-        for collection in ax.collections:
-            for x, y in collection.get_offsets():
-                anchor_point = point(x, y)
-                if anchor_point:
-                    items.append(dict(kind='marker', a=anchor_point, marker='^', color=ANNOTATION,
-                                      size=8, text='月度突破'))
-        for marker in marker_specs(kind, meta):
+        explicit_markers = marker_specs(kind, meta)
+        if ax.collections and not explicit_markers:
+            raise ValueError(f'策略散点图元尚未适配：{kind or "未知策略"}')
+        # Scatter artists are recreated from the explicit per-strategy marker
+        # contract below. Never guess every collection is a monthly breakout.
+        for marker in explicit_markers:
             if marker.column in source:
                 for index in source.index[source[marker.column].fillna(False).astype(bool)]:
                     p = point(index, float(source.loc[index, marker.price_column])*marker.multiplier)

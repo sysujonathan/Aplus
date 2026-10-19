@@ -397,10 +397,7 @@ class AplusMainWindow(ttk.Window):
                     slot._show_interactive()
 
     def destroy(self):
-        if not self._flush_embedded_charts():
-            return False
         super().destroy()
-        return True
 
     def _close_for_version_update(self):
         """Only called after Service has atomically reserved an idle update."""

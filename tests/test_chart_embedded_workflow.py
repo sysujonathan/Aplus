@@ -172,6 +172,47 @@ def test_switch_materialization_failure_preserves_active_bridge(tmp_path):
     assert session.current is original and session.active_token == 0
 
 
+def test_stale_embedded_page_cannot_write_or_manage_current_symbol(tmp_path):
+    store, _, boot = setup(tmp_path)
+    session = ChartSessionBridge(store, boot, lambda _: None)
+    session.active_token = 7
+    assert session.bootstrap()['sessionToken'] == 7
+    before = store.chart_document(boot['identity'])
+    with pytest.raises(ValueError, match='旧页面'):
+        session.save_state(dict(timeframe='daily', objects=[]), 0, 6)
+    with pytest.raises(ValueError, match='旧页面'):
+        session.read_alerts(6)
+    with pytest.raises(ValueError, match='旧页面'):
+        session.delete_alert('missing', 6)
+    assert store.chart_document(boot['identity']) == before
+
+
+def test_embedded_bridge_forwards_advanced_alert_fields(tmp_path):
+    store, _, boot = setup(tmp_path)
+    session = ChartSessionBridge(store, boot, lambda _: None)
+    session.active_token = 4
+    result = session.create_price_alert(10, 'enter_channel', '价格通道', 'price',
+        'daily', 20, 'bar_close', None, 12, 10, 3, 4)
+    alert = result['alert']
+    assert alert['upper'] == 12 and alert['lower'] == 10
+    movement = session.create_price_alert(3.5, 'rise_pct', '三根上涨', 'price',
+        'daily', 20, 'bar_close', None, None, None, 3, 4)['alert']
+    assert movement['bars'] == 3
+
+
+def test_hidden_layout_tiles_are_suspended_instead_of_kept_polling():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from gui.chart_panel import ChartGrid
+    visible, hidden = Mock(), Mock()
+    grid = SimpleNamespace(_slot_pool=[visible, hidden], _layout_count=1, _slots=[],
+                           host=Mock())
+    ChartGrid._build_slots(grid)
+    visible.suspend_interactive.assert_not_called()
+    hidden.suspend_interactive.assert_called_once_with()
+    visible.grid.assert_called_once()
+
+
 def test_alert_edit_disable_reenable_delete_keep_forward_watermark_and_events(tmp_path):
     store, _, boot = setup(tmp_path)
     clock = ['2026-10-15T20:00:00+08:00']

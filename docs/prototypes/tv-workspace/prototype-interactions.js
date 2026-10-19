@@ -141,7 +141,9 @@ function savePrototypeState(flushOnly = false) {
     try { localStorage.setItem(tvStateKey, JSON.stringify(state)); } catch (_) { /* Store remains authoritative. */ }
     if (chartBoot.production && window.pywebview?.api?.save_state) {
       document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>正在保存到本机…';
-      bridgeSaveChain = bridgeSaveChain.then(() => window.pywebview.api.save_state(state, bridgeRevision))
+      const saveArgs = [state, bridgeRevision];
+      if (chartBoot.sessionToken != null) saveArgs.push(chartBoot.sessionToken);
+      bridgeSaveChain = bridgeSaveChain.then(() => window.pywebview.api.save_state(...saveArgs))
         .then(result => {
           bridgeRevision = Number(result.revision);
           if (Array.isArray(result.alerts)) { chartAlerts = result.alerts; updateObjectTree(); }
@@ -1720,12 +1722,14 @@ document.querySelector('#createAlert').addEventListener('click', async () => {
       const timeframe = document.querySelector('#alertTimeframe')?.value || activeTimeframeUnit;
       const pending = bridgeSaveChain.then(() => {
         if (bridgeSaveFailed) throw new Error('请先保存当前图表修改');
-        return window.pywebview.api.create_price_alert(value,
+        const args = [value,
           condition || 'cross_up', name,
           document.querySelector('#alertTarget')?.value || 'price', timeframe,
           Number(document.querySelector('#alertEmaLength')?.value || 20),
           document.querySelector('#alertFrequency')?.value || 'bar_close',
-          document.querySelector('#alertExpires')?.value || null, upper, lower, lookback);
+          document.querySelector('#alertExpires')?.value || null, upper, lower, lookback];
+        if (chartBoot.sessionToken != null) args.push(chartBoot.sessionToken);
+        return window.pywebview.api.create_price_alert(...args);
       });
       bridgeSaveChain = pending.then(result => {
         bridgeRevision = Number(result.revision);

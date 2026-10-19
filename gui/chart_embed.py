@@ -66,21 +66,33 @@ class ChartSessionBridge:
         self._close_window = self._cancel_close = None
 
     def bootstrap(self):
-        return self.current.bootstrap() if self.current else None
+        if not self.current:
+            return None
+        boot = self.current.bootstrap()
+        boot['sessionToken'] = self.active_token
+        return boot
 
-    def save_state(self, state, expected_revision=None):
+    def _check_token(self, session_token):
+        if self.active_token and session_token != self.active_token:
+            raise ValueError('图表页面已切换，旧页面修改未写入当前标的')
+
+    def save_state(self, state, expected_revision=None, session_token=None):
         with self._lock:
+            self._check_token(session_token)
             if self.current is None:
                 raise ValueError('尚未选择真实行情')
             return self.current.save_state(state, expected_revision)
 
     def create_price_alert(self, value, condition='cross_up', name='', target='price',
-                           timeframe=None, ema_length=20, frequency='bar_close', expires=None):
+                           timeframe=None, ema_length=20, frequency='bar_close', expires=None,
+                           upper=None, lower=None, bars=1, session_token=None):
         with self._lock:
+            self._check_token(session_token)
             if self.current is None:
                 raise ValueError('尚未选择真实行情')
             return self.current.create_price_alert(value, condition, name, target, timeframe,
-                                                    ema_length, frequency, expires)
+                                                    ema_length, frequency, expires,
+                                                    upper, lower, bars)
 
     def activate_context(self):
         with self._lock:
@@ -89,26 +101,31 @@ class ChartSessionBridge:
                 raise ValueError('切换请求已失效')
             boot = request.get('boot')
             boot = refresh_workspace_boot(self.store, boot) if boot else None
+            if boot:
+                boot['sessionToken'] = request['token']
             self.materialize(boot)
             self.current = ChartBridge(self.store, boot) if boot else None
             self.active_token = request['token']
             self.failed_token = None
             return {'token': self.active_token}
 
-    def update_alert(self, alert_id, changes):
+    def update_alert(self, alert_id, changes, session_token=None):
         with self._lock:
+            self._check_token(session_token)
             if self.current is None:
                 raise ValueError('尚未选择真实行情')
             return self.current.update_alert(alert_id, changes)
 
-    def delete_alert(self, alert_id):
+    def delete_alert(self, alert_id, session_token=None):
         with self._lock:
+            self._check_token(session_token)
             if self.current is None:
                 raise ValueError('尚未选择真实行情')
             return self.current.delete_alert(alert_id)
 
-    def read_alerts(self):
+    def read_alerts(self, session_token=None):
         with self._lock:
+            self._check_token(session_token)
             return self.current.read_alerts() if self.current else {'alerts': []}
 
     def notify_active(self):
@@ -133,7 +150,8 @@ class ChartSessionBridge:
             raise RuntimeError('快照剪贴板尚未就绪')
         return self._copy_snapshot(data_url)
 
-    def request_layout(self, count):
+    def request_layout(self, count, session_token=None):
+        self._check_token(session_token)
         if type(count) is not int or count not in (1, 4, 6, 9):
             raise ValueError('只支持单图、4图、6图和9图')
         callback = getattr(self, '_request_layout', None)
@@ -143,7 +161,6 @@ class ChartSessionBridge:
         return {'ok': True}
 
     def cancel_close(self):
-        self.close_requested = False
         if self._cancel_close:
             self._cancel_close()
 
@@ -213,6 +230,7 @@ class EmbeddedChartHost:
         self.error = None
         self._timer = None
         self._started = None
+        self._queued_context = None
 
     @staticmethod
     def available():
@@ -221,6 +239,7 @@ class EmbeddedChartHost:
 
     def show(self, context):
         if self.closing and not self.closed():
+            self._queued_context = context
             return
         boot = workspace_boot(self.store, context) if context else None
         if boot:
@@ -286,14 +305,31 @@ class EmbeddedChartHost:
             if self._started and time.monotonic() - self._started > 30:
                 raise RuntimeError('交互图表启动超时，请重开图表；未删除任何分析对象')
         except Exception as exc:
-            self.error = str(exc)
-            if self.on_error:
+            error = str(exc)
+            changed = error != self.error
+            self.error = error
+            if self.on_error and changed:
                 self.on_error(self.error)
+            if not self.closed():
+                self._timer = self.parent.after(250, self._poll)
             return
+        if self.closed() and self.closing and self._queued_context is not None:
+            context, self._queued_context = self._queued_context, None
+            self.cleanup()
+            self.closing = False
+            self.show(context)
+            return
+        if self.closed() and self.closing:
+            self.cleanup()
+            return
+        self.error = None
         if not self.closed():
             self._timer = self.parent.after(100, self._poll)
 
     def request_close(self):
+        self._queued_context = None
+        if self.closing:
+            return
         self.closing = True
         if self.process is not None and self.process.poll() is None:
             self.token += 1

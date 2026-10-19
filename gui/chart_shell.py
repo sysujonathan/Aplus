@@ -190,6 +190,7 @@ def run_session(session_path):
             def cancelled():
                 close_guard.failed()
                 if not close_guard.allow_close:
+                    bridge.close_requested = False
                     _write_json(status, {'ready': True, 'closeCancelled': True})
             bridge._cancel_close = cancelled
         window.events.closing += close_guard.request
@@ -205,7 +206,8 @@ def run_session(session_path):
         window.events.loaded += loaded
         def start_embedded():
             try:
-                window.events.loaded.wait()
+                if not window.events.loaded.wait(30):
+                    raise TimeoutError('交互图表页面加载超时；未写入或删除分析对象')
                 # Parent before showing, so no detached window flashes on stock selection.
                 from .chart_embed import NativeChild
                 native = NativeChild(int(window.native.Handle.ToInt64()), payload['parent_hwnd'])

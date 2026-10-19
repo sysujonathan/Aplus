@@ -224,6 +224,12 @@ class ChartPanel(native_ttk.Frame):
         if self._embedded is not None and not self._embedded.closed():
             self._embedded.show(None)
 
+    def suspend_interactive(self):
+        """Release a hidden layout tile after its final acknowledged save."""
+        self._cancel_manual()
+        if self._embedded is not None and not self._embedded.closed():
+            self._embedded.request_close()
+
     def show_observation(
         self,
         store,
@@ -617,9 +623,12 @@ class ChartGrid(ttk.Frame):
         self.set_items([])
 
     def _build_slots(self):
-        # Hidden slots retain their editor and save queue when layouts change.
-        for child in self.host.winfo_children():
+        # Only visible tiles keep a WebView process. A hidden tile first asks
+        # its page to flush the Store-backed document, then releases the child.
+        for index, child in enumerate(self._slot_pool):
             child.grid_remove()
+            if index >= self._layout_count:
+                child.suspend_interactive()
         self._slots = []
         rows, columns = layout_shape(self._layout_count)
         for row in range(3):

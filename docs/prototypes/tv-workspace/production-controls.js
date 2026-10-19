@@ -163,7 +163,8 @@ document.querySelectorAll('[data-chart-layout]').forEach(button => button.addEve
   try {
     document.activeElement?.blur?.();
     await savePrototypeState(true);if(bridgeSaveFailed)throw new Error('当前分析尚未保存，布局已保留');
-    await window.pywebview.api.request_layout(Number(button.dataset.chartLayout));closeWorkspaceModal();
+    const args=[Number(button.dataset.chartLayout)];if(chartBoot.sessionToken!=null)args.push(chartBoot.sessionToken);
+    await window.pywebview.api.request_layout(...args);closeWorkspaceModal();
   } catch(error){showToast(error.message||String(error));}
   finally {button.disabled = false;}
 }));
@@ -277,7 +278,9 @@ window.writeAlertChange = async (method, id, changes) => {
   if (!chartBoot.production) throw new Error('提醒管理需要正式本机图表');
   const pending = bridgeSaveChain.then(() => {
     if (bridgeSaveFailed) throw new Error('请先保存当前图表修改');
-    return window.pywebview.api[method](id, changes);
+    const args=method==='delete_alert'?[id]:[id, changes];
+    if(chartBoot.sessionToken!=null)args.push(chartBoot.sessionToken);
+    return window.pywebview.api[method](...args);
   });
   bridgeSaveChain = pending.then(result => {
     bridgeRevision = Number(result.revision); chartAlerts = structuredClone(result.alerts);
@@ -292,7 +295,8 @@ setInterval(async()=>{
   try {
     await bridgeSaveChain;
     if(closingWorkspace)return;
-    const result=await window.pywebview.api.read_alerts();
+    const args=[];if(chartBoot.sessionToken!=null)args.push(chartBoot.sessionToken);
+    const result=await window.pywebview.api.read_alerts(...args);
     if(JSON.stringify(result.alerts)!==JSON.stringify(chartAlerts)){
       chartAlerts=structuredClone(result.alerts);updateObjectTree();renderWorkspace();
       if(editingAlertId&&document.querySelector('#alertModal').classList.contains('show'))

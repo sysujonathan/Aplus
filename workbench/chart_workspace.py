@@ -197,7 +197,8 @@ def risk_readout(obj):
         point = float(web.get('point_value', 1))
         risk_size = (float(web['risk_value']) * (account/100 if web.get('risk_unit') == 'percent' else 1)
                      if 'risk_value' in web else float(obj['risk_budget']))
-        bounded = min(risk_size/(risk*point*lot), account*float(web.get('leverage',10000))/entry*point/lot)
+        bounded = min(risk_size/(risk*point*lot),
+                      account*float(web.get('leverage',10000))/(entry*point*lot))
         digits = 0 if str(web.get('qty_precision','default')) == 'default' else int(web['qty_precision'])
         quantity = math.floor(bounded * 10**digits + 1e-9) / 10**digits
     unit = '股' if lot == 1 else '手（分析单位）'

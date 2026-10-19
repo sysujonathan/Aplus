@@ -35,7 +35,11 @@ DRAWING_LABELS = {**dict(TOOLS), 'text': '文字', 'ruler': '价格范围'}
 TF_LABELS = [('5m', '5分'), ('1h', '1小时'), ('4h', '4小时'),
              ('daily', '日'), ('weekly', '周'), ('monthly', '月')]
 CONDITION_LABELS = {'above': '高于', 'below': '低于', 'cross_up': '向上穿越',
-                    'cross_down': '向下穿越', 'cross': '任意穿越'}
+                    'cross_down': '向下穿越', 'cross': '任意穿越',
+                    'enter_channel': '进入通道', 'exit_channel': '离开通道',
+                    'inside_channel': '处于通道内', 'outside_channel': '处于通道外',
+                    'rise': '上涨指定数值', 'fall': '下跌指定数值',
+                    'rise_pct': '上涨指定百分比', 'fall_pct': '下跌指定百分比'}
 
 
 def _ruler_readout(obj):
@@ -840,30 +844,57 @@ class ChartWorkspaceDialog:
         last = float(self._render_frame().close.iloc[-1])
         value = tk.StringVar(value=str(alert.get('value', round(last, 3))))
         ema_len = tk.StringVar(value=str(alert.get('ema_length', self.history.value['settings']['ema_length'])))
+        upper = tk.StringVar(value=str(alert.get('upper') or round(last * 1.01, 3)))
+        lower = tk.StringVar(value=str(alert.get('lower') or round(last * .99, 3)))
+        bars = tk.StringVar(value=str(alert.get('bars', 1)))
         enabled = tk.BooleanVar(value=alert.get('enabled',True))
         expiry = tk.StringVar(value=alert.get('expires',''))
-        rows = [('名称',name),('固定价格',value),('EMA 长度',ema_len),('到期时间（可空）',expiry)]
+        rows = [('名称',name),('价格／变动幅度',value),('EMA 长度',ema_len),
+                ('到期时间（可空）',expiry),('通道上轨',upper),('通道下轨',lower),
+                ('回看 K 线数量',bars)]
         for row,(label,var) in enumerate(rows):
             ttk.Label(box,text=label).grid(row=row,column=0,sticky=tk.W,pady=4)
             ttk.Entry(box,textvariable=var,width=30).grid(row=row,column=1,sticky=tk.EW,pady=4)
-        ttk.Label(box,text='目标').grid(row=4,column=0,sticky=tk.W)
-        ttk.Combobox(box,textvariable=target,state='readonly',values=tuple(target_values)).grid(row=4,column=1,sticky=tk.EW)
-        ttk.Label(box,text='条件').grid(row=5,column=0,sticky=tk.W,pady=4)
-        ttk.Combobox(box,textvariable=condition,state='readonly',values=tuple(condition_values)).grid(row=5,column=1,sticky=tk.EW,pady=4)
-        ttk.Label(box,text='频率').grid(row=6,column=0,sticky=tk.W,pady=4)
-        ttk.Combobox(box,textvariable=frequency,state='readonly',values=tuple(frequency_values)).grid(row=6,column=1,sticky=tk.EW,pady=4)
-        ttk.Checkbutton(box,text='启用',variable=enabled).grid(row=7,column=1,sticky=tk.W)
+        ttk.Label(box,text='目标').grid(row=7,column=0,sticky=tk.W)
+        ttk.Combobox(box,textvariable=target,state='readonly',values=tuple(target_values)).grid(row=7,column=1,sticky=tk.EW)
+        ttk.Label(box,text='条件').grid(row=8,column=0,sticky=tk.W,pady=4)
+        ttk.Combobox(box,textvariable=condition,state='readonly',values=tuple(condition_values)).grid(row=8,column=1,sticky=tk.EW,pady=4)
+        ttk.Label(box,text='频率').grid(row=9,column=0,sticky=tk.W,pady=4)
+        ttk.Combobox(box,textvariable=frequency,state='readonly',values=tuple(frequency_values)).grid(row=9,column=1,sticky=tk.EW,pady=4)
+        ttk.Checkbutton(box,text='启用',variable=enabled).grid(row=10,column=1,sticky=tk.W)
         ttk.Label(box,text=f'固定口径：{self.source} · {self.adjustment} · {dict(TF_LABELS)[self.timeframe]}\n'
                   '只检查之后出现的已收盘 K 线；回放和历史数据不会补触发。\n'
                   '触发方式：A++ 本机弹窗，不发送外部消息。',foreground=MUTED,justify=tk.LEFT).grid(
-                      row=8,column=0,columnspan=2,sticky=tk.W,pady=10)
+                      row=11,column=0,columnspan=2,sticky=tk.W,pady=10)
         def save():
             try:
+                condition_key = condition_values[condition.get()]
+                upper_value, lower_value, bars_value = float(upper.get()), float(lower.get()), int(bars.get())
                 if alert:
-                    item = deepcopy(alert); item.update(name=name.get().strip(),target=target_values[target.get()],
-                        condition=condition_values[condition.get()],value=float(value.get()),ema_length=int(ema_len.get()),
+                    item = deepcopy(alert)
+                    before = deepcopy(item)
+                    item.update(name=name.get().strip(),target=target_values[target.get()],
+                        condition=condition_key,value=float(value.get()),ema_length=int(ema_len.get()),
                         frequency=frequency_values[frequency.get()], expires=expiry.get().strip(),
-                        enabled=enabled.get(),status='等待下一根已收盘 K 线')
+                        enabled=enabled.get(),
+                        upper=upper_value,lower=lower_value,bars=bars_value)
+                    semantic = ('condition','target','value','ema_length','timeframe','upper','lower','bars')
+                    reseed = any(item.get(key) != before.get(key) for key in semantic)
+                    reseed |= item['enabled'] and not before.get('enabled', True)
+                    if reseed:
+                        from .chart_alerts import load_alert_frame
+                        moment = datetime.now(timezone.utc).isoformat()
+                        current = load_alert_frame(self.store, self.identity, item, moment)
+                        if current is None or current.empty:
+                            raise ValueError('没有同来源、同复权的已收盘行情，无法更新提醒条件')
+                        seeded = create_alert(name=item['name'], code=item['code'], source=item['source'],
+                            adjustment=item['adjustment'], timeframe=item['timeframe'], target=item['target'],
+                            condition=item['condition'], value=item['value'], frame=current,
+                            ema_length=item['ema_length'], frequency=item['frequency'],
+                            expires=item.get('expires'), active_after=moment,
+                            upper=item.get('upper'), lower=item.get('lower'), bars=item.get('bars', 1))
+                        item.update(cursor=seeded['cursor'], active_after=seeded['active_after'],
+                                    status=seeded['status'])
                 else:
                     from .chart_alerts import load_alert_frame
                     moment = datetime.now(timezone.utc).isoformat()
@@ -873,17 +904,18 @@ class ChartWorkspaceDialog:
                         raise ValueError('没有同来源、同复权的已完成正式行情，请更新行情后创建提醒')
                     item = create_alert(name=name.get(), code=self.code, source=self.source,
                         adjustment=self.adjustment, timeframe=self.timeframe, target=target_values[target.get()],
-                        condition=condition_values[condition.get()], value=float(value.get()), frame=current,
+                        condition=condition_key, value=float(value.get()), frame=current,
                         ema_length=int(ema_len.get()), frequency=frequency_values[frequency.get()],
-                        expires=expiry.get().strip(), active_after=moment)
+                        expires=expiry.get().strip(), active_after=moment,
+                        upper=upper_value, lower=lower_value, bars=bars_value)
                 doc = deepcopy(self.history.value)
                 doc['alerts'] = [item if old['id']==item['id'] else old for old in doc['alerts']]
                 if not alert: doc['alerts'].append(item)
                 doc = validate_document(doc); self.history.value = doc
                 self._save(); win.destroy(); self.refresh_tree()
             except Exception as exc: messagebox.showerror('提醒未保存',str(exc),parent=win)
-        ttk.Button(box,text='取消',command=win.destroy).grid(row=9,column=0,sticky=tk.E,padx=5)
-        ttk.Button(box,text='保存提醒',command=save).grid(row=9,column=1,sticky=tk.E)
+        ttk.Button(box,text='取消',command=win.destroy).grid(row=12,column=0,sticky=tk.E,padx=5)
+        ttk.Button(box,text='保存提醒',command=save).grid(row=12,column=1,sticky=tk.E)
 
     def _scheduled_alert_check(self):
         self._alert_after = None

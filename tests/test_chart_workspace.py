@@ -374,8 +374,11 @@ def test_native_position_analysis_matches_risk_lot_leverage_and_precision(kind,t
     assert risk_readout(obj)[2] == 50
     obj['web'].update(lot_size=3,qty_precision='2')
     assert risk_readout(obj)[2] == 16.66
+    obj['web'].update(lot_size=1,point_value=10,qty_precision='default')
+    assert risk_readout(obj)[2] == 5
     value['drawings'] = [obj]
-    assert validate_document(value)['drawings'][0]['web']['lot_size'] == 3
+    validated_web = validate_document(value)['drawings'][0]['web']
+    assert validated_web['lot_size'] == 1 and validated_web['point_value'] == 10
     obj['web']['leverage'] = float('nan')
     with pytest.raises(ValueError,match='有限正数'):
         validate_document(value)

@@ -130,7 +130,7 @@ def test_exact_historical_main_and_current_preview_are_distinct():
     assert r.version_label(merged) == 'v2026.10.11.30'
     assert merged['channel'] == 'main' and merged['notes']
     preview = r.identity(ROOT, dict(head='a'*40, branch='codex/preview'))
-    assert r.version_label(preview) == 'v2026.10.17.52 · 预览版'
+    assert r.version_label(preview) == 'v2026.10.17.53 · 预览版'
     approved = r.identity(ROOT, target='0026048789cd7f793a6e845a074ccc853bc45777')
     assert r.version_label(approved) == 'v2026.10.15.48'
     assert approved['channel'] == 'main' and approved['notes']

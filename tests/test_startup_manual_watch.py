@@ -171,8 +171,20 @@ def test_chart_cache_alert_identity_and_hash_are_not_bypassed(tmp_path):
     for mismatch in [dict(source='tickflow'), dict(adjustment='前复权'), dict(code='sh.513501')]:
         assert load_alert_frame(store, '', dict(spec, **mismatch), now) is None
     (store.root / record['path']).write_bytes(b'corrupted')
-    with pytest.raises(ValueError, match='校验失败'):
-        load_alert_frame(store, '', spec, now)
+    assert load_alert_frame(store, '', spec, now) is None
+
+
+def test_bad_watch_cache_falls_back_to_verified_official_snapshot(tmp_path):
+    from gui.chart_alerts import load_alert_frame
+    store = Store(tmp_path)
+    _, record = fetch_history(store, '513500', 'baostock', threading.Event(),
+                             provider_factory=Provider, end='2026-10-16')
+    (store.root / record['path']).write_bytes(b'corrupted')
+    official = bars().assign(open=20., high=22., low=18., close=21.)
+    save_dataset(store, 'sh.513500', official, 'baostock', '不复权')
+    spec = dict(code='sh.513500', source='baostock', adjustment='不复权', timeframe='daily')
+    result = load_alert_frame(store, '', spec, '2026-10-16T20:00:00+08:00')
+    assert result.close.tolist() == [21., 21.]
 
 
 def test_chart_cache_cannot_certify_missing_friday_and_never_splices_prices(tmp_path):
