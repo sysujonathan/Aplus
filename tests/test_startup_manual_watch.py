@@ -125,6 +125,102 @@ def test_valid_local_market_is_read_only_and_source_specific(tmp_path):
     assert (tmp_path / 'workbench.sqlite3').read_bytes() == before
 
 
+def test_chart_only_etf_alert_uses_verified_cache_and_only_future_closes(tmp_path):
+    from gui.chart_bridge import ChartBridge, workspace_boot
+    from gui.chart_alerts import load_alert_frame, ChartAlertMonitor
+    from workbench.chart_workspace import evaluate_alert
+    store = Store(tmp_path)
+    before = business(store)
+    provider = Provider()
+    # Historical chart contents are deliberately older than the creation date.
+    stale = bars('2026-10-16')
+    frame, record = fetch_history(store, '513500', 'baostock', threading.Event(),
+        provider_factory=lambda: provider, end='2026-10-16')
+    boot = workspace_boot(store, dict(frame=frame, record=record, code='sh.513500',
+                                     timeframe='daily', context_kind='watch'))
+    moment = '2026-10-19T20:00:00+08:00'
+    alert = ChartBridge(store, boot, clock=lambda: moment).create_price_alert(10.7)['alert']
+    assert alert['cursor'] == '2026-10-16' and alert['active_after'] == moment
+    # A newly delivered close from before creation must not notify.
+    late = pd.concat([stale, stale.iloc[[-1]].assign(date='2026-10-19', close=10.9)], ignore_index=True)
+    provider.fetch_unadjusted = Mock(return_value=late)
+    fetch_history(store, '513500', 'baostock', threading.Event(),
+                  provider_factory=lambda: provider, end='2026-10-19')
+    alert, event = evaluate_alert(alert, load_alert_frame(store, boot['identity'], alert, moment), now=moment)
+    assert event is None and alert['cursor'] == '2026-10-19'
+    future = pd.concat([late, stale.iloc[[-1]].assign(date='2026-10-20', close=10.5),
+                       stale.iloc[[-1]].assign(date='2026-10-21', close=10.9)], ignore_index=True)
+    provider.fetch_unadjusted = Mock(return_value=future)
+    fetch_history(store, '513500', 'baostock', threading.Event(),
+                  provider_factory=lambda: provider, end='2026-10-21')
+    later = '2026-10-21T20:00:00+08:00'
+    current = ChartAlertMonitor(Mock(), store, clock=lambda: later)._frame(boot['identity'], alert)
+    _, event = evaluate_alert(alert, current, now=later)
+    assert event['bar'] == '2026-10-21'
+    assert business(store) == before  # cache/analysis never enter scanning or trade tables
+
+
+def test_chart_cache_alert_identity_and_hash_are_not_bypassed(tmp_path):
+    from gui.chart_alerts import load_alert_frame
+    store = Store(tmp_path)
+    _, record = fetch_history(store, '513500', 'baostock', threading.Event(),
+                             provider_factory=Provider, end='2026-10-16')
+    spec = dict(code='sh.513500', source='baostock', adjustment='不复权', timeframe='weekly')
+    now = '2026-10-16T20:00:00+08:00'
+    assert load_alert_frame(store, '', spec, now).date.tolist() == ['2026-10-16']
+    for mismatch in [dict(source='tickflow'), dict(adjustment='前复权'), dict(code='sh.513501')]:
+        assert load_alert_frame(store, '', dict(spec, **mismatch), now) is None
+    (store.root / record['path']).write_bytes(b'corrupted')
+    assert load_alert_frame(store, '', spec, now) is None
+
+
+def test_bad_watch_cache_falls_back_to_verified_official_snapshot(tmp_path):
+    from gui.chart_alerts import load_alert_frame
+    store = Store(tmp_path)
+    _, record = fetch_history(store, '513500', 'baostock', threading.Event(),
+                             provider_factory=Provider, end='2026-10-16')
+    (store.root / record['path']).write_bytes(b'corrupted')
+    official = bars().assign(open=20., high=22., low=18., close=21.)
+    save_dataset(store, 'sh.513500', official, 'baostock', '不复权')
+    spec = dict(code='sh.513500', source='baostock', adjustment='不复权', timeframe='daily')
+    result = load_alert_frame(store, '', spec, '2026-10-16T20:00:00+08:00')
+    assert result.close.tolist() == [21., 21.]
+
+
+@pytest.mark.parametrize('broken', [
+    {'code': 'sh.513500'},
+    [],
+])
+def test_bad_watch_cache_metadata_never_aborts_verified_official_alerts(tmp_path, broken):
+    from gui.chart_alerts import load_alert_frame
+    store = Store(tmp_path)
+    fetch_history(store, '513500', 'baostock', threading.Event(),
+                  provider_factory=Provider, end='2026-10-16')
+    store.execute("UPDATE meta SET value=? WHERE key=?", (
+        json.dumps(broken), 'watch_chart:baostock:sh.513500'))
+    official = bars().assign(open=20., high=22., low=18., close=21.)
+    save_dataset(store, 'sh.513500', official, 'baostock', '不复权')
+    spec = dict(code='sh.513500', source='baostock', adjustment='不复权', timeframe='daily')
+    result = load_alert_frame(store, '', spec, '2026-10-16T20:00:00+08:00')
+    assert result.close.tolist() == [21., 21.]
+
+
+def test_chart_cache_cannot_certify_missing_friday_and_never_splices_prices(tmp_path):
+    from gui.chart_alerts import load_alert_frame
+    store = Store(tmp_path)
+    provider = Provider()
+    provider.fetch_unadjusted = Mock(return_value=bars('2026-10-15').iloc[:1])
+    cached, _ = fetch_history(store, '513500', 'baostock', threading.Event(),
+                             provider_factory=lambda: provider, end='2026-10-16')
+    spec = dict(code='sh.513500', source='baostock', adjustment='不复权', timeframe='weekly')
+    assert load_alert_frame(store, '', spec, '2026-10-16T20:00:00+08:00').empty
+    official = bars().assign(open=20., high=22., low=18., close=21.)
+    save_dataset(store, 'sh.513500', official, 'baostock', '不复权')
+    result = load_alert_frame(store, '', dict(spec, timeframe='daily'), '2026-10-16T20:00:00+08:00')
+    assert result.close.tolist() == [21., 21.]
+    assert len(cached) == 1  # the older cache was not combined with the scan series
+
+
 def test_same_tail_chart_cache_preserves_query_watermark_and_does_not_refetch(tmp_path, monkeypatch):
     from gui.watch_chart import load_chart
     from PIL import Image
@@ -441,6 +537,127 @@ def test_manual_dialog_add_and_chart_do_not_require_an_observation(tmp_path, mon
         assert slot._image is not None and '手动关注' in slot._title_var.get()
         assert slot._workspace_context['payload'] == {} and slot._workspace_context['strategy_type'] == ''
         assert store.rows('SELECT * FROM observations') == store.rows('SELECT * FROM plans') == []
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Native desktop')
+def test_compatibility_monitor_starts_checks_other_period_and_recovers_from_read_failure(tmp_path, monkeypatch):
+    if native_case('test_compatibility_monitor_starts_checks_other_period_and_recovers_from_read_failure', tmp_path):
+        return
+    import tkinter as tk
+    from datetime import datetime
+    import gui.chart_workspace as workspace
+    from gui.chart_bridge import ChartBridge, workspace_boot
+    store = Store(tmp_path)
+    initial = pd.DataFrame(dict(date=['2026-10-02','2026-10-09'], open=9., high=9.1,
+                                low=8.9, close=9., volume=100))
+    save_dataset(store, 'sz.000001', initial, 'baostock', '前复权')
+    context = dict(frame=initial, record={'source':'baostock','adjustment':'前复权'},
+                   code='sz.000001', timeframe='daily')
+    boot = workspace_boot(store, context)
+    bridge = ChartBridge(store, boot, clock=lambda:'2026-10-15T20:00:00+08:00')
+    bridge.create_price_alert(10, timeframe='daily')
+    bridge.create_price_alert(10, timeframe='weekly')
+    current = pd.concat([initial, initial.iloc[[-1]].assign(date='2026-10-16',
+                         open=11.,high=11.1,low=10.9,close=11.)], ignore_index=True)
+    save_dataset(store, 'sz.000001', current, 'baostock', '前复权')
+    monkeypatch.setattr(workspace, 'datetime', Mock(now=lambda *_:datetime.fromisoformat('2026-10-16T20:00:00+08:00')))
+    monkeypatch.setattr(workspace.ChartWorkspaceDialog, 'schedule_render', lambda _self:None)
+    warning = Mock()
+    monkeypatch.setattr(workspace.messagebox, 'showwarning', warning)
+    root = tk.Tk()
+    dialog = None
+    try:
+        dialog = workspace.ChartWorkspaceDialog(root, store, **context)
+        assert dialog._alert_after in root.tk.call('after','info')
+        assert boot['identity'] in root._active_chart_workspaces
+        # Run the actual scheduled callback rather than sleeping for its timer.
+        dialog.top.after_cancel(dialog._alert_after)
+        dialog._scheduled_alert_check()
+        saved = store.chart_document(boot['identity'])
+        assert dialog.timeframe == 'daily'
+        assert {alert['timeframe'] for alert in saved['alerts'] if len(alert['events'])==1} == {'daily','weekly'}
+        assert all(alert['cursor']=='2026-10-16' for alert in saved['alerts'])
+        assert dialog._alert_after in root.tk.call('after','info')
+        warning.assert_called_once()
+        dialog.top.after_cancel(dialog._alert_after)
+        monkeypatch.setattr(dialog, 'check_alerts', Mock(side_effect=OSError('坏的行情文件')))
+        dialog._scheduled_alert_check()
+        assert '坏的行情文件' in dialog.status.get()
+        assert dialog._alert_after in root.tk.call('after','info')
+        assert store.chart_document(boot['identity']) == saved
+    finally:
+        if dialog is not None:
+            dialog.close()
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Native desktop')
+def test_manual_watch_compatibility_fallback_accepts_display_period_and_saved_analysis(tmp_path, monkeypatch):
+    if native_case('test_manual_watch_compatibility_fallback_accepts_display_period_and_saved_analysis', tmp_path):
+        return
+    import tkinter as tk
+    import gui.chart_workspace as workspace
+    from gui.chart_bridge import ChartBridge, workspace_boot
+    store = Store(tmp_path)
+    context = dict(frame=bars(), record={'source':'baostock','adjustment':'不复权'},
+                   code='sh.513500', timeframe='daily', display_timeframe='weekly', context_kind='watch')
+    monkeypatch.setenv('APLUS_TK_CHART_FALLBACK', '1')
+    monkeypatch.setattr(workspace.ChartWorkspaceDialog, 'schedule_render', lambda _self: None)
+    root = tk.Tk()
+    try:
+        dialog = workspace.open_chart_workspace(root, store, **context)
+        assert dialog.base_timeframe == 'daily' and dialog.timeframe == 'weekly'
+        assert dialog.base_frame.date.tolist() == bars().date.tolist()
+        assert dialog.frame.date.tolist() == ['2026-10-16']
+        dialog.close()
+        boot = workspace_boot(store, context)
+        ChartBridge(store, boot).save_state(dict(timeframe='monthly', objects=[]))
+        before = store.chart_document(boot['identity'])
+        dialog = workspace.open_chart_workspace(root, store, **context)
+        assert dialog.base_timeframe == 'daily' and dialog.timeframe == 'monthly'
+        assert store.chart_document(boot['identity']) == before
+        dialog.close()
+    finally:
+        root.destroy()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Native desktop')
+def test_manual_watch_enters_default_interactive_grid_without_fake_signal(tmp_path, monkeypatch):
+    if native_case('test_manual_watch_enters_default_interactive_grid_without_fake_signal', tmp_path):
+        return
+    import tkinter as tk
+    from PIL import Image
+    from gui.chart_panel import ChartGrid
+    from gui.chart_items import ChartItem
+    from gui.chart_bridge import workspace_boot
+    store = Store(tmp_path)
+    save_dataset(store, 'sz.000001', bars(), 'baostock', '前复权')
+    before = business(store)
+    host = Mock()
+    factory = Mock(return_value=host)
+    factory.available.return_value = True
+    monkeypatch.setattr('gui.chart_embed.EmbeddedChartHost', factory)
+    monkeypatch.setattr('gui.watch_chart.render_chart', lambda *_a, **_k: Image.new('RGB', (500,300)))
+    monkeypatch.setattr('gui.watch_chart.chart_day', lambda: '2026-10-16')
+    monkeypatch.setattr('gui.watch_chart.fetch_history', Mock(side_effect=AssertionError('local chart needs no fetch')))
+    root = tk.Tk()
+    try:
+        grid = ChartGrid(root, store, interactive=True, layout_count=1)
+        grid.pack()
+        grid.set_items([ChartItem('sz.000001','测试',None,'baostock','watch',timeframe='weekly',manual=True)])
+        deadline = time.monotonic()+3
+        while not host.show.call_count and time.monotonic()<deadline:
+            root.update()
+            time.sleep(.01)
+        host.show.assert_called_once()
+        context = host.show.call_args.args[0]
+        assert context['payload'] == {} and context['strategy_type'] == ''
+        boot = workspace_boot(store, context)
+        assert boot['state']['timeframe'] == 'weekly'
+        assert boot['timeframe'] == 'daily' and len(boot['series']['daily']) == len(bars())
+        assert business(store) == before
     finally:
         root.destroy()
 

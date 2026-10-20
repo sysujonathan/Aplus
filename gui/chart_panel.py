@@ -60,11 +60,12 @@ def _configure_chart_styles():
 class ChartPanel(native_ttk.Frame):
     """一个独立图格：自身标的、活动状态以及独立 TradingView 入口。"""
 
-    def __init__(self, parent, store=None, on_activate=None, image_cache=None):
+    def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None):
         _configure_chart_styles()
         super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
         self.store = store
         self._on_activate = on_activate
+        self._on_layout = on_layout
         self._image_cache = image_cache if image_cache is not None else {}
         self._code = None
         self._observation_id = None
@@ -73,6 +74,8 @@ class ChartPanel(native_ttk.Frame):
         self._photo = None
         self._workspace_context = None
         self._workspace_request = None
+        self._embedded = None
+        self._interactive = interactive
         self._manual_controller = None
         self.bind('<Destroy>', self._destroy_manual, add='+')
         self.columnconfigure(0, weight=1)
@@ -143,6 +146,42 @@ class ChartPanel(native_ttk.Frame):
         self.chart_frame.bind("<Configure>", lambda _event: self._fit_image())
         for widget in (self, self.header, self.title_label, self.chart_label):
             widget.bind("<Button-1>", self._activate, add="+")
+        if interactive:
+            self._analysis_btn.configure(text='弹出图表')
+            self.readout_frame.grid_remove()
+
+    def _show_interactive(self):
+        if not self._interactive or not self.store:
+            return
+        from .chart_embed import EmbeddedChartHost
+        if not EmbeddedChartHost.available():
+            self.readout_frame.grid()
+            self.readout.set('交互主图不可用，当前为兼容预览；请核对 WebView2 环境')
+            return
+        try:
+            context = self._workspace_context or self._rebuild_workspace_context()
+            if self._embedded is None:
+                self._embedded = EmbeddedChartHost(self.chart_frame, self.store, self._embedded_error,
+                    on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate)
+            self.readout_frame.grid()
+            self.readout.set('正在加载交互主图；当前分析会先保存到本机')
+            self._embedded.show(context)
+        except Exception as exc:
+            self._embedded_error(str(exc))
+
+    def _embedded_error(self, error):
+        self.readout_frame.grid()
+        self.readout.set('交互主图未就绪：' + error)
+        if self._image is None and self._workspace_context:
+            try:
+                context = self._workspace_context
+                self._image = render_chart(context['frame'],context['payload'],'',context['metadata'],
+                    strategy=context['strategy'],strategy_type=context['strategy_type'],code=context['code'],
+                    instrument_type=context.get('instrument_type'))
+                self._fit_image()
+                self.readout.set('兼容预览：' + error)
+            except Exception:
+                self.chart_label.configure(text='交互主图未就绪：' + error)
 
     def tv_button(self, _parent=None):
         """兼容旧调用；多图模式下按钮固定在各自图格右上角。"""
@@ -182,6 +221,14 @@ class ChartPanel(native_ttk.Frame):
         self.chart_label.configure(image="", text="拖入关注标的或切换候选页")
         self._tv_btn.configure(state=tk.DISABLED)
         self._analysis_btn.configure(state=tk.DISABLED)
+        if self._embedded is not None and not self._embedded.closed():
+            self._embedded.show(None)
+
+    def suspend_interactive(self):
+        """Release a hidden layout tile after its final acknowledged save."""
+        self._cancel_manual()
+        if self._embedded is not None and not self._embedded.closed():
+            self._embedded.request_close()
 
     def show_observation(
         self,
@@ -225,6 +272,7 @@ class ChartPanel(native_ttk.Frame):
             self._tv_btn.configure(state=tk.NORMAL)
             self._analysis_btn.configure(state=tk.NORMAL)
             self._fit_image()
+            self._show_interactive()
             return
         from .data import load_observation_candles, code_names
         from workbench.market import load_dataset
@@ -264,7 +312,9 @@ class ChartPanel(native_ttk.Frame):
             name = code_names(store).get(self._code, "")
             period = "周K" if self._tf == "weekly" else "日K"
             # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
-            self._image = render_chart(
+            from .chart_embed import EmbeddedChartHost
+            interactive_ready = getattr(self, '_interactive', False) is True and EmbeddedChartHost.available()
+            self._image = None if interactive_ready else render_chart(
                 calculated,
                 payload,
                 "",
@@ -312,6 +362,7 @@ class ChartPanel(native_ttk.Frame):
             self._tv_btn.configure(state=tk.NORMAL)
             self._analysis_btn.configure(state=tk.NORMAL)
             self._fit_image()
+            self._show_interactive()
         except Exception as exc:
             self._code = None
             self._image = self._photo = None
@@ -433,12 +484,15 @@ class ChartGrid(ttk.Frame):
     """TradingView 式活动图格：候选分页，关注点击/拖拽只替换指定格。"""
 
     def __init__(self, parent, store=None, layout_count=4, on_page_state=None,
-                 on_active_item=None):
+                 on_active_item=None, interactive=False, on_layout_request=None):
         super().__init__(parent)
         self.store = store
+        self._interactive = interactive
+        self._slot_pool = []
         self._layout_count = layout_count if layout_count in _LAYOUT_SHAPES else 4
         self._on_page_state = on_page_state
         self._on_active_item = on_active_item
+        self._on_layout_request = on_layout_request
         self._items = []
         self._display_items = []
         self._page_start = 0
@@ -569,8 +623,12 @@ class ChartGrid(ttk.Frame):
         self.set_items([])
 
     def _build_slots(self):
-        for child in self.host.winfo_children():
-            child.destroy()
+        # Only visible tiles keep a WebView process. A hidden tile first asks
+        # its page to flush the Store-backed document, then releases the child.
+        for index, child in enumerate(self._slot_pool):
+            child.grid_remove()
+            if index >= self._layout_count:
+                child.suspend_interactive()
         self._slots = []
         rows, columns = layout_shape(self._layout_count)
         for row in range(3):
@@ -579,14 +637,19 @@ class ChartGrid(ttk.Frame):
             self.host.columnconfigure(column, weight=1 if column < columns else 0)
         for index in range(self._layout_count):
             row, column = divmod(index, columns)
-            slot = ChartPanel(
-                self.host,
-                self.store,
-                on_activate=lambda i=index: self._activate_slot(i),
-                image_cache=self._image_cache,
-            )
+            if index < len(self._slot_pool):
+                slot = self._slot_pool[index]
+            else:
+                slot = ChartPanel(self.host, self.store,
+                    on_activate=lambda i=index: self._activate_slot(i),
+                    image_cache=self._image_cache, interactive=self._interactive,
+                    on_layout=self._on_layout_request or self.set_layout)
+                self._slot_pool.append(slot)
             slot.grid(row=row, column=column, sticky=tk.NSEW, padx=3, pady=3)
             self._slots.append(slot)
+
+    def embedded_hosts(self):
+        return [slot._embedded for slot in self._slot_pool if slot._embedded is not None]
 
     def _render_page(self):
         self._render_token += 1

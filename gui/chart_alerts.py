@@ -13,7 +13,7 @@ from workbench.chart_workspace import (aggregate_minutes, bar_close_time, bar_co
 
 
 def load_alert_frame(store, chart_identity, alert, now):
-    """Read the official source, never a historical chart's display snapshot."""
+    """Read verified local source data, never a historical display snapshot."""
     timeframe = alert['timeframe']
     if timeframe in ('5m', '1h', '4h'):
         frame, _ = store.load_chart_series(chart_identity, '5m')
@@ -23,10 +23,21 @@ def load_alert_frame(store, chart_identity, alert, now):
     else:
         from .data import latest_market_dataset
         from workbench.market import load_dataset
+        from workbench.watch_history import cached_history
         record = latest_market_dataset(store, alert['code'], 'daily', alert['source'])
-        if not record or str(record.get('adjustment')) != alert['adjustment']:
+        official = (load_dataset(store, record['id'])
+                    if record and str(record.get('adjustment')) == alert['adjustment'] else None)
+        try:
+            cached = cached_history(store, alert['code'], alert['source'], alert['adjustment'])
+        except (OSError, ValueError, KeyError, TypeError):
+            # A disposable watch-chart cache must never suppress a verified
+            # official snapshot or abort every other alert in this poll.
+            cached = None
+        candidates = [item for item in (official, cached) if item is not None]
+        if not candidates:
             return None
-        frame, _ = load_dataset(store, record['id'])  # verifies immutable snapshot hash
+        # Keep each immutable series intact: never splice scan and chart-cache prices.
+        frame, _ = max(candidates, key=lambda item: (item[1]['end'], item[1].get('checked_through', '')))
         frame = frame.loc[[bar_completed(day, 'daily', now) for day in frame.date]].reset_index(drop=True)
         if timeframe in ('weekly', 'monthly') and not frame.empty:
             from .chart_workspace import resample_daily

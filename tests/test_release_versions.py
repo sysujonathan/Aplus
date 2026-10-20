@@ -54,13 +54,16 @@ def test_catalog_covers_each_pr_without_inventing_publications():
     assert by_pr[47]['commit'] == 'e968647fb02ffdf79b4854432ea9ce51f1f94e03'
     assert by_pr[48]['status'] == 'released'
     assert by_pr[48]['commit'] == '0026048789cd7f793a6e845a074ccc853bc45777'
-    assert all(by_pr[n]['status'] == 'released' for n in (49, 50, 51))
+    assert by_pr[49]['status'] == by_pr[50]['status'] == 'released'
     assert by_pr[49]['commit'] == '9ae9b9e4398415fadd1e051750d9db2058bdd4e6'
     assert by_pr[50]['commit'] == '704334c7b1e52baef444e468e568504f3ceb7dfe'
+    assert by_pr[51]['status'] == 'released'
     assert by_pr[51]['commit'] == 'bd6b1951dc86a4d4bc73e93cb71b23987734f4f9'
+    assert by_pr[52]['status'] == 'preview'
     assert by_pr[51]['version'] == '2026.10.17.51'
-    assert by_pr[52]['status'] == by_pr[53]['status'] == 'preview'
-    assert 'commit' not in by_pr[52] and 'commit' not in by_pr[53]
+    assert by_pr[53]['status'] == 'released'
+    assert by_pr[53]['commit'] == '9f32bff91bd27c70de3a0286fdf200857caf1ca8'
+    assert 'commit' not in by_pr[52]
     assert all('commit' not in by_pr[x] for x in (33, 34))
     assert by_pr[34]['version'] == '2026.10.12.34'
     assert by_pr[35]['version'] == '2026.10.12.35'
@@ -88,7 +91,10 @@ def test_generated_document_and_offline_catalog_are_one_source():
     assert 'v2026.10.14.45-preview' not in text
     assert 'v2026.10.15.46-preview' not in text
     assert 'v2026.10.15.47-preview' not in text
-    assert 'v2026.10.15.50-preview' not in text and 'v2026.10.15.50' in text
+    assert 'v2026.10.15.50-preview' not in text
+    assert 'v2026.10.15.49-preview' not in text
+    assert 'v2026.10.17.52-preview' in text
+    assert 'v2026.10.17.53-preview' not in text and 'v2026.10.17.53' in text
     assert 'v2026.10.15.48-preview' not in text and 'v2026.10.15.48' in text
 
 

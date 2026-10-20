@@ -139,7 +139,12 @@ from gui.main_window import AplusMainWindow
 from gui.usage_help import show_usage
 from gui import version_update as ui
 s=Store(Path(sys.argv[1])/'isolated'); service=Service(s)
-w=AplusMainWindow(service=service,store=s); w.update()
+w=AplusMainWindow(service=service,store=s)
+# This test drives synthetic release notices. Keep the unrelated delayed online
+# checker out of it, even when loading the offline documents takes over 4 seconds.
+w.after_cancel(w.version_controller.startup_check_id)
+w.version_controller.startup_check_id=None
+w.update()
 c=w.version_controller; c.root=Path(sys.argv[1]); (c.root/'.git').mkdir()
 height=w.chart.winfo_height()
 assert w.usage_button.master is w.section_nav

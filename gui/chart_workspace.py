@@ -35,13 +35,48 @@ DRAWING_LABELS = {**dict(TOOLS), 'text': '文字', 'ruler': '价格范围'}
 TF_LABELS = [('5m', '5分'), ('1h', '1小时'), ('4h', '4小时'),
              ('daily', '日'), ('weekly', '周'), ('monthly', '月')]
 CONDITION_LABELS = {'above': '高于', 'below': '低于', 'cross_up': '向上穿越',
-                    'cross_down': '向下穿越', 'cross': '任意穿越'}
+                    'cross_down': '向下穿越', 'cross': '任意穿越',
+                    'enter_channel': '进入通道', 'exit_channel': '离开通道',
+                    'inside_channel': '处于通道内', 'outside_channel': '处于通道外',
+                    'rise': '上涨指定数值', 'fall': '下跌指定数值',
+                    'rise_pct': '上涨指定百分比', 'fall_pct': '下跌指定百分比'}
+CHANNEL_CONDITIONS = frozenset(('enter_channel', 'exit_channel',
+                                'inside_channel', 'outside_channel'))
+MOVEMENT_CONDITIONS = frozenset(('rise', 'fall', 'rise_pct', 'fall_pct'))
+
+
+def _alert_optional_values(condition, upper, lower, bars):
+    """Parse only fields that participate in the selected alert condition."""
+    if condition in CHANNEL_CONDITIONS:
+        return float(upper), float(lower), 1
+    if condition in MOVEMENT_CONDITIONS:
+        return None, None, int(bars)
+    return None, None, 1
 
 
 def _ruler_readout(obj):
     start, end = (float(point[1]) for point in obj['points'])
     delta = end - start
     return f'{delta:+.3f} ({delta / start * 100:+.2f}%)'
+
+
+def _path_ends(obj):
+    web = obj.get('web') or {}
+    return (web.get('startStyle') == 'arrow',
+            web.get('endStyle', 'arrow' if web.get('path_version') else 'none') == 'arrow')
+
+
+def _arrow_marker_points(a, b):
+    length = math.hypot(b[0]-a[0], b[1]-a[1])
+    if length < .01:
+        return [a, b]
+    ux, uy = (b[0]-a[0])/length, (b[1]-a[1])/length
+    head = min(48, length*.4)
+    wing, shaft = head*.625, head*.625*.45
+    base = (b[0]-ux*head, b[1]-uy*head)
+    def side(offset):
+        return (base[0]-uy*offset, base[1]+ux*offset)
+    return [a, side(shaft), side(wing), b, side(-wing), side(-shaft)]
 
 
 def resample_daily(frame, timeframe):
@@ -63,7 +98,7 @@ class ChartWorkspaceDialog:
 
     def __init__(self, parent, store, *, frame, record, code, name='', timeframe='daily',
                  payload=None, metadata=None, strategy=None, strategy_type='',
-                 instrument_type=None, holding_levels=(), replay_events=(), title=''):
+                 instrument_type=None, holding_levels=(), replay_events=(), title='', display_timeframe=None):
         self.store, self.code, self.name = store, str(code), str(name or '')
         self.record = dict(record or {})
         self.source = str(self.record.get('source') or 'unknown')
@@ -121,8 +156,12 @@ class ChartWorkspaceDialog:
         self.top.bind('<Escape>', self._escape)
         self._build()
         self._load_saved_intraday()
-        self.schedule_render()
-        self._alert_after = None
+        display = (saved['settings'].get('web_state') or {}).get('timeframe') or display_timeframe
+        if display in ('daily', 'weekly', 'monthly') and display != self.timeframe:
+            self.change_timeframe(display)
+        else:
+            self.schedule_render()
+        self._alert_after = self.top.after(3_000, self._scheduled_alert_check)
 
     @property
     def value(self):
@@ -413,6 +452,9 @@ class ChartWorkspaceDialog:
                                         fill=color, anchor=tk.SW, tags=tag)
         elif kind == 'ray':
             x, y = points[0]; self.canvas.create_line(x, y, x_right, y, fill=color, width=width, tags=tag)
+        elif kind == 'arrow' and (obj.get('web') or {}).get('arrow_marker_version'):
+            polygon = _arrow_marker_points(*points[:2])
+            self.canvas.create_polygon(*[n for point in polygon for n in point], fill=color, outline=color, tags=tag)
         elif kind in ('trend', 'arrow'):
             self.canvas.create_line(*points[0], *points[1], fill=color, width=width,
                                     arrow=tk.LAST if kind == 'arrow' else tk.NONE, tags=tag)
@@ -437,7 +479,10 @@ class ChartWorkspaceDialog:
                                     font=('Segoe UI Symbol', 18, 'bold'), tags=tag)
         elif kind == 'path':
             flat = [n for point in points for n in point]
-            self.canvas.create_line(*flat, fill=color, width=width, smooth=False, tags=tag)
+            start, end = _path_ends(obj)
+            self.canvas.create_line(*flat, fill=color, width=width, smooth=False,
+                                    arrow=tk.BOTH if start and end else tk.FIRST if start else tk.LAST if end else tk.NONE,
+                                    tags=tag)
         elif kind == 'channel':
             a, b, c = points; dx, dy = c[0]-a[0], c[1]-a[1]
             self.canvas.create_line(*a, *b, fill=color, width=width, tags=tag)
@@ -763,7 +808,7 @@ class ChartWorkspaceDialog:
         ttk.Checkbutton(fields, text='EMA', variable=ema).grid(row=0, column=0, sticky=tk.W)
         ttk.Label(fields, text='长度').grid(row=0,column=1); ttk.Entry(fields,textvariable=length,width=7).grid(row=0,column=2)
         ttk.Label(fields, text='来源').grid(row=0,column=3); ttk.Combobox(fields,textvariable=source,
-            values=('open','high','low','close'),state='readonly',width=7).grid(row=0,column=4)
+            values=('open','high','low','close','volume','hl2','hlc3','ohlc4'),state='readonly',width=7).grid(row=0,column=4)
         ttk.Label(fields, text='偏移').grid(row=0,column=5); ttk.Entry(fields,textvariable=offset,width=7).grid(row=0,column=6)
         ttk.Button(fields, text='颜色', command=lambda: self._pick_color(settings, 'ema_color')).grid(row=0,column=7,padx=6)
         ttk.Checkbutton(fields, text='Bar Count', variable=count).grid(row=1,column=0,sticky=tk.W,pady=8)
@@ -811,30 +856,76 @@ class ChartWorkspaceDialog:
         last = float(self._render_frame().close.iloc[-1])
         value = tk.StringVar(value=str(alert.get('value', round(last, 3))))
         ema_len = tk.StringVar(value=str(alert.get('ema_length', self.history.value['settings']['ema_length'])))
+        upper = tk.StringVar(value=str(alert.get('upper') or round(last * 1.01, 3)))
+        lower = tk.StringVar(value=str(alert.get('lower') or round(last * .99, 3)))
+        bars = tk.StringVar(value=str(alert.get('bars', 1)))
         enabled = tk.BooleanVar(value=alert.get('enabled',True))
         expiry = tk.StringVar(value=alert.get('expires',''))
-        rows = [('名称',name),('固定价格',value),('EMA 长度',ema_len),('到期时间（可空）',expiry)]
+        rows = [('名称',name),('价格／变动幅度',value),('EMA 长度',ema_len),
+                ('到期时间（可空）',expiry),('通道上轨',upper),('通道下轨',lower),
+                ('回看 K 线数量',bars)]
+        entries = []
         for row,(label,var) in enumerate(rows):
             ttk.Label(box,text=label).grid(row=row,column=0,sticky=tk.W,pady=4)
-            ttk.Entry(box,textvariable=var,width=30).grid(row=row,column=1,sticky=tk.EW,pady=4)
-        ttk.Label(box,text='目标').grid(row=4,column=0,sticky=tk.W)
-        ttk.Combobox(box,textvariable=target,state='readonly',values=tuple(target_values)).grid(row=4,column=1,sticky=tk.EW)
-        ttk.Label(box,text='条件').grid(row=5,column=0,sticky=tk.W,pady=4)
-        ttk.Combobox(box,textvariable=condition,state='readonly',values=tuple(condition_values)).grid(row=5,column=1,sticky=tk.EW,pady=4)
-        ttk.Label(box,text='频率').grid(row=6,column=0,sticky=tk.W,pady=4)
-        ttk.Combobox(box,textvariable=frequency,state='readonly',values=tuple(frequency_values)).grid(row=6,column=1,sticky=tk.EW,pady=4)
-        ttk.Checkbutton(box,text='启用',variable=enabled).grid(row=7,column=1,sticky=tk.W)
+            entry = ttk.Entry(box,textvariable=var,width=30)
+            entry.grid(row=row,column=1,sticky=tk.EW,pady=4)
+            entries.append(entry)
+        ttk.Label(box,text='目标').grid(row=7,column=0,sticky=tk.W)
+        ttk.Combobox(box,textvariable=target,state='readonly',values=tuple(target_values)).grid(row=7,column=1,sticky=tk.EW)
+        ttk.Label(box,text='条件').grid(row=8,column=0,sticky=tk.W,pady=4)
+        condition_box = ttk.Combobox(box,textvariable=condition,state='readonly',values=tuple(condition_values))
+        condition_box.grid(row=8,column=1,sticky=tk.EW,pady=4)
+        ttk.Label(box,text='频率').grid(row=9,column=0,sticky=tk.W,pady=4)
+        ttk.Combobox(box,textvariable=frequency,state='readonly',values=tuple(frequency_values)).grid(row=9,column=1,sticky=tk.EW,pady=4)
+        ttk.Checkbutton(box,text='启用',variable=enabled).grid(row=10,column=1,sticky=tk.W)
         ttk.Label(box,text=f'固定口径：{self.source} · {self.adjustment} · {dict(TF_LABELS)[self.timeframe]}\n'
                   '只检查之后出现的已收盘 K 线；回放和历史数据不会补触发。\n'
                   '触发方式：A++ 本机弹窗，不发送外部消息。',foreground=MUTED,justify=tk.LEFT).grid(
-                      row=8,column=0,columnspan=2,sticky=tk.W,pady=10)
+                      row=11,column=0,columnspan=2,sticky=tk.W,pady=10)
+        def sync_optional_fields(_event=None):
+            selected = condition_values[condition.get()]
+            channel_state = 'normal' if selected in CHANNEL_CONDITIONS else 'disabled'
+            movement_state = 'normal' if selected in MOVEMENT_CONDITIONS else 'disabled'
+            entries[4].configure(state=channel_state)
+            entries[5].configure(state=channel_state)
+            entries[6].configure(state=movement_state)
+        condition_box.bind('<<ComboboxSelected>>', sync_optional_fields)
+        sync_optional_fields()
         def save():
             try:
+                condition_key = condition_values[condition.get()]
+                upper_value, lower_value, bars_value = _alert_optional_values(
+                    condition_key, upper.get(), lower.get(), bars.get())
                 if alert:
-                    item = deepcopy(alert); item.update(name=name.get().strip(),target=target_values[target.get()],
-                        condition=condition_values[condition.get()],value=float(value.get()),ema_length=int(ema_len.get()),
+                    item = deepcopy(alert)
+                    before = deepcopy(item)
+                    item.update(name=name.get().strip(),target=target_values[target.get()],
+                        condition=condition_key,value=float(value.get()),ema_length=int(ema_len.get()),
                         frequency=frequency_values[frequency.get()], expires=expiry.get().strip(),
-                        enabled=enabled.get(),status='等待下一根已收盘 K 线')
+                        enabled=enabled.get())
+                    for key in ('upper', 'lower', 'bars'):
+                        item.pop(key, None)
+                    if condition_key in CHANNEL_CONDITIONS:
+                        item.update(upper=upper_value, lower=lower_value)
+                    elif condition_key in MOVEMENT_CONDITIONS:
+                        item['bars'] = bars_value
+                    semantic = ('condition','target','value','ema_length','timeframe','upper','lower','bars')
+                    reseed = any(item.get(key) != before.get(key) for key in semantic)
+                    reseed |= item['enabled'] and not before.get('enabled', True)
+                    if reseed:
+                        from .chart_alerts import load_alert_frame
+                        moment = datetime.now(timezone.utc).isoformat()
+                        current = load_alert_frame(self.store, self.identity, item, moment)
+                        if current is None or current.empty:
+                            raise ValueError('没有同来源、同复权的已收盘行情，无法更新提醒条件')
+                        seeded = create_alert(name=item['name'], code=item['code'], source=item['source'],
+                            adjustment=item['adjustment'], timeframe=item['timeframe'], target=item['target'],
+                            condition=item['condition'], value=item['value'], frame=current,
+                            ema_length=item['ema_length'], frequency=item['frequency'],
+                            expires=item.get('expires'), active_after=moment,
+                            upper=item.get('upper'), lower=item.get('lower'), bars=item.get('bars', 1))
+                        item.update(cursor=seeded['cursor'], active_after=seeded['active_after'],
+                                    status=seeded['status'])
                 else:
                     from .chart_alerts import load_alert_frame
                     moment = datetime.now(timezone.utc).isoformat()
@@ -844,22 +935,33 @@ class ChartWorkspaceDialog:
                         raise ValueError('没有同来源、同复权的已完成正式行情，请更新行情后创建提醒')
                     item = create_alert(name=name.get(), code=self.code, source=self.source,
                         adjustment=self.adjustment, timeframe=self.timeframe, target=target_values[target.get()],
-                        condition=condition_values[condition.get()], value=float(value.get()), frame=current,
+                        condition=condition_key, value=float(value.get()), frame=current,
                         ema_length=int(ema_len.get()), frequency=frequency_values[frequency.get()],
-                        expires=expiry.get().strip(), active_after=moment)
+                        expires=expiry.get().strip(), active_after=moment,
+                        upper=upper_value, lower=lower_value, bars=bars_value)
                 doc = deepcopy(self.history.value)
                 doc['alerts'] = [item if old['id']==item['id'] else old for old in doc['alerts']]
                 if not alert: doc['alerts'].append(item)
                 doc = validate_document(doc); self.history.value = doc
                 self._save(); win.destroy(); self.refresh_tree()
             except Exception as exc: messagebox.showerror('提醒未保存',str(exc),parent=win)
-        ttk.Button(box,text='取消',command=win.destroy).grid(row=9,column=0,sticky=tk.E,padx=5)
-        ttk.Button(box,text='保存提醒',command=save).grid(row=9,column=1,sticky=tk.E)
+        ttk.Button(box,text='取消',command=win.destroy).grid(row=12,column=0,sticky=tk.E,padx=5)
+        ttk.Button(box,text='保存提醒',command=save).grid(row=12,column=1,sticky=tk.E)
 
     def _scheduled_alert_check(self):
         self._alert_after = None
-        self.check_alerts(silent=True)
-        if not self._closed: self._alert_after = self.top.after(60_000, self._scheduled_alert_check)
+        try:
+            self.check_alerts(silent=True)
+            self._last_alert_error = None
+        except Exception as exc:
+            error = str(exc)
+            self.status.set('本轮提醒检查暂停：' + error)
+            if error != getattr(self, '_last_alert_error', None):
+                self._last_alert_error = error
+                messagebox.showwarning('A++ 提醒检查暂停', error + '\n\n当前图形仍保留，下轮重新核对已保存行情。', parent=self.top)
+        finally:
+            if not self._closed:
+                self._alert_after = self.top.after(60_000, self._scheduled_alert_check)
 
     def check_alerts(self, *, silent=False):
         if self.replay_index is not None: return
@@ -867,8 +969,8 @@ class ChartWorkspaceDialog:
         now = datetime.now(timezone.utc).isoformat()
         from .chart_alerts import load_alert_frame
         for index, alert in enumerate(doc['alerts']):
-            if (alert['code'],alert['source'],alert['adjustment'],alert['timeframe']) != (
-                    self.code,self.source,self.adjustment,self.timeframe):
+            if (alert['code'],alert['source'],alert['adjustment']) != (
+                    self.code,self.source,self.adjustment):
                 continue
             frame = load_alert_frame(self.store, self.identity, alert, now)
             if frame is None or frame.empty:
@@ -876,7 +978,12 @@ class ChartWorkspaceDialog:
             doc['alerts'][index], event = evaluate_alert(alert, frame, now=now)
             if event: events.append(event)
         if doc['alerts'] != self.history.value['alerts']:
-            self.history.value = validate_document(doc); self._save(); self.refresh_tree()
+            previous = self.history.value
+            self.history.value = validate_document(doc)
+            if not self._save():
+                self.history.value = previous
+                return  # Another editor still owns the revision; do not notify uncommitted events.
+            self.refresh_tree()
         if events:
             messagebox.showwarning('A++ 行情提醒', '\n'.join(
                 f"{event['text']} · {event['bar']} · 收盘 {event['price']:.3f}" for event in events), parent=self.top)
@@ -972,6 +1079,8 @@ class ChartWorkspaceDialog:
                     y=pts[0][1]+(pts[1][1]-pts[0][1])*float(level)
                     draw.line((min(pts[0][0],pts[1][0]),y,right,y),fill=color,width=width)
             elif kind=='ray': draw.line((*pts[0],right,pts[0][1]),fill=color,width=width)
+            elif kind=='arrow' and (obj.get('web') or {}).get('arrow_marker_version'):
+                draw.polygon(_arrow_marker_points(*pts[:2]), fill=color)
             elif kind in ('trend','arrow'): draw.line((*pts[0],*pts[1]),fill=color,width=width)
             elif kind=='ruler':
                 (x1,y1),(x2,y2)=pts
@@ -981,7 +1090,15 @@ class ChartWorkspaceDialog:
             elif kind=='text': draw.text((pts[0][0]+4,pts[0][1]+4),obj.get('text') or '文字',fill=color)
             elif kind=='rectangle': draw.rectangle((*pts[0],*pts[1]),outline=color,width=width,fill='#33124466')
             elif kind in ('up','down'): draw.text(pts[0],'▲' if kind=='up' else '▼',fill=color,anchor='mm')
-            elif kind=='path': draw.line([tuple(p) for p in pts],fill=color,width=width,joint='curve')
+            elif kind=='path':
+                draw.line([tuple(p) for p in pts],fill=color,width=width,joint='curve')
+                start, end = _path_ends(obj)
+                for enabled, tip, previous in ((start,pts[0],pts[1]),(end,pts[-1],pts[-2])):
+                    if enabled:
+                        angle=math.atan2(tip[1]-previous[1],tip[0]-previous[0])
+                        for offset in (-.45,.45):
+                            wing=(tip[0]-12*math.cos(angle+offset),tip[1]-12*math.sin(angle+offset))
+                            draw.line((tuple(tip),wing),fill=color,width=width)
             elif kind=='channel':
                 a,b,c=pts; dx,dy=c[0]-a[0],c[1]-a[1]
                 draw.line((a,b),fill=color,width=width); draw.line((c,(b[0]+dx,b[1]+dy)),fill=color,width=width)

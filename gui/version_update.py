@@ -129,6 +129,9 @@ class VersionController:
                 self.waiting = None
                 self.window._update_pending = False
                 self.window.deiconify()
+                resume_charts = getattr(self.window, '_resume_embedded_charts', None)
+                if resume_charts is not None:
+                    resume_charts()
                 if self.reserved:
                     self.window.service.release_code_update()
                     self.reserved = False
@@ -265,6 +268,9 @@ class VersionController:
             return
         try:
             require_web_closed()
+            flush_charts = getattr(self.window, '_flush_embedded_charts', None)
+            if flush_charts is not None and not flush_charts():
+                return
             service.reserve_code_update()
             self.reserved = True
             # Hide interaction before starting the helper, but don't exit until
@@ -276,6 +282,9 @@ class VersionController:
         except Exception as exc:
             self.window._update_pending = False
             self.window.deiconify()
+            resume_charts = getattr(self.window, '_resume_embedded_charts', None)
+            if resume_charts is not None:
+                resume_charts()
             if self.reserved:
                 service.release_code_update()
                 self.reserved = False

@@ -79,6 +79,33 @@ class _ChartView:
         return path.read_bytes()
 
 
+def cached_history(store, code, source, adjustment=None):
+    """Read only a verified chart cache; never infer identity from its filename."""
+    code = code_of(code)
+    if adjustment is not None and adjustment != '不复权':
+        return None
+    view = _ChartView(store)
+    saved = view.rows('SELECT value FROM meta WHERE key=?', ('watch_chart:' + source + ':' + code,))
+    if not saved:
+        return None
+    record = json.loads(saved[0]['value'])
+    if (record['source'] != source or record['code'] != code
+            or record['adjustment'] != '不复权' or record['timeframe'] != 'daily'):
+        raise ValueError('关注K图缓存身份不一致')
+    prefix = f'watch_history/{source}/{code}/'
+    sha = record['sha256']
+    if (not isinstance(sha, str) or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha)
+            or record['path'] != prefix + sha + '.csv' or record['id'] != 'watch-' + sha):
+        raise ValueError('关注K图缓存路径无效')
+    raw = view.read_artifact(record['path'])
+    if digest(raw) != sha:
+        raise ValueError('关注K图缓存校验失败')
+    frame = validate_bars(pd.read_csv(io.BytesIO(raw)))
+    if frame.date.iloc[0] != record['start'] or frame.date.iloc[-1] != record['end']:
+        raise ValueError('关注K图缓存日期不一致')
+    return frame, record
+
+
 def local_history(store, code, source=None):
     code = code_of(code)
     source = source or chart_source(store, code)
@@ -91,26 +118,12 @@ def local_history(store, code, source=None):
             candidates.append(load_dataset(view, rows[0]['id']))
         except (ValueError, OSError):
             pass  # A bad snapshot cannot be displayed; the chart may refetch.
-    saved = view.rows('SELECT value FROM meta WHERE key=?', ('watch_chart:' + source + ':' + code,))
-    if saved:
-        try:
-            record = json.loads(saved[0]['value'])
-            if record['source'] != source or record['code'] != code or record['adjustment'] != '不复权':
-                raise ValueError('关注K图缓存身份不一致')
-            prefix = f'watch_history/{source}/{code}/'
-            sha = record['sha256']
-            if (not isinstance(sha, str) or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha)
-                    or record['path'] != prefix + sha + '.csv' or record['id'] != 'watch-' + sha):
-                raise ValueError('关注K图缓存路径无效')
-            raw = view.read_artifact(record['path'])
-            if digest(raw) != record['sha256']:
-                raise ValueError('关注K图缓存校验失败')
-            frame = validate_bars(pd.read_csv(io.BytesIO(raw)))
-            if frame.date.iloc[0] != record['start'] or frame.date.iloc[-1] != record['end']:
-                raise ValueError('关注K图缓存日期不一致')
-            candidates.append((frame, record))
-        except (ValueError, OSError, KeyError, TypeError):
-            pass
+    try:
+        cached = cached_history(store, code, source)
+        if cached:
+            candidates.append(cached)
+    except (ValueError, OSError, KeyError, TypeError):
+        pass  # Display may refetch; alert callers instead surface validation failures.
     # A successful chart request can legitimately return the same final day
     # as an older scan snapshot. Keep its query watermark in that tie, or each
     # reopen would incorrectly schedule the same network request again.

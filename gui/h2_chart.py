@@ -8,6 +8,65 @@ from .theme import ACCENT, ANNOTATION, BORDER, CONTROL_BG, MUTED, STOP, TARGET, 
 GAP_COLOR = ANNOTATION
 
 
+def _gap_label(ax, center):
+    from matplotlib.text import Annotation
+
+    class BoundedGapLabel(Annotation):
+        """Fit the label at render time, including resized and exported figures."""
+
+        def draw(self, renderer):
+            # Recompute from the preferred offset, never accumulate resize shifts.
+            self.set_position((28, 18))
+            self.update_positions(renderer)
+            self.update_bbox_position_size(renderer)
+            text_box = self.get_bbox_patch().get_window_extent(renderer)
+            plot_box = self.axes.get_window_extent(renderer)
+            scale = renderer.points_to_pixels(1)
+            margin = 3 * scale
+
+            def correction(low, high, start, end):
+                if high - low > end - start - 2 * margin:
+                    return (start + end - low - high) / 2
+                return max(start + margin - low, min(0, end - margin - high))
+
+            obstacles = []
+            for text in self.axes.texts:
+                if text.get_gid() in ('h2-decision-card', 'h2-decision-prices'):
+                    text.update_bbox_position_size(renderer)
+                    obstacles.append(text.get_bbox_patch().get_window_extent(renderer))
+            candidates = [(0, 0)]
+            for box in obstacles:
+                candidates.extend(((box.x1 + margin - text_box.x0, 0),
+                                   (box.x0 - margin - text_box.x1, 0),
+                                   (0, box.y1 + margin - text_box.y0),
+                                   (0, box.y0 - margin - text_box.y1)))
+
+            def fit_and_score(offset):
+                dx, dy = offset
+                dx += correction(text_box.x0 + dx, text_box.x1 + dx, plot_box.x0, plot_box.x1)
+                dy += correction(text_box.y0 + dy, text_box.y1 + dy, plot_box.y0, plot_box.y1)
+                overlap = sum(
+                    max(0, min(text_box.x1 + dx, box.x1 + margin) - max(text_box.x0 + dx, box.x0 - margin)) *
+                    max(0, min(text_box.y1 + dy, box.y1 + margin) - max(text_box.y0 + dy, box.y0 - margin))
+                    for box in obstacles)
+                return (overlap > .01, overlap, dx*dx + dy*dy), (dx, dy)
+
+            _, (dx, dy) = min(map(fit_and_score, candidates), key=lambda result: result[0])
+            self.set_position((28 + dx / scale, 18 + dy / scale))
+            super().draw(renderer)
+
+    label = BoundedGapLabel(
+        'Gap', xy=center, xytext=(28, 18), textcoords='offset points',
+        color=GAP_COLOR, fontsize=9, fontweight='normal',
+        ha='center', va='center',
+        bbox=dict(boxstyle='round,pad=0.15', facecolor=CONTROL_BG,
+                  edgecolor='none', alpha=.9),
+        arrowprops=dict(arrowstyle='-', color=ANNOTATION, lw=.9,
+                        shrinkA=2, shrinkB=5), annotation_clip=True,
+    )
+    ax.add_artist(label)
+
+
 def draw_h2(ax, plot, plan):
     from matplotlib.patches import Rectangle
 
@@ -72,18 +131,7 @@ def draw_h2(ax, plot, plan):
                 linewidth=1.2, facecolor='none', edgecolor=GAP_COLOR,
                 linestyle='--', alpha=.6,
             ))
-            ax.annotate(
-                'Gap', xy=((bo + setup) / 2, (floor + top) / 2),
-                xytext=(28, 18), textcoords='offset points',
-                color=GAP_COLOR, fontsize=9, fontweight='normal',
-                ha='center', va='center',
-                bbox=dict(
-                    boxstyle='round,pad=0.15', facecolor=CONTROL_BG,
-                    edgecolor='none', alpha=.9,
-                ),
-                arrowprops=dict(arrowstyle='-', color=ANNOTATION, lw=.9,
-                                shrinkA=2, shrinkB=5), annotation_clip=True,
-            )
+            _gap_label(ax, ((bo + setup) / 2, (floor + top) / 2))
     for gap in plan.get('prior_open_gaps', []):
         if gap['date'] in dates:
             ax.hlines(gap['floor'], dates.index(gap['date']), len(dates) - 1,
@@ -113,9 +161,11 @@ def draw_h2(ax, plot, plan):
         prices = '当前无待挂计划'
     card = ax.text(.02, .97, headline, transform=ax.transAxes, fontsize=10, fontweight='bold',
             color=TEXT, va='top', linespacing=1.5,
-            bbox=dict(boxstyle='round,pad=.4', facecolor=CONTROL_BG, alpha=.94, edgecolor=BORDER))
+            bbox=dict(boxstyle='round,pad=.4', facecolor=CONTROL_BG, alpha=.94, edgecolor=BORDER),
+            gid='h2-decision-card')
     # Secondary prices below the four-line decision card, in a smaller font.
     box = card.get_window_extent(renderer=ax.figure.canvas.get_renderer())
     y = ax.transAxes.inverted().transform((box.x0, box.y0))[1] - .025
     ax.text(.02, y, prices, transform=ax.transAxes, fontsize=8, color=MUTED, va='top',
-            bbox=dict(boxstyle='round,pad=.25', facecolor=CONTROL_BG, alpha=.94, edgecolor=BORDER))
+            bbox=dict(boxstyle='round,pad=.25', facecolor=CONTROL_BG, alpha=.94, edgecolor=BORDER),
+            gid='h2-decision-prices')

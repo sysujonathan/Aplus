@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from gui.chart_renderer import render_chart
-from gui.chart_workspace import resample_daily
+from gui.chart_workspace import _alert_optional_values, resample_daily
 from gui.chart_bridge import ChartBridge, workspace_boot
 from gui.chart_bridge import drawing_to_frontend
 from gui.chart_shell import ChartCloseGuard
@@ -56,6 +56,76 @@ def test_closed_bar_alert_is_forward_only_deduplicated_and_replay_safe():
     replay_alert = deepcopy(alert); replay_alert['cursor'] = '2026-01-06'
     replayed, event = evaluate_alert(replay_alert, extended, now='2026-01-07T20:00:00+08:00', replay=True)
     assert event is None and replayed['cursor'] == '2026-01-06'
+
+
+@pytest.mark.parametrize('condition,closes,kwargs', [
+    ('enter_channel', [8, 8, 10], {'upper': 11, 'lower': 9}),
+    ('exit_channel', [10, 10, 12], {'upper': 11, 'lower': 9}),
+    ('inside_channel', [10, 10, 10.5], {'upper': 11, 'lower': 9}),
+    ('outside_channel', [10, 10, 12], {'upper': 11, 'lower': 9}),
+    ('rise', [8, 9, 11], {'value': 2, 'bars': 2}),
+    ('fall', [12, 11, 9], {'value': 2, 'bars': 2}),
+    ('rise_pct', [100, 100, 111], {'value': 10, 'bars': 2}),
+    ('fall_pct', [100, 100, 89], {'value': 10, 'bars': 2}),
+])
+def test_tv_channel_and_movement_alerts_use_completed_bars(condition, closes, kwargs):
+    dates = ['2026-01-05', '2026-01-06', '2026-01-07']
+    seed = bars(dates=dates[:2], closes=closes[:2])
+    alert = create_alert(name='高级提醒', code='sz.000001', source='s', adjustment='qfq',
+        timeframe='daily', target='price', condition=condition,
+        value=kwargs.get('value', 10), frame=seed, upper=kwargs.get('upper'),
+        lower=kwargs.get('lower'), bars=kwargs.get('bars', 1))
+    updated, event = evaluate_alert(alert, bars(dates=dates, closes=closes),
+                                    now='2026-01-07T20:00:00+08:00')
+    assert event['bar'] == '2026-01-07'
+    assert event['price'] == closes[-1] and updated['cursor'] == '2026-01-07'
+
+
+def test_tv_advanced_alert_fields_are_validated():
+    frame = bars(closes=[9, 10])
+    with pytest.raises(ValueError, match='上下轨'):
+        create_alert(name='坏通道', code='sz.000001', source='s', adjustment='qfq',
+            timeframe='daily', target='price', condition='enter_channel', value=10,
+            frame=frame, upper=9, lower=10)
+    with pytest.raises(ValueError, match='K线数量'):
+        create_alert(name='坏回看', code='sz.000001', source='s', adjustment='qfq',
+            timeframe='daily', target='price', condition='rise', value=1,
+            frame=frame, bars=0)
+
+
+@pytest.mark.parametrize('condition,closes,value,triggered', [
+    ('above', [10, 10], 10, False),
+    ('below', [10, 10], 10, False),
+    ('cross_up', [10, 10.1], 10, True),
+    ('cross_down', [10, 9.9], 10, True),
+    ('rise_pct', [0, 0, 1], 10, False),
+])
+def test_alert_equality_and_zero_baseline_boundaries(condition, closes, value, triggered):
+    dates = ['2026-01-05', '2026-01-06', '2026-01-07'][-len(closes):]
+    seed = bars(dates=dates[:-1], closes=closes[:-1])
+    alert = create_alert(name='边界', code='sz.000001', source='s', adjustment='qfq',
+        timeframe='daily', target='price', condition=condition, value=value,
+        frame=seed, bars=2)
+    updated, event = evaluate_alert(alert, bars(dates=dates, closes=closes),
+                                    now='2026-01-07T20:00:00+08:00')
+    assert (event is not None) is triggered
+    assert updated['cursor'] == dates[-1]
+
+
+def test_compat_alert_panel_only_parses_fields_used_by_selected_condition():
+    assert _alert_optional_values('above', '', '', '') == (None, None, 1)
+    assert _alert_optional_values('enter_channel', '12', '10', '') == (12, 10, 1)
+    assert _alert_optional_values('rise_pct', '', '', '3') == (None, None, 3)
+
+
+def test_basic_ema_alert_keeps_close_crossing_ema_semantics():
+    seed = bars(dates=['2026-01-05', '2026-01-06'], closes=[10, 9])
+    alert = create_alert(name='上穿EMA', code='sz.000001', source='s', adjustment='qfq',
+        timeframe='daily', target='ema', condition='cross_up', value=99,
+        frame=seed, ema_length=2)
+    extended = bars(dates=['2026-01-05', '2026-01-06', '2026-01-07'], closes=[10, 9, 11])
+    _, event = evaluate_alert(alert, extended, now='2026-01-07T20:00:00+08:00')
+    assert event['bar'] == '2026-01-07' and event['price'] == 11
 
 
 def test_intraday_alert_waits_for_close_and_checks_latest_completed_prefix():
@@ -314,3 +384,26 @@ def test_chart_close_waits_for_frontend_ack_and_can_retry_failure(tmp_path):
     guard = ChartCloseGuard(other, bridge)
     bridge.cancel_close()
     assert other.destroyed and guard.request() is True
+
+
+@pytest.mark.parametrize('kind,target,stop', [('long',14,8),('short',6,12)])
+def test_native_position_analysis_matches_risk_lot_leverage_and_precision(kind,target,stop):
+    from workbench.chart_workspace import document, risk_readout, validate_document
+    value = document()
+    obj = make_drawing(kind,[['2026-10-15',10]],created_at='2026-10-15',settings=value['settings'])
+    obj['points'] = [['2026-10-15',10],['2026-10-15',stop],['2026-10-19',target],['2026-10-19',10]]
+    obj['web'] = dict(account_size=5000,risk_value=10,risk_unit='percent',leverage=1,lot_size=1)
+    text, ratio, quantity = risk_readout(obj)
+    assert ratio == 2 and quantity == 250 and '非交易建议' in text
+    obj['web']['leverage'] = .1
+    assert risk_readout(obj)[2] == 50
+    obj['web'].update(lot_size=3,qty_precision='2')
+    assert risk_readout(obj)[2] == 16.66
+    obj['web'].update(lot_size=1,point_value=10,qty_precision='default')
+    assert risk_readout(obj)[2] == 5
+    value['drawings'] = [obj]
+    validated_web = validate_document(value)['drawings'][0]['web']
+    assert validated_web['lot_size'] == 1 and validated_web['point_value'] == 10
+    obj['web']['leverage'] = float('nan')
+    with pytest.raises(ValueError,match='有限正数'):
+        validate_document(value)

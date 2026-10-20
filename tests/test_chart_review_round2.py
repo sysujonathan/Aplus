@@ -208,6 +208,14 @@ def test_native_fallback_reads_web_text_and_ruler_without_changing_saved_objects
     bridge.save_state(dict(timeframe='daily', objects=[
         dict(id='note', type='text', a=dict(index=1, value=10), text='my note'),
         dict(id='range', type='ruler', a=dict(index=2, value=9), b=dict(index=5, value=11)),
+        dict(id='legacy-path', type='path', a=dict(index=3,value=10),b=dict(index=8,value=11),
+             points=[dict(index=3,value=10),dict(index=6,value=12),dict(index=8,value=11)]),
+        dict(id='arrow-path', type='path', a=dict(index=4,value=10),b=dict(index=9,value=11),
+             points=[dict(index=4,value=10),dict(index=7,value=12),dict(index=9,value=11)],
+             path_version=1,startStyle='arrow',endStyle='arrow'),
+        dict(id='legacy-arrow',type='arrow',a=dict(index=3,value=10),b=dict(index=8,value=12)),
+        dict(id='marker-arrow',type='arrow',a=dict(index=4,value=10),b=dict(index=9,value=12),
+             arrow_marker_version=1,fontSize=16),
     ]))
     before = store.chart_document(boot['identity'])
     assert set(POINT_COUNTS) <= set(workspace.DRAWING_LABELS)
@@ -229,6 +237,13 @@ def test_native_fallback_reads_web_text_and_ruler_without_changing_saved_objects
         for obj in before['drawings']:
             dialog._draw_object(obj, selected=True)
             assert dialog.canvas.find_withtag('obj:'+obj['id'])
+            if obj['kind']=='path':
+                line=next(item for item in dialog.canvas.find_withtag('obj:'+obj['id'])
+                          if dialog.canvas.type(item)=='line')
+                assert dialog.canvas.itemcget(line,'arrow') == ('both' if obj['id']=='arrow-path' else 'none')
+            if obj['kind']=='arrow':
+                shapes=[dialog.canvas.type(item) for item in dialog.canvas.find_withtag('obj:'+obj['id'])]
+                assert ('polygon' if obj['id']=='marker-arrow' else 'line') in shapes
         texts = [dialog.canvas.itemcget(item, 'text') for item in dialog.canvas.find_all()
                  if dialog.canvas.type(item) == 'text']
         assert 'my note' in texts and '+2.000 (+22.22%)' in texts

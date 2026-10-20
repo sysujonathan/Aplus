@@ -74,7 +74,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     legend_handles = []
     if options.get('ema', True):
         if display_options is not None:
-            ema = frame[options.get('ema_source', 'close')].ewm(
+            from workbench.chart_indicators import price_source
+            ema = price_source(frame, options.get('ema_source', 'close')).ewm(
                 span=int(options.get('ema_length', 20)), adjust=False).mean().shift(int(options.get('ema_offset', 0)))
             ema = ema.loc[visible.index]
         else:

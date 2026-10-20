@@ -35,7 +35,8 @@ def validate_document(value):
     settings = {**DEFAULT_SETTINGS, **value.get('settings', {})}
     if not 1 <= int(settings['ema_length']) <= 500 or not -500 <= int(settings['ema_offset']) <= 500:
         raise ValueError('EMA 长度或偏移超出范围')
-    if settings['ema_source'] not in ('open', 'high', 'low', 'close'):
+    from .chart_indicators import EMA_SOURCES
+    if settings['ema_source'] not in EMA_SOURCES:
         raise ValueError('不支持的均线价格来源')
     if not 1 <= int(settings['count_interval']) <= 500:
         raise ValueError('计数间隔必须为 1～500')
@@ -48,7 +49,7 @@ def validate_document(value):
         if len(color) != 7 or color[0] != '#' or any(c not in '0123456789abcdefABCDEF' for c in color[1:]):
             raise ValueError('颜色须使用 #RRGGBB')
     levels = [float(n) for n in settings['fib_levels']]
-    if not levels or len(levels) > 20 or not all(math.isfinite(n) for n in levels):
+    if not levels or len(levels) > 24 or not all(math.isfinite(n) for n in levels):
         raise ValueError('斐波那契级别无效')
     settings['fib_levels'] = levels
     value['settings'] = settings
@@ -70,6 +71,15 @@ def validate_document(value):
             raise ValueError('绘图锚点数量不正确')
         if not 1 <= int(obj.get('width', 2)) <= 8:
             raise ValueError('线宽必须为 1～8')
+        web = obj.get('web') or {}
+        if kind in ('long', 'short'):
+            for key in ('account_size','risk_value','lot_size','leverage','point_value'):
+                if key in web and (not math.isfinite(float(web[key])) or float(web[key]) <= 0):
+                    raise ValueError('仓位分析输入必须为有限正数')
+            if web.get('risk_unit', 'cash') not in ('cash','percent'):
+                raise ValueError('仓位分析风险单位无效')
+            if str(web.get('qty_precision','default')) not in ('default', *map(str, range(9))):
+                raise ValueError('数量显示精度无效')
         for day, price in obj['points']:
             pd.Timestamp(day)
             if not math.isfinite(float(price)) or float(price) <= 0:
@@ -79,12 +89,27 @@ def validate_document(value):
         if not isinstance(alert.get('id'), str) or not alert['id'] or alert['id'] in alert_ids:
             raise ValueError('提醒编号无效或重复')
         alert_ids.add(alert['id'])
-        if alert['condition'] not in ('above', 'below', 'cross_up', 'cross_down', 'cross'):
+        if alert['condition'] not in (
+                'above', 'below', 'cross_up', 'cross_down', 'cross',
+                'enter_channel', 'exit_channel', 'inside_channel', 'outside_channel',
+                'rise', 'fall', 'rise_pct', 'fall_pct'):
             raise ValueError('提醒条件无效')
         if alert['target'] not in ('price', 'ema') or alert['frequency'] not in ('once', 'bar_close'):
             raise ValueError('提醒口径无效')
         if not math.isfinite(float(alert['value'])) or float(alert['value']) <= 0:
             raise ValueError('提醒价格无效')
+        if alert['condition'] in ('enter_channel', 'exit_channel',
+                                  'inside_channel', 'outside_channel'):
+            try:
+                upper, lower = float(alert.get('upper')), float(alert.get('lower'))
+            except (TypeError, ValueError):
+                raise ValueError('提醒通道上下轨无效') from None
+            if (not math.isfinite(upper) or not math.isfinite(lower)
+                    or lower <= 0 or upper <= lower):
+                raise ValueError('提醒通道上下轨无效')
+        if alert['condition'] in ('rise', 'fall', 'rise_pct', 'fall_pct'):
+            if not 1 <= int(alert.get('bars', 1)) <= 500:
+                raise ValueError('提醒回看K线数量必须为 1～500')
         if not 1 <= int(alert.get('ema_length', 20)) <= 500:
             raise ValueError('提醒均线长度无效')
         if alert.get('timeframe') not in ('5m', '1h', '4h', 'daily', 'weekly', 'monthly'):
@@ -165,8 +190,20 @@ def risk_readout(obj):
         return '止损／目标方向无效', 0, 0
     ratio = reward/risk
     quantity = math.floor(float(obj['risk_budget'])/risk)
+    web = obj.get('web') or {}
+    lot = float(web.get('lot_size', 1))
+    if any(key in web for key in ('account_size','risk_value','lot_size','leverage')):
+        account = float(web.get('account_size', 1000))
+        point = float(web.get('point_value', 1))
+        risk_size = (float(web['risk_value']) * (account/100 if web.get('risk_unit') == 'percent' else 1)
+                     if 'risk_value' in web else float(obj['risk_budget']))
+        bounded = min(risk_size/(risk*point*lot),
+                      account*float(web.get('leverage',10000))/(entry*point*lot))
+        digits = 0 if str(web.get('qty_precision','default')) == 'default' else int(web['qty_precision'])
+        quantity = math.floor(bounded * 10**digits + 1e-9) / 10**digits
+    unit = '股' if lot == 1 else '手（分析单位）'
     return (f'风险 {risk/entry:.2%} · 回报 {reward/entry:.2%} · R {ratio:.2f} · '
-            f'分析模拟数量 {quantity} 股 · 非交易建议'), ratio, quantity
+            f'分析模拟数量 {quantity:g} {unit} · 非交易建议'), ratio, quantity
 
 
 def session_counts(frame):
@@ -177,7 +214,7 @@ def session_counts(frame):
 
 def create_alert(*, name, code, source, adjustment, timeframe, target, condition,
                  value, frame, ema_length=20, frequency='bar_close', expires=None,
-                 active_after=None):
+                 active_after=None, upper=None, lower=None, bars=1):
     """Create a forward-only alert. Existing history is seeded, never backfilled."""
     if frame is None or frame.empty:
         raise ValueError('创建提醒前需要真实行情')
@@ -187,6 +224,10 @@ def create_alert(*, name, code, source, adjustment, timeframe, target, condition
                  value=float(value), ema_length=int(ema_length), frequency=str(frequency),
                  expires=str(expires or ''), enabled=True, cursor=str(frame.date.iloc[-1]),
                  status='等待下一根已收盘 K 线', events=[])
+    if condition in ('enter_channel', 'exit_channel', 'inside_channel', 'outside_channel'):
+        alert.update(upper=upper, lower=lower)
+    if condition in ('rise', 'fall', 'rise_pct', 'fall_pct'):
+        alert['bars'] = bars
     if active_after is not None:
         alert['active_after'] = str(active_after)
     validate_document({'revision': 0, 'settings': DEFAULT_SETTINGS,
@@ -360,17 +401,44 @@ def evaluate_alert(alert, frame, *, now, replay=False):
     ):
         updated['status'] = '已跳过创建前收盘行情 ' + stamp
         return updated, None
-    series = closed.close.astype(float)
-    threshold = (series.ewm(span=int(alert['ema_length']), adjust=False).mean()
-                 if alert['target'] == 'ema' else pd.Series(float(alert['value']), index=series.index))
-    previous, current = float(series.iloc[-2]-threshold.iloc[-2]), float(series.iloc[-1]-threshold.iloc[-1])
+    close = closed.close.astype(float)
+    ema = close.ewm(span=int(alert['ema_length']), adjust=False).mean()
+    series = ema if alert['target'] == 'ema' else close
     condition = alert['condition']
-    hit = {'above':current>0, 'below':current<0, 'cross_up':previous<=0<current,
-           'cross_down':previous>=0>current, 'cross':previous<=0<current or previous>=0>current}[condition]
+    if condition in ('enter_channel', 'exit_channel', 'inside_channel', 'outside_channel'):
+        upper, lower = float(alert['upper']), float(alert['lower'])
+        previous_inside = lower <= float(series.iloc[-2]) <= upper
+        current_inside = lower <= float(series.iloc[-1]) <= upper
+        hit = {'enter_channel': not previous_inside and current_inside,
+               'exit_channel': previous_inside and not current_inside,
+               'inside_channel': current_inside,
+               'outside_channel': not current_inside}[condition]
+    elif condition in ('rise', 'fall', 'rise_pct', 'fall_pct'):
+        lookback = int(alert.get('bars', 1))
+        if len(series) <= lookback:
+            updated['status'] = f'等待至少 {lookback + 1} 根已收盘 K 线'
+            return updated, None
+        baseline, current_value = float(series.iloc[-lookback-1]), float(series.iloc[-1])
+        move = current_value - baseline
+        percent = move / baseline * 100 if baseline else math.nan
+        amount = float(alert['value'])
+        hit = {'rise': move >= amount, 'fall': -move >= amount,
+               'rise_pct': percent >= amount, 'fall_pct': -percent >= amount}[condition]
+    else:
+        if alert['target'] == 'ema':
+            previous = float(close.iloc[-2] - ema.iloc[-2])
+            current = float(close.iloc[-1] - ema.iloc[-1])
+        else:
+            previous = float(close.iloc[-2] - float(alert['value']))
+            current = float(close.iloc[-1] - float(alert['value']))
+        hit = {'above': current > 0, 'below': current < 0,
+               'cross_up': previous <= 0 < current,
+               'cross_down': previous >= 0 > current,
+               'cross': previous <= 0 < current or previous >= 0 > current}[condition]
     updated['status'] = '已检查 ' + stamp
     if not hit:
         return updated, None
-    event = dict(time=str(now), bar=stamp, price=float(series.iloc[-1]), alert=alert['id'],
+    event = dict(time=str(now), bar=stamp, price=float(close.iloc[-1]), alert=alert['id'],
                  text=alert['name'], timeframe=alert['timeframe'])
     updated['events'] = [*alert.get('events', []), event][-100:]
     updated['status'] = '已触发 ' + stamp

@@ -109,10 +109,14 @@ class WatchChartController:
                                  f" · {record['source']} / {record['adjustment']} · 截至 {record['end']}")
             panel._workspace_context = dict(frame=data['frame'], record=record, code=self.item.code,
                                            name=self.item.name, timeframe='daily', payload={},
+                                           display_timeframe=self.timeframe,
                                            metadata={}, strategy_type='', context_kind='watch')
             panel._workspace_request = {'manual': True}
             panel._analysis_btn.configure(state=tk.NORMAL)
-            panel._fit_image()
+            if getattr(panel, '_interactive', False):
+                panel._show_interactive()
+            else:
+                panel._fit_image()
         if data is None or data['refresh']:
             self.refresh()
 

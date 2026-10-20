@@ -227,6 +227,47 @@ def test_annotation_frame_keeps_only_visible_bars_and_uses_integer_axis():
     assert visible.iloc[0].date == frame.iloc[-120].date
 
 
+@pytest.mark.parametrize('width', [320, 640])
+@pytest.mark.parametrize('edge', ['top-right', 'bottom-right', 'top-left', 'bottom-left'])
+def test_gap_label_stays_inside_narrow_price_plot_without_moving_gap(width, edge):
+    figure, axis = plt.subplots(figsize=(width / 100, 2.4), dpi=100)
+    try:
+        plot = _bars()
+        right = edge.endswith('right')
+        first, last = (28, 29) if right else (0, 1)
+        floor, top = (9.2, 9.8) if edge.startswith('top') else (.1, .3)
+        plan = {'bo_date': plot.iloc[first].date, 'h2_setup_date': plot.iloc[last].date,
+                'gap_floor': floor, 'gap_top': top}
+        before = dict(plan)
+        axis.set_xlim(-.6, 29.6)
+        axis.set_ylim(0, 10)
+        draw_h2(axis, plot, plan)
+        gap, = axis.patches
+        geometry = (gap.get_xy(), gap.get_width(), gap.get_height())
+        label = next(text for text in axis.texts if text.get_text() == 'Gap')
+
+        # Exercise normal, resized, high-DPI export, and restored rendering.
+        for current_width, dpi in [(width, 100), (240, 144), (width, 100)]:
+            figure.set_size_inches(current_width / 100, 2.4)
+            figure.set_dpi(dpi)
+            figure.canvas.draw()
+            bounds = label.get_bbox_patch().get_window_extent(figure.canvas.get_renderer())
+            region = axis.get_window_extent()
+            assert bounds.x0 >= region.x0 - .1
+            assert bounds.x1 <= region.x1 + .1
+            assert bounds.y0 >= region.y0 - .1
+            assert bounds.y1 <= region.y1 + .1
+            for text in axis.texts:
+                if text.get_gid() in ('h2-decision-card', 'h2-decision-prices'):
+                    obstacle = text.get_bbox_patch().get_window_extent(figure.canvas.get_renderer())
+                    assert not bounds.overlaps(obstacle)
+            assert label.xy == ((first + last) / 2, (floor + top) / 2)
+            assert (gap.get_xy(), gap.get_width(), gap.get_height()) == geometry
+            assert plan == before
+    finally:
+        plt.close(figure)
+
+
 def test_signal_context_failure_keeps_diagnostic_traceback(caplog):
     class BrokenStrategy:
         def get_signal_info(self, frame):

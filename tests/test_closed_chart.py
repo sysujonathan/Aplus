@@ -216,7 +216,8 @@ def test_edit_popup_chart_and_automatic_archive_double_click_are_read_only(tmp_p
     assert result.returncode==0,result.stdout+result.stderr
 
 
-def check_native_closed_viewer(tmp_path):
+@patch('gui.chart_embed.EmbeddedChartHost.available', return_value=False)
+def check_native_closed_viewer(tmp_path, _embedded_available):
     import ttkbootstrap as ttk
     from gui.trade_management import _ClosedDialog, TradeManagementFrame
     from gui.closed_trade_chart import ClosedTradeChartDialog
