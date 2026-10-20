@@ -10,6 +10,13 @@ for(const hex of ['#ffffff','#000000','#ff0000','#00ff00','#0000ff','#abcdef','#
 assert.equal(paletteContext.chartHexFromHsv(360,1,1),'#ff0000');
 assert.equal(paletteContext.chartHexFromHsv(120,0,.5),'#808080');
 function extract(name){const start=source.indexOf(`function ${name}(`);assert.ok(start>=0,name);return source.slice(start,source.indexOf('\n}',start)+2);}
+let queuedFrame=null,paintModes=[];
+const frameContext=vm.createContext({workspaceRenderFrame:null,workspaceRenderMode:null,
+  requestAnimationFrame:callback=>{queuedFrame=callback;return 7;},renderWorkspace:mode=>paintModes.push(mode)});
+vm.runInContext(extract('scheduleWorkspaceRender'),frameContext);
+frameContext.scheduleWorkspaceRender('overlay');frameContext.scheduleWorkspaceRender('overlay');frameContext.scheduleWorkspaceRender('all');
+assert.equal(typeof queuedFrame,'function');assert.equal(frameContext.workspaceRenderFrame,7);
+queuedFrame();assert.deepEqual(paintModes,['all'],'many pointer events must collapse into one strongest frame');
 let current=[],paths=[],labels=[],handles=[],rectangles=[];
 const ctx=new Proxy({
   beginPath(){current=[];},moveTo(x,y){current.push([x,y]);},lineTo(x,y){current.push([x,y]);},
@@ -362,9 +369,24 @@ Object.assign(context,{wrap:{getBoundingClientRect:()=>({width:1000,height:600})
   drawStrategyEvidence(){},drawReplayBoundary(){},drawLastPrice(){},priceTag(){},
 });
 context.canvas.getContext=()=>ctx;
+context.baseCanvas={width:0,height:0,getContext:()=>ctx};
 Object.assign(context.indicatorSettings,{ema:true,ema_daily:true,ema_width:1.5,ema_color:'#ff9800',ema_offset:-1});
-vm.runInContext(extract('renderWorkspace'),context);paths=[];
+vm.runInContext([extract('sizeCanvas'),extract('renderWorkspace')].join('\n'),context);paths=[];
 vm.runInContext('calculateEma();renderWorkspace()',context);
+assert.equal(vm.runInContext('sizeCanvas({width:100,height:50},100,50,1)',context),false,
+  'an unchanged backing store must not be reset');
+let baseClears=0,overlayClears=0;
+const layerContext=counter=>new Proxy({
+  clearRect(){counter();},measureText:text=>({width:String(text).length*6}),
+},{get(target,key){return key in target?target[key]:(()=>{});},set(target,key,value){target[key]=value;return true;}});
+const baseLayer=layerContext(()=>baseClears++),overlayLayer=layerContext(()=>overlayClears++);
+context.baseCanvas.getContext=()=>baseLayer;context.canvas.getContext=()=>overlayLayer;
+vm.runInContext("renderWorkspace('all')",context);
+assert.equal(baseClears,1);assert.equal(overlayClears,1);
+vm.runInContext("renderWorkspace('overlay')",context);
+assert.equal(baseClears,1,'selection and drawing edits cannot repaint the candle layer');
+assert.equal(overlayClears,2,'overlay edits repaint only the transparent drawing layer');
+context.baseCanvas.getContext=()=>ctx;context.canvas.getContext=()=>ctx;
 assert.ok(context.canvas._view.high<50,'production scale must not use prototype or future prices');
 assert.ok(context.canvas._view.low>35,'production scale must follow this symbol');
 const averagePath=paths.find(p=>p.color==='#ff9800');
@@ -457,7 +479,7 @@ assert.equal(context.drawingsVisible,true);assert.equal(context.indicatorSetting
 // Real wheel dispatch: ordinary zoom is right anchored; Ctrl focuses the cursor.
 let wheelHandler,zoomCall,panCall;
 const wheelContext=vm.createContext({Math,viewCount:200,clamp:(n,a,b)=>Math.max(a,Math.min(b,n)),
-  zoomAround:(factor,ratio)=>{zoomCall={factor,ratio};},panChart:n=>{panCall=n;},
+  zoomAround:(factor,ratio,deferred)=>{zoomCall={factor,ratio,deferred};},panChart:(n,deferred)=>{panCall={n,deferred};},
   canvas:{_view:{left:8,plotWidth:1000},getBoundingClientRect:()=>({left:20}),
     addEventListener:(_name,handler)=>{wheelHandler=handler;}}});
 const wheelStart=source.indexOf("canvas.addEventListener('wheel', event => {");
@@ -465,8 +487,9 @@ const wheelEnd=source.indexOf('}, { passive: false });',wheelStart)+'}, { passiv
 vm.runInContext(source.slice(wheelStart,wheelEnd),wheelContext);
 const wheel={preventDefault(){},clientX:228,deltaY:-120};
 wheelHandler(wheel);assert.equal(zoomCall.ratio,1);assert.ok(zoomCall.factor<1);
-wheelHandler({...wheel,ctrlKey:true});assert.equal(zoomCall.ratio,.2);
-wheelHandler({...wheel,shiftKey:true});assert.equal(panCall,-16);
+assert.equal(zoomCall.deferred,true);
+wheelHandler({...wheel,ctrlKey:true});assert.equal(zoomCall.ratio,.2);assert.equal(zoomCall.deferred,true);
+wheelHandler({...wheel,shiftKey:true});assert.deepEqual(panCall,{n:-16,deferred:true});
 // A persisted 1.0 alpha must open as 100%, not as 1%.
 let alphaChange;
 const alphaControl={type:'range',dataset:{setting:'alpha'},value:'100',

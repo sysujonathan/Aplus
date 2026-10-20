@@ -3,6 +3,7 @@ const bars = [{"date":"2026-06-22","open":4.25,"high":4.25,"low":4.02,"close":4.
 bars.unshift(...window.prototypeEarlierBars);
 
 const canvas = document.querySelector('#chartCanvas');
+const baseCanvas = document.querySelector('#chartBaseCanvas');
 const wrap = document.querySelector('#chartWrap');
 const crosshair = document.querySelector('#crosshair');
 const selectedObject = document.querySelector('#selectedObject');

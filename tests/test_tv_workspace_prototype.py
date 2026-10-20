@@ -82,7 +82,7 @@ def test_prototype_is_offline_and_contains_reviewed_states():
 
     assert not parser.remote_assets
     assert {
-        'chartCanvas', 'rightPanel', 'alertModal', 'objectModal',
+        'chartBaseCanvas', 'chartCanvas', 'rightPanel', 'alertModal', 'objectModal',
         'replayBar', 'replayStartModal', 'replayExitModal',
         'chartNavControls', 'snapshotModal', 'removeModal',
     } <= parser.ids
@@ -158,6 +158,11 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert '.favorite-tools .drag-handle' in style
     assert '.chart-nav-controls.visible' in style
     assert 'cursor: ns-resize' in style
+    assert "renderWorkspace(mode = 'all')" in script
+    assert "scheduleWorkspaceRender('overlay')" in script
+    assert 'requestAnimationFrame' in script
+    assert 'target.width === pixelWidth' in script
+    assert '#chartBaseCanvas, #chartCanvas' in style
 
 
 def test_prototype_is_also_bound_to_the_production_store_bridge():
