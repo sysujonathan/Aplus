@@ -58,6 +58,7 @@ let priceZoom = 1;
 let priceCenterOffset = 0;
 let magnetEnabled = true;
 let hitRegions = [];
+let staticHitRegions = [];
 let hoverPoint = null;
 let strategyLabelBoxes = [];
 let replayActive = false;
@@ -83,6 +84,39 @@ let redoStack = [];
 let bridgeRevision = Number(chartBoot.revision || 0);
 let bridgeSaveChain = Promise.resolve();
 let bridgeSaveFailed = false;
+let workspaceRenderFrame = null;
+let workspaceRenderMode = null;
+let viewSaveTimer = null;
+
+function scheduleWorkspaceRender(mode = 'all') {
+  workspaceRenderMode = workspaceRenderMode === 'all' || mode === 'all' ? 'all' : 'overlay';
+  if (workspaceRenderFrame !== null) return;
+  workspaceRenderFrame = requestAnimationFrame(() => {
+    const next = workspaceRenderMode || 'all';
+    workspaceRenderFrame = null; workspaceRenderMode = null;
+    renderWorkspace(next);
+  });
+}
+
+function flushWorkspaceRender(mode = null) {
+  if (workspaceRenderFrame !== null) cancelAnimationFrame(workspaceRenderFrame);
+  const next = mode || workspaceRenderMode;
+  workspaceRenderFrame = null; workspaceRenderMode = null;
+  if (next) renderWorkspace(next);
+}
+
+function scheduleViewStateSave() {
+  clearTimeout(viewSaveTimer);
+  viewSaveTimer = setTimeout(() => { viewSaveTimer = null; savePrototypeState(); }, 180);
+}
+
+function sizeCanvas(target, width, height, ratio) {
+  const pixelWidth = Math.max(1, Math.round(width * ratio));
+  const pixelHeight = Math.max(1, Math.round(height * ratio));
+  if (target.width === pixelWidth && target.height === pixelHeight) return false;
+  target.width = pixelWidth; target.height = pixelHeight;
+  return true;
+}
 const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offset:0, ema_width:1.5, ema_alpha:1,
   ema_color:'#ff9800', chart_type:'candles', magnet:true, strategy_visible:true, drawings_visible:true,
   ema_daily:true, ema_weekly:true, ema_monthly:true, indicators_visible:true,
@@ -117,6 +151,9 @@ function loadPrototypeState() {
 
 function savePrototypeState(flushOnly = false) {
   try {
+    if (flushOnly && typeof viewSaveTimer !== 'undefined' && viewSaveTimer !== null) {
+      clearTimeout(viewSaveTimer); viewSaveTimer = null; flushOnly = false;
+    }
     if(flushOnly){
       window.flushChartInlineEditor?.(true,true);
       // An idle second view must not write its stale document merely on close.
@@ -337,16 +374,20 @@ function timeAxisTicks(view) {
   return selected.sort((a,b)=>a.index-b.index);
 }
 
-function renderWorkspace() {
-  if (typeof syncWorkspaceControls === 'function') syncWorkspaceControls();
+function renderWorkspace(mode = 'all') {
   const visibleObjects = userObjects.filter(drawingVisibleInWorkspace);
   document.querySelector('#selectedObject').classList.toggle('visible', visibleObjects.some(item => item.id === selectedId));
   const rect = wrap.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(rect.width * ratio));
-  canvas.height = Math.max(1, Math.round(rect.height * ratio));
-  const ctx = canvas.getContext('2d');
+  const background = typeof baseCanvas === 'undefined' || !baseCanvas ? canvas : baseCanvas;
+  const backgroundResized = sizeCanvas(background, rect.width, rect.height, ratio);
+  const overlayResized = sizeCanvas(canvas, rect.width, rect.height, ratio);
+  const resized = backgroundResized || overlayResized;
+  const renderBase = mode !== 'overlay' || Boolean(resized);
+  const ctx = background.getContext('2d');
+  const overlay = canvas.getContext('2d');
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  overlay.setTransform(ratio, 0, 0, ratio, 0, 0);
   const width = rect.width;
   const height = rect.height;
   const right = 61;
@@ -358,13 +399,14 @@ function renderWorkspace() {
   const left = 8;
   const plotWidth = width - right - left;
   const plotHeight = Math.max(1, height - bottom - top);
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = css('--bg');
-  ctx.fillRect(0, 0, width, height);
-
   const visible = visibleWindow();
   const rows = visible.data;
-  if (!rows.length) return;
+  if (!rows.length) {
+    if (renderBase) { ctx.clearRect(0, 0, width, height); ctx.fillStyle=css('--bg');ctx.fillRect(0,0,width,height); }
+    overlay.clearRect(0, 0, width, height);
+    canvas._view=null;background._view=null;staticHitRegions=[];hitRegions=[];
+    return;
+  }
   const priceLow = Math.min(...rows.map(row => row.low));
   const priceHigh = Math.max(...rows.map(row => row.high));
   const pricePadding = Math.max(priceHigh - priceLow, Math.abs(priceHigh) * .02, .01) * .08;
@@ -379,6 +421,12 @@ function renderWorkspace() {
   const candleWidth = plotWidth / Math.max(1, viewCount + RIGHT_MARGIN_BARS);
   const xGlobal = globalIndex => xFor(globalIndex - visible.begin, left, candleWidth);
   canvas._view = { rows, begin: visible.begin, end: visible.end, left, right, top, bottom, width, height, plotWidth, plotHeight, y, low, high, candleWidth, xGlobal, futureSpace };
+  background._view = canvas._view;
+
+  if (renderBase) {
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = css('--bg');
+  ctx.fillRect(0, 0, width, height);
   hitRegions = [];
   strategyLabelBoxes = [];
 
@@ -459,20 +507,6 @@ function renderWorkspace() {
   });
 
   if (indicatorSettings.strategy_visible !== false && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view);
-  if (drawingsVisible) {
-    const selectedDrawing=visibleObjects.find(item=>item.id===selectedId);
-    visibleObjects.filter(item=>item!==selectedDrawing).forEach(item=>drawUserObject(ctx,canvas._view,item));
-    if(selectedDrawing)drawUserObject(ctx,canvas._view,selectedDrawing);
-    if (draftAnchor && draftCursor) drawUserObject(ctx, canvas._view, {
-      id: 'draft', type: activeDrawingTool, a: draftAnchor,
-      b: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftPoints[1] : draftCursor,
-      c: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftCursor : undefined,
-      points: activeDrawingTool === 'path' ? [...draftPoints, draftCursor] : undefined,
-      arrow_marker_version: activeDrawingTool === 'arrow' ? 1 : undefined,
-      stop: draftAnchor.value - Math.abs(draftCursor.value - draftAnchor.value) * .55,
-      color: activeDrawingTool === 'arrow' ? '#f23645' : '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
-    }, true);
-  }
   if (replayActive) drawReplayBoundary(ctx, canvas._view);
   if (!replayActive) chartAlerts.filter(alert => alert.enabled !== false && alert.target === 'price'
     && alert.timeframe === activeTimeframeUnit).forEach(alert => {
@@ -490,6 +524,27 @@ function renderWorkspace() {
   const emaValue = legendIndex <= replayIndex ? ema[legendIndex] : undefined;
   document.querySelector('.ema-value').textContent = Number.isFinite(emaValue) ? chartPrice(emaValue,indicatorSettings.ema_precision) : '—';
   if (typeof syncIndicatorLegend === 'function') syncIndicatorLegend();
+  staticHitRegions = hitRegions.slice();
+  }
+
+  hitRegions = staticHitRegions.slice();
+  overlay.clearRect(0, 0, width, height);
+  overlay.save(); overlay.beginPath(); overlay.rect(left, top, plotWidth, plotHeight); overlay.clip();
+  if (drawingsVisible) {
+    const selectedDrawing=visibleObjects.find(item=>item.id===selectedId);
+    visibleObjects.filter(item=>item!==selectedDrawing).forEach(item=>drawUserObject(overlay,canvas._view,item));
+    if(selectedDrawing)drawUserObject(overlay,canvas._view,selectedDrawing);
+    if (draftAnchor && draftCursor) drawUserObject(overlay, canvas._view, {
+      id: 'draft', type: activeDrawingTool, a: draftAnchor,
+      b: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftPoints[1] : draftCursor,
+      c: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftCursor : undefined,
+      points: activeDrawingTool === 'path' ? [...draftPoints, draftCursor] : undefined,
+      arrow_marker_version: activeDrawingTool === 'arrow' ? 1 : undefined,
+      stop: draftAnchor.value - Math.abs(draftCursor.value - draftAnchor.value) * .55,
+      color: activeDrawingTool === 'arrow' ? '#f23645' : '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
+    }, true);
+  }
+  overlay.restore();
 }
 
 function calculateEma() {
@@ -829,12 +884,13 @@ function selectObject(id, x, y, refreshTree = true) {
     showToast('策略证据为只读；不会被人工标绘覆盖');
     return;
   }
+  const selectionChanged = selectedId !== id;
   selectedId = id;
   const object = userObjects.find(item => item.id === id);
   selected = Boolean(object);
   if (!object) {
     document.querySelector('#selectedObject').classList.remove('visible');
-    renderWorkspace();
+    if (selectionChanged) renderWorkspace('overlay');
     return;
   }
   const toolbar = document.querySelector('#selectedObject');
@@ -848,7 +904,7 @@ function selectObject(id, x, y, refreshTree = true) {
   document.querySelector('.color-swatch').style.background = object.color || '#2962ff';
   if(refreshTree)updateObjectTree();
   else document.querySelectorAll('[data-object-id]').forEach(row=>row.classList.toggle('selected',row.dataset.objectId===id));
-  renderWorkspace();
+  if (selectionChanged) renderWorkspace('overlay');
 }
 
 function objectAtSelection() { return userObjects.find(item => item.id === selectedId); }
@@ -884,7 +940,7 @@ function startTool(type, button) {
   canvas.classList.toggle('drawing', Boolean(activeDrawingTool));
   const instruction = type === 'path' ? '依次单击转折点，双击完成' : (type === 'zoom' || type === 'zoomOut') ? '在图上拖框选择区域' : onePointTools.has(type)||['long','short'].includes(type) ? '在图上单击放置' : '依次单击起点和终点';
   showToast(activeDrawingTool ? `${toolNames[type] || button?.title}：${instruction}` : `${button?.title || '十字光标'}已选择`);
-  renderWorkspace();
+  renderWorkspace('overlay');
 }
 
 function normalizeDrawingPrice(value) {
@@ -917,17 +973,17 @@ function placeDrawing(point) {
   if (!draftAnchor) {
     draftAnchor = snapped;
     draftCursor = { ...draftAnchor };
-    if (activeDrawingTool === 'path') { draftPoints = [draftAnchor]; renderWorkspace(); return; }
-    if (!onePointTools.has(activeDrawingTool) && !['long','short'].includes(activeDrawingTool)) { renderWorkspace(); return; }
+    if (activeDrawingTool === 'path') { draftPoints = [draftAnchor]; renderWorkspace('overlay'); return; }
+    if (!onePointTools.has(activeDrawingTool) && !['long','short'].includes(activeDrawingTool)) { renderWorkspace('overlay'); return; }
   }
   if (activeDrawingTool === 'path') {
     const last = draftPoints.at(-1);
     if (!last || Math.abs(last.index - snapped.index) > .2 || Math.abs(last.value - snapped.value) > .01) draftPoints.push(snapped);
-    draftCursor = snapped; renderWorkspace(); return;
+    draftCursor = snapped; renderWorkspace('overlay'); return;
   }
   if (activeDrawingTool === 'channel' && draftPoints.length < 2) {
     draftPoints = [structuredClone(draftAnchor), snapped];
-    draftCursor = snapped; renderWorkspace(); showToast('点击第三点设置平行通道宽度'); return;
+    draftCursor = snapped; renderWorkspace('overlay'); showToast('点击第三点设置平行通道宽度'); return;
   }
   const finish = activeDrawingTool === 'channel' ? draftPoints[1] : snapped;
   const object = {
@@ -958,7 +1014,7 @@ function placeDrawing(point) {
       lot_size:1,leverage:10000,qty_precision:'default',risk_budget:250,alwaysShowStats:false,color:'#787b86',width:1});
     object.stop=normalizeDrawingPrice(object.stop);
     if(Math.min(object.b.value,object.stop)<=0||object.b.value===object.a.value||object.stop===object.a.value){
-      exitDrawingMode();renderWorkspace();showToast('当前价格无法放置有效的初始目标和止损，请调整放置价格');return;
+      exitDrawingMode();renderWorkspace('overlay');showToast('当前价格无法放置有效的初始目标和止损，请调整放置价格');return;
     }
   }
   rememberObjects();
@@ -985,14 +1041,15 @@ function finishPath(point = null) {
   // Old polyline objects/templates keep their saved geometry. New drawings use
   // the Path tool seen in the trader's favourites, rather than closing a shape.
   object.path_version=1;delete object.closed;delete object.fill;
-  userObjects.push(object); savePrototypeState(); updateObjectTree(); selectObject(object.id, point?.x || 0, point?.y || 0);
-  exitDrawingMode(); showToast('多段折线已保存到当前标的'); renderWorkspace(); return true;
+  userObjects.push(object); savePrototypeState(); updateObjectTree(); exitDrawingMode();
+  selectObject(object.id, point?.x || 0, point?.y || 0);showToast('多段折线已保存到当前标的');return true;
 }
 
-function zoomAround(factor, ratio) {
+function zoomAround(factor, ratio, deferred = false) {
   const view = canvas._view;
   if (!view) return;
-  const anchorIndex = view.begin + ratio * (viewCount + RIGHT_MARGIN_BARS) - .5;
+  const current = visibleWindow();
+  const anchorIndex = current.begin + ratio * (viewCount + RIGHT_MARGIN_BARS) - .5;
   const maxCount = Math.min(bars.length, replayIndex + 1);
   const nextCount = clamp(Math.round(viewCount * factor), 18, maxCount);
   const maxEnd = Math.min(bars.length,replayIndex+1);
@@ -1000,13 +1057,15 @@ function zoomAround(factor, ratio) {
   viewCount = nextCount;
   const limits=panLimits();
   viewOffset = clamp(Math.round(maxEnd-nextCount-begin),limits.min,limits.max);
-  renderWorkspace(); savePrototypeState();
+  if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
+  else { renderWorkspace(); savePrototypeState(); }
 }
 
-function panChart(barDelta) {
+function panChart(barDelta, deferred = false) {
   const limits=panLimits();
   viewOffset = clamp(viewOffset + Math.round(barDelta), limits.min, limits.max);
-  renderWorkspace(); savePrototypeState();
+  if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
+  else { renderWorkspace(); savePrototypeState(); }
 }
 
 function resetChartView() {
@@ -1150,28 +1209,28 @@ canvas.addEventListener('pointerdown', event => {
 canvas.addEventListener('pointermove', event => {
   const point = eventPoint(event);
   updateCrosshair(point);
-  if (draftAnchor && activeDrawingTool) { draftCursor = snapDrawingPoint(point); renderWorkspace(); }
-  if (!gesture) {if(objectAtSelection()?.type==='fib')renderWorkspace();return;}
+  if (draftAnchor && activeDrawingTool) { draftCursor = snapDrawingPoint(point); scheduleWorkspaceRender('overlay'); }
+  if (!gesture) {if(objectAtSelection()?.type==='fib')scheduleWorkspaceRender('overlay');return;}
   const dx = event.clientX - gesture.startX;
   const dy = event.clientY - gesture.startY;
   gesture.moved ||= Math.abs(dx) + Math.abs(dy) > 4;
   if (gesture.mode === 'price-scale') {
     priceZoom = clamp(gesture.startZoom * Math.exp(-dy / 105), .45, 7);
-    renderWorkspace();
+    scheduleWorkspaceRender('all');
   } else if (gesture.mode === 'time-scale') {
     const next = clamp(Math.round(gesture.startCount * Math.exp(dx / 230)), 18, replayIndex + 1);
-    viewCount = next;const limits=panLimits();viewOffset=clamp(viewOffset,limits.min,limits.max);renderWorkspace();
+    viewCount = next;const limits=panLimits();viewOffset=clamp(viewOffset,limits.min,limits.max);scheduleWorkspaceRender('all');
   } else if (gesture.mode === 'pan' && gesture.moved) {
     const candle = Math.max(.01, canvas._view.candleWidth);
     const limits=panLimits();
     viewOffset = clamp(gesture.startOffset + Math.round(dx / candle), limits.min, limits.max);
-    renderWorkspace();
+    scheduleWorkspaceRender('all');
   } else if (gesture.mode === 'zoom-box') {
     showZoomSelection(gesture.start, point);
   } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && gesture.moved) {
     const object = userObjects.find(item => item.id === gesture.objectId);
     moveObjectFromOriginal(object, gesture.original, gesture.start, point, gesture.mode === 'object-handle' ? gesture.handle : null);
-    renderWorkspace();
+    scheduleWorkspaceRender('overlay');
   }
 });
 
@@ -1187,7 +1246,7 @@ canvas.addEventListener('pointerup', event => {
   } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && gesture.moved) {
     undoStack.push(gesture.before);indicatorUndoStack.push(structuredClone(indicatorSettings));
     if(undoStack.length>30){undoStack.shift();indicatorUndoStack.shift();}
-    redoStack = [];indicatorRedoStack=[]; updateUndoButtons(); savePrototypeState(); updateObjectTree(); renderWorkspace();
+    redoStack = [];indicatorRedoStack=[]; updateUndoButtons(); flushWorkspaceRender('overlay'); savePrototypeState(); updateObjectTree();
     showToast(gesture.mode === 'object-handle' ? '结构端点已调整并保存' : '图形位置已移动并保存');
   } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && !gesture.moved) selectObject(gesture.objectId, point.x, point.y);
   if (gesture.moved && ['price-scale', 'time-scale', 'pan'].includes(gesture.mode)) savePrototypeState();
@@ -1195,23 +1254,24 @@ canvas.addEventListener('pointerup', event => {
 });
 
 function cancelChartGesture() {
+  const overlayOnly=gesture?.mode==='object-move'||gesture?.mode==='object-handle';
   if(gesture?.before)userObjects=gesture.before;
   if(gesture?.mode==='price-scale')priceZoom=gesture.startZoom;
   if(gesture?.mode==='time-scale')viewCount=gesture.startCount;
   if(gesture?.mode==='pan')viewOffset=gesture.startOffset;
-  gesture=null;hideZoomSelection();renderWorkspace();
+  gesture=null;hideZoomSelection();flushWorkspaceRender(overlayOnly?'overlay':'all');
 }
 canvas.addEventListener('pointercancel', cancelChartGesture);
 canvas.addEventListener('mouseleave', () => { crosshair.classList.remove('show'); updateReadout(bars[Math.min(replayIndex, bars.length - 1)]); });
 canvas.addEventListener('wheel', event => {
   event.preventDefault();
-  if(event.shiftKey){panChart(Math.sign(event.deltaY)*Math.max(1,Math.round(viewCount*.08)));return;}
+  if(event.shiftKey){panChart(Math.sign(event.deltaY)*Math.max(1,Math.round(viewCount*.08)),true);return;}
   const view = canvas._view;
   const rect = canvas.getBoundingClientRect();
   // TV's ordinary wheel keeps the right edge; Ctrl/Meta focuses the cursor.
   const ratio = event.ctrlKey || event.metaKey
     ? clamp((event.clientX - rect.left - view.left) / view.plotWidth, 0, 1) : 1;
-  zoomAround(Math.exp(event.deltaY * .0016), ratio);
+  zoomAround(Math.exp(event.deltaY * .0016), ratio, true);
 }, { passive: false });
 
 const chartNavControls = document.querySelector('#chartNavControls');
@@ -1284,7 +1344,7 @@ function paletteSettings(object) {
 }
 
 function commitObjectSetting(object, key, value) {
-  rememberObjects(); object[key] = value; savePrototypeState(); renderWorkspace();
+  rememberObjects(); object[key] = value; savePrototypeState(); renderWorkspace('overlay');
 }
 
 function refreshFibStylePreviews(object) {
@@ -1361,13 +1421,13 @@ function renderFibSettings(object) {
   });
   host.querySelectorAll('[data-fib-level-enabled]').forEach(control => control.addEventListener('change', () => {
     const index = Number(control.dataset.fibLevelEnabled); rememberObjects(); object.fibLevels[index].enabled = control.checked;
-    savePrototypeState(); renderFibSettings(object); renderWorkspace();
+    savePrototypeState(); renderFibSettings(object); renderWorkspace('overlay');
   }));
   host.querySelectorAll('[data-fib-level-value]').forEach(control => control.addEventListener('input', () => {
     const index = Number(control.dataset.fibLevelValue); commitObjectSetting(object.fibLevels[index], 'value', Number(control.value));
   }));
   host.querySelectorAll('[data-fib-level-color]').forEach(control => control.addEventListener('change', () => {
-    const index = Number(control.dataset.fibLevelColor); rememberObjects();materializeFibUniformColor(object);object.fibLevels[index].color = control.value; refreshFibStylePreviews(object);savePrototypeState(); renderWorkspace();
+    const index = Number(control.dataset.fibLevelColor); rememberObjects();materializeFibUniformColor(object);object.fibLevels[index].color = control.value; refreshFibStylePreviews(object);savePrototypeState(); renderWorkspace('overlay');
   }));
   host.querySelectorAll('[data-fib-setting]').forEach(control => control.addEventListener('change', () => {
     const key = control.dataset.fibSetting;
@@ -1375,7 +1435,7 @@ function renderFibSettings(object) {
     if (key === 'fibHorizontalWidth' || key === 'fibTrendWidth' || key === 'fibFontSize') value = Number(value);
     if (key === 'fibBackgroundAlpha') value = Number(value) / 100;
     if (key === 'fibSingleColor') {
-      rememberObjects();assignFibUniformColor(object, value);savePrototypeState();renderWorkspace();
+      rememberObjects();assignFibUniformColor(object, value);savePrototypeState();renderWorkspace('overlay');
     } else commitObjectSetting(object, key, value);
     refreshFibStylePreviews(object);
     if (key === 'color') document.querySelector('.color-swatch').style.background = value;
@@ -1424,7 +1484,7 @@ function renderCoordinateSettings(object) {
     ${['long','short'].includes(object.type)?`<label>止损价格<input id="positionStopPrice" type="number" min="0.000001" step="any" value="${object.stop}"></label>`:''}</div>`;
   host.querySelector('#positionStopPrice')?.addEventListener('change',event=>{
     const value=Number(event.target.value);if(!Number.isFinite(value)||value<=0){showToast('止损价格必须为正数');return;}
-    rememberObjects();object.stop=value;savePrototypeState();renderWorkspace();
+    rememberObjects();object.stop=value;savePrototypeState();renderWorkspace('overlay');
   });
   host.querySelectorAll('[data-coordinate-field]').forEach(control => control.addEventListener('change', () => {
     const value=Number(control.value);
@@ -1439,7 +1499,7 @@ function renderCoordinateSettings(object) {
     point[control.dataset.coordinateField] = control.dataset.coordinateField === 'index' ? value-1 : value;
     if (control.dataset.coordinateField === 'index') delete point.date;
     if(object.type==='path'){object.a=object.points[0];object.b=object.points.at(-1);}
-    savePrototypeState(); renderWorkspace();
+    savePrototypeState(); renderWorkspace('overlay');
   }));
 }
 
@@ -1449,7 +1509,7 @@ function renderVisibilitySettings(object) {
     object.visibility = object.visibility || {daily:true,weekly:true,monthly:true};
     host.innerHTML = `<p class="visibility-note">在所选周期中显示</p><div class="visibility-grid">${[['daily','日'],['weekly','周'],['monthly','月']].map(([unit,label])=>`<label><input data-visible-unit="${unit}" type="checkbox" ${object.visibility[unit]===false?'':'checked'}>${label}</label>`).join('')}</div><p class="notice">分钟周期待真实数据源接入</p>`;
     host.querySelectorAll('[data-visible-unit]').forEach(control=>control.addEventListener('change',()=>{
-      rememberObjects();object.visibility[control.dataset.visibleUnit]=control.checked;savePrototypeState();renderWorkspace();
+      rememberObjects();object.visibility[control.dataset.visibleUnit]=control.checked;savePrototypeState();renderWorkspace('overlay');
     }));
     return;
   }
@@ -1464,12 +1524,12 @@ function renderVisibilitySettings(object) {
   host.querySelectorAll('[data-fib-visibility-key]').forEach(row => {
     const setting = object.fibVisibility[row.dataset.fibVisibilityKey];
     row.querySelector('[data-fib-visibility-enabled]').addEventListener('change', event => {
-      rememberObjects(); setting.enabled = event.target.checked; savePrototypeState(); renderVisibilitySettings(object); renderWorkspace();
+      rememberObjects(); setting.enabled = event.target.checked; savePrototypeState(); renderVisibilitySettings(object); renderWorkspace('overlay');
     });
     row.querySelectorAll('[data-fib-visibility-bound]').forEach(control => control.addEventListener('input', () => {
       const key=control.dataset.fibVisibilityBound,value=Number(control.value),limit=fibVisibilityDefaults[row.dataset.fibVisibilityKey].max;
       if(!control.value||!Number.isInteger(value)||value<1||value>limit||(key==='min'?value>setting.max:value<setting.min))return;
-      rememberObjects(); setting[key] = value;savePrototypeState(); renderWorkspace();
+      rememberObjects(); setting[key] = value;savePrototypeState(); renderWorkspace('overlay');
     }));
   });
 }
@@ -1498,7 +1558,7 @@ function closeObjectSettings(revert = false) {
   }
   const history=objectSettingsHistory;objectSettingsSnapshot = null;objectSettingsHistory=null;
   if(!revert && history?.dirty){const finalObjects=userObjects;userObjects=history.objects;rememberObjects();userObjects=finalObjects;}
-  closeWorkspaceModal(); savePrototypeState(); updateObjectTree(); renderWorkspace();
+  closeWorkspaceModal(); savePrototypeState(); updateObjectTree(); renderWorkspace('overlay');
 }
 
 document.querySelector('#quickSettings').addEventListener('click', openObjectSettings);
@@ -1508,7 +1568,7 @@ document.querySelector('#quickDelete').addEventListener('click', () => {
   userObjects = userObjects.filter(item => item.id !== selectedId);
   selectedId = null; selected = false;
   document.querySelector('#selectedObject').classList.remove('visible');
-  savePrototypeState(); updateObjectTree(); renderWorkspace(); showToast('图形已删除');
+  savePrototypeState(); updateObjectTree(); renderWorkspace('overlay'); showToast('图形已删除');
 });
 document.querySelector('#quickColor').addEventListener('click', () => {
   const object=objectAtSelection();if(!object)return;
@@ -1558,14 +1618,14 @@ function updateObjectTree() {
       event.preventDefault(); event.stopPropagation();
       const object = userObjects.find(item => item.id === label.dataset.objectId); if (!object) return;
       rememberObjects(); object.locked = !object.locked;
-      savePrototypeState(); updateObjectTree(); renderWorkspace();
+      savePrototypeState(); updateObjectTree(); renderWorkspace('overlay');
     });
     label.addEventListener('click', event => {
       if (event.target.closest('[data-object-lock]')) return;
       const object = userObjects.find(item => item.id === label.dataset.objectId); if (!object) return;
       if(event.target.matches('input')||event.target.closest('.tree-eye')){
         event.preventDefault();rememberObjects();object.visible=event.target.matches('input')?event.target.checked:object.visible===false;
-        savePrototypeState();updateObjectTree();renderWorkspace();
+        savePrototypeState();updateObjectTree();renderWorkspace('overlay');
       }
       else{event.preventDefault();selectObject(object.id,wrap.clientWidth*.55,180,false);}
     });
@@ -1667,7 +1727,7 @@ document.querySelectorAll('[data-template-action]').forEach(button => button.add
     renderToolSpecificSettings(object);renderVisibilitySettings(object);
     if(['long','short'].includes(object.type))renderPositionInputs(object);
     if(['trend','ray','channel','rectangle','path','arrow'].includes(object.type))renderDrawingTextSettings(object);
-    savePrototypeState();renderWorkspace();
+    savePrototypeState();renderWorkspace('overlay');
   }
   document.querySelector('#templateMenu').classList.remove('show');
 }));
@@ -1979,13 +2039,16 @@ replaySpeedMenu.querySelectorAll('[data-replay-speed]').forEach(button => button
 }));
 document.addEventListener('click', event => { if (!event.target.closest('.replay-speed-wrap')) replaySpeedMenu.classList.remove('visible'); });
 function cleanSnapshotCanvas() {
-  const selection=selectedId;selectedId=null;renderWorkspace();
+  if(typeof flushWorkspaceRender==='function')flushWorkspaceRender();
+  const selection=selectedId;selectedId=null;renderWorkspace('overlay');
   try {const result=document.createElement('canvas'),ratio=window.devicePixelRatio||1;
     const narrow=canvas.width/ratio<800,header=narrow?68:50;
     result.width=canvas.width;result.height=canvas.height+Math.round(header*ratio);
     const ctx=result.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);
     ctx.fillStyle=css('--bg');ctx.fillRect(0,0,result.width/ratio,result.height/ratio);
-    ctx.drawImage(canvas,0,header,canvas.width/ratio,canvas.height/ratio);
+    const background=typeof baseCanvas==='undefined'||!baseCanvas?canvas:baseCanvas;
+    ctx.drawImage(background,0,header,canvas.width/ratio,canvas.height/ratio);
+    if(background!==canvas)ctx.drawImage(canvas,0,header,canvas.width/ratio,canvas.height/ratio);
     ctx.fillStyle='#d1d4dc';ctx.font='12px "Microsoft YaHei",sans-serif';ctx.textAlign='left';
     ctx.fillText(document.querySelector('.instrument-title b').textContent,10,20);
     ctx.font='11px "Microsoft YaHei",sans-serif';
@@ -1998,7 +2061,7 @@ function cleanSnapshotCanvas() {
       const value=indicatorSettings.ema_values===false?'':document.querySelector('.ema-value').textContent;
       ctx.fillStyle=indicatorSettings.ema_color;ctx.fillText(`${name}  ${value}`,rect.left-plot.left,rect.top-plot.top+header+14);}
     return result;
-  } finally {selectedId=selection;renderWorkspace();}
+  } finally {selectedId=selection;renderWorkspace('overlay');}
 }
 
 async function copyCurrentChartSnapshot() {
@@ -2166,7 +2229,7 @@ function fitFavoriteToolbar() {
   toolbar.style.left=`${clamp(toolbar.offsetLeft,4,Math.max(4,wrap.clientWidth-toolbar.offsetWidth-4))}px`;
   toolbar.style.top=`${clamp(toolbar.offsetTop,4,Math.max(4,wrap.clientHeight-toolbar.offsetHeight-43))}px`;
 }
-const workspaceResize = new ResizeObserver(() => {fitFavoriteToolbar();renderWorkspace();});
+const workspaceResize = new ResizeObserver(() => {fitFavoriteToolbar();scheduleWorkspaceRender('all');});
 workspaceResize.observe(wrap);
 applyProductionContext();
 if(!chartBoot.production && initialPrototypeState.timeframe && initialPrototypeState.timeframe!=='daily')

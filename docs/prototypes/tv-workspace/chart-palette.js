@@ -52,7 +52,7 @@ function appendChartStrokeChoices(popup, object, key, closeOnChoice = false) {
     line.style.borderTopWidth=(width?value:1)+'px';line.style.borderTopStyle=width?'solid':value;button.append(line);
     if(!width){const text=document.createElement('span');text.textContent=label;button.append(text);}
     button.onclick=()=>{
-      rememberObjects();object[key]=value;savePrototypeState();renderWorkspace();refreshFibStylePreviews(objectAtSelection());
+      rememberObjects();object[key]=value;savePrototypeState();renderWorkspace('overlay');refreshFibStylePreviews(objectAtSelection());
       group.querySelectorAll('button').forEach(choice=>choice.setAttribute('aria-pressed',String(choice===button)));
       if(closeOnChoice)closeChartColorPicker();
     };
@@ -112,7 +112,7 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null) => 
     if(object.type==='fib' && key==='fibSingleColor')assignFibUniformAlpha(object,value/100);
     else if(level){if(object.type==='fib')materializeFibUniformColor(object);level.alpha=value/100;}
     else object[alphaKey]=value/100;
-    savePrototypeState();renderWorkspace();
+    savePrototypeState();renderWorkspace('overlay');
   };
   range.onchange=()=>applyAlpha(range);number.oninput=number.onchange=()=>applyAlpha(number);
   if(isEma){range.onchange=number.oninput=number.onchange=event=>{
@@ -144,7 +144,7 @@ window.openChartWidthPicker = () => {
   const popup=document.createElement('section');chartColorPopup=popup;popup.className='chart-width-picker';
   [1,2,3,4,5,6,7,8].forEach(width=>{
     const button=document.createElement('button');button.type='button';button.textContent=width+' px';
-    button.onclick=()=>{rememberObjects();object.width=width;document.querySelector('#quickWidth').textContent=width+'px';savePrototypeState();renderWorkspace();closeChartColorPicker();};
+    button.onclick=()=>{rememberObjects();object.width=width;document.querySelector('#quickWidth').textContent=width+'px';savePrototypeState();renderWorkspace('overlay');closeChartColorPicker();};
     popup.append(button);
   });
   document.body.append(popup);positionChartPicker(popup,document.querySelector('#quickWidth'));

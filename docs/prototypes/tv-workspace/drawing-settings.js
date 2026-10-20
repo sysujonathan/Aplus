@@ -75,7 +75,7 @@ function bindDrawingStyle(host,object) {
       let value=control.type==='checkbox'?control.checked:control.type==='number'||control.dataset.numeric||ratio||['width','middleWidth'].includes(control.dataset.setting)?Number(control.value):control.value;
       if(ratio)value/=100;
       if(typeof value==='number'&&(!Number.isFinite(value)||(ratio?value<0:value<=0)||value>500)){showToast('请输入有效数值');return;}
-      rememberObjects();object[control.dataset.setting]=value;savePrototypeState();renderWorkspace();
+      rememberObjects();object[control.dataset.setting]=value;savePrototypeState();renderWorkspace('overlay');
       if(host.querySelector('[data-stroke-preview]'))refreshFibStylePreviews(object);
     });
   });
@@ -83,7 +83,7 @@ function bindDrawingStyle(host,object) {
     rememberObjects();object.color=button.dataset.color;
     host.querySelector('[data-setting="color"]').value=object.color;
     host.querySelectorAll('[data-color]').forEach(item=>item.classList.toggle('active',item===button));
-    savePrototypeState();renderWorkspace();
+    savePrototypeState();renderWorkspace('overlay');
   });
 }
 function channelLevels(object) {
@@ -115,7 +115,7 @@ function renderChannelSettings(object) {
       const key=control.dataset.channelField;
       const value=control.type==='checkbox'?control.checked:['value','width'].includes(key)?Number(control.value):control.value;
       if(typeof value==='number'&&(!Number.isFinite(value)||Math.abs(value)>100)){renderChannelSettings(object);return;}
-      rememberObjects();level[key]=value;savePrototypeState();renderWorkspace();
+      rememberObjects();level[key]=value;savePrototypeState();renderWorkspace('overlay');
       if(key==='enabled')renderChannelSettings(object);else refreshFibStylePreviews(object);
     });
   });
@@ -136,9 +136,9 @@ function renderTrendSettings(object) {
   bindDrawingStyle(host,object);host.querySelector('[data-setting="statsPosition"]').value=object.statsPosition||'right';
   const extend=host.querySelector('[data-trend-extend]');
   if(extend){extend.value=object.extendLeft?(object.extendRight?'both':'left'):object.extendRight?'right':'none';
-    extend.onchange=()=>{rememberObjects();object.extendLeft=['left','both'].includes(extend.value);object.extendRight=['right','both'].includes(extend.value);savePrototypeState();renderWorkspace();};}
+    extend.onchange=()=>{rememberObjects();object.extendLeft=['left','both'].includes(extend.value);object.extendRight=['right','both'].includes(extend.value);savePrototypeState();renderWorkspace('overlay');};}
   host.querySelectorAll('[data-trend-stat]').forEach(control=>control.addEventListener('change',()=>{
-    rememberObjects();object.trendStats={...object.trendStats,[control.dataset.trendStat]:control.checked};savePrototypeState();renderWorkspace();
+    rememberObjects();object.trendStats={...object.trendStats,[control.dataset.trendStat]:control.checked};savePrototypeState();renderWorkspace('overlay');
   }));
 }
 function drawTrendDetails(ctx,object,ax,ay,bx,by,selected) {
@@ -174,7 +174,7 @@ function editFibLevelText(object,index,point) {
     if(finished)return;finished=true;activeChartInlineEditor=null;
     const text=input.value.replace(/[\r\n]/g,'').slice(0,50);
     if(commit&&text!==original){rememberObjects();level.text=text;}
-    input.remove();if(commit&&text!==original&&persist)savePrototypeState();renderWorkspace();
+    input.remove();if(commit&&text!==original&&persist)savePrototypeState();renderWorkspace('overlay');
   };
   input.onkeydown=event=>{event.stopPropagation();if(event.key==='Enter'){event.preventDefault();window.flushChartInlineEditor();}
     if(event.key==='Escape'){event.preventDefault();window.flushChartInlineEditor(false);}};
@@ -236,7 +236,7 @@ function renderPositionInputs(object) {
     }
     if(key==='risk_value')proposed.risk_unit=host.querySelector('[data-position="risk_unit"]').value;
     proposed.risk_budget=Number(proposed.risk_value??1000)*(proposed.risk_unit==='percent'?Number(proposed.account_size??1000)/100:1);
-    rememberObjects();Object.assign(object,proposed);savePrototypeState();renderPositionInputs(object);renderWorkspace();
+    rememberObjects();Object.assign(object,proposed);savePrototypeState();renderPositionInputs(object);renderWorkspace('overlay');
   }));
 }
 function renderPositionStyle(object) {
@@ -253,7 +253,7 @@ function renderPositionStyle(object) {
   bindDrawingStyle(host,object);
   host.querySelectorAll('[data-position-stat]').forEach(control=>control.addEventListener('change',()=>{
     rememberObjects();object.positionStats={...object.positionStats,[control.dataset.positionStat]:control.checked};
-    savePrototypeState();renderWorkspace();
+    savePrototypeState();renderWorkspace('overlay');
   }));
 }
 function drawingTextDefaults(object) {
