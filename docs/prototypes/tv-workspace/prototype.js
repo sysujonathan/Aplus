@@ -4,6 +4,7 @@ bars.unshift(...window.prototypeEarlierBars);
 
 const canvas = document.querySelector('#chartCanvas');
 const baseCanvas = document.querySelector('#chartBaseCanvas');
+const foregroundCanvas = document.querySelector('#chartForegroundCanvas');
 const wrap = document.querySelector('#chartWrap');
 const crosshair = document.querySelector('#crosshair');
 const selectedObject = document.querySelector('#selectedObject');
@@ -306,7 +307,9 @@ document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button =
 }));
 document.querySelector('#openAlert').addEventListener('click', () => openModal('alertModal'));
 document.querySelector('#openObject').addEventListener('click', () => openModal('objectModal'));
-selectedObject.addEventListener('click', () => openModal('objectModal'));
+selectedObject.addEventListener('click', event => {
+  if (event.target === selectedObject) openModal('objectModal');
+});
 document.querySelector('#removeObjects').addEventListener('click', () => openModal('removeModal'));
 document.querySelectorAll('.close-modal').forEach(button => button.addEventListener('click', closeModal));
 document.querySelector('#modalBackdrop').addEventListener('click', event => { if (event.target.id === 'modalBackdrop') closeModal(); });

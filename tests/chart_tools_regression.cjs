@@ -162,8 +162,8 @@ context.replayCutoffDate='2026-10-13';
 assert.equal(context.drawingVisibleInWorkspace(visibilityObject),true);
 context.replayActive=false;context.replayCutoffDate=null;
 assert.match(extract('renderWorkspace'),/classList\.toggle\('visible', visibleObjects\.some/);
-// Quick settings must stay out of the price plot even when a selected point
-// moves through the previous click position; it must not steal the next drag.
+// TV opens quick settings beside the selected drawing and keeps them inside
+// the chart. A later click on that object moves the unpinned bar near the click.
 const selectionElements=new Map();
 context.userObjects=[{id:'movable',type:'ray',color:'#fff',width:2}];
 context.wrap={clientWidth:1000,clientHeight:600};
@@ -173,10 +173,34 @@ context.updateObjectTree=()=>{};context.renderWorkspace=()=>{};
 vm.runInContext(extract('selectObject'),context);
 context.selectObject('movable',900,200);
 const quickBar=selectionElements.get('#selectedObject');
-assert.ok(Number.parseFloat(quickBar.style.top)+36<42,'quick controls must remain above the first plotted price');
+assert.equal(Number.parseFloat(quickBar.style.left),648,'right-edge selections place controls on their left');
+assert.equal(Number.parseFloat(quickBar.style.top),148,'quick controls open near the click');
 const fixedToolbar=JSON.stringify(quickBar.style);
 context.selectObject('movable',900,100);
-assert.equal(JSON.stringify(quickBar.style),fixedToolbar,'moving the selected anchor cannot move editing controls into its path');
+assert.notEqual(JSON.stringify(quickBar.style),fixedToolbar);
+assert.equal(Number.parseFloat(quickBar.style.top),48,'the toolbar follows a new selection click until manually dragged');
+assert.match(source,/selectedToolbarMoved=true/);assert.match(source,/selectedDragHandle/);
+// Blank-chart drag moves both axes from one immutable gesture snapshot.
+const chartCanvasBeforeNavigation=context.canvas;
+Object.assign(context,{viewOffset:0,priceCenterOffset:0,panLimits:()=>({min:-12,max:100}),
+  canvas:{_view:{candleWidth:10}}});
+vm.runInContext(extract('panViewFromGesture'),context);
+context.panViewFromGesture({startOffset:5,startPriceCenterOffset:1,startPriceSpan:20,plotHeight:100},20,-10);
+assert.equal(context.viewOffset,7);assert.equal(context.priceCenterOffset,-1);
+// Price-axis wheel zooms around its cursor without changing time density.
+Object.assign(context,{priceZoom:1,priceCenterOffset:0,canvas:{_view:{low:0,high:100}},
+  scheduleWorkspaceRender(){},scheduleViewStateSave(){},renderWorkspace(){},savePrototypeState(){}});
+vm.runInContext(extract('zoomPriceAround'),context);
+context.zoomPriceAround(.5,.25,true);
+assert.equal(context.priceZoom,2);assert.equal(context.priceCenterOffset,12.5);
+// Undo keeps the settings object identity stable for already-bound controls.
+const indicatorSettingsBeforeRestore=context.indicatorSettings;
+Object.assign(context,{indicatorSettings:{ema:true,magnet:true,temporary:1}});
+vm.runInContext(extract('restoreIndicatorSettings'),context);
+const settingsIdentity=context.indicatorSettings;
+context.restoreIndicatorSettings({ema:false,magnet:false});
+assert.equal(context.indicatorSettings,settingsIdentity);assert.deepEqual({...context.indicatorSettings},{ema:false,magnet:false});
+context.canvas=chartCanvasBeforeNavigation;context.indicatorSettings=indicatorSettingsBeforeRestore;
 const positionMetrics=context.AplusPositionMetrics.metrics;
 const model={type:'long',a:{index:0,value:10},b:{index:3,value:14},stop:8,
   account_size:5000,risk_value:10,risk_unit:'percent',lot_size:1,leverage:1};
