@@ -187,6 +187,24 @@ def test_bad_watch_cache_falls_back_to_verified_official_snapshot(tmp_path):
     assert result.close.tolist() == [21., 21.]
 
 
+@pytest.mark.parametrize('broken', [
+    {'code': 'sh.513500'},
+    [],
+])
+def test_bad_watch_cache_metadata_never_aborts_verified_official_alerts(tmp_path, broken):
+    from gui.chart_alerts import load_alert_frame
+    store = Store(tmp_path)
+    fetch_history(store, '513500', 'baostock', threading.Event(),
+                  provider_factory=Provider, end='2026-10-16')
+    store.execute("UPDATE meta SET value=? WHERE key=?", (
+        json.dumps(broken), 'watch_chart:baostock:sh.513500'))
+    official = bars().assign(open=20., high=22., low=18., close=21.)
+    save_dataset(store, 'sh.513500', official, 'baostock', '不复权')
+    spec = dict(code='sh.513500', source='baostock', adjustment='不复权', timeframe='daily')
+    result = load_alert_frame(store, '', spec, '2026-10-16T20:00:00+08:00')
+    assert result.close.tolist() == [21., 21.]
+
+
 def test_chart_cache_cannot_certify_missing_friday_and_never_splices_prices(tmp_path):
     from gui.chart_alerts import load_alert_frame
     store = Store(tmp_path)

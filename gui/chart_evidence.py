@@ -41,7 +41,15 @@ def strategy_evidence(context):
     if kind in GAP_STRATEGIES:
         source = gap_annotation_frame(source, payload, kind)
         if source is None:
-            return {'items': [], 'facts': [*facts, '原信号结构待核对（保留归档计划价格）']}
+            items = []
+            for key, label, color in [('stop', 'SL', STOP), ('target', 'TP1', TARGET)]:
+                value = payload.get(key)
+                if value is not None and math.isfinite(float(value)):
+                    items.append(dict(kind='hline', value=float(value), text=label,
+                                      color=color, dash='--', width=1, alpha=.7))
+            return {'items': items,
+                    'facts': [*facts, '原信号结构待核对（保留归档计划价格）'],
+                    'availableDate': anchor}
     dates = source.date.astype(str).str[:10].tolist()
 
     def point(x, y):
@@ -84,6 +92,8 @@ def strategy_evidence(context):
                     alpha=patch.get_alpha() if patch.get_alpha() is not None else 1,
                     fill=to_hex(patch.get_facecolor()) if patch.get_fill() and patch.get_facecolor()[3] else None))
         for text in ax.texts:
+            if kind in GAP_STRATEGIES and 'GAP_H2' not in kind and text.get_text() == 'H2':
+                continue
             position = point(*text.get_position())
             arrow = point(*text.xy) if isinstance(text, Annotation) else None
             if position:
@@ -106,8 +116,10 @@ def strategy_evidence(context):
         for trend in trend_specs(kind):
             if trend.column in source:
                 points = [point(index, value) for index, value in enumerate(source[trend.column])]
-                items.append(dict(kind='line', points=points, color=trend.color,
-                                  dash=trend.linestyle, width=trend.width, alpha=1))
+                points = [item for item in points if item is not None]
+                if len(points) >= 2:
+                    items.append(dict(kind='line', points=points, color=trend.color,
+                                      dash=trend.linestyle, width=trend.width, alpha=1))
         if not owns_risk_lines(kind):
             for key, label, color in [('stop', 'SL', STOP), ('target', 'TP1', TARGET)]:
                 value = payload.get(key)

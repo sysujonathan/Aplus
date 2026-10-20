@@ -391,6 +391,14 @@ class ChartBridge:
             reseed = any(key in patch and patch[key] != current.get(key) for key in semantic)
             reseed |= patch.get('enabled') is True and not current.get('enabled', True)
             candidate = {**current, **patch}
+            channel = candidate['condition'] in (
+                'enter_channel', 'exit_channel', 'inside_channel', 'outside_channel')
+            movement = candidate['condition'] in ('rise', 'fall', 'rise_pct', 'fall_pct')
+            if not channel:
+                candidate.pop('upper', None)
+                candidate.pop('lower', None)
+            if not movement:
+                candidate.pop('bars', None)
             validate_document({**document, 'alerts': [candidate]})
             if reseed:
                 from .chart_alerts import load_alert_frame

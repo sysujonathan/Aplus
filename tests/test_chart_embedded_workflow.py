@@ -162,14 +162,22 @@ def test_native_chart_navigation_commands_are_scoped_to_the_display_request(tmp_
 
 def test_switch_materialization_failure_preserves_active_bridge(tmp_path):
     store, _, boot = setup(tmp_path)
-    def fail(_):
-        raise OSError('page unavailable')
-    session = ChartSessionBridge(store, boot, fail)
+    attempts = []
+    def fail_once(value):
+        attempts.append(value)
+        if len(attempts) == 1:
+            raise OSError('page unavailable')
+    session = ChartSessionBridge(store, boot, fail_once)
     original = session.current
     session.pending = dict(token=3, boot=boot)
     with pytest.raises(OSError):
         session.activate_context()
     assert session.current is original and session.active_token == 0
+    session.cancel_context_switch()
+    assert session.failed_token == 3 and session.pending['token'] == 3
+    session.retry_context_switch()
+    assert session.activate_context() == {'token': 3}
+    assert session.active_token == 3 and session.failed_token is None
 
 
 def test_stale_embedded_page_cannot_write_or_manage_current_symbol(tmp_path):
@@ -250,9 +258,11 @@ def test_advanced_alert_fields_survive_bridge_create_edit_and_reseed(tmp_path):
     movement = bridge.update_alert(channel['id'], {
         'condition': 'rise_pct', 'value': 3.5, 'bars': 4})['alerts'][0]
     assert movement['condition'] == 'rise_pct' and movement['bars'] == 4
+    assert 'upper' not in movement and 'lower' not in movement
     assert movement['active_after'] == clock[0]
     reopened = store.chart_document(boot['identity'])['alerts'][0]
     assert reopened['condition'] == 'rise_pct' and reopened['bars'] == 4
+    assert 'upper' not in reopened and 'lower' not in reopened
 
 
 @pytest.mark.parametrize('changes', [{'cursor': '2026-10-19'}, {'enabled': 'false'},

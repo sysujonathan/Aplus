@@ -29,7 +29,7 @@ def load_alert_frame(store, chart_identity, alert, now):
                     if record and str(record.get('adjustment')) == alert['adjustment'] else None)
         try:
             cached = cached_history(store, alert['code'], alert['source'], alert['adjustment'])
-        except (OSError, ValueError):
+        except (OSError, ValueError, KeyError, TypeError):
             # A disposable watch-chart cache must never suppress a verified
             # official snapshot or abort every other alert in this poll.
             cached = None

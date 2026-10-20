@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from gui.chart_renderer import render_chart
-from gui.chart_workspace import resample_daily
+from gui.chart_workspace import _alert_optional_values, resample_daily
 from gui.chart_bridge import ChartBridge, workspace_boot
 from gui.chart_bridge import drawing_to_frontend
 from gui.chart_shell import ChartCloseGuard
@@ -91,6 +91,31 @@ def test_tv_advanced_alert_fields_are_validated():
         create_alert(name='坏回看', code='sz.000001', source='s', adjustment='qfq',
             timeframe='daily', target='price', condition='rise', value=1,
             frame=frame, bars=0)
+
+
+@pytest.mark.parametrize('condition,closes,value,triggered', [
+    ('above', [10, 10], 10, False),
+    ('below', [10, 10], 10, False),
+    ('cross_up', [10, 10.1], 10, True),
+    ('cross_down', [10, 9.9], 10, True),
+    ('rise_pct', [0, 0, 1], 10, False),
+])
+def test_alert_equality_and_zero_baseline_boundaries(condition, closes, value, triggered):
+    dates = ['2026-01-05', '2026-01-06', '2026-01-07'][-len(closes):]
+    seed = bars(dates=dates[:-1], closes=closes[:-1])
+    alert = create_alert(name='边界', code='sz.000001', source='s', adjustment='qfq',
+        timeframe='daily', target='price', condition=condition, value=value,
+        frame=seed, bars=2)
+    updated, event = evaluate_alert(alert, bars(dates=dates, closes=closes),
+                                    now='2026-01-07T20:00:00+08:00')
+    assert (event is not None) is triggered
+    assert updated['cursor'] == dates[-1]
+
+
+def test_compat_alert_panel_only_parses_fields_used_by_selected_condition():
+    assert _alert_optional_values('above', '', '', '') == (None, None, 1)
+    assert _alert_optional_values('enter_channel', '12', '10', '') == (12, 10, 1)
+    assert _alert_optional_values('rise_pct', '', '', '3') == (None, None, 3)
 
 
 def test_basic_ema_alert_keeps_close_crossing_ema_semantics():

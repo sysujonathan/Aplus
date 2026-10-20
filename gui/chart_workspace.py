@@ -40,6 +40,18 @@ CONDITION_LABELS = {'above': '高于', 'below': '低于', 'cross_up': '向上穿
                     'inside_channel': '处于通道内', 'outside_channel': '处于通道外',
                     'rise': '上涨指定数值', 'fall': '下跌指定数值',
                     'rise_pct': '上涨指定百分比', 'fall_pct': '下跌指定百分比'}
+CHANNEL_CONDITIONS = frozenset(('enter_channel', 'exit_channel',
+                                'inside_channel', 'outside_channel'))
+MOVEMENT_CONDITIONS = frozenset(('rise', 'fall', 'rise_pct', 'fall_pct'))
+
+
+def _alert_optional_values(condition, upper, lower, bars):
+    """Parse only fields that participate in the selected alert condition."""
+    if condition in CHANNEL_CONDITIONS:
+        return float(upper), float(lower), 1
+    if condition in MOVEMENT_CONDITIONS:
+        return None, None, int(bars)
+    return None, None, 1
 
 
 def _ruler_readout(obj):
@@ -852,13 +864,17 @@ class ChartWorkspaceDialog:
         rows = [('名称',name),('价格／变动幅度',value),('EMA 长度',ema_len),
                 ('到期时间（可空）',expiry),('通道上轨',upper),('通道下轨',lower),
                 ('回看 K 线数量',bars)]
+        entries = []
         for row,(label,var) in enumerate(rows):
             ttk.Label(box,text=label).grid(row=row,column=0,sticky=tk.W,pady=4)
-            ttk.Entry(box,textvariable=var,width=30).grid(row=row,column=1,sticky=tk.EW,pady=4)
+            entry = ttk.Entry(box,textvariable=var,width=30)
+            entry.grid(row=row,column=1,sticky=tk.EW,pady=4)
+            entries.append(entry)
         ttk.Label(box,text='目标').grid(row=7,column=0,sticky=tk.W)
         ttk.Combobox(box,textvariable=target,state='readonly',values=tuple(target_values)).grid(row=7,column=1,sticky=tk.EW)
         ttk.Label(box,text='条件').grid(row=8,column=0,sticky=tk.W,pady=4)
-        ttk.Combobox(box,textvariable=condition,state='readonly',values=tuple(condition_values)).grid(row=8,column=1,sticky=tk.EW,pady=4)
+        condition_box = ttk.Combobox(box,textvariable=condition,state='readonly',values=tuple(condition_values))
+        condition_box.grid(row=8,column=1,sticky=tk.EW,pady=4)
         ttk.Label(box,text='频率').grid(row=9,column=0,sticky=tk.W,pady=4)
         ttk.Combobox(box,textvariable=frequency,state='readonly',values=tuple(frequency_values)).grid(row=9,column=1,sticky=tk.EW,pady=4)
         ttk.Checkbutton(box,text='启用',variable=enabled).grid(row=10,column=1,sticky=tk.W)
@@ -866,18 +882,33 @@ class ChartWorkspaceDialog:
                   '只检查之后出现的已收盘 K 线；回放和历史数据不会补触发。\n'
                   '触发方式：A++ 本机弹窗，不发送外部消息。',foreground=MUTED,justify=tk.LEFT).grid(
                       row=11,column=0,columnspan=2,sticky=tk.W,pady=10)
+        def sync_optional_fields(_event=None):
+            selected = condition_values[condition.get()]
+            channel_state = 'normal' if selected in CHANNEL_CONDITIONS else 'disabled'
+            movement_state = 'normal' if selected in MOVEMENT_CONDITIONS else 'disabled'
+            entries[4].configure(state=channel_state)
+            entries[5].configure(state=channel_state)
+            entries[6].configure(state=movement_state)
+        condition_box.bind('<<ComboboxSelected>>', sync_optional_fields)
+        sync_optional_fields()
         def save():
             try:
                 condition_key = condition_values[condition.get()]
-                upper_value, lower_value, bars_value = float(upper.get()), float(lower.get()), int(bars.get())
+                upper_value, lower_value, bars_value = _alert_optional_values(
+                    condition_key, upper.get(), lower.get(), bars.get())
                 if alert:
                     item = deepcopy(alert)
                     before = deepcopy(item)
                     item.update(name=name.get().strip(),target=target_values[target.get()],
                         condition=condition_key,value=float(value.get()),ema_length=int(ema_len.get()),
                         frequency=frequency_values[frequency.get()], expires=expiry.get().strip(),
-                        enabled=enabled.get(),
-                        upper=upper_value,lower=lower_value,bars=bars_value)
+                        enabled=enabled.get())
+                    for key in ('upper', 'lower', 'bars'):
+                        item.pop(key, None)
+                    if condition_key in CHANNEL_CONDITIONS:
+                        item.update(upper=upper_value, lower=lower_value)
+                    elif condition_key in MOVEMENT_CONDITIONS:
+                        item['bars'] = bars_value
                     semantic = ('condition','target','value','ema_length','timeframe','upper','lower','bars')
                     reseed = any(item.get(key) != before.get(key) for key in semantic)
                     reseed |= item['enabled'] and not before.get('enabled', True)

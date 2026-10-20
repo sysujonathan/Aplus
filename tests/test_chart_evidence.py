@@ -1,14 +1,16 @@
 """Strategy-specific vectors retain geometry and the original signal prefix."""
 from copy import deepcopy
 import json
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from matplotlib.patches import Rectangle
 
 from core.strategy_registry import StrategyRegistry
+from core.strategies.gap_pinbar_strategy import GapPinbarStrategy
 from gui.chart_evidence import strategy_evidence
-from gui.theme import ANNOTATION
+from gui.theme import ANNOTATION, STOP, TARGET
 
 
 def bars():
@@ -71,3 +73,59 @@ def test_real_strategy_annotation_methods_are_not_replaced_with_generic_star(kin
         if item.get('a'):
             assert item['a']['date'] <= frame.date.iloc[20]
     json.dumps(output, allow_nan=False)
+
+
+def test_mtr_trend_omits_non_finite_points_from_web_evidence():
+    frame = bars()
+    frame['signal_mtr'] = False
+    frame.loc[20, 'signal_mtr'] = True
+    frame['is_sw_h_geometric'] = False
+    frame['geometric_trendline'] = float('nan')
+    frame.loc[12:20, 'geometric_trendline'] = [10.2 + index * .1 for index in range(9)]
+    strategy = StrategyRegistry.get_strategy('MTR_MASTER')
+    output = strategy_evidence(dict(frame=frame, payload=dict(asof=frame.date.iloc[20]),
+        strategy=strategy, strategy_type='MTR_MASTER', metadata=strategy.get_metadata()))
+    trend = next(item for item in output['items']
+                 if item['kind'] == 'line' and item['color'] == '#8B949E')
+    assert len(trend['points']) == 9
+    assert all(point is not None for point in trend['points'])
+    json.dumps(output, allow_nan=False)
+
+
+def test_gap_web_evidence_matches_desktop_label_and_archived_price_fallback():
+    frame = bars()
+    frame['is_breakout_gp'] = False
+    frame['signal_gap_pinbar'] = False
+    frame['gap_pinbar_prior_low'] = float('nan')
+    frame['gap_pinbar_floor_exact'] = float('nan')
+    frame['gap_pinbar_top_exact'] = float('nan')
+    anchor = frame.date.iloc[20]
+    payload = dict(asof=anchor, setup_date=anchor, entry=12.2, stop=11.8, target=13.0)
+    strategy = GapPinbarStrategy()
+    output = strategy_evidence(dict(frame=frame, payload=payload, strategy=strategy,
+        strategy_type='STRATEGY_GAP_PINBAR', metadata=strategy.get_metadata()))
+    assert '原信号结构待核对（保留归档计划价格）' in output['facts']
+    levels = {(item['text'], item['value'], item['color']) for item in output['items']}
+    assert levels == {('SL', 11.8, STOP), ('TP1', 13.0, TARGET)}
+    assert output['availableDate'] == anchor
+    json.dumps(output, allow_nan=False)
+
+
+def test_non_h2_gap_web_evidence_does_not_add_h2_label():
+    frame = bars()
+    anchor = frame.date.iloc[20]
+    payload = dict(asof=anchor, setup_date=anchor, stop=11.8, target=13.0)
+
+    class Strategy:
+        def get_signal_info(self, source):
+            return {}
+
+        def annotate_chart(self, ax, source, kind, **kwargs):
+            ax.text(20, 12, 'H2')
+            ax.text(20, 11.9, 'Gap')
+
+    with patch('gui.chart_evidence.gap_annotation_frame', return_value=frame.iloc[:21].copy()):
+        output = strategy_evidence(dict(frame=frame, payload=payload, strategy=Strategy(),
+            strategy_type='STRATEGY_GAP_PINBAR', metadata={}))
+    labels = {item['text'] for item in output['items'] if item['kind'] == 'label'}
+    assert 'Gap' in labels and 'H2' not in labels
