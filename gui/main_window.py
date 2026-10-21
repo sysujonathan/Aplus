@@ -593,9 +593,9 @@ class AplusMainWindow(ttk.Window):
                 self.watch.select_code(observation_id[len('watch:'):])
                 return
             if self._chart_mode == "watch":
-                self.watch.select_observation(observation_id)
+                self.watch.select_observation(observation_id, take_focus=False)
             else:
-                self.candidates.select_observation(observation_id)
+                self.candidates.select_observation(observation_id, take_focus=False)
 
     def _on_watch_drag_motion(self, root_x, root_y):
         self.chart.highlight_drop(root_x, root_y)

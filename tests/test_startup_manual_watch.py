@@ -652,6 +652,8 @@ def test_manual_watch_enters_default_interactive_grid_without_fake_signal(tmp_pa
             root.update()
             time.sleep(.01)
         host.show.assert_called_once()
+        assert not grid._slots[0]._analysis_btn.winfo_ismapped()
+        assert grid._slots[0]._tv_btn.winfo_ismapped()
         context = host.show.call_args.args[0]
         assert context['payload'] == {} and context['strategy_type'] == ''
         boot = workspace_boot(store, context)

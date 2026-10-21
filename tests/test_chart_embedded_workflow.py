@@ -221,6 +221,47 @@ def test_hidden_layout_tiles_are_suspended_instead_of_kept_polling():
     visible.grid.assert_called_once()
 
 
+def test_embedded_pointer_activity_does_not_reselect_the_active_sidebar_row():
+    from unittest.mock import Mock
+    from gui.chart_items import ChartItem
+    from gui.chart_panel import ChartGrid
+    callback = Mock()
+    grid = ChartGrid.__new__(ChartGrid)
+    grid._active_slot = 0
+    grid._display_items = [
+        ChartItem('sz.000001', '一号', 11, 'baostock', 'candidate'),
+        ChartItem('sz.000002', '二号', 22, 'baostock', 'candidate'),
+    ]
+    grid._slots = [Mock(), Mock()]
+    grid._on_active_item = callback
+
+    grid._activate_slot(0)
+    callback.assert_not_called()
+    grid._slots[0].set_active.assert_not_called()
+    grid._slots[1].set_active.assert_not_called()
+    grid._activate_slot(1)
+    callback.assert_called_once_with(22)
+    grid._slots[0].set_active.assert_called_once_with(False)
+    grid._slots[1].set_active.assert_called_once_with(True)
+
+
+def test_chart_activation_syncs_sidebar_without_stealing_chart_focus():
+    from unittest.mock import Mock
+    from gui.main_window import AplusMainWindow
+    window = AplusMainWindow.__new__(AplusMainWindow)
+    window.watch, window.candidates = Mock(), Mock()
+
+    window._chart_mode = 'candidates'
+    window._on_chart_item_activated(11)
+    window.candidates.select_observation.assert_called_once_with(11, take_focus=False)
+
+    window._chart_mode = 'watch'
+    window._on_chart_item_activated(22)
+    window.watch.select_observation.assert_called_once_with(22, take_focus=False)
+    window._on_chart_item_activated('watch:sz.000001')
+    window.watch.select_code.assert_called_once_with('sz.000001')
+
+
 def test_alert_edit_disable_reenable_delete_keep_forward_watermark_and_events(tmp_path):
     store, _, boot = setup(tmp_path)
     clock = ['2026-10-15T20:00:00+08:00']

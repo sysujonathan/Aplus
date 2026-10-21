@@ -147,7 +147,10 @@ class ChartPanel(native_ttk.Frame):
         for widget in (self, self.header, self.title_label, self.chart_label):
             widget.bind("<Button-1>", self._activate, add="+")
         if interactive:
-            self._analysis_btn.configure(text='弹出图表')
+            # The embedded workspace is already the complete editor. Keeping a
+            # second detached-workspace action here duplicates the same chart
+            # and costs scarce header space; the external TV reference remains.
+            self._analysis_btn.pack_forget()
             self.readout_frame.grid_remove()
 
     def _show_interactive(self):
@@ -693,9 +696,14 @@ class ChartGrid(ttk.Frame):
         )
 
     def _activate_slot(self, index):
+        if index == self._active_slot:
+            return
         self._active_slot = index
         self._refresh_active_styles()
         item = self.current_item()
+        # Every pointerdown inside the embedded WebView reports its active tile.
+        # Re-selecting the already active sidebar row would steal native focus
+        # from the chart and create a visible jump on every trading action.
         if item and self._on_active_item:
             self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
 
