@@ -168,6 +168,10 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert '#chartBaseCanvas, #chartCanvas, #chartForegroundCanvas' in style
     assert '#chartForegroundCanvas { z-index: 2; pointer-events: none; }' in style
     assert 'restoreIndicatorSettings(indicatorUndoStack.pop())' in script
+    assert 'if (!view) return;' in script
+    assert 'prototype.css?v=20261021-1' in html
+    assert 'prototype.js?v=20261021-1' in html
+    assert 'prototype-interactions.js?v=20261021-1' in html
 
 
 def test_prototype_is_also_bound_to_the_production_store_bridge():

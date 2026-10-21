@@ -1304,6 +1304,7 @@ canvas.addEventListener('mouseleave', () => { crosshair.classList.remove('show')
 canvas.addEventListener('wheel', event => {
   event.preventDefault();
   const view = canvas._view;
+  if (!view) return;
   const rect = canvas.getBoundingClientRect();
   const x=event.clientX-rect.left,y=event.clientY-rect.top;
   if(x>view.width-view.right&&y<view.height-39){

@@ -514,6 +514,9 @@ wheelHandler(wheel);assert.equal(zoomCall.ratio,1);assert.ok(zoomCall.factor<1);
 assert.equal(zoomCall.deferred,true);
 wheelHandler({...wheel,ctrlKey:true});assert.equal(zoomCall.ratio,.2);assert.equal(zoomCall.deferred,true);
 wheelHandler({...wheel,shiftKey:true});assert.deepEqual(panCall,{n:-16,deferred:true});
+// A wheel event during the first paint is ignored until chart geometry exists.
+wheelContext.canvas._view=null;zoomCall=null;panCall=null;
+assert.doesNotThrow(()=>wheelHandler(wheel));assert.equal(zoomCall,null);assert.equal(panCall,null);
 // A persisted 1.0 alpha must open as 100%, not as 1%.
 let alphaChange;
 const alphaControl={type:'range',dataset:{setting:'alpha'},value:'100',
