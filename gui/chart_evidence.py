@@ -27,6 +27,7 @@ def strategy_evidence(context):
     from matplotlib.colors import to_hex
     from matplotlib.patches import Rectangle
     from matplotlib.text import Annotation
+    from matplotlib.collections import LineCollection, PathCollection
 
     source = context['frame'].reset_index(drop=True).copy()
     anchor = str(payload.get('setup_date') or payload.get('asof') or source.date.iloc[-1])[:10]
@@ -102,8 +103,30 @@ def strategy_evidence(context):
                     align=text.get_horizontalalignment(), vertical=text.get_verticalalignment(),
                     leader=bool(arrow and text.arrow_patch)))
         explicit_markers = marker_specs(kind, meta)
-        if ax.collections and not explicit_markers:
-            raise ValueError(f'策略散点图元尚未适配：{kind or "未知策略"}')
+        for collection in ax.collections:
+            if isinstance(collection, LineCollection):
+                # hlines/vlines create LineCollections, not scatter markers.
+                # Keep each finite segment's date/price endpoints and styling.
+                if collection.get_transform() != ax.transData:
+                    raise ValueError('策略线段使用了尚未适配的坐标系')
+                colors = collection.get_colors()
+                widths = collection.get_linewidths()
+                dashes = collection.get_linestyles()
+                for index, segment in enumerate(collection.get_segments()):
+                    points = [point(x, y) for x, y in segment]
+                    if len(points) < 2 or any(p is None for p in points):
+                        continue
+                    color = colors[index % len(colors)]
+                    dash = dashes[index % len(dashes)][1]
+                    items.append(dict(kind='line', points=points, color=to_hex(color),
+                        width=float(widths[index % len(widths)]),
+                        dash=[float(value) for value in dash] if dash is not None else '-',
+                        alpha=collection.get_alpha() if collection.get_alpha() is not None else float(color[3])))
+            elif isinstance(collection, PathCollection):
+                if not explicit_markers:
+                    raise ValueError(f'策略散点图元尚未适配：{kind or "未知策略"}')
+            else:
+                raise ValueError(f'策略图元尚未适配：{type(collection).__name__}')
         # Scatter artists are recreated from the explicit per-strategy marker
         # contract below. Never guess every collection is a monthly breakout.
         for marker in explicit_markers:
