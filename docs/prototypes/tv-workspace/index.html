@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>A+ 图表工作台高保真原型</title>
-  <link rel="stylesheet" href="prototype.css?v=20261019-1">
+  <link rel="stylesheet" href="prototype.css?v=20261021-1">
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true">
@@ -111,6 +111,7 @@
         <div class="chart-wrap" id="chartWrap">
           <canvas id="chartBaseCanvas" aria-hidden="true"></canvas>
           <canvas id="chartCanvas"></canvas>
+          <canvas id="chartForegroundCanvas" aria-hidden="true"></canvas>
           <div class="quote-buttons">
             <div class="quote sell"><b>5.00</b><span>卖出</span></div>
             <small>0.01</small>
@@ -137,6 +138,7 @@
           </div>
 
           <div class="selected-object" id="selectedObject" aria-label="所选图形快捷设置">
+            <button class="drag-handle" id="selectedDragHandle" title="拖动图形设置栏" aria-label="拖动图形设置栏"><i></i><i></i><i></i><i></i><i></i><i></i></button>
             <button id="quickColor" title="选择颜色"><span class="color-swatch"></span></button><button id="quickWidth" title="设置线宽">2px</button><span>—</span>
             <button id="quickSettings" title="打开对象设置"><svg><use href="#i-settings"/></svg></button>
             <button id="quickDelete" title="删除所选图形"><svg><use href="#i-trash"/></svg></button>
@@ -318,12 +320,12 @@
   <div class="chart-context-menu" id="templateMenu"><button data-template-action="apply">应用保存的模板</button><button data-template-action="save">保存当前设置为模板</button></div>
   <script>window.tvPrototypeV2 = true;</script>
   <script src="historical-bars-v2.js"></script>
-  <script src="prototype.js"></script>
+  <script src="prototype.js?v=20261021-1"></script>
   <script src="chart-coordinates.js"></script>
   <script src="chart-indicators.js"></script>
   <script src="chart-position.js"></script>
   <script src="drawing-settings.js?v=20261019-1"></script>
-  <script src="prototype-interactions.js?v=20261019-1"></script>
+  <script src="prototype-interactions.js?v=20261021-1"></script>
   <script src="production-controls.js?v=20261019-1"></script>
   <script src="chart-palette.js?v=20261019-1"></script>
 </body>

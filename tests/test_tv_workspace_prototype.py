@@ -82,7 +82,7 @@ def test_prototype_is_offline_and_contains_reviewed_states():
 
     assert not parser.remote_assets
     assert {
-        'chartBaseCanvas', 'chartCanvas', 'rightPanel', 'alertModal', 'objectModal',
+        'chartBaseCanvas', 'chartCanvas', 'chartForegroundCanvas', 'rightPanel', 'alertModal', 'objectModal',
         'replayBar', 'replayStartModal', 'replayExitModal',
         'chartNavControls', 'snapshotModal', 'removeModal',
     } <= parser.ids
@@ -115,6 +115,7 @@ def test_prototype_contains_tradingview_interaction_contract():
 
     assert 'id="zoomOut"' in html
     assert 'id="favoriteDragHandle"' in html
+    assert 'id="selectedDragHandle"' in html
     assert 'href="#i-polyline"' in html
     assert 'data-tab="coordinates"' in html
     assert 'data-tab="visibility"' in html
@@ -143,7 +144,9 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert 'ClipboardItem' in script and 'navigator.clipboard.write' in script
     assert 'DEFAULT_VISIBLE_BARS = 204' in script
     assert 'RIGHT_MARGIN_BARS = 12' in script
-    assert "gesture.startOffset + Math.round(dx / candle)" in script
+    assert 'panViewFromGesture(gesture,dx,dy)' in script
+    assert 'startPriceCenterOffset: priceCenterOffset' in script
+    assert 'zoomPriceAround(Math.exp(event.deltaY*.0016)' in script
     assert 'resetChartView' in script and 'navReset' in html
     assert 'replaySpeeds = [10, 7, 5, 3, 1, .5, .3, .2, .1]' in script
     assert 'replayStartDate' in html and 'replaySpeedMenu' in html
@@ -162,7 +165,13 @@ def test_prototype_contains_tradingview_interaction_contract():
     assert "scheduleWorkspaceRender('overlay')" in script
     assert 'requestAnimationFrame' in script
     assert 'target.width === pixelWidth' in script
-    assert '#chartBaseCanvas, #chartCanvas' in style
+    assert '#chartBaseCanvas, #chartCanvas, #chartForegroundCanvas' in style
+    assert '#chartForegroundCanvas { z-index: 2; pointer-events: none; }' in style
+    assert 'restoreIndicatorSettings(indicatorUndoStack.pop())' in script
+    assert 'if (!view) return;' in script
+    assert 'prototype.css?v=20261021-1' in html
+    assert 'prototype.js?v=20261021-1' in html
+    assert 'prototype-interactions.js?v=20261021-1' in html
 
 
 def test_prototype_is_also_bound_to_the_production_store_bridge():

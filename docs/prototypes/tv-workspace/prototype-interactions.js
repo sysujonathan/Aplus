@@ -380,14 +380,18 @@ function renderWorkspace(mode = 'all') {
   const rect = wrap.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   const background = typeof baseCanvas === 'undefined' || !baseCanvas ? canvas : baseCanvas;
+  const foreground = typeof foregroundCanvas === 'undefined' || !foregroundCanvas ? null : foregroundCanvas;
   const backgroundResized = sizeCanvas(background, rect.width, rect.height, ratio);
   const overlayResized = sizeCanvas(canvas, rect.width, rect.height, ratio);
-  const resized = backgroundResized || overlayResized;
+  const foregroundResized = foreground ? sizeCanvas(foreground, rect.width, rect.height, ratio) : false;
+  const resized = backgroundResized || overlayResized || foregroundResized;
   const renderBase = mode !== 'overlay' || Boolean(resized);
   const ctx = background.getContext('2d');
   const overlay = canvas.getContext('2d');
+  const foregroundContext = foreground?.getContext('2d') || null;
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   overlay.setTransform(ratio, 0, 0, ratio, 0, 0);
+  foregroundContext?.setTransform(ratio, 0, 0, ratio, 0, 0);
   const width = rect.width;
   const height = rect.height;
   const right = 61;
@@ -404,7 +408,8 @@ function renderWorkspace(mode = 'all') {
   if (!rows.length) {
     if (renderBase) { ctx.clearRect(0, 0, width, height); ctx.fillStyle=css('--bg');ctx.fillRect(0,0,width,height); }
     overlay.clearRect(0, 0, width, height);
-    canvas._view=null;background._view=null;staticHitRegions=[];hitRegions=[];
+    foregroundContext?.clearRect(0, 0, width, height);
+    canvas._view=null;background._view=null;if(foreground)foreground._view=null;staticHitRegions=[];hitRegions=[];
     return;
   }
   const priceLow = Math.min(...rows.map(row => row.low));
@@ -422,6 +427,7 @@ function renderWorkspace(mode = 'all') {
   const xGlobal = globalIndex => xFor(globalIndex - visible.begin, left, candleWidth);
   canvas._view = { rows, begin: visible.begin, end: visible.end, left, right, top, bottom, width, height, plotWidth, plotHeight, y, low, high, candleWidth, xGlobal, futureSpace };
   background._view = canvas._view;
+  if(foreground)foreground._view = canvas._view;
 
   if (renderBase) {
   ctx.clearRect(0, 0, width, height);
@@ -507,19 +513,24 @@ function renderWorkspace(mode = 'all') {
   });
 
   if (indicatorSettings.strategy_visible !== false && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view);
-  if (replayActive) drawReplayBoundary(ctx, canvas._view);
+  ctx.restore();
+
+  const topContext = foregroundContext || ctx;
+  if(foregroundContext)foregroundContext.clearRect(0, 0, width, height);
+  topContext.save(); topContext.beginPath(); topContext.rect(left, top, plotWidth, plotHeight); topContext.clip();
+  if (replayActive) drawReplayBoundary(topContext, canvas._view);
   if (!replayActive) chartAlerts.filter(alert => alert.enabled !== false && alert.target === 'price'
     && alert.timeframe === activeTimeframeUnit).forEach(alert => {
     const py = y(Number(alert.value));
-    ctx.save(); ctx.strokeStyle = '#ff9800'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
-    ctx.fillStyle = '#ff9800'; ctx.font = '11px Segoe UI'; ctx.textAlign = 'left';
-    ctx.fillText(`${alert.name} ${chartPrice(alert.value)}`, left + 10, py - 5); ctx.restore();
+    topContext.save(); topContext.strokeStyle = '#ff9800'; topContext.lineWidth = 1; topContext.setLineDash([4, 4]);
+    topContext.beginPath(); topContext.moveTo(left, py); topContext.lineTo(width - right, py); topContext.stroke();
+    topContext.fillStyle = '#ff9800'; topContext.font = '11px Segoe UI'; topContext.textAlign = 'left';
+    topContext.fillText(`${alert.name} ${chartPrice(alert.value)}`, left + 10, py - 5); topContext.restore();
     registerRect(`alert:${alert.id}`, left, py - 5, width - right, py + 5);
   });
-  ctx.restore();
-  drawAxisPriceTags(ctx,canvas._view);
-  drawLastPrice(ctx, rows.at(-1).close, y, width, right);
+  topContext.restore();
+  drawAxisPriceTags(topContext,canvas._view);
+  drawLastPrice(topContext, rows.at(-1).close, y, width, right);
   const legendIndex = Math.min(replayIndex, bars.length - 1) - Number(indicatorSettings.ema_offset);
   const emaValue = legendIndex <= replayIndex ? ema[legendIndex] : undefined;
   document.querySelector('.ema-value').textContent = Number.isFinite(emaValue) ? chartPrice(emaValue,indicatorSettings.ema_precision) : '—';
@@ -879,12 +890,14 @@ function eventPoint(event) {
   return { x, y: yPx, index, value };
 }
 
+let selectedToolbarMoved = false;
 function selectObject(id, x, y, refreshTree = true) {
   if (id === 'strategy-evidence') {
     showToast('策略证据为只读；不会被人工标绘覆盖');
     return;
   }
   const selectionChanged = selectedId !== id;
+  if(selectionChanged)selectedToolbarMoved=false;
   selectedId = id;
   const object = userObjects.find(item => item.id === id);
   selected = Boolean(object);
@@ -895,10 +908,12 @@ function selectObject(id, x, y, refreshTree = true) {
   }
   const toolbar = document.querySelector('#selectedObject');
   toolbar.classList.add('visible');
-  // Keep editing controls above the price plot. A toolbar tied to the last
-  // click can cover an endpoint when that endpoint is dragged toward it.
-  toolbar.style.left = `${Math.max(8, wrap.clientWidth - 190)}px`;
-  toolbar.style.top = '0px';
+  if(!selectedToolbarMoved){
+    const toolbarWidth=toolbar.offsetWidth||238,toolbarHeight=toolbar.offsetHeight||38;
+    const preferredLeft=x+14+toolbarWidth<=wrap.clientWidth-4?x+14:x-toolbarWidth-14;
+    toolbar.style.left=`${clamp(preferredLeft,4,Math.max(4,wrap.clientWidth-toolbarWidth-4))}px`;
+    toolbar.style.top=`${clamp(y-toolbarHeight-14,4,Math.max(4,wrap.clientHeight-toolbarHeight-43))}px`;
+  }
   document.querySelector('#quickWidth').textContent = `${object.width || 2}px`;
   document.querySelector('#quickWidth').hidden = ['up','down','text'].includes(object.type) || Boolean(object.arrow_marker_version);
   document.querySelector('.color-swatch').style.background = object.color || '#2962ff';
@@ -1061,6 +1076,29 @@ function zoomAround(factor, ratio, deferred = false) {
   else { renderWorkspace(); savePrototypeState(); }
 }
 
+function zoomPriceAround(factor, ratio, deferred = false) {
+  const view = canvas._view;
+  if (!view) return;
+  const cursorRatio = clamp(ratio, 0, 1);
+  const cursorValue = view.high - cursorRatio * (view.high - view.low);
+  const nextZoom = clamp(priceZoom / factor, .45, 7);
+  const nextSpan = (view.high - view.low) * priceZoom / nextZoom;
+  const nextHigh = cursorValue + cursorRatio * nextSpan;
+  const nextCenter = nextHigh - nextSpan / 2;
+  const currentCenter = (view.high + view.low) / 2;
+  priceZoom = nextZoom;
+  priceCenterOffset += nextCenter - currentCenter;
+  if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
+  else { renderWorkspace(); savePrototypeState(); }
+}
+
+function panViewFromGesture(state, dx, dy) {
+  const candle = Math.max(.01, canvas._view.candleWidth);
+  const limits = panLimits();
+  viewOffset = clamp(state.startOffset + Math.round(dx / candle), limits.min, limits.max);
+  priceCenterOffset = state.startPriceCenterOffset + dy / Math.max(1, state.plotHeight) * state.startPriceSpan;
+}
+
 function panChart(barDelta, deferred = false) {
   const limits=panLimits();
   viewOffset = clamp(viewOffset + Math.round(barDelta), limits.min, limits.max);
@@ -1199,7 +1237,9 @@ canvas.addEventListener('pointerdown', event => {
       if (object.locked) { gesture = null; return; }
       gesture = { mode: region.handle ? 'object-handle' : 'object-move', objectId: region.id, handle: region.handle, original: structuredClone(object), before: structuredClone(userObjects), start: point, startX: event.clientX, startY: event.clientY, moved: false };
     } else {
-      gesture = { mode: region ? 'select' : 'pan', objectId: region?.id || null, startX: event.clientX, startY: event.clientY, startOffset: viewOffset, moved: false };
+      gesture = { mode: region ? 'select' : 'pan', objectId: region?.id || null, startX: event.clientX, startY: event.clientY,
+        startOffset: viewOffset, startPriceCenterOffset: priceCenterOffset,
+        startPriceSpan: view.high-view.low, plotHeight:view.plotHeight, moved: false };
     }
   } else {
     gesture = { mode: 'draw', startX: event.clientX, startY: event.clientY, moved: false };
@@ -1221,9 +1261,7 @@ canvas.addEventListener('pointermove', event => {
     const next = clamp(Math.round(gesture.startCount * Math.exp(dx / 230)), 18, replayIndex + 1);
     viewCount = next;const limits=panLimits();viewOffset=clamp(viewOffset,limits.min,limits.max);scheduleWorkspaceRender('all');
   } else if (gesture.mode === 'pan' && gesture.moved) {
-    const candle = Math.max(.01, canvas._view.candleWidth);
-    const limits=panLimits();
-    viewOffset = clamp(gesture.startOffset + Math.round(dx / candle), limits.min, limits.max);
+    panViewFromGesture(gesture,dx,dy);
     scheduleWorkspaceRender('all');
   } else if (gesture.mode === 'zoom-box') {
     showZoomSelection(gesture.start, point);
@@ -1258,16 +1296,21 @@ function cancelChartGesture() {
   if(gesture?.before)userObjects=gesture.before;
   if(gesture?.mode==='price-scale')priceZoom=gesture.startZoom;
   if(gesture?.mode==='time-scale')viewCount=gesture.startCount;
-  if(gesture?.mode==='pan')viewOffset=gesture.startOffset;
+  if(gesture?.mode==='pan'){viewOffset=gesture.startOffset;priceCenterOffset=gesture.startPriceCenterOffset;}
   gesture=null;hideZoomSelection();flushWorkspaceRender(overlayOnly?'overlay':'all');
 }
 canvas.addEventListener('pointercancel', cancelChartGesture);
 canvas.addEventListener('mouseleave', () => { crosshair.classList.remove('show'); updateReadout(bars[Math.min(replayIndex, bars.length - 1)]); });
 canvas.addEventListener('wheel', event => {
   event.preventDefault();
-  if(event.shiftKey){panChart(Math.sign(event.deltaY)*Math.max(1,Math.round(viewCount*.08)),true);return;}
   const view = canvas._view;
+  if (!view) return;
   const rect = canvas.getBoundingClientRect();
+  const x=event.clientX-rect.left,y=event.clientY-rect.top;
+  if(x>view.width-view.right&&y<view.height-39){
+    zoomPriceAround(Math.exp(event.deltaY*.0016),(y-view.top)/view.plotHeight,true);return;
+  }
+  if(event.shiftKey){panChart(Math.sign(event.deltaY)*Math.max(1,Math.round(viewCount*.08)),true);return;}
   // TV's ordinary wheel keeps the right edge; Ctrl/Meta focuses the cursor.
   const ratio = event.ctrlKey || event.metaKey
     ? clamp((event.clientX - rect.left - view.left) / view.plotWidth, 0, 1) : 1;
@@ -1327,6 +1370,21 @@ document.querySelector('#favoriteDragHandle').addEventListener('pointerdown', ev
   const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); savePrototypeState(); showToast('收藏工具栏位置已保存'); };
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', up, { once: true });
 });
+
+const selectedToolbar = document.querySelector('#selectedObject');
+document.querySelector('#selectedDragHandle').addEventListener('pointerdown', event => {
+  event.preventDefault(); event.stopPropagation();
+  selectedToolbarMoved=true;
+  const toolbarRect=selectedToolbar.getBoundingClientRect(),wrapRect=wrap.getBoundingClientRect();
+  const start={x:event.clientX,y:event.clientY,left:toolbarRect.left-wrapRect.left,top:toolbarRect.top-wrapRect.top};
+  const move=moveEvent=>{
+    selectedToolbar.style.left=`${clamp(start.left+moveEvent.clientX-start.x,4,Math.max(4,wrap.clientWidth-selectedToolbar.offsetWidth-4))}px`;
+    selectedToolbar.style.top=`${clamp(start.top+moveEvent.clientY-start.y,4,Math.max(4,wrap.clientHeight-selectedToolbar.offsetHeight-43))}px`;
+  };
+  const up=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);};
+  window.addEventListener('pointermove',move);window.addEventListener('pointerup',up,{once:true});
+});
+document.querySelector('#selectedDragHandle').addEventListener('click',event=>event.stopPropagation());
 
 function openWorkspaceModal(id) {
   document.querySelectorAll('.modal').forEach(modal => modal.classList.remove('show'));
@@ -2049,6 +2107,7 @@ function cleanSnapshotCanvas() {
     const background=typeof baseCanvas==='undefined'||!baseCanvas?canvas:baseCanvas;
     ctx.drawImage(background,0,header,canvas.width/ratio,canvas.height/ratio);
     if(background!==canvas)ctx.drawImage(canvas,0,header,canvas.width/ratio,canvas.height/ratio);
+    if(typeof foregroundCanvas!=='undefined'&&foregroundCanvas)ctx.drawImage(foregroundCanvas,0,header,canvas.width/ratio,canvas.height/ratio);
     ctx.fillStyle='#d1d4dc';ctx.font='12px "Microsoft YaHei",sans-serif';ctx.textAlign='left';
     ctx.fillText(document.querySelector('.instrument-title b').textContent,10,20);
     ctx.font='11px "Microsoft YaHei",sans-serif';
@@ -2097,22 +2156,27 @@ document.querySelectorAll('.panel-tabs button[data-panel]').forEach(button => bu
   showToast(button.dataset.panel === 'watch' ? '已切换到自选标的，主图保持不变' : '已切换到策略匹配，主图保持可操作');
 }));
 
+function restoreIndicatorSettings(snapshot) {
+  Object.keys(indicatorSettings).filter(key=>!(key in snapshot)).forEach(key=>delete indicatorSettings[key]);
+  Object.assign(indicatorSettings,snapshot);
+}
+
 document.querySelector('#undoAction').addEventListener('click', () => {
   if (!undoStack.length) { showToast('没有可撤销的图形操作'); return; }
   redoStack.push(structuredClone(userObjects)); userObjects = undoStack.pop(); selectedId = null;
   indicatorRedoStack.push(structuredClone(indicatorSettings));
-  if (indicatorUndoStack.length) indicatorSettings = indicatorUndoStack.pop();
+  if (indicatorUndoStack.length) restoreIndicatorSettings(indicatorUndoStack.pop());
   magnetEnabled=indicatorSettings.magnet!==false;drawingsVisible=indicatorSettings.drawings_visible!==false;
-  calculateEma();
+  calculateEma();syncWorkspaceControls();
   document.querySelector('#selectedObject').classList.remove('visible'); savePrototypeState(); updateUndoButtons(); updateObjectTree(); renderWorkspace(); showToast('已撤销图形操作');
 });
 document.querySelector('#redoAction').addEventListener('click', () => {
   if (!redoStack.length) { showToast('没有可重做的图形操作'); return; }
   undoStack.push(structuredClone(userObjects)); userObjects = redoStack.pop(); selectedId = null;
   indicatorUndoStack.push(structuredClone(indicatorSettings));
-  if (indicatorRedoStack.length) indicatorSettings = indicatorRedoStack.pop();
+  if (indicatorRedoStack.length) restoreIndicatorSettings(indicatorRedoStack.pop());
   magnetEnabled=indicatorSettings.magnet!==false;drawingsVisible=indicatorSettings.drawings_visible!==false;
-  calculateEma();
+  calculateEma();syncWorkspaceControls();
   document.querySelector('#selectedObject').classList.remove('visible'); savePrototypeState(); updateUndoButtons(); updateObjectTree(); renderWorkspace(); showToast('已重做图形操作');
 });
 
@@ -2229,7 +2293,12 @@ function fitFavoriteToolbar() {
   toolbar.style.left=`${clamp(toolbar.offsetLeft,4,Math.max(4,wrap.clientWidth-toolbar.offsetWidth-4))}px`;
   toolbar.style.top=`${clamp(toolbar.offsetTop,4,Math.max(4,wrap.clientHeight-toolbar.offsetHeight-43))}px`;
 }
-const workspaceResize = new ResizeObserver(() => {fitFavoriteToolbar();scheduleWorkspaceRender('all');});
+function fitSelectedToolbar() {
+  const toolbar=document.querySelector('#selectedObject');if(!toolbar.classList.contains('visible'))return;
+  toolbar.style.left=`${clamp(toolbar.offsetLeft,4,Math.max(4,wrap.clientWidth-toolbar.offsetWidth-4))}px`;
+  toolbar.style.top=`${clamp(toolbar.offsetTop,4,Math.max(4,wrap.clientHeight-toolbar.offsetHeight-43))}px`;
+}
+const workspaceResize = new ResizeObserver(() => {fitFavoriteToolbar();fitSelectedToolbar();scheduleWorkspaceRender('all');});
 workspaceResize.observe(wrap);
 applyProductionContext();
 if(!chartBoot.production && initialPrototypeState.timeframe && initialPrototypeState.timeframe!=='daily')

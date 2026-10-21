@@ -84,9 +84,10 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .currency { margin-left: auto; border: 1px solid #3b3b3b; border-radius: 5px; padding: 6px 9px; }
 
 .chart-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--bg); }
-#chartBaseCanvas, #chartCanvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+#chartBaseCanvas, #chartCanvas, #chartForegroundCanvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
 #chartBaseCanvas { z-index: 0; pointer-events: none; }
 #chartCanvas { z-index: 1; cursor: crosshair; touch-action: none; }
+#chartForegroundCanvas { z-index: 2; pointer-events: none; }
 #chartCanvas.price-scale { cursor: ns-resize; }
 #chartCanvas.time-scale { cursor: ew-resize; }
 #chartCanvas.drawing { cursor: crosshair; }
@@ -122,6 +123,9 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .selected-object svg { width: 18px; height: 18px; }
 .selected-object button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; }
 .selected-object button:hover { background: #383838; }
+.selected-object .drag-handle { width: 24px; height: 38px; flex: 0 0 24px; display: grid; grid-template-columns: repeat(2, 3px); grid-auto-rows: 3px; place-content: center; gap: 3px; margin: 0 0 0 -4px; padding: 0; border-radius: 6px 0 0 6px; color: #666; cursor: grab; }
+.selected-object .drag-handle:active { cursor: grabbing; }
+.selected-object .drag-handle i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; }
 #quickWidth { width: auto; min-width: 38px; padding: 0 5px; font-size: 12px; }
 .selected-object [hidden] { display: none; }
 .color-swatch { width: 17px; height: 17px; border-radius: 3px; background: var(--blue); }
