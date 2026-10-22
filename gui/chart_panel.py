@@ -576,7 +576,7 @@ class ChartGrid(ttk.Frame):
     def replace_active(self, item):
         return self.replace_slot(self._active_slot, item)
 
-    def replace_slot(self, slot_index, item):
+    def replace_slot(self, slot_index, item, *, notify_active=False):
         if not isinstance(item, ChartItem):
             raise TypeError("替换图格需要 ChartItem")
         if not (item.observation_id or item.manual) or not 0 <= int(slot_index) < len(self._slots):
@@ -588,13 +588,18 @@ class ChartGrid(ttk.Frame):
         self._active_slot = slot_index
         self._show_item(self._slots[slot_index], item)
         self._refresh_active_styles()
+        if notify_active and self._on_active_item:
+            self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
         return True
 
     def replace_at_point(self, item, root_x, root_y):
         index = self.slot_at_point(root_x, root_y)
         if index is None:
             return False
-        return self.replace_slot(index, item)
+        # A drop changes both the tile and the trader's active instrument, so
+        # synchronize the sidebar now. A later click on this already-active
+        # tile is intentionally ignored to keep the WebView focus stable.
+        return self.replace_slot(index, item, notify_active=True)
 
     def highlight_drop(self, root_x, root_y):
         target = self.slot_at_point(root_x, root_y)

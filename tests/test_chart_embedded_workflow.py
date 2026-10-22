@@ -262,6 +262,32 @@ def test_chart_activation_syncs_sidebar_without_stealing_chart_focus():
     window.watch.select_code.assert_called_once_with('sz.000001')
 
 
+def test_drop_replacement_syncs_sidebar_before_same_tile_click_is_ignored():
+    from unittest.mock import Mock
+    from gui.chart_items import ChartItem
+    from gui.chart_panel import ChartGrid
+    callback = Mock()
+    grid = ChartGrid.__new__(ChartGrid)
+    grid._active_slot = 1
+    grid._display_items = [
+        ChartItem('sz.000001', '一号', 11, 'baostock', 'candidate'),
+        ChartItem('sz.000002', '二号', 22, 'baostock', 'candidate'),
+    ]
+    grid._slots = [Mock(), Mock()]
+    grid._show_item = Mock()
+    grid._on_active_item = callback
+    dropped = ChartItem('sz.000003', '三号', 33, 'baostock', 'watch')
+
+    assert grid.replace_slot(0, dropped, notify_active=True)
+    callback.assert_called_once_with(33)
+    grid._activate_slot(0)
+    callback.assert_called_once_with(33)
+
+    callback.reset_mock()
+    grid.replace_active(ChartItem('sz.000004', '四号', 44, 'baostock', 'candidate'))
+    callback.assert_not_called()
+
+
 def test_alert_edit_disable_reenable_delete_keep_forward_watermark_and_events(tmp_path):
     store, _, boot = setup(tmp_path)
     clock = ['2026-10-15T20:00:00+08:00']
