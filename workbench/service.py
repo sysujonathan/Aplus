@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 
 from .backtest import Assumptions, run_study, summarize
-from .market import BaoStock, completed_date, load_dataset, verify_dataset, save_dataset, validate_bars, select_board_codes, latest_datasets
+from .market import (BaoStock, completed_date, dataset_records, load_dataset, verify_dataset,
+                     save_dataset, validate_bars, select_board_codes, latest_datasets)
 from .store import ROOT, digest, dumps, now
 from .strategies import (calculate, catalog, prepare, prepare_indicators, scan_engine_version,
                          signal_at_end, verify_frozen)
@@ -517,10 +518,14 @@ class Service:
 
     def _scan_one(self, job,spec,previous=None,overall_total=None,coverage=None):
         previous = previous or {}
+        prefetched_records = None
         # Daily market scans must not silently shrink the universe to downloaded files.
-        if spec.get('source') in SOURCES or ('boards' in spec and any(
-                r['source'] in SOURCES for did in spec['datasets']
-                for r in self.store.rows('SELECT source FROM datasets WHERE id=?', (did,)))):
+        market_scan = spec.get('source') in SOURCES
+        if not market_scan and 'boards' in spec:
+            prefetched_records = dataset_records(self.store, spec['datasets'])
+            market_scan = any(prefetched_records.get(did, {}).get('source') in SOURCES
+                              for did in spec['datasets'])
+        if market_scan:
             if coverage is None:
                 self.progress(job,0,0,'扫描前核验行情完整性；不联网补拉')
                 coverage = audit_scope(self.store, spec['boards'], min(spec['asof'], completed_date()), spec['datasets'],
@@ -569,17 +574,30 @@ class Service:
         checkpoint = digest(dumps([spec.get('source'), sorted(spec['datasets']),
             sorted((s.id,s.version,versions[s.id]) for s in strategies),timeframe,asof,engine]).encode())
         report.update(engine_version=engine,calculation_versions=versions,asof=asof,total=total)
-        answer_keys = [cache_key(did,s.id,versions[s.id],timeframe,asof,engine)
-                       for did in spec['datasets'] for s in strategies]
+        lookups = []
+        lookup_keys = []
+        for did in spec['datasets']:
+            keys = {s.id:cache_key(did,s.id,versions[s.id],timeframe,asof,engine) for s in strategies}
+            legacy = {s.id:cache_key(did,s.id,s.version,timeframe,asof,legacy_engine) for s in strategies}
+            bridged = {s.id:cache_key(did,s.id,versions[s.id],timeframe,asof,compatible[s.id])
+                       for s in strategies if s.id in compatible}
+            lookups.append((keys, legacy, bridged))
+            lookup_keys.extend([*keys.values(), *legacy.values(), *bridged.values()])
+        answer_keys = [key for keys, _legacy, _bridged in lookups for key in keys.values()]
         complete = None if spec.get('force') else finished_scan(self.store,checkpoint,timeframe,answer_keys)
         if complete is not None:
             # Market scans just verified all files in their actual audit. Direct
             # imports need the same tamper check before their stage is reused.
             if coverage is None:
                 try:
+                    if prefetched_records is None:
+                        prefetched_records = dataset_records(self.store, spec['datasets'])
                     for did in spec['datasets']:
                         self.check_stop(job)
-                        verify_dataset(self.store,did,job)
+                        record = prefetched_records.get(did)
+                        if record is None:
+                            raise ValueError('行情快照不存在')
+                        verify_dataset(self.store,did,job,record=record)
                 except (OSError,ValueError):
                     complete = None  # Original per-stock error/exclusion path.
         if complete is not None:
@@ -593,20 +611,19 @@ class Service:
                           f'{timeframe} 已完成判断直接复用 {total} 次，无需重新扫描')
             return report
         self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(merge_scan_reports(previous,report)),job))
-        for did in spec['datasets']:
+        prefetched_signals = {} if spec.get('force') else cached_answers(self.store, lookup_keys)
+        del lookup_keys  # Keep only rows that actually exist, not every candidate key.
+        metadata_batch_failed = False
+        for did, (keys, legacy, bridged) in zip(spec['datasets'], lookups):
             self.check_stop(job)
             event_rows, cache_rows, observation_rows = [], [], []
 
             def queue_event(action, path='', **detail):
                 event_rows.append((now(), job, action, str(path), dumps(detail)))
 
-            keys = {strategy.id: cache_key(did,strategy.id,versions[strategy.id],timeframe,asof,engine)
-                for strategy in strategies}
-            legacy = {s.id:cache_key(did,s.id,s.version,timeframe,asof,legacy_engine) for s in strategies}
-            bridged = {s.id:cache_key(did,s.id,versions[s.id],timeframe,asof,compatible[s.id])
-                       for s in strategies if s.id in compatible}
-            cached_signals = {} if spec.get('force') else cached_answers(
-                self.store, [*keys.values(),*legacy.values(),*bridged.values()])
+            stock_lookup_keys = [*keys.values(), *legacy.values(), *bridged.values()]
+            cached_signals = {key:prefetched_signals[key] for key in stock_lookup_keys
+                              if key in prefetched_signals}
             for s in strategies:
                 if keys[s.id] not in cached_signals and legacy[s.id] in cached_signals:
                     cached_signals[keys[s.id]] = cached_signals[legacy[s.id]]
@@ -614,11 +631,22 @@ class Service:
                     cached_signals[keys[s.id]] = cached_signals[bridged[s.id]]
             all_cached = all(key in cached_signals for key in keys.values())
             try:
+                if prefetched_records is None and not metadata_batch_failed:
+                    try:
+                        prefetched_records = dataset_records(self.store, spec['datasets'])
+                    except Exception:
+                        # The former path exposed a metadata read failure on the
+                        # current stock, then retried later stocks one by one.
+                        metadata_batch_failed = True
+                        raise
+                record = (prefetched_records or {}).get(did)
+                if record is None and not metadata_batch_failed:
+                    raise ValueError('行情快照不存在')
                 if all_cached:
-                    record = verify_dataset(self.store, did, job)
+                    record = verify_dataset(self.store, did, job, record=record)
                     data = None
                 else:
-                    data,record = load_dataset(self.store,did,job)
+                    data,record = load_dataset(self.store,did,job,record=record)
                     data = prepare(data,timeframe,asof)
                     data.attrs['code'] = record['code']
                 data_error = None
@@ -695,6 +723,8 @@ class Service:
                 db.execute('UPDATE jobs SET progress=?,total=?,result=?,message=? WHERE id=?',
                     (previous.get('total',0)+done,overall_total or total,dumps(merge_scan_reports(previous,report)),
                      f"{timeframe} 已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
+            if not spec.get('force'):
+                prefetched_signals.update((key, signal) for key, signal, _created in cache_rows)
             self.check_stop(job)
         if report['success'] == total:
             report['checkpoints'] = {timeframe:dict(identity=checkpoint,signals=report['signals'],
