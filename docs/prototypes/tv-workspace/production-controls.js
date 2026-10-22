@@ -71,7 +71,7 @@ function drawVectorEvidence(ctx, view) {
   if (!replayActive || !data.availableDate || data.availableDate <= replayDate) (data.items || []).forEach(item => {
     ctx.save();ctx.strokeStyle=item.color||'#cbd5e1';ctx.fillStyle=item.color||'#cbd5e1';
     ctx.lineWidth=Number(item.width||1);ctx.globalAlpha=Number(item.alpha ?? 1);
-    ctx.setLineDash(item.dash==='--'?[6,4]:item.dash===':'?[2,4]:item.dash==='-.'?[6,3,2,3]:[]);
+    ctx.setLineDash(Array.isArray(item.dash)?item.dash:item.dash==='--'?[6,4]:item.dash===':'?[2,4]:item.dash==='-.'?[6,3,2,3]:[]);
     const a=position(item.a), b=position(item.b);
     if (item.kind==='hline') {
       const y=view.y(item.value);ctx.beginPath();ctx.moveTo(view.left,y);ctx.lineTo(view.width-view.right,y);ctx.stroke();

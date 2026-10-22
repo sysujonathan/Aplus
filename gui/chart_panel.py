@@ -172,6 +172,12 @@ class ChartPanel(native_ttk.Frame):
     def _embedded_error(self, error):
         self.readout_frame.grid()
         self.readout.set('交互主图未就绪：' + error)
+        # An embedded blank/stale page covers Tk's preview and error label.
+        # Close through the normal save acknowledgement, never kill a page
+        # that may still contain unsaved drawings.
+        embedded = getattr(self, '_embedded', None)
+        if embedded is not None and not embedded.closed():
+            embedded.request_close()
         if self._image is None and self._workspace_context:
             try:
                 context = self._workspace_context

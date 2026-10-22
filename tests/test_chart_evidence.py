@@ -129,3 +129,84 @@ def test_non_h2_gap_web_evidence_does_not_add_h2_label():
             strategy_type='STRATEGY_GAP_PINBAR', metadata={}))
     labels = {item['text'] for item in output['items'] if item['kind'] == 'label'}
     assert 'Gap' in labels and 'H2' not in labels
+
+
+def test_line_collections_preserve_gap_segment_geometry_without_fake_markers():
+    frame = bars()
+    before = frame.copy(deep=True)
+    class Strategy:
+        def get_signal_info(self, source):
+            return {}
+        def annotate_chart(self, ax, source, kind, **kwargs):
+            ax.hlines([11.,12.], [5,9], [20,20], colors=['red','blue'],
+                      linestyles=[':', '--'], linewidths=[.9,1.2], alpha=.5)
+            ax.vlines(10, 10.5, 12.5, color='green')
+    output = strategy_evidence(dict(frame=frame, payload={'asof':frame.date.iloc[20]},
+        strategy=Strategy(),strategy_type='CUSTOM',metadata={}))
+    lines = [item for item in output['items'] if item['kind']=='line']
+    assert len(lines)==3 and not any(item['kind']=='marker' for item in output['items'])
+    assert lines[0]['points']==[dict(date=frame.date.iloc[5],value=11.,offset=0.),
+                               dict(date=frame.date.iloc[20],value=11.,offset=0.)]
+    assert lines[1]['points'][0]['date']==frame.date.iloc[9]
+    assert lines[2]['points'][0]['date']==lines[2]['points'][1]['date']==frame.date.iloc[10]
+    assert lines[0]['alpha']==.5 and lines[0]['width']==.9
+    assert isinstance(lines[0]['dash'],list) and lines[0]['dash']!=lines[1]['dash']
+    pd.testing.assert_frame_equal(frame,before)
+    json.dumps(output,allow_nan=False)
+
+
+def test_unknown_scatter_still_requires_explicit_strategy_marker_contract():
+    class Strategy:
+        def get_signal_info(self, source): return {}
+        def annotate_chart(self, ax, source, kind, **kwargs): ax.scatter([1],[11])
+    with pytest.raises(ValueError,match='散点'):
+        strategy_evidence(dict(frame=bars(),strategy=Strategy(),strategy_type='CUSTOM',metadata={}))
+
+
+@pytest.mark.parametrize('kind,prefix,breakout,signal', [
+    ('STRATEGY_STRUCTURAL_GAP','struct_gap','is_breakout','signal_struct_gap_confirm'),
+    ('STRATEGY_GAP_PINBAR','gap_pinbar','is_breakout_gp','signal_gap_pinbar'),
+])
+def test_real_gap_strategy_with_prior_open_gap_loads_all_chart_vectors(kind,prefix,breakout,signal):
+    frame=bars()
+    columns=['open','high','low','close']
+    frame.loc[5:,columns]+=1
+    frame.loc[20:,columns]+=1
+    frame[breakout]=False
+    frame.loc[[5,20],breakout]=True
+    frame[signal]=False
+    frame.loc[30,signal]=True
+    floor,prior,top=13.1,9.9,13.9
+    for suffix,value in [('_floor_exact',floor),('_prior_low',prior),('_top_exact',top)]:
+        frame[prefix+suffix]=float('nan')
+        frame.loc[30,prefix+suffix]=value
+    target=floor+top-prior if prefix=='struct_gap' else 2*floor-prior
+    payload=dict(asof=frame.date.iloc[30],setup_date=frame.date.iloc[30],
+                 entry=float(frame.high.iloc[30]),stop=floor,target=target)
+    strategy=StrategyRegistry.get_strategy(kind)
+    before=frame.copy(deep=True)
+    output=strategy_evidence(dict(frame=frame,payload=payload,strategy=strategy,
+        strategy_type=kind,metadata=strategy.get_metadata()))
+    prior_gap=[item for item in output['items'] if item['kind']=='line'
+               and item['points'][0]['date']==frame.date.iloc[5]]
+    assert len(prior_gap)==1
+    assert prior_gap[0]['points']==[dict(date=frame.date.iloc[5],value=float(frame.high.iloc[3]),offset=0.),
+                                   dict(date=frame.date.iloc[30],value=float(frame.high.iloc[3]),offset=0.)]
+    assert any(item['kind']=='rectangle' for item in output['items'])
+    assert not any(item['kind']=='marker' for item in output['items'])
+    pd.testing.assert_frame_equal(frame,before)
+    json.dumps(output,allow_nan=False)
+
+
+def test_failed_embedded_context_releases_cover_only_through_save_acknowledgement():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from gui.chart_panel import ChartPanel
+    host=Mock()
+    host.closed.return_value=False
+    panel=SimpleNamespace(readout_frame=Mock(),readout=Mock(),_embedded=host,
+                          _image=object(),_workspace_context=None)
+    ChartPanel._embedded_error(panel,'unsupported annotation')
+    host.request_close.assert_called_once_with()
+    panel.readout_frame.grid.assert_called_once_with()
+    assert 'unsupported annotation' in panel.readout.set.call_args.args[0]
