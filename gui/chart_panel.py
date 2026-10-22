@@ -147,7 +147,10 @@ class ChartPanel(native_ttk.Frame):
         for widget in (self, self.header, self.title_label, self.chart_label):
             widget.bind("<Button-1>", self._activate, add="+")
         if interactive:
-            self._analysis_btn.configure(text='弹出图表')
+            # The embedded workspace is already the complete editor. Keeping a
+            # second detached-workspace action here duplicates the same chart
+            # and costs scarce header space; the external TV reference remains.
+            self._analysis_btn.pack_forget()
             self.readout_frame.grid_remove()
 
     def _show_interactive(self):
@@ -579,7 +582,7 @@ class ChartGrid(ttk.Frame):
     def replace_active(self, item):
         return self.replace_slot(self._active_slot, item)
 
-    def replace_slot(self, slot_index, item):
+    def replace_slot(self, slot_index, item, *, notify_active=False):
         if not isinstance(item, ChartItem):
             raise TypeError("替换图格需要 ChartItem")
         if not (item.observation_id or item.manual) or not 0 <= int(slot_index) < len(self._slots):
@@ -591,13 +594,18 @@ class ChartGrid(ttk.Frame):
         self._active_slot = slot_index
         self._show_item(self._slots[slot_index], item)
         self._refresh_active_styles()
+        if notify_active and self._on_active_item:
+            self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
         return True
 
     def replace_at_point(self, item, root_x, root_y):
         index = self.slot_at_point(root_x, root_y)
         if index is None:
             return False
-        return self.replace_slot(index, item)
+        # A drop changes both the tile and the trader's active instrument, so
+        # synchronize the sidebar now. A later click on this already-active
+        # tile is intentionally ignored to keep the WebView focus stable.
+        return self.replace_slot(index, item, notify_active=True)
 
     def highlight_drop(self, root_x, root_y):
         target = self.slot_at_point(root_x, root_y)
@@ -699,9 +707,14 @@ class ChartGrid(ttk.Frame):
         )
 
     def _activate_slot(self, index):
+        if index == self._active_slot:
+            return
         self._active_slot = index
         self._refresh_active_styles()
         item = self.current_item()
+        # Every pointerdown inside the embedded WebView reports its active tile.
+        # Re-selecting the already active sidebar row would steal native focus
+        # from the chart and create a visible jump on every trading action.
         if item and self._on_active_item:
             self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
 

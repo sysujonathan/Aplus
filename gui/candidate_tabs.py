@@ -260,14 +260,15 @@ class CandidateTabs(ttk.Frame):
         self.tree.focus_set()
         return True
 
-    def select_observation(self, observation_id):
+    def select_observation(self, observation_id, *, take_focus=True):
         """按稳定观察编号定位行；列表排序后仍能选中正确股票。"""
         for iid, value in self.tree._obs.items():
             if value == observation_id:
                 self.tree.selection_set(iid)
                 self.tree.focus(iid)
                 self.tree.see(iid)
-                self.tree.focus_set()
+                if take_focus:
+                    self.tree.focus_set()
                 return True
         return False
 
