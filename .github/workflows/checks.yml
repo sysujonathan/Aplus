@@ -1,8 +1,19 @@
 name: A acceptance
-on: [push, pull_request]
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-main-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       # 冻结校验按字节比对 sha256：checkout 前必须禁用行尾转换，
       # 否则 LF/CRLF 改变文件字节，verify_frozen 全线失败（2026-09-28 定位）
@@ -11,5 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
       - run: python -m pip install -r requirements-lock.txt
-      - run: python -m pytest -q
+      - run: python -m pytest -q --durations=30
