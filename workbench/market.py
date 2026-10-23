@@ -109,11 +109,30 @@ def save_dataset(store: Store, code, frame, source, adjustment, job=None, timefr
     return identity
 
 
-def load_dataset(store, dataset_id, job=None):
-    rows = store.rows('SELECT * FROM datasets WHERE id=?', (dataset_id,))
-    if not rows:
+def dataset_records(store, dataset_ids):
+    """Read immutable snapshot metadata in bounded SQLite batches.
+
+    The returned mapping is only a read optimization. Callers must still walk
+    their original dataset sequence so duplicate snapshots, failures and
+    progress retain their existing order.
+    """
+    dataset_ids = list(dict.fromkeys(dataset_ids))
+    records = {}
+    for offset in range(0, len(dataset_ids), 500):
+        batch = dataset_ids[offset:offset + 500]
+        records.update((row['id'], row) for row in store.rows(
+            'SELECT * FROM datasets WHERE id IN (' + ','.join('?' for _ in batch) + ')', batch))
+    return records
+
+
+def load_dataset(store, dataset_id, job=None, record=None):
+    if record is None:
+        rows = store.rows('SELECT * FROM datasets WHERE id=?', (dataset_id,))
+        if not rows:
+            raise ValueError('行情快照不存在')
+        record = rows[0]
+    if record.get('id') != dataset_id:
         raise ValueError('行情快照不存在')
-    record = rows[0]
     content = store.read_artifact(record['path'], job)
     if digest(content) != record['sha256']:
         raise ValueError('行情文件被外部修改，校验不一致。请重新同步，不使用此快照')
