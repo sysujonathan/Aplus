@@ -11,6 +11,7 @@ from .provider_guard import ProviderError, ProviderGuard, error_detail
 from .sources import SOURCES, isolate_tickflow_legacy, require_update_source
 from .store import dumps, now
 from .premarket_store import PremarketStore
+from .scan_receipt import persist_rebuilt_receipt
 
 
 def validate_spec(spec):
@@ -105,7 +106,8 @@ def run_premarket(service, job, spec):
                 if stop.is_set(): status = 'cancelled'
                 message = result.get('stop_reason', '完成')
             except InterruptedError as exc:
-                result, status, message = {}, 'cancelled', str(exc)
+                result = persist_rebuilt_receipt(proxy.store, child) if kind == 'scan' else None
+                result, status, message = result or {}, 'cancelled', str(exc)
             except Exception as exc:
                 detail = error_detail(exc, source)
                 if kind == 'sync' and isinstance(exc, (ProviderError, TimeoutError)):

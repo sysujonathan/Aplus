@@ -11,6 +11,7 @@ from .scope import selected_boards, save_boards, scan_datasets
 from .strategies import prepare
 from .store import dumps
 from .sources import SOURCES,market_source,set_market_source,FALLBACK_SOURCES,UPDATE_SOURCES,RETIRED_MESSAGE
+from .scan_receipt import receipt_for_read
 
 TF = {'daily':'日线', 'weekly':'周线'}
 
@@ -97,19 +98,20 @@ def render(store, service, entries, candles, tv_link, coverage_panel, current_jo
     observations = store.rows("SELECT o.*,d.source,d.adjustment FROM observations o JOIN datasets d ON d.id=o.dataset_id "
                               "WHERE d.source=? ORDER BY o.created DESC",(source,))
     by_oid = {o['id']:o for o in observations}
+    reports = {j['id']: receipt_for_read(store, j['id'], j['result']) for j in jobs}
     jobs = [j for j in jobs if json.loads(j['spec']).get('source')==source
-            or any(oid in by_oid for oid in json.loads(j['result']).get('observation_ids',[]))]
+            or any(oid in by_oid for oid in reports[j['id']].get('observation_ids',[]))]
     rows, receipt_key, settings = [], 'empty', {}
     if jobs:
         by_job = {j['id']:j for j in jobs}
         with st.expander('扫描批次与异常',expanded=False):
             receipt_key = st.selectbox('扫描批次',list(by_job),
                          format_func=lambda k:f"{by_job[k]['created']} · {by_job[k]['status']} · {k[:8]}")
-            report = json.loads(by_job[receipt_key]['result'])
+            report = reports[receipt_key]
             st.caption(f"完成判断 {report.get('success',0)} 次 · 命中 {report.get('signals',0)} 条 · 异常 {len(report.get('errors',[]))} 项")
             if report.get('errors'):
                 st.dataframe(report['errors'],hide_index=True)
-        report = json.loads(by_job[receipt_key]['result'])
+        report = reports[receipt_key]
         settings = json.loads(by_job[receipt_key]['spec'])
         rows = [by_oid[oid] for oid in report.get('observation_ids',[]) if oid in by_oid]
     watch = store.rows('SELECT * FROM watchlist WHERE active=1 ORDER BY created DESC')
