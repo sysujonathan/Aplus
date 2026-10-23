@@ -173,6 +173,67 @@ def test_version_runtime_and_approval_changes_fall_back_to_original(store, monke
     assert MTRFastRejector(store, 'job', spec).mode == 'OFF'
 
 
+@pytest.mark.parametrize('mode', ['SHADOW', 'CANARY', 'ACCELERATED'])
+def test_windows_ci_runtime_exact_binding_exercises_requested_mode(
+        store, monkeypatch, mode):
+    spec = catalog(store)['MTR_MASTER']
+    monkeypatch.setattr(
+        'workbench.mtr_acceleration._runtime',
+        lambda: ('Windows', '3.12', '2.5.3', '2.3.3'),
+    )
+    monkeypatch.setenv(MODE_ENV, mode)
+    if mode in {'CANARY', 'ACCELERATED'}:
+        monkeypatch.setenv(APPROVAL_ENV, current_binding_id())
+        monkeypatch.setenv(CANARY_RATE_ENV, '0.5')
+
+    fast = MTRFastRejector(store, 'windows-ci', spec)
+
+    assert fast.mode == mode and fast.active
+
+
+@pytest.mark.parametrize('runtime', [
+    ('Linux', '3.12', '2.5.3', '2.3.3'),
+    ('Windows', '3.11', '2.5.3', '2.3.3'),
+    ('Windows', '3.12', '2.5.2', '2.3.3'),
+    ('Windows', '3.12', '2.5.3', '2.3.2'),
+])
+def test_nearby_unverified_runtimes_still_fall_back_to_off(
+        store, monkeypatch, runtime):
+    spec = catalog(store)['MTR_MASTER']
+    monkeypatch.setattr('workbench.mtr_acceleration._runtime', lambda: runtime)
+    monkeypatch.setenv(MODE_ENV, 'SHADOW')
+
+    fast = MTRFastRejector(store, 'unverified-runtime', spec)
+
+    assert fast.mode == 'OFF' and not fast.active
+    events = store.rows(
+        "SELECT detail FROM events WHERE action='MTR快速拒绝回退原版' ORDER BY seq DESC")
+    assert events and '未经绑定验证' in json.loads(events[0]['detail'])['reason']
+
+
+def test_runtime_binding_change_invalidates_previous_approval(store, monkeypatch):
+    spec = catalog(store)['MTR_MASTER']
+    monkeypatch.setattr(
+        'workbench.mtr_acceleration._runtime',
+        lambda: ('Windows', '3.14', '2.4.1', '2.3.3'),
+    )
+    previous_binding = current_binding_id()
+    monkeypatch.setattr(
+        'workbench.mtr_acceleration._runtime',
+        lambda: ('Windows', '3.12', '2.5.3', '2.3.3'),
+    )
+    current_binding = current_binding_id()
+    assert current_binding != previous_binding
+
+    monkeypatch.setenv(MODE_ENV, 'ACCELERATED')
+    monkeypatch.setenv(CANARY_RATE_ENV, '0')
+    monkeypatch.setenv(APPROVAL_ENV, previous_binding)
+    assert MTRFastRejector(store, 'stale-approval', spec).mode == 'OFF'
+
+    monkeypatch.setenv(APPROVAL_ENV, current_binding)
+    assert MTRFastRejector(store, 'current-approval', spec).mode == 'ACCELERATED'
+
+
 def test_current_frozen_mtr_generated_legal_prefixes_have_zero_difference(store, monkeypatch):
     spec = catalog(store)['MTR_MASTER']
     fast = controller(store, monkeypatch, 'SHADOW', spec=spec)

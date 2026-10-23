@@ -31,7 +31,7 @@ EXPECTED_METADATA = {
     'supported_timeframes': ['daily'],
 }
 SUPPORTED_RUNTIMES = {
-    ('Linux', '3.12', '2.5.3', '2.3.3'),  # Locked GitHub validation environment.
+    ('Windows', '3.12', '2.5.3', '2.3.3'),  # Locked GitHub validation environment.
     ('Windows', '3.14', '2.4.1', '2.3.3'),  # Audited development environment.
 }
 
