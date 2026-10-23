@@ -26,6 +26,8 @@ from .readiness import (audit_scope, expected_day, reusable_baostock_basics,
 from .sync_batch import sync_results
 from .sources import market_source, SOURCES, coverage_state, FALLBACK_SOURCES, require_update_source
 from .provider_guard import ProviderGuard, ProviderError, access_limited, restricted, error_detail
+from .scan_receipt import (begin_receipt, persist_rebuilt_receipt, progress_receipt,
+                           recover_running_scans)
 
 
 def merge_scan_reports(previous, current):
@@ -43,6 +45,10 @@ def merge_scan_reports(previous, current):
     return merged
 
 
+def _scan_crash_probe(_point):
+    """No-op transaction-boundary probe used by hard-crash recovery tests."""
+
+
 class Service:
     def __init__(self, store):
         self.store = store
@@ -50,6 +56,7 @@ class Service:
         self.cancel_flags = {}
         self.lock = threading.Lock()
         self._code_update_reserved = False
+        recover_running_scans(store)
         store.execute("UPDATE jobs SET status='interrupted',finished=?,message='程序重启；任务未完成，可重新发起' "
                       "WHERE status IN ('queued','running')", (now(),))
 
@@ -130,6 +137,8 @@ class Service:
             self.store.execute('UPDATE jobs SET status=?,finished=?,result=?,message=? WHERE id=?',
                                (state,now(),dumps(report),'完成' if state=='completed' else report.get('stop_reason','请查看回执中的未完成项目'),job))
         except InterruptedError as exc:
+            if kind == 'scan':
+                persist_rebuilt_receipt(self.store, job)
             self.store.execute("UPDATE jobs SET status='cancelled',finished=?,message=? WHERE id=?", (now(),str(exc),job))
         except Exception as exc:
             source=spec.get('source','baostock')
@@ -142,7 +151,13 @@ class Service:
                     source = 'baostock'
                 detail['cooldown']=ProviderGuard(self.store,source).failure(exc)
             self.store.event(job,'任务异常',**detail,traceback=traceback.format_exc())
-            self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps({'errors':[detail],'stop_reason':str(exc),'source':source}),job))
+            report = persist_rebuilt_receipt(self.store, job) if kind == 'scan' else None
+            if report is None:
+                report = {'errors':[detail],'stop_reason':str(exc),'source':source}
+            else:
+                report['errors'] = list(report.get('errors', [])) + [detail]
+                report.update(stop_reason=str(exc), source=source)
+            self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(report),job))
             self.store.execute("UPDATE jobs SET status='failed',finished=?,message=? WHERE id=?", (now(),str(exc),job))
         finally:
             self.store.event(job,'任务结束',self.store.path)
@@ -610,7 +625,7 @@ class Service:
             self.progress(job,previous.get('total',0)+total,overall_total or total,
                           f'{timeframe} 已完成判断直接复用 {total} 次，无需重新扫描')
             return report
-        self.store.execute('UPDATE jobs SET result=? WHERE id=?',(dumps(merge_scan_reports(previous,report)),job))
+        begin_receipt(self.store, job, merge_scan_reports(previous, report), timeframe)
         prefetched_signals = {} if spec.get('force') else cached_answers(self.store, lookup_keys)
         del lookup_keys  # Keep only rows that actually exist, not every candidate key.
         metadata_batch_failed = False
@@ -706,12 +721,14 @@ class Service:
                     report['success'] += 1
                 except Exception as exc:
                     report['errors'].append({'code':record['code'],'strategy':strategy.id,'timeframe':timeframe,'error':str(exc)})
-                    queue_event('策略计算失败',strategy.file,code=record['code'],strategy=strategy.id,error=str(exc))
+                    queue_event('策略计算失败',strategy.file,code=record['code'],strategy=strategy.id,
+                                timeframe=timeframe,error=str(exc))
                 stock_done += 1
             done += stock_done
             # One durable checkpoint per stock replaces dozens of tiny SQLite
             # connections/commits while preserving the same cache, observation
             # and audit records.
+            _scan_crash_probe('before_stock_transaction')
             with self.store.connect() as db:
                 if observation_rows:
                     db.executemany('INSERT OR IGNORE INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
@@ -720,9 +737,12 @@ class Service:
                     db.executemany('INSERT OR IGNORE INTO scan_cache VALUES(?,?,?)', cache_rows)
                 if event_rows:
                     db.executemany('INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)', event_rows)
+                merged_report = merge_scan_reports(previous, report)
                 db.execute('UPDATE jobs SET progress=?,total=?,result=?,message=? WHERE id=?',
-                    (previous.get('total',0)+done,overall_total or total,dumps(merge_scan_reports(previous,report)),
+                    (previous.get('total',0)+done,overall_total or total,dumps(progress_receipt(merged_report, timeframe)),
                      f"{timeframe} 已处理 {done}/{total} 次 · 复用 {report['reused']} · 新计算 {report['calculated']}",job))
+                _scan_crash_probe('inside_stock_transaction')
+            _scan_crash_probe('after_stock_commit')
             if not spec.get('force'):
                 prefetched_signals.update((key, signal) for key, signal, _created in cache_rows)
             self.check_stop(job)
