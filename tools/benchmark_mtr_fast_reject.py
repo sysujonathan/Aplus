@@ -207,18 +207,26 @@ def main():
     parser.add_argument('--bars', type=int, default=300)
     parser.add_argument('--detector-samples', type=int, default=120)
     parser.add_argument('--rounds', type=int, default=3)
+    parser.add_argument('--output')
+    parser.add_argument('--quiet', action='store_true')
     args = parser.parse_args()
 
     detector = {'detector_only': [], 'public_indicators_plus_mtr': []}
-    system = {'OFF': [], 'ACCELERATED': []}
+    system = {'OFF': [], 'SHADOW': [], 'ACCELERATED': []}
     for round_index in range(args.rounds):
         detector['detector_only'].append(
             detector_once(args.detector_samples, args.bars, include_indicators=False))
         detector['public_indicators_plus_mtr'].append(
             detector_once(args.detector_samples, args.bars, include_indicators=True))
-        order = ['OFF', 'ACCELERATED'] if round_index % 2 == 0 else ['ACCELERATED', 'OFF']
+        orders = [
+            ['OFF', 'SHADOW', 'ACCELERATED'],
+            ['ACCELERATED', 'OFF', 'SHADOW'],
+            ['SHADOW', 'ACCELERATED', 'OFF'],
+        ]
+        order = orders[round_index % len(orders)]
         round_results = {name: system_once(name, args.datasets, args.bars) for name in order}
-        if round_results['OFF']['business'] != round_results['ACCELERATED']['business']:
+        if any(round_results['OFF']['business'] != round_results[name]['business']
+               for name in ('SHADOW', 'ACCELERATED')):
             raise AssertionError('six-strategy system-path business mismatch')
         for name in system:
             system[name].append(round_results[name])
@@ -249,12 +257,17 @@ def main():
         'detector': detector_summary,
         'six_strategy_cold_service': {
             'datasets': args.datasets, 'bars': args.bars,
-            'OFF': system_summary['OFF'], 'ACCELERATED': system_summary['ACCELERATED'],
+            'OFF': system_summary['OFF'], 'SHADOW': system_summary['SHADOW'],
+            'ACCELERATED': system_summary['ACCELERATED'],
             'improvement_pct': round((1 - accelerated / off) * 100, 2),
             'business_equal': True,
         },
     }
-    print(dumps(output))
+    encoded = dumps(output)
+    if args.output:
+        Path(args.output).write_text(encoded + '\n', encoding='utf-8')
+    if not args.quiet:
+        print(encoded)
 
 
 if __name__ == '__main__':
