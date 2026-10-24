@@ -85,7 +85,7 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             assert int(page.status_label.cget('wraplength')) == page.status_label.winfo_width()
             assert int(page.completeness_label.cget('wraplength')) == page.completeness_label.winfo_width()
             assert page.histogram.winfo_height() >= 90
-        bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 14.1, 11)
+        bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 15, 11)
         records = run_replay(h2_spec, bars, bars.date.iloc[124], bars.date.iloc[-1], costs=Assumptions())
         report = summarize_replay(records)
         report.update(start=bars.date.iloc[124], end=bars.date.iloc[-1], processed_datasets=1,

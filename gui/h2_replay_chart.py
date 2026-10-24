@@ -13,12 +13,21 @@ def replay_view(frame, record, event_index, posthoc=False):
     fills = [event for event in events if event['kind'] == 'fill']
     if fills:
         fill = fills[0]
+        new_pricing = payload.get('pricing_basis') == 'gap-floor-sl-2r-v1'
         payload.update(pending_state='PENDING', entry=fill['price'], stop=fill['stop'],
-                       entry_plan_price=fill['price'], sl1_plan_price=fill['stop'],
-                       target=fill['target'], replay_caption='历史成交计划（非当前待挂价）')
+                       entry_plan_price=fill['price'], target=fill['target'],
+                       replay_caption='历史成交计划（非当前待挂价）')
         risk = fill['price'] - fill['stop']
-        payload.update(initial_risk_pct=risk / fill['price'] * 100,
-                       mm_r_multiple=(fill['target'] - fill['price']) / risk)
+        if new_pricing:
+            payload.update(sl_plan_price=fill['stop'], tp_plan_price=fill['target'],
+                           initial_risk_pct=risk / fill['price'] * 100,
+                           tp_r_multiple=(fill['target'] - fill['price']) / risk,
+                           mm_r_multiple=(payload['mm_target'] - fill['price']) / risk
+                           if payload.get('mm_target') is not None else None)
+        else:
+            payload.update(sl1_plan_price=fill['stop'],
+                           initial_risk_pct=risk / fill['price'] * 100,
+                           mm_r_multiple=(fill['target'] - fill['price']) / risk)
     else:
         payload['replay_caption'] = '当时的次日计划' if payload.get('pending_state') == 'PENDING' else '当时机会已结束'
     # The historical filled-plan card uses PENDING to retain its entry/stop

@@ -5,7 +5,7 @@ from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 from PIL import ImageTk
 
-from workbench.h2_replay import MODEL as BASE_MODEL
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL
 from workbench.stop_research import AnchorSettings, GROUPS, MODEL
 from workbench.stop_research_service import load_experiment
 from .afterhours_workspace import label, button, tree

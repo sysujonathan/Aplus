@@ -826,7 +826,8 @@ class Service:
         if spec.get('execution_model') == 'gap-h2-stop-comparison-v1':
             from .stop_research_service import execute_experiment
             return execute_experiment(self, job, spec)
-        if spec.get('execution_model') == 'gap-h2-daily-execution-v1':
+        from .h2_replay import MODEL as h2_replay_model
+        if spec.get('execution_model') == h2_replay_model:
             from .h2_replay_service import execute_replay
             return execute_replay(self, job, spec)
         strategy = catalog(self.store)[spec['strategy']]

@@ -72,6 +72,7 @@ def draw_h2(ax, plot, plan):
 
     dates = plot.date.astype(str).str[:10].tolist()
     state = plan.get('pending_state', 'UNAVAILABLE')
+    new_pricing = plan.get('pricing_basis') == 'gap-floor-sl-2r-v1'
     decimals = plan.get('price_decimals', 2)
 
     def mark(label, day, price, color, offset):
@@ -143,16 +144,26 @@ def draw_h2(ax, plot, plan):
              STOP, (18, -28))
 
     risk = plan.get('initial_risk_pct')
-    reward = plan.get('mm_r_multiple')
+    reward = plan.get('tp_r_multiple') if new_pricing else plan.get('mm_r_multiple')
     gaps = plan.get('prior_open_gap_count')
     if state == 'PENDING':
         headline = (plan.get('replay_caption', '明日挂单计划') + '\n'
                     + (f'风险  {risk:.2f}%' if risk is not None else '风险  待核对') + '\n'
                     + (f'收益  {reward:.2f}R' if reward is not None else '收益  待核对') + '\n'
                     + (f'趋势  前序开放缺口 {gaps}个' if gaps is not None else '趋势  数据不足'))
-        prices = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
-            ('Entry', 'entry_plan_price'), ('SL1', 'sl1_plan_price'), ('MM', 'mm_target'))
-                            if plan.get(key) is not None)
+        if new_pricing:
+            primary = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
+                ('Entry', 'entry_plan_price'), ('SL', 'sl_plan_price'), ('2R', 'tp_plan_price'))
+                               if plan.get(key) is not None)
+            references = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
+                ('SL1参考', 'sl1_plan_price'), ('MM参考', 'mm_target')) if plan.get(key) is not None)
+            if plan.get('mm_r_multiple') is not None:
+                references += f' ({plan["mm_r_multiple"]:.2f}R)'
+            prices = primary + ('\n' + references if references else '')
+        else:
+            prices = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
+                ('Entry', 'entry_plan_price'), ('SL1', 'sl1_plan_price'), ('MM', 'mm_target'))
+                                if plan.get(key) is not None)
     else:
         label = STATE_LABELS.get(state, state)
         if plan.get('state_reason') == 'target_already_reached':
