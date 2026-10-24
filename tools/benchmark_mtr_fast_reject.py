@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 
-sys.path.insert(0, str(Path.cwd()))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from workbench.mtr_acceleration import (  # noqa: E402
     APPROVAL_ENV,
@@ -201,6 +202,12 @@ def rounded(row):
             for key, value in row.items() if key != 'business'}
 
 
+def write_output(path, encoded):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(encoded + '\n', encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--datasets', type=int, default=60)
@@ -265,7 +272,7 @@ def main():
     }
     encoded = dumps(output)
     if args.output:
-        Path(args.output).write_text(encoded + '\n', encoding='utf-8')
+        write_output(args.output, encoded)
     if not args.quiet:
         print(encoded)
 

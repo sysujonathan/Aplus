@@ -1,6 +1,6 @@
 """Read-only real-market MTR SHADOW validation and isolated service benchmark.
 
-The source Aplus store is opened with SQLite read-only/immutable flags. Selected
+The source Aplus store is opened through a SQLite read-only snapshot. Selected
 market files are SHA-256 checked, then copied into temporary stores. Nothing in
 the source runtime is changed, and no network provider is contacted.
 """
@@ -25,7 +25,8 @@ import tracemalloc
 import pandas as pd
 
 
-sys.path.insert(0, str(Path.cwd()))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from workbench import service as service_module  # noqa: E402
 from workbench.history_quality import quality_for, save_quality  # noqa: E402
@@ -64,14 +65,44 @@ STRATEGIES = [
 ]
 
 
+def repository_head(repo_root=REPO_ROOT):
+    """Return traceable Git identity without making validation depend on Git."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--verify', 'HEAD'], cwd=repo_root,
+            text=True, capture_output=True, check=False,
+        )
+    except FileNotFoundError:
+        return {'status': 'unavailable', 'sha': None, 'detail': 'git executable not found'}
+    except OSError as exc:
+        return {'status': 'unavailable', 'sha': None, 'detail': str(exc)}
+    sha = result.stdout.strip()
+    if result.returncode or len(sha) != 40:
+        detail = result.stderr.strip() or 'HEAD could not be resolved'
+        return {'status': 'unknown', 'sha': None, 'detail': detail}
+    return {'status': 'available', 'sha': sha, 'detail': None}
+
+
+def write_output(path, encoded):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(encoded + '\n', encoding='utf-8')
+
+
 def readonly_records(source_home, source):
     source_home = Path(source_home).resolve()
     database = source_home / 'workbench.sqlite3'
     if not database.is_file():
         raise ValueError(f'源数据仓缺少 workbench.sqlite3：{source_home}')
-    uri = database.as_uri() + '?mode=ro&immutable=1'
+    # immutable=1 is unsafe when a database can have WAL content or a concurrent
+    # writer: SQLite skips locking and change detection under that promise.  A
+    # mode=ro transaction remains non-writing while honoring WAL and locks.
+    uri = database.as_uri() + '?mode=ro'
     with sqlite3.connect(uri, uri=True) as db:
         db.row_factory = sqlite3.Row
+        db.execute('PRAGMA query_only=ON')
+        db.execute('BEGIN')
+        journal_mode = db.execute('PRAGMA journal_mode').fetchone()[0]
         schema = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         records = [dict(row) for row in db.execute(
             '''SELECT d.* FROM datasets d JOIN (
@@ -81,9 +112,18 @@ def readonly_records(source_home, source):
                WHERE d.rows>=125 ORDER BY d.code''', (source,))]
         quality_rows = db.execute(
             "SELECT COUNT(*) FROM meta WHERE key LIKE 'market_quality:%'").fetchone()[0]
+        db.execute('COMMIT')
     if not records:
         raise ValueError(f'源数据仓没有可验证的 {source} 日线')
-    return source_home, schema[0] if schema else None, records, quality_rows
+    sqlite_safety = {
+        'connection': 'mode=ro',
+        'query_only': True,
+        'snapshot_transaction': True,
+        'journal_mode': str(journal_mode).lower(),
+        'wal_sidecar_present': database.with_name(database.name + '-wal').exists(),
+        'immutable_assumption': False,
+    }
+    return source_home, schema[0] if schema else None, records, quality_rows, sqlite_safety
 
 
 def spaced(items, count):
@@ -452,7 +492,23 @@ def service_benchmark(snapshots, rounds):
             row = service_once(mode, snapshots)
             business.setdefault(mode, row.pop('business'))
             samples[mode].append(row)
-    digests = {mode: rows[0]['business_digest'] for mode, rows in samples.items()}
+    digest_rounds = {
+        mode: [row['business_digest'] for row in rows]
+        for mode, rows in samples.items()
+    }
+    expected = digest_rounds['OFF'][0]
+    mismatches = [
+        f'{mode}[round={round_index}]={value}'
+        for mode, values in digest_rounds.items()
+        for round_index, value in enumerate(values, start=1)
+        if value != expected
+    ]
+    if mismatches:
+        raise AssertionError(
+            'six-strategy service business mismatch; '
+            f'expected OFF[round=1]={expected}; differences: ' + ', '.join(mismatches)
+        )
+    digests = {mode: values[0] for mode, values in digest_rounds.items()}
     summary = {mode: median_summary(rows) for mode, rows in samples.items()}
     off = summary['OFF']['cold_seconds']
     for mode in ('SHADOW', 'ACCELERATED'):
@@ -461,7 +517,8 @@ def service_benchmark(snapshots, rounds):
     return {
         'stocks': len(snapshots), 'rounds': rounds,
         'interleaved_order': True, 'business_digests': digests,
-        'business_equal': len(set(digests.values())) == 1,
+        'business_digest_rounds': digest_rounds,
+        'business_equal': True,
         'signals': {mode: business[mode]['signals'] for mode in business},
         'errors': {mode: business[mode]['errors'] for mode in business},
         'summary': summary,
@@ -525,7 +582,7 @@ def main():
     parser.add_argument('--quiet', action='store_true')
     args = parser.parse_args()
 
-    source_home, schema, records, source_quality_rows = readonly_records(
+    source_home, schema, records, source_quality_rows, sqlite_safety = readonly_records(
         args.source_home, args.source)
     needed = max(args.shadow_stocks, args.performance_stocks, args.quality_stocks)
     all_snapshots = load_snapshots(source_home, records, needed)
@@ -538,12 +595,13 @@ def main():
         binding_store = Store(directory)
         mtr = catalog(binding_store)['MTR_MASTER']
         calculation = calculation_versions([mtr])[mtr.id]
+    git = repository_head()
     environment = {
         'platform_python_numpy_pandas': _runtime(),
         'runtime_supported': _runtime() in SUPPORTED_RUNTIMES,
         'binding': current_binding_id(),
-        'main_sha': subprocess.check_output(
-            ['git', 'rev-parse', 'HEAD'], text=True).strip(),
+        'main_sha': git['sha'],
+        'git': git,
         'frozen_manifest': verify_frozen(),
         'mtr_release_matches': mtr.version == EXPECTED_RELEASE,
         'calculation_matches': calculation == EXPECTED_CALCULATION,
@@ -553,6 +611,7 @@ def main():
         'kind': 'mtr-pre-activation-validation-v1',
         'source': {
             'kind': args.source, 'schema': schema, 'read_only': True,
+            'sqlite_safety': sqlite_safety,
             'available_eligible_snapshots': len(records),
             'source_quality_cache_rows': source_quality_rows,
             'rows_min': min(record['rows'] for record in records),
@@ -572,7 +631,7 @@ def main():
     }
     encoded = json.dumps(output, ensure_ascii=False, indent=2)
     if args.output:
-        Path(args.output).write_text(encoded + '\n', encoding='utf-8')
+        write_output(args.output, encoded)
     if not args.quiet:
         print(encoded)
     if (not environment['runtime_supported'] or not environment['mtr_release_matches']
