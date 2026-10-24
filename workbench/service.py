@@ -826,10 +826,15 @@ class Service:
         if spec.get('execution_model') == 'gap-h2-stop-comparison-v1':
             from .stop_research_service import execute_experiment
             return execute_experiment(self, job, spec)
-        from .h2_replay import MODEL as h2_replay_model
-        if spec.get('execution_model') == h2_replay_model:
+        from .h2_replay import LEGACY_MODEL as h2_legacy_model, MODEL as h2_replay_model
+        execution_model = spec.get('execution_model')
+        if execution_model == h2_legacy_model:
+            raise ValueError('GAP H2 v1 仅用于读取既有 SL1／MM 历史回测；当前版本不能直接新建 v1 回放')
+        if execution_model == h2_replay_model:
             from .h2_replay_service import execute_replay
             return execute_replay(self, job, spec)
+        if execution_model and execution_model != 'signal-study-v1-fixed-next-bar':
+            raise ValueError(f'不支持的回测执行模型：{execution_model}')
         strategy = catalog(self.store)[spec['strategy']]
         tf = spec['timeframe']
         if tf not in strategy.timeframes:

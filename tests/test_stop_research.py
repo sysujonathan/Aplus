@@ -8,7 +8,7 @@ import pytest
 from tests.test_h2_plan import h2_bars, h2_spec, append_bar
 from tests.test_workbench import wait_for
 from workbench.backtest import Assumptions
-from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, run_replay, summarize_replay
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, MODEL as CURRENT_MODEL, run_replay, summarize_replay
 from workbench.h2_replay_service import load_receipt
 from workbench.market import save_dataset
 from workbench.service import Service
@@ -17,8 +17,36 @@ from workbench.stop_research import AnchorSettings, MODEL, candidate_anchor, com
 from workbench.stop_research_service import load_experiment
 from workbench.strategies import verify_frozen
 from gui.stop_research_chart import render_comparison
+from tools import acceptance_stop_research
 
 ZERO=Assumptions(commission_bps=0,sell_tax_bps=0,slippage_bps=0)
+
+
+def test_acceptance_tool_and_gui_use_the_same_legacy_baseline():
+    assert acceptance_stop_research.BASE_MODEL == BASE_MODEL
+
+
+def test_stop_research_rejects_v2_source_instead_of_mixing_r_basis(tmp_path):
+    store = Store(tmp_path/'isolated')
+    source = 'v2-source'
+    report = {
+        'execution_model': CURRENT_MODEL,
+        'records_path': f'research/{source}/replay.json',
+    }
+    store.execute(
+        'INSERT INTO jobs(id,kind,status,created,spec,result) VALUES(?,?,?,?,?,?)',
+        (source, 'backtest', 'completed', now(), '{}', dumps(report)),
+    )
+    store.write_artifact(report['records_path'], b'[]', source)
+    service = Service(store)
+    try:
+        job = service.submit('backtest', {'execution_model': MODEL, 'source_job': source})
+        row = wait_for(store, job)
+        assert row['status'] == 'failed'
+        assert '只接受原 SL1／MM' in row['message']
+        assert not store.backtest_history(MODEL)
+    finally:
+        service.pool.shutdown()
 
 
 def example(h2_bars,h2_spec,ending='rescue'):

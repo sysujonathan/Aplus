@@ -463,6 +463,33 @@ def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spe
     assert plan['rating']['factors']  # Still archived for tracing, outside the decision card.
 
 
+def test_nearby_h2_price_labels_move_text_without_moving_price_lines(h2_spec, h2_bars):
+    from matplotlib.axes import Axes
+    instance, calculated = calculate(h2_spec, h2_bars)
+    plan = signal_at_end(h2_spec, h2_bars)
+    plan = dict(plan, sl1_plan_price=10.00, target=11.85, tp_plan_price=11.85,
+                mm_target=11.84)
+    annotations = []
+    original = Axes.annotate
+
+    def capture(self, text, *args, **kwargs):
+        if text in ('Gap Floor',) or text.startswith(('SL:', 'SL1:', '2R:', 'MM:')):
+            annotations.append((text, kwargs.get('xy') or args[0], kwargs.get('xytext')))
+        return original(self, text, *args, **kwargs)
+
+    with patch.object(Axes, 'annotate', capture):
+        render_chart(calculated, plan, '', instance.get_metadata(),
+                     strategy=instance, strategy_type=h2_spec.id)
+    prices = {text: xy[1] for text, xy, _offset in annotations if ':' in text}
+    assert prices == {'SL: 9.99': 9.99, 'SL1: 10.00': 10.0,
+                      '2R: 11.85': 11.85, 'MM: 11.84': 11.84}
+    offsets = {text: offset for text, _xy, offset in annotations if ':' in text}
+    assert offsets['SL: 9.99'] != offsets['SL1: 10.00']
+    assert offsets['2R: 11.85'] != offsets['MM: 11.84']
+    floor = next(item for item in annotations if item[0] == 'Gap Floor')
+    assert floor[1][1] == 10 and floor[2] == (-38, -42)
+
+
 def test_scan_archives_new_plan_without_replacing_legacy_or_duplicating_manual_plan(tmp_path, h2_spec, h2_bars):
     import json
     from workbench.market import save_dataset

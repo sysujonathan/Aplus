@@ -3,6 +3,7 @@ from dataclasses import asdict
 import json
 
 from .backtest import Assumptions
+from .h2_replay import LEGACY_MODEL
 from .h2_replay_service import load_receipt
 from .market import load_dataset
 from .stop_research import AnchorSettings, MODEL, RULE, compare_trade, summarize
@@ -15,6 +16,8 @@ def execute_experiment(service, job, spec):
     settings.validate()
     source_job = spec.get('source_job')
     source, source_report, originals = load_receipt(service.store, source_job)
+    if source_report.get('execution_model') != LEGACY_MODEL:
+        raise ValueError('初始止损研究只接受原 SL1／MM 的 GAP H2 v1 回测，不能混用新版 SL／2R 回测')
     if source_report['strategy_version'] != verify_frozen():
         raise ValueError('源回测原策略版本不同，请先重新运行盘后回测')
     if source['status'] in ('running', 'queued'):

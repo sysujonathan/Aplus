@@ -1,7 +1,7 @@
 from copy import deepcopy
 import pytest
 
-from gui.research_views import comparison_rows, scope_caption
+from gui.research_views import comparison_rows, outcome, scope_caption
 from workbench.h2_replay_service import available_snapshots
 from workbench.market import BOARDS, save_dataset
 from workbench.store import Store
@@ -10,6 +10,14 @@ from workbench.h2_replay_service import load_receipt
 from workbench.service import Service
 from tests.test_workbench import wait_for
 from tests.test_h2_plan import h2_bars
+
+
+def test_outcome_keeps_v1_mm_and_v2_two_r_semantics_distinct():
+    assert outcome({'status': 'closed', 'reason': 'MM 止盈'}) == 'MM 止盈'
+    assert outcome({'status': 'closed', 'reason': '2R 止盈'}) == '2R 止盈'
+    assert outcome({'status': 'closed', 'reason': '人工止盈'}) == '人工止盈'
+    assert outcome({'status': 'closed', 'reason': '持有期限退出'}) == '期限退出'
+    assert outcome({'status': 'closed', 'reason': '跳空止损'}) == '止损'
 
 
 def test_market_boards_use_shared_instrument_classification(tmp_path, h2_bars):

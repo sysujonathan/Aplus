@@ -26,7 +26,15 @@ def scope_caption(report):
 def outcome(record):
     if record['status'] == 'closed':
         reason = record.get('reason', '')
-        return 'MM 止盈' if '止盈' in reason else '期限退出' if '期限' in reason else '止损'
+        if '2R' in reason and '止盈' in reason:
+            return '2R 止盈'
+        if 'MM' in reason and '止盈' in reason:
+            return 'MM 止盈'
+        if '期限' in reason:
+            return '期限退出'
+        if '止损' in reason:
+            return '止损'
+        return reason or '已结束'
     return LABELS[record['status']]
 
 

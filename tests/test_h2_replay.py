@@ -12,7 +12,7 @@ from workbench.h2_replay import (H2Settings, LEGACY_MODEL, MODEL, ResearchSpec,
 from workbench.h2_replay_service import available_snapshots, load_receipt
 from workbench.market import save_dataset
 from workbench.service import Service
-from workbench.store import Store
+from workbench.store import Store, dumps
 from workbench.strategies import calculate, catalog, verify_frozen
 from gui.afterhours import list_prices
 from gui.h2_replay_chart import replay_view, render_replay
@@ -257,6 +257,38 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
         assert zoomed.info['replay_view']['total'] == int((bars.date <= records[0]['events'][0]['date']).sum())
         assert native.tobytes() != zoomed.tobytes()
         assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == schema_before
+    finally:
+        service.pool.shutdown()
+
+
+def test_legacy_replay_request_fails_instead_of_becoming_generic_study(tmp_path):
+    store = Store(tmp_path / 'legacy-route')
+    service = Service(store)
+    try:
+        job = service.submit('backtest', {'execution_model': LEGACY_MODEL})
+        row = wait_for(store, job)
+        assert row['status'] == 'failed'
+        assert 'v1' in row['message'] and '不能直接新建' in row['message']
+        assert json.loads(row['result'])['stop_reason'] == row['message']
+        assert not list((store.root / 'research').glob(f'{job}/*'))
+    finally:
+        service.pool.shutdown()
+
+
+@pytest.mark.parametrize('status', ['queued', 'running'])
+def test_restart_interrupts_legacy_replay_without_changing_model(tmp_path, status):
+    store = Store(tmp_path / status)
+    spec = {'execution_model': LEGACY_MODEL, 'strategy': 'STRATEGY_GAP_H2'}
+    store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
+                  ('legacy', 'backtest', status, '2026-10-24T00:00:00+08:00', dumps(spec)))
+    before_result = store.rows('SELECT result FROM jobs WHERE id=?', ('legacy',))[0]['result']
+    service = Service(store)
+    try:
+        row = store.rows('SELECT * FROM jobs WHERE id=?', ('legacy',))[0]
+        assert row['status'] == 'interrupted'
+        assert json.loads(row['spec']) == spec
+        assert row['result'] == before_result
+        assert '可重新发起' in row['message']
     finally:
         service.pool.shutdown()
 

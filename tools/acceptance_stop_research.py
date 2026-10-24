@@ -8,7 +8,7 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from workbench.h2_replay import MODEL as BASE_MODEL
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL
 from workbench.h2_replay_service import load_receipt
 from workbench.market import save_dataset
 from workbench.service import Service

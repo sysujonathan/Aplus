@@ -74,6 +74,11 @@ def draw_h2(ax, plot, plan):
     state = plan.get('pending_state', 'UNAVAILABLE')
     new_pricing = plan.get('pricing_basis') == 'gap-floor-sl-2r-v1'
     decimals = plan.get('price_decimals', 2)
+    floor_offset = (-12, -28)
+    if (new_pricing and plan.get('gap_floor') is not None and plan.get('sl_plan_price') is not None
+            and plan.get('price_tick')
+            and abs(plan['gap_floor'] - plan['sl_plan_price']) <= plan['price_tick'] * 1.01):
+        floor_offset = (-38, -42)
 
     def mark(label, day, price, color, offset):
         if day not in dates or price is None:
@@ -109,7 +114,7 @@ def draw_h2(ax, plot, plan):
         ('BO', 'bo_date', 'bo_high', ACCENT, (0, 16)),
         ('H1', 'h1_date', 'h1_high', '#8E24AA', (0, 30)),
         ('MM low', 'mm_low_date', 'mm_low', MUTED, (18, -18)),
-        ('Gap Floor', 'gap_floor_date', 'gap_floor', ACCENT, (-12, -28)),
+        ('Gap Floor', 'gap_floor_date', 'gap_floor', ACCENT, floor_offset),
     ):
         mark(label, plan.get(day_key), plan.get(price_key), color, offset)
     # The pullback setup is not the subsequent upside trigger. Only a verified

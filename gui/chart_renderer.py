@@ -288,17 +288,22 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             ("stop", "SL", STOP), ("target", "TP1", TARGET))
         h2_label_offsets = {}
         if new_h2_pricing:
-            target = payload.get("target")
-            mm_target = payload.get("mm_target")
-            if target is not None and mm_target is not None:
-                target_value, mm_value = float(target), float(mm_target)
-                if (view_low <= target_value <= view_high
-                        and view_low <= mm_value <= view_high
-                        and abs(target_value - mm_value) < (view_high - view_low) * .018):
-                    higher, lower = (("target", "mm_target")
-                                     if target_value >= mm_value else ("mm_target", "target"))
-                    h2_label_offsets[higher] = 6
-                    h2_label_offsets[lower] = -6
+            visible_levels = sorted(
+                ((key, float(payload[key])) for key, _label, _color in h2_labels
+                 if payload.get(key) is not None and view_low <= float(payload[key]) <= view_high),
+                key=lambda item: item[1], reverse=True,
+            )
+            groups = []
+            for item in visible_levels:
+                if (not groups or
+                        groups[-1][-1][1] - item[1] >= (view_high - view_low) * .018):
+                    groups.append([item])
+                else:
+                    groups[-1].append(item)
+            for group in groups:
+                if len(group) > 1:
+                    for index, (key, _value) in enumerate(group):
+                        h2_label_offsets[key] = (len(group) - 1 - 2 * index) * 6
         for key, label, color in labels:
             if owns_levels:
                 continue
