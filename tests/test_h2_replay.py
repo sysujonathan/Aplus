@@ -7,7 +7,8 @@ import pytest
 
 from workbench.backtest import Assumptions
 from workbench.h2_plan import _structure, project_plan
-from workbench.h2_replay import H2Settings, MODEL, ResearchSpec, boundary_samples, run_replay, summarize_replay
+from workbench.h2_replay import (H2Settings, LEGACY_MODEL, MODEL, ResearchSpec,
+                                 boundary_samples, run_replay, summarize_replay)
 from workbench.h2_replay_service import available_snapshots, load_receipt
 from workbench.market import save_dataset
 from workbench.service import Service
@@ -44,21 +45,23 @@ def test_full_tick_equal_high_not_trigger_and_next_plan_updates(h2_spec, h2_bars
     bars = append_bar(h2_bars, 11.6, 10.4)
     r = study(h2_spec, bars)[0]
     assert not r['triggered'] and r['latest_plan']['entry'] == 11.61
-    assert r['latest_plan']['stop'] == 10.39
+    assert r['latest_plan']['stop'] == 9.99
+    assert r['latest_plan']['sl1_plan_price'] == 10.39
+    assert r['latest_plan']['target'] == 14.85
     assert len(r['events']) == 2
     bars = append_bar(bars, 11.61, 10.6)
     r = study(h2_spec, bars)[0]
     assert r['filled'] and r['triggered'] and r['entry'] == 11.61
-    assert r['stop'] == 10.39 and r['status'] == 'open'
+    assert r['stop'] == 9.99 and r['target'] == 14.85 and r['status'] == 'open'
 
 
 def test_stop_target_and_costs_use_fixed_fill_risk(h2_spec, h2_bars):
     bars = append_bar(h2_bars, 11.8, 10.8)
-    bars = append_bar(bars, 14.2, 11)
+    bars = append_bar(bars, 15, 11)
     r = study(h2_spec, bars)[0]
-    assert r['status'] == 'closed' and r['reason'] == 'MM 止盈'
-    assert r['exit'] == 14
-    assert r['r_multiple'] == pytest.approx((14 - 11.61) / (11.61 - 10.49))
+    assert r['status'] == 'closed' and r['reason'] == '2R 止盈'
+    assert r['exit'] == 14.85
+    assert r['r_multiple'] == pytest.approx(2)
     costly = study(h2_spec, bars, costs=Assumptions())[0]
     assert costly['r_multiple'] < r['r_multiple']
     summary = summarize_replay([r])
@@ -66,25 +69,57 @@ def test_stop_target_and_costs_use_fixed_fill_risk(h2_spec, h2_bars):
     assert summary['boundaries']['profit'] == [r['id']]
 
 
-def test_t1_stop_deferred_to_next_tradable_open(h2_spec, h2_bars):
-    # Entry is observable at the open before SL1 gets hit that same day.
-    bars = append_bar(h2_bars, 12, 10.4)
+def test_gap_fill_does_not_recalculate_frozen_two_r_target(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 12.5, 10.8)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [12.0, 12.1]
+    bars = append_bar(bars, 15.0, 11.5)
+    r = study(h2_spec, bars)[0]
+    assert r['planned_entry'] == 11.61 and r['entry'] == 12.0
+    assert r['stop'] == 9.99 and r['target'] == 14.85
+    assert r['reason'] == '2R 止盈'
+    assert r['r_multiple'] == pytest.approx((14.85 - 12.0) / (12.0 - 9.99))
+
+
+def test_post_fill_double_touch_is_conservatively_stopped(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 11.8, 10.8)
+    bars = append_bar(bars, 15.0, 9.8)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [11.0, 12.0]
+    r = study(h2_spec, bars)[0]
+    assert r['reason'] == 'SL 止损（同日双触碰优先止损）'
+    assert r['exit'] == 9.99
+
+
+@pytest.mark.parametrize('open_price,high,low,expected_reason,expected_exit', [
+    (9.50, 10.0, 9.0, '跳空止损', 9.50),
+    (15.50, 16.0, 15.0, '2R 止盈', 14.85),
+])
+def test_post_fill_gap_exit_keeps_existing_conservative_prices(
+        h2_spec, h2_bars, open_price, high, low, expected_reason, expected_exit):
+    bars = append_bar(h2_bars, 11.8, 10.8)
+    bars = append_bar(bars, high, low)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [open_price, open_price]
+    r = study(h2_spec, bars)[0]
+    assert r['reason'] == expected_reason and r['exit'] == expected_exit
+
+
+def test_t1_fill_day_then_blocked_day_and_next_tradable_stop(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 12, 10.8)
     bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 11.8]
     bars = append_bar(bars, 10.2, 10.2)
     bars = append_bar(bars, 10.3, 9.9)
     bars.loc[len(bars) - 1, 'open'] = 10.1
     r = study(h2_spec, bars)[0]
     assert r['filled'] and r['status'] == 'closed'
-    assert r['reason'] == 'T+1 延迟止损'
-    assert r['exit'] == 10.1 and r['holding_bars'] == 2
-    assert any(e['kind'] == 't1' for e in r['events'])
+    assert r['reason'].startswith('SL 止损')
+    assert r['exit'] == 9.99 and r['holding_bars'] == 2
+    assert not any(e['kind'] == 'exit' and e['date'] == r['entry_date'] for e in r['events'])
     assert any(e['kind'] == 'blocked' for e in r['events'])
 
 
-@pytest.mark.parametrize('mode', ['one_price', 'ambiguous_sl1', 'floor', 'mm'])
+@pytest.mark.parametrize('mode', ['one_price', 'ambiguous_sl', 'floor', 'mm'])
 def test_trigger_is_not_fill(h2_spec, h2_bars, mode):
-    high, low = {'one_price': (11.7, 11.7), 'ambiguous_sl1': (11.8, 10.4),
-                 'floor': (11.8, 9.9), 'mm': (14.1, 10.7)}[mode]
+    high, low = {'one_price': (11.7, 11.7), 'ambiguous_sl': (11.8, 9.9),
+                 'floor': (11.8, 10.0), 'mm': (14.1, 10.7)}[mode]
     bars = append_bar(h2_bars, high, low)
     if mode == 'one_price':
         bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 11.7]
@@ -111,7 +146,7 @@ def test_future_append_cannot_change_past_events_or_shape(h2_spec, h2_bars):
     prefix = append_bar(h2_bars, 11.5, 10.4)
     old = study(h2_spec, prefix)[0]
     future = append_bar(prefix, 11.8, 10.8)
-    future = append_bar(future, 14.1, 11)
+    future = append_bar(future, 15, 11)
     new = study(h2_spec, future)[0]
     assert old['structure'] == new['structure'] and old['id'] == new['id']
     assert new['events'][:len(old['events'])] == old['events']
@@ -183,7 +218,7 @@ def test_causal_prefilter_matches_daily_frozen_detector(h2_spec, h2_bars):
 def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
     store = Store(tmp_path / 'replay')
     schema_before = store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']
-    bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 14.1, 11)
+    bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 15, 11)
     did = save_dataset(store, 'sh.600000', bars, 'csv', '测试合成行情，非真实验收')
     demo = save_dataset(store, 'sz.000001', bars, 'demo', '合成')
     assert [r['id'] for r in available_snapshots(store)[0]] == [did]

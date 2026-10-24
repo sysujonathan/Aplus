@@ -13,7 +13,9 @@ from .store import digest, dumps
 from .strategies import calculate
 
 
-MODEL = 'gap-h2-daily-execution-v1'
+LEGACY_MODEL = 'gap-h2-daily-execution-v1'
+MODEL = 'gap-h2-daily-execution-v2'
+SUPPORTED_MODELS = (LEGACY_MODEL, MODEL)
 LABELS = {'pending': '仍待挂', 'invalidated': '结构失效', 'mm_first': 'MM 已先达到',
           'expired': '等待超时', 'unavailable': '无法复核', 'filtered': '条件过滤',
           'unfilled': '触发未成交', 'open': '持仓未结束', 'closed': '已结束'}
@@ -91,6 +93,7 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
     code = frame.attrs.get('code')
     record = dict(id=digest(f'{code}|{structure["bo_date"]}|{structure["h2_setup_date"]}'.encode())[:24],
                   code=code, setup_date=structure['h2_setup_date'], structure=dict(structure),
+                  execution_model=MODEL, pricing_basis='gap-floor-sl-2r-v1',
                   status='pending', triggered=False, filled=False, events=[])
     plan = project_plan(frame.iloc[:setup_index + 1], structure, code,
                         lookback=settings.lookback, wait_bars=settings.wait_bars)
@@ -121,17 +124,17 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
             elif bar.open <= stop:
                 price, reason = float(bar.open), '跳空止损'
             elif bar.open >= target:
-                price, reason = target, 'MM 止盈'
+                price, reason = target, '2R 止盈'
             elif bar.low <= stop:
-                price, reason = stop, 'SL1 止损（同日双触碰优先止损）'
+                price, reason = stop, 'SL 止损（同日双触碰优先止损）'
             elif bar.high >= target:
-                price, reason = target, 'MM 止盈'
+                price, reason = target, '2R 止盈'
             elif i - record['_fill_pos'] >= costs.holding_bars:
                 price, reason = float(bar.close), '持有期限退出'
             if price is not None:
                 _close(record, frame, i, price, reason, costs)
                 break
-            _event(record, day, 'holding', '持仓；SL1 与 MM 固定为模拟成交时的计划价')
+            _event(record, day, 'holding', '持仓；SL 与 2R 固定为模拟成交时的计划价')
             continue
 
         prior = plan
@@ -155,9 +158,9 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
             elif not _executable(bar):
                 reason = '停牌／单一价格，无法保证成交'
             elif bar.open <= prior['stop'] or (bar.open < prior['entry'] and bar.low <= prior['stop']):
-                reason = '入场与 SL1 的先后无法确认，保守不成交'
+                reason = '入场与 SL 的先后无法确认，保守不成交'
             elif fill >= prior['target']:
-                reason = '跳空／滑点后的入场价已达 MM'
+                reason = '跳空／滑点后的入场价已达 2R'
             if reason:
                 record.update(status='mm_first' if plan.get('state_reason') == 'target_already_reached'
                               else 'unfilled', reason=reason)
@@ -165,15 +168,16 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
                 break
             record.update(status='open', filled=True, entry_date=day, entry=fill,
                           planned_entry=prior['entry'], stop=prior['stop'], target=prior['target'],
+                          sl1_reference=prior.get('sl1_plan_price'), mm_reference=prior.get('mm_target'),
                           initial_risk_pct=(fill - prior['stop']) / fill * 100,
                           _fill_pos=i)
             _event(record, day, 'fill', '模拟成交；买入当日按 T+1 不退出', prior, price=fill,
                    stop=prior['stop'], target=prior['target'])
             if bar.low <= prior['stop']:
                 t1_stop = True
-                _event(record, day, 't1', '买入日触及 SL1；下一可交易日开盘模拟延迟止损')
+                _event(record, day, 't1', '买入日触及 SL；下一可交易日开盘模拟延迟止损')
             elif bar.high >= prior['target']:
-                _event(record, day, 't1', '买入日触及 MM；T+1 当日无法卖出')
+                _event(record, day, 't1', '买入日触及 2R；T+1 当日无法卖出')
             continue
         state = plan['pending_state']
         if state != 'PENDING':
@@ -182,7 +186,7 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
             record['status'] = status
             _event(record, day, status, LABELS[status], plan)
             break
-        _event(record, day, 'plan', '收盘更新次日 Entry／SL1；原 MM 保持不变', plan)
+        _event(record, day, 'plan', '收盘更新次日 Entry／2R／SL1；SL 与原 MM 保持不变', plan)
     if record['status'] == 'open':
         record.update(mark_date=_day(frame, len(frame) - 1),
                       unrealized_return=float(frame.iloc[-1].close / record['entry'] - 1))

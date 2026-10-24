@@ -2,13 +2,22 @@
 import pytest
 
 from workbench.store import Store, dumps
-from workbench.h2_replay import MODEL
+from workbench.h2_replay import LEGACY_MODEL, MODEL, SUPPORTED_MODELS
 
 
-def add_job(store, identity, status='completed', kind='backtest', result=None):
+def add_job(store, identity, status='completed', kind='backtest', result=None, model=MODEL):
     store.execute('INSERT INTO jobs(id,kind,status,created,spec,result) VALUES(?,?,?,?,?,?)',
                   (identity, kind, status, '2026-10-05T01:00:00+00:00', '{}',
-                   dumps({'execution_model': MODEL}) if result is None else result))
+                   dumps({'execution_model': model}) if result is None else result))
+
+
+def test_history_can_list_legacy_and_current_without_relabeling_reports(tmp_path):
+    store = Store(tmp_path)
+    add_job(store, 'legacy', model=LEGACY_MODEL)
+    add_job(store, 'current')
+    rows = store.backtest_history(SUPPORTED_MODELS)
+    assert [row['id'] for row in rows] == ['current', 'legacy']
+    assert [row['display']['number'] for row in rows] == [2, 1]
 
 
 def test_history_stable_numbers_names_delete_restore_and_immutable_reports(tmp_path):

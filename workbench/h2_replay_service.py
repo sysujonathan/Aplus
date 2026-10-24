@@ -7,7 +7,7 @@ import time
 import pandas as pd
 
 from .backtest import Assumptions
-from .h2_replay import H2Settings, MODEL, run_replay, summarize_replay
+from .h2_replay import H2Settings, MODEL, SUPPORTED_MODELS, run_replay, summarize_replay
 from .h2_replay_cache import cache_key, engine_version, read_cache, write_cache
 from .market import BOARDS, board_of, completed_date, load_dataset
 from .store import digest, dumps
@@ -36,6 +36,8 @@ def available_snapshots(store, scope='market', boards=None):
 
 
 def execute_replay(service, job, spec):
+    if spec.get('execution_model') != MODEL:
+        raise ValueError('新回测必须使用当前 GAP H2 执行口径')
     if spec.get('timeframe') != 'daily' or spec.get('strategy') != 'STRATEGY_GAP_H2':
         raise ValueError('当前执行回放仅支持原 GAP H2 日线')
     ids = spec.get('datasets', [])
@@ -117,6 +119,8 @@ def execute_replay(service, job, spec):
             else:
                 reused += 1
             for trade in trades:
+                trade.setdefault('execution_model', MODEL)
+                trade.setdefault('pricing_basis', 'gap-floor-sl-2r-v1')
                 trade['dataset_id'] = did
                 trade['study_end'] = end
             records.extend(trades)
@@ -149,8 +153,8 @@ def execute_replay(service, job, spec):
                                '腾讯不复权历史跨除权可能影响信号；不包含分红及除权股数调整，不直接等同总回报',
                                '日线无法确认盘中先后、涨跌停排队及实际流动性；单一价格不成交',
                                '入场与结构失效／MM 同日发生时保守不成交',
-                               'A 股买入日按 T+1 不退出；买入日破 SL1 则下一可交易日开盘延迟止损',
-                               'SL1／MM 成交后固定；超过持有期限在可交易日收盘退出',
+                               'A 股买入日按 T+1 不退出；买入日破 SL 则下一可交易日开盘延迟止损',
+                               '正式 SL／2R 成交后固定；SL1 与 MM 仅保留结构参考；超过持有期限在可交易日收盘退出',
                                '未结束仓位不强制平仓，不计入胜率或 R 排名',
                                '使用当前历史快照，前复权不是当时可用数据版本；现存名单有幸存者偏差',
                                'CSV 来源未经行情源认证，仅作为导入研究，不作为真实行情验收证明',
@@ -173,7 +177,7 @@ def load_receipt(store, job):
     if not rows:
         raise ValueError('回测回执不存在')
     report = json.loads(rows[0]['result'])
-    if report.get('execution_model') != MODEL:
+    if report.get('execution_model') not in SUPPORTED_MODELS:
         raise ValueError('此记录不属于 GAP H2 执行回放')
     records = json.loads(store.read_artifact(report['records_path']).decode('utf-8'))
     return rows[0], report, records

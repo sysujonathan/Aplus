@@ -190,7 +190,7 @@ def build_workspace(page):
     table.rowconfigure(0, weight=1)
     table.grid_propagate(False)
     p.tree = tree(table, [('date', 'H2 日期', 112, tk.W), ('code', '代码', 106, tk.W), ('name', '名称', 105, tk.W),
-                          ('entry', '成交/待挂', 110, tk.E), ('stop', 'SL1', 82, tk.E),
+                          ('entry', '成交/待挂', 110, tk.E), ('stop', 'SL', 82, tk.E),
                           ('risk', '风险', 78, tk.E), ('result', '结局', 114, tk.W), ('r', '净 R', 70, tk.E)])
     p.tree.configure(displaycolumns=('date', 'code', 'entry', 'risk', 'result', 'r'))
     for key in p.tree['columns']:

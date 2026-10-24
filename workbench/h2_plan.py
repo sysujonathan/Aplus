@@ -40,6 +40,13 @@ def _number(value):
         return None
 
 
+def _two_r_target(entry, stop, tick):
+    """Return an executable tick-aligned target exactly two planned risks away."""
+    unit = Decimal(str(tick))
+    entry_value, stop_value = Decimal(str(entry)), Decimal(str(stop))
+    return float((entry_value + 2 * (entry_value - stop_value)).quantize(unit))
+
+
 def _positions(frame, column):
     if column not in frame:
         return []
@@ -109,10 +116,12 @@ def project_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT)
     """Follow one original setup; a newer setup must not replace a watched one."""
     plan = dict(structure or {})
     plan.update(plan_kind='gap-h2-next-session', plan_version=plan_version(),
+                pricing_basis='gap-floor-sl-2r-v1',
                 pending_state='UNAVAILABLE', state_reason='missing_structure',
                 plan_asof=_date(frame, len(frame) - 1) if len(frame) else None,
                 entry=None, stop=None, target=None, entry_plan_price=None,
-                sl1_plan_price=None, initial_risk_pct=None, mm_r_multiple=None)
+                sl_plan_price=None, sl1_plan_price=None, tp_plan_price=None,
+                initial_risk_pct=None, tp_r_multiple=None, mm_r_multiple=None)
     if not len(frame) or not structure:
         return plan
     dates = frame.date.astype(str).str[:10].tolist()
@@ -160,13 +169,17 @@ def project_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT)
     low_pos = bo + 1 + int(np.argmin(pullback.low.to_numpy()))
     ref_low = float(frame.iloc[low_pos].low)
     entry = offset_tick(code, ref_high, 1, instrument_type=instrument_type)
-    stop = offset_tick(code, ref_low, -1, instrument_type=instrument_type)
+    stop = offset_tick(code, floor, -1, instrument_type=instrument_type)
+    sl1 = offset_tick(code, ref_low, -1, instrument_type=instrument_type)
     risk = entry - stop
+    formal_target = _two_r_target(entry, stop, tick)
     plan.update(entry_reference_high=ref_high, entry_reference_date=dates[-1],
                 sl1_reference_low=ref_low, sl1_reference_date=dates[low_pos],
-                entry_plan_price=entry, sl1_plan_price=stop,
-                entry=entry, stop=stop, target=target,
+                entry_plan_price=entry, sl_plan_price=stop, sl1_plan_price=sl1,
+                tp_plan_price=formal_target,
+                entry=entry, stop=stop, target=formal_target,
                 initial_risk_pct=risk / entry * 100 if 0 < stop < entry else None,
+                tp_r_multiple=(formal_target - entry) / risk if 0 < stop < entry < formal_target else None,
                 mm_r_multiple=(target - entry) / risk if 0 < stop < entry < target else None)
     return plan
 

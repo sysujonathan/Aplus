@@ -1,5 +1,5 @@
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 
 import pandas as pd
@@ -8,11 +8,11 @@ import pytest
 from tests.test_h2_plan import h2_bars, h2_spec, append_bar
 from tests.test_workbench import wait_for
 from workbench.backtest import Assumptions
-from workbench.h2_replay import H2Settings, MODEL as BASE_MODEL, run_replay
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, run_replay, summarize_replay
 from workbench.h2_replay_service import load_receipt
 from workbench.market import save_dataset
 from workbench.service import Service
-from workbench.store import Store
+from workbench.store import Store, dumps, now
 from workbench.stop_research import AnchorSettings, MODEL, candidate_anchor, compare_trade, replay_fixed_stop, summarize
 from workbench.stop_research_service import load_experiment
 from workbench.strategies import verify_frozen
@@ -35,7 +35,17 @@ def example(h2_bars,h2_spec,ending='rescue'):
         bars=append_bar(bars,16.,11.)
     elif ending=='open':
         bars=append_bar(bars,12.,10.)
-    rec=run_replay(h2_spec,bars,bars.date.iloc[124],bars.date.iloc[-1],costs=ZERO)[0]
+    current=run_replay(h2_spec,bars,bars.date.iloc[124],bars.date.iloc[-1],costs=ZERO)[0]
+    old_stop=current['trigger_plan']['sl1_plan_price']
+    seed=dict(current,stop=old_stop,target=current['structure']['mm_target'])
+    baseline=replay_fixed_stop(bars,seed,old_stop,ZERO)
+    rec=dict(current)
+    for key in ('status','stop','target','exit_date','exit','reason','net_return','r_multiple',
+                'holding_bars','mae','mfe','mark_date','unrealized_return','events'):
+        rec.pop(key,None)
+    rec.update(baseline,execution_model=BASE_MODEL,
+               initial_risk_pct=(baseline['entry']-baseline['stop'])/baseline['entry']*100)
+    rec.pop('pricing_basis',None)
     rec['dataset_id']='sample';rec['study_end']=bars.date.iloc[-1]
     return bars,rec
 
@@ -100,14 +110,22 @@ def test_shallow_pause_is_an_explicit_variant_not_body_color(h2_bars,h2_spec):
 
 
 def test_service_saved_history_chart_cutoff_and_no_formal_state(tmp_path,h2_bars,h2_spec):
-    frozen=verify_frozen();bars,_=example(h2_bars,h2_spec)
+    frozen=verify_frozen();bars,original=example(h2_bars,h2_spec)
     store=Store(tmp_path/'isolated')
     schema=store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']
     did=save_dataset(store,'sh.600000',bars,'csv','合成工程测试，非真实验收')
+    original.update(dataset_id=did,study_end=bars.date.iloc[-1])
+    source='legacy-source'
+    report=summarize_replay([original])
+    report.update(execution_model=BASE_MODEL,strategy_version=frozen,
+                  assumptions=asdict(ZERO),datasets=[store.rows('SELECT * FROM datasets WHERE id=?',(did,))[0]],
+                  start=bars.date.iloc[124],end=bars.date.iloc[-1],scope='specified',
+                  real_data=False,complete=True,records_path=f'research/{source}/replay.json')
+    store.execute('INSERT INTO jobs(id,kind,status,created,spec,result) VALUES(?,?,?,?,?,?)',
+                  (source,'backtest','completed',now(),'{}',dumps(report)))
+    store.write_artifact(report['records_path'],dumps([original]).encode('utf-8'),source)
     service=Service(store)
     try:
-        source=service.submit('backtest',dict(execution_model=BASE_MODEL,strategy='STRATEGY_GAP_H2',timeframe='daily',datasets=[did],start=bars.date.iloc[124],end=bars.date.iloc[-1],assumptions=dict(commission_bps=0,sell_tax_bps=0,slippage_bps=0)))
-        assert wait_for(store,source)['status']=='completed'
         baseline=load_receipt(store,source)[2]
         job=service.submit('backtest',dict(execution_model=MODEL,source_job=source))
         assert wait_for(store,job)['status']=='completed'
