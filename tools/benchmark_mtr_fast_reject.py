@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 
-sys.path.insert(0, str(Path.cwd()))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 from workbench.mtr_acceleration import (  # noqa: E402
     APPROVAL_ENV,
@@ -201,24 +202,38 @@ def rounded(row):
             for key, value in row.items() if key != 'business'}
 
 
+def write_output(path, encoded):
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(encoded + '\n', encoding='utf-8')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--datasets', type=int, default=60)
     parser.add_argument('--bars', type=int, default=300)
     parser.add_argument('--detector-samples', type=int, default=120)
     parser.add_argument('--rounds', type=int, default=3)
+    parser.add_argument('--output')
+    parser.add_argument('--quiet', action='store_true')
     args = parser.parse_args()
 
     detector = {'detector_only': [], 'public_indicators_plus_mtr': []}
-    system = {'OFF': [], 'ACCELERATED': []}
+    system = {'OFF': [], 'SHADOW': [], 'ACCELERATED': []}
     for round_index in range(args.rounds):
         detector['detector_only'].append(
             detector_once(args.detector_samples, args.bars, include_indicators=False))
         detector['public_indicators_plus_mtr'].append(
             detector_once(args.detector_samples, args.bars, include_indicators=True))
-        order = ['OFF', 'ACCELERATED'] if round_index % 2 == 0 else ['ACCELERATED', 'OFF']
+        orders = [
+            ['OFF', 'SHADOW', 'ACCELERATED'],
+            ['ACCELERATED', 'OFF', 'SHADOW'],
+            ['SHADOW', 'ACCELERATED', 'OFF'],
+        ]
+        order = orders[round_index % len(orders)]
         round_results = {name: system_once(name, args.datasets, args.bars) for name in order}
-        if round_results['OFF']['business'] != round_results['ACCELERATED']['business']:
+        if any(round_results['OFF']['business'] != round_results[name]['business']
+               for name in ('SHADOW', 'ACCELERATED')):
             raise AssertionError('six-strategy system-path business mismatch')
         for name in system:
             system[name].append(round_results[name])
@@ -249,12 +264,17 @@ def main():
         'detector': detector_summary,
         'six_strategy_cold_service': {
             'datasets': args.datasets, 'bars': args.bars,
-            'OFF': system_summary['OFF'], 'ACCELERATED': system_summary['ACCELERATED'],
+            'OFF': system_summary['OFF'], 'SHADOW': system_summary['SHADOW'],
+            'ACCELERATED': system_summary['ACCELERATED'],
             'improvement_pct': round((1 - accelerated / off) * 100, 2),
             'business_equal': True,
         },
     }
-    print(dumps(output))
+    encoded = dumps(output)
+    if args.output:
+        write_output(args.output, encoded)
+    if not args.quiet:
+        print(encoded)
 
 
 if __name__ == '__main__':
