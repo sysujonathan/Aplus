@@ -29,6 +29,7 @@ from .provider_guard import ProviderGuard, ProviderError, access_limited, restri
 from .scan_receipt import (begin_receipt, persist_rebuilt_receipt, progress_receipt,
                            recover_running_scans)
 from .mtr_acceleration import MTRFastRejector, requested_mode as mtr_requested_mode
+from .three_k_acceleration import ThreeKFastRejector, requested_mode as three_k_requested_mode
 
 
 def merge_scan_reports(previous, current):
@@ -563,7 +564,10 @@ class Service:
         entries = catalog(self.store)
         strategies = [entries[k] for k in spec['strategies']]
         mtr_strategy = next((strategy for strategy in strategies if strategy.id == 'MTR_MASTER'), None)
+        three_k_strategy = next((strategy for strategy in strategies
+                                 if strategy.id == 'STRATEGY_3K'), None)
         mtr_fast = None
+        three_k_fast = None
         # The default OFF path keeps the existing cache/checkpoint/call route.
         # Any opt-in mode remains advisory until exact bindings pass.
         if mtr_strategy is not None and mtr_requested_mode() != 'OFF':
@@ -573,6 +577,16 @@ class Service:
             except Exception as exc:
                 try:
                     self.store.event(job, 'MTR快速拒绝回退原版', mode=mtr_requested_mode(),
+                                     reason=f'灰度控制器不可用：{type(exc).__name__}: {exc}')
+                except Exception:
+                    pass  # Optional acceleration never blocks the original detector.
+        if three_k_strategy is not None and three_k_requested_mode() != 'OFF':
+            try:
+                candidate = ThreeKFastRejector(self.store, job, three_k_strategy)
+                three_k_fast = candidate if candidate.active else None
+            except Exception as exc:
+                try:
+                    self.store.event(job, '3K快速拒绝回退原版', mode=three_k_requested_mode(),
                                      reason=f'灰度控制器不可用：{type(exc).__name__}: {exc}')
                 except Exception:
                     pass  # Optional acceleration never blocks the original detector.
@@ -602,6 +616,8 @@ class Service:
         engine = scan_engine_version(include_frozen=False)
         legacy_engine = scan_engine_version()
         checkpoint_engine = mtr_fast.cache_engine(engine) if mtr_fast and mtr_fast.active else engine
+        if three_k_fast and three_k_fast.active:
+            checkpoint_engine = three_k_fast.cache_engine(checkpoint_engine)
         checkpoint = digest(dumps([spec.get('source'), sorted(spec['datasets']),
             sorted((s.id,s.version,versions[s.id]) for s in strategies),timeframe,asof,checkpoint_engine]).encode())
         report.update(engine_version=engine,calculation_versions=versions,asof=asof,total=total)
@@ -611,6 +627,8 @@ class Service:
             def bound_engine(strategy, base):
                 if strategy.id == 'MTR_MASTER' and mtr_fast and mtr_fast.active:
                     return mtr_fast.cache_engine(base)
+                if strategy.id == 'STRATEGY_3K' and three_k_fast and three_k_fast.active:
+                    return three_k_fast.cache_engine(base)
                 return base
 
             keys = {s.id:cache_key(did,s.id,versions[s.id],timeframe,asof,bound_engine(s,engine))
@@ -670,6 +688,8 @@ class Service:
                     cached_signals[keys[s.id]] = cached_signals[bridged[s.id]]
             if mtr_fast and mtr_fast.fused and mtr_strategy is not None:
                 cached_signals.pop(keys[mtr_strategy.id], None)
+            if three_k_fast and three_k_fast.fused and three_k_strategy is not None:
+                cached_signals.pop(keys[three_k_strategy.id], None)
             all_cached = all(key in cached_signals for key in keys.values())
             try:
                 if prefetched_records is None and not metadata_batch_failed:
@@ -714,15 +734,20 @@ class Service:
                 if self.cancel_flags[job].is_set():
                     break  # Commit finished judgments before honouring stop.
                 accelerated_mtr = strategy.id == 'MTR_MASTER' and mtr_fast is not None
+                accelerated_three_k = strategy.id == 'STRATEGY_3K' and three_k_fast is not None
                 mtr_original_called = False
                 mtr_call_event_queued = False
+                three_k_original_called = False
+                three_k_call_event_queued = False
                 try:
                     if data_error:
                         raise ValueError(data_error)
                     if not all_cached and len(data)<125:
                         raise ValueError(f'已完成 K 线仅 {len(data)} 根，至少需要 125 根')
                     key = keys[strategy.id]
-                    if key in cached_signals and not (accelerated_mtr and mtr_fast.fused):
+                    fused_acceleration = ((accelerated_mtr and mtr_fast.fused)
+                                          or (accelerated_three_k and three_k_fast.fused))
+                    if key in cached_signals and not fused_acceleration:
                         signal = json.loads(cached_signals[key])
                         report['reused'] += 1
                         queue_event('复用已完成策略判断',strategy.file,code=record['code'],key=key)
@@ -756,6 +781,34 @@ class Service:
                                 queue_event('MTR快速拒绝熔断', strategy.file,
                                             **mtr_fast.fuse_evidence,
                                             persistence_error=mtr_fast.fuse_persist_error)
+                        elif accelerated_three_k:
+                            queue_event('3K灰度门禁判断', strategy.file, strategy=strategy.id,
+                                        code=record['code'], dataset=did,
+                                        mode=three_k_fast.requested_mode,
+                                        binding=three_k_fast.binding_id)
+
+                            def original_three_k():
+                                nonlocal three_k_original_called
+                                three_k_original_called = True
+                                return signal_at_end(strategy, data, prepared=prepared)
+
+                            fast_result = three_k_fast.run(
+                                original_three_k,
+                                data, prepared, f'{did}|{timeframe}|{asof}|{key}')
+                            signal = fast_result.signal
+                            if three_k_original_called:
+                                queue_event('调用策略', strategy.file, strategy=strategy.id,
+                                            code=record['code'], dataset=did)
+                                three_k_call_event_queued = True
+                            if fast_result.event_action:
+                                queue_event(fast_result.event_action, strategy.file,
+                                            code=record['code'], dataset=did,
+                                            **(fast_result.event_detail or {}))
+                            if (three_k_fast.fused and three_k_fast.fuse_persist_error
+                                    and three_k_fast.fuse_evidence):
+                                queue_event('3K快速拒绝熔断', strategy.file,
+                                            **three_k_fast.fuse_evidence,
+                                            persistence_error=three_k_fast.fuse_persist_error)
                         else:
                             queue_event('调用策略',strategy.file,strategy=strategy.id,
                                         code=record['code'],dataset=did)
@@ -775,11 +828,16 @@ class Service:
                         queue_event('记录策略命中',self.store.path,observation=identity,code=record['code'])
                     else:
                         report['no_signal'] += 1
-                    if not (accelerated_mtr and mtr_fast.fused):
+                    if not ((accelerated_mtr and mtr_fast.fused)
+                            or (accelerated_three_k and three_k_fast.fused)):
                         cache_rows.append((key,dumps(signal),now()))
                     report['success'] += 1
                 except Exception as exc:
                     if accelerated_mtr and mtr_original_called and not mtr_call_event_queued:
+                        queue_event('调用策略', strategy.file, strategy=strategy.id,
+                                    code=record['code'], dataset=did)
+                    if (accelerated_three_k and three_k_original_called
+                            and not three_k_call_event_queued):
                         queue_event('调用策略', strategy.file, strategy=strategy.id,
                                     code=record['code'], dataset=did)
                     if (accelerated_mtr and mtr_fast.fused and mtr_fast.fuse_persist_error
@@ -787,6 +845,12 @@ class Service:
                         queue_event('MTR快速拒绝熔断', strategy.file,
                                     **mtr_fast.fuse_evidence,
                                     persistence_error=mtr_fast.fuse_persist_error)
+                    if (accelerated_three_k and three_k_fast.fused
+                            and three_k_fast.fuse_persist_error
+                            and three_k_fast.fuse_evidence):
+                        queue_event('3K快速拒绝熔断', strategy.file,
+                                    **three_k_fast.fuse_evidence,
+                                    persistence_error=three_k_fast.fuse_persist_error)
                     report['errors'].append({'code':record['code'],'strategy':strategy.id,'timeframe':timeframe,'error':str(exc)})
                     queue_event('策略计算失败',strategy.file,code=record['code'],strategy=strategy.id,
                                 timeframe=timeframe,error=str(exc))
@@ -813,7 +877,9 @@ class Service:
             if not spec.get('force'):
                 prefetched_signals.update((key, signal) for key, signal, _created in cache_rows)
             self.check_stop(job)
-        if report['success'] == total and not (mtr_fast and mtr_fast.fused):
+        if (report['success'] == total
+                and not (mtr_fast and mtr_fast.fused)
+                and not (three_k_fast and three_k_fast.fused)):
             report['checkpoints'] = {timeframe:dict(identity=checkpoint,signals=report['signals'],
                                                   observation_ids=report['observation_ids'])}
         return report
