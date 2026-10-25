@@ -1,6 +1,7 @@
 """Opt-in 3K fast rejection with exact bindings, shadow checks and a fuse."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import platform
@@ -22,9 +23,10 @@ VALID_MODES = {'OFF', 'SHADOW', 'CANARY', 'ACCELERATED'}
 EXPECTED_RELEASE = '185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c'
 EXPECTED_CALCULATION = '7ee2750c5c14e317f2755158589bf6eac37bf40ec5b4282e0bf4ab17ac5e19e5'
 EXPECTED_ADAPTER_SHA = '844f211f2b09eb10e8217d0aa8421b52cf738d7b56623b05925e4d9ccc138a92'
+STORE_CONTRACT_KEY = 'workbench/store.py:3k-persistence-contract'
 EXPECTED_SUPPORT_SHAS = {
     'workbench/scan_cache.py': '6c38124c10af76a74be214cdd2fbce936821ca701a975edb700150543ed48676',
-    'workbench/store.py': 'e6b1151a8d4ce3f3795ca24836cdfe82785a99ce02cc9f86badf3745769af048',
+    STORE_CONTRACT_KEY: '97568e987daa3897c8a7865b35ca11eec7c5645a9d9063f6e9a4065b90e9fb29',
 }
 EXPECTED_METADATA = {
     'display_name': '3K',
@@ -45,8 +47,58 @@ def _runtime():
             np.__version__, pd.__version__)
 
 
+def _store_contract_sha(source=None):
+    """Hash only the Store behavior that 3K cache/fuse persistence relies on."""
+    if source is None:
+        source = (ROOT / 'workbench/store.py').read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    store = next((node for node in tree.body
+                  if isinstance(node, ast.ClassDef) and node.name == 'Store'), None)
+    if store is None:
+        raise ValueError('Store 持久化契约不存在')
+    methods = {node.name: node for node in store.body
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    required_functions = ('now', 'dumps')
+    required_methods = ('connect', 'rows', 'execute', 'event')
+    if any(name not in functions for name in required_functions):
+        raise ValueError('Store 事件序列化契约不完整')
+    if any(name not in methods for name in required_methods):
+        raise ValueError('Store 连接或事件持久化契约不完整')
+
+    init = methods.get('__init__')
+    if init is None:
+        raise ValueError('Store 初始化契约不存在')
+    ddl = {}
+    for node in ast.walk(init):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        for statement in node.value.split(';'):
+            normalized = ' '.join(statement.split())
+            for table in ('meta', 'events', 'scan_cache'):
+                marker = f'CREATE TABLE IF NOT EXISTS {table}('
+                if marker in normalized:
+                    ddl[table] = normalized
+    if set(ddl) != {'meta', 'events', 'scan_cache'}:
+        raise ValueError('Store 元数据、事件或缓存表契约不完整')
+
+    payload = {
+        'functions': {name: ast.dump(functions[name], include_attributes=False)
+                      for name in required_functions},
+        'methods': {name: ast.dump(methods[name], include_attributes=False)
+                    for name in required_methods},
+        'ddl': ddl,
+    }
+    return digest(dumps(payload).encode())
+
+
 def _support_shas():
-    return {path: digest((ROOT / path).read_bytes()) for path in EXPECTED_SUPPORT_SHAS}
+    return {
+        'workbench/scan_cache.py': digest(
+            (ROOT / 'workbench/scan_cache.py').read_bytes()),
+        STORE_CONTRACT_KEY: _store_contract_sha(),
+    }
 
 
 def current_binding_id():
@@ -125,8 +177,11 @@ def assess_latest_bar(frame, prepared):
     if not valid_prices.all() or (volume < 0).any():
         return GateAssessment(False, False, 'OHLCV 合法性检查失败')
     expected_bullish = close > opening
+    bullish_source = prepared['is_bullish']
+    if not pd.api.types.is_bool_dtype(bullish_source.dtype) or bullish_source.isna().any():
+        return GateAssessment(False, False, '公共阳线指标无法验证')
     try:
-        actual_bullish = prepared['is_bullish'].fillna(False).astype(bool).to_numpy()
+        actual_bullish = bullish_source.to_numpy(dtype=bool)
     except (TypeError, ValueError):
         return GateAssessment(False, False, '公共阳线指标无法验证')
     if not np.array_equal(actual_bullish, expected_bullish):
@@ -316,8 +371,19 @@ class ThreeKFastRejector:
         if not gate.reject:
             return FastResult(original())
 
-        sampled = self.mode == 'SHADOW' or self._sampled(sample_key)
-        if sampled:
+        sampled = self._sampled(sample_key)
+        # CANARY_RATE has deliberately opposite operational roles:
+        # - CANARY: fraction allowed onto the new fast path; the rest remains
+        #   shadow-checked on the original detector.
+        # - ACCELERATED: fraction retained on the original detector as ongoing
+        #   audit; the rest uses the already-approved fast path.
+        if self.mode == 'CANARY' and sampled:
+            return FastResult(None, '3K快速拒绝Canary', {
+                'mode': self.mode, 'binding': self.binding_id,
+                'sample': digest(str(sample_key).encode()), 'gate_reason': gate.reason})
+
+        run_original = self.mode in {'SHADOW', 'CANARY'} or sampled
+        if run_original:
             try:
                 signal = original()
             except Exception as exc:

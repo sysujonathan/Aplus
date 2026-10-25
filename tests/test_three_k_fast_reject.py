@@ -16,6 +16,7 @@ from workbench.three_k_acceleration import (
     CANARY_RATE_ENV,
     MODE_ENV,
     ThreeKFastRejector,
+    _store_contract_sha,
     assess_latest_bar,
     current_binding_id,
 )
@@ -80,7 +81,7 @@ def test_gate_matches_frozen_latest_confirmation_necessity(frame):
 
 @pytest.mark.parametrize('mutation', [
     'bad_date', 'bad_price', 'changed_prepared', 'bad_bullish',
-    'text_atr', 'infinite_ema', 'missing_body', 'stale_close_loc',
+    'text_bullish', 'text_atr', 'infinite_ema', 'missing_body', 'stale_close_loc',
 ])
 def test_untrusted_input_never_fast_rejects(frame, mutation):
     raw = reject_frame(frame)
@@ -93,6 +94,9 @@ def test_untrusted_input_never_fast_rejects(frame, mutation):
         prepared.loc[prepared.index[-1], 'close'] += 1
     elif mutation == 'bad_bullish':
         prepared.loc[prepared.index[-1], 'is_bullish'] = False
+    elif mutation == 'text_bullish':
+        prepared['is_bullish'] = prepared['is_bullish'].astype(object)
+        prepared.loc[prepared.index[-1], 'is_bullish'] = 'True'
     elif mutation == 'text_atr':
         prepared.loc[prepared.index[-1], 'atr'] = 'broken'
     elif mutation == 'infinite_ema':
@@ -118,11 +122,22 @@ def test_corrupt_public_indicator_runs_original_and_preserves_exception(
     assert not fast.fused and fast.mode == 'ACCELERATED'
 
 
-@pytest.mark.parametrize('relative', ['workbench/scan_cache.py', 'workbench/store.py'])
-def test_support_implementation_change_invalidates_binding_and_old_approval(
-        store, monkeypatch, relative):
+def test_text_bullish_runs_original_and_preserves_exception(store, frame, monkeypatch):
+    fast = controller(store, monkeypatch, 'ACCELERATED', rate=0)
+    raw = reject_frame(frame)
+    prepared = prepare_indicators(raw)
+    prepared['is_bullish'] = prepared['is_bullish'].astype(object)
+    prepared.loc[prepared.index[-1], 'is_bullish'] = 'True'
+
+    with pytest.raises(TypeError, match='冻结3K布尔指标异常'):
+        fast.run(lambda: (_ for _ in ()).throw(TypeError('冻结3K布尔指标异常')),
+                 raw, prepared, 'corrupt-bullish')
+    assert not fast.fused and fast.mode == 'ACCELERATED'
+
+
+def test_scan_cache_change_invalidates_binding_and_old_approval(store, monkeypatch):
     old_binding = current_binding_id()
-    target = (Path(__file__).resolve().parents[1] / relative).resolve()
+    target = (Path(__file__).resolve().parents[1] / 'workbench/scan_cache.py').resolve()
     original_read_bytes = Path.read_bytes
 
     def changed_bytes(path):
@@ -140,6 +155,35 @@ def test_support_implementation_change_invalidates_binding_and_old_approval(
     fallback = store.rows(
         "SELECT detail FROM events WHERE action='3K快速拒绝回退原版' ORDER BY seq DESC LIMIT 1")
     assert fallback and '缓存或熔断持久化实现变化' in fallback[0]['detail']
+
+
+def test_store_contract_change_invalidates_binding_and_old_approval(store, monkeypatch):
+    old_binding = current_binding_id()
+    monkeypatch.setattr('workbench.three_k_acceleration._store_contract_sha',
+                        lambda _source=None: 'changed-store-contract')
+    assert current_binding_id() != old_binding
+
+    monkeypatch.setenv(MODE_ENV, 'ACCELERATED')
+    monkeypatch.setenv(APPROVAL_ENV, old_binding)
+    fast = ThreeKFastRejector(store, 'changed-store-contract',
+                              catalog(store)['STRATEGY_3K'])
+    assert fast.mode == 'OFF'
+    fallback = store.rows(
+        "SELECT detail FROM events WHERE action='3K快速拒绝回退原版' ORDER BY seq DESC LIMIT 1")
+    assert fallback and '缓存或熔断持久化实现变化' in fallback[0]['detail']
+
+
+def test_store_contract_ignores_unrelated_code_but_tracks_required_behavior():
+    source = (Path(__file__).resolve().parents[1] / 'workbench/store.py').read_text(
+        encoding='utf-8')
+    baseline = _store_contract_sha(source)
+    unrelated = source + '\n\ndef unrelated_backtest_helper():\n    return "unchanged"\n'
+    assert _store_contract_sha(unrelated) == baseline
+
+    changed = source.replace('sqlite3.connect(self.path, timeout=30)',
+                             'sqlite3.connect(self.path, timeout=31)', 1)
+    assert changed != source
+    assert _store_contract_sha(changed) != baseline
 
 
 def test_shadow_preserves_payload_and_trips_fuse_on_difference(store, frame, monkeypatch):
@@ -183,12 +227,45 @@ def test_accelerated_skips_only_unsampled_safe_rejection(store, frame, monkeypat
 
 
 def test_sampled_business_exception_is_preserved_and_fused(store, frame, monkeypatch):
-    fast = controller(store, monkeypatch, 'CANARY', rate=1)
+    fast = controller(store, monkeypatch, 'ACCELERATED', rate=1)
     raw = reject_frame(frame)
     with pytest.raises(ValueError, match='冻结3K真实异常'):
         fast.run(lambda: (_ for _ in ()).throw(ValueError('冻结3K真实异常')),
                  raw, prepare_indicators(raw), 'always-sampled')
     assert fast.fused and fast.mode == 'OFF'
+
+
+@pytest.mark.parametrize('mode', ['CANARY', 'ACCELERATED'])
+@pytest.mark.parametrize('rate', [0, 0.37, 1])
+def test_canary_and_accelerated_have_opposite_deterministic_split(
+        store, frame, monkeypatch, mode, rate):
+    fast = controller(store, monkeypatch, mode, rate=rate)
+    raw = reject_frame(frame)
+    prepared = prepare_indicators(raw)
+    keys = [f'deterministic-{index}' for index in range(80)]
+    sampled = sum(fast._sampled(key) for key in keys)
+    original_calls = 0
+    fast_calls = 0
+
+    def original():
+        nonlocal original_calls
+        original_calls += 1
+        return None
+
+    for key in keys:
+        result = fast.run(original, raw, prepared, key)
+        if result.event_action in {'3K快速拒绝', '3K快速拒绝Canary'}:
+            fast_calls += 1
+
+    if rate == 0:
+        assert sampled == 0
+    elif rate == 1:
+        assert sampled == len(keys)
+    else:
+        assert 0 < sampled < len(keys)
+    expected_original = len(keys) - sampled if mode == 'CANARY' else sampled
+    assert original_calls == expected_original
+    assert fast_calls == len(keys) - expected_original
 
 
 def test_version_runtime_and_approval_changes_fall_back(store, monkeypatch):
