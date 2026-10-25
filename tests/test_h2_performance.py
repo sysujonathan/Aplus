@@ -8,7 +8,7 @@ import pytest
 
 from workbench.backtest import Assumptions
 from workbench.h2_prefilter import candidate_days
-from workbench.h2_replay import H2Settings, MODEL, run_replay
+from workbench.h2_replay import H2Settings, LEGACY_MODEL, MODEL, run_replay
 from workbench.h2_replay_cache import cache_key, engine_version, read_cache, write_cache
 from workbench.h2_replay_service import load_receipt
 from workbench.market import save_dataset
@@ -72,13 +72,15 @@ def test_cache_key_all_inputs_and_bad_cache_not_used(tmp_path, h2_bars, h2_spec)
     snapshot = store.rows('SELECT * FROM datasets WHERE id=?', (did,))[0]
     settings, costs = H2Settings(), Assumptions()
     version = engine_version()
-    def key(snap=snapshot, start='2025-01-01', end='2025-12-31', cfg=settings, price=costs, engine=version):
-        return cache_key(snap, h2_spec, start, end, cfg, price, engine)
+    def key(snap=snapshot, start='2025-01-01', end='2025-12-31', cfg=settings,
+            price=costs, engine=version, model=MODEL):
+        return cache_key(snap, h2_spec, start, end, cfg, price, engine, model)
     original = key()
     assert all(value != original for value in [
         key(start='2025-01-02'), key(end='2025-12-30'),
         key(cfg=replace(settings, wait_bars=20)), key(price=replace(costs, slippage_bps=0)),
-        key(engine='different'), key(snap=dict(snapshot, sha256='different'))])
+        key(engine='different'), key(model=LEGACY_MODEL),
+        key(snap=dict(snapshot, sha256='different'))])
     assert read_cache(store, original) is None
     write_cache(store, original, [])
     assert read_cache(store, original) == []  # Zero-opportunity results are reusable too.
@@ -126,7 +128,7 @@ def test_stopped_job_reuses_only_finished_symbols_on_retry(tmp_path, h2_bars):
     spec = dict(strategy='STRATEGY_GAP_H2', timeframe='daily', execution_model=MODEL,
                 datasets=ids, start=h2_bars.date.iloc[124], end=h2_bars.date.iloc[-1])
     calls = []
-    def replay(strategy, frame, start, end, settings, costs, progress, cancelled):
+    def replay(strategy, frame, start, end, settings, costs, progress, cancelled, **kwargs):
         calls.append(frame.attrs['code'])
         if len(calls) == 2:
             next(iter(service.cancel_flags.values())).set()

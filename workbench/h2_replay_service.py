@@ -7,12 +7,16 @@ import time
 import pandas as pd
 
 from .backtest import Assumptions
-from .h2_replay import H2Settings, MODEL, run_replay, summarize_replay
+from .h2_replay import (H2Settings, LEGACY_MODEL, LEGACY_PRICING_BASIS, MODEL,
+                        PRICING_BASIS, SUPPORTED_MODELS, run_replay, summarize_replay)
 from .h2_replay_cache import cache_key, engine_version, read_cache, write_cache
 from .market import BOARDS, board_of, completed_date, load_dataset
 from .store import digest, dumps
 from .strategies import catalog, prepare
 from .sources import market_source, SOURCES
+
+
+ITERATION_BASELINE_PURPOSE = 'strategy-iteration-v1-baseline'
 
 
 def available_snapshots(store, scope='market', boards=None):
@@ -36,6 +40,44 @@ def available_snapshots(store, scope='market', boards=None):
 
 
 def execute_replay(service, job, spec):
+    if spec.get('execution_model') != MODEL:
+        raise ValueError('新回测必须使用当前 GAP H2 执行口径')
+    return _execute_replay(service, job, spec, MODEL)
+
+
+def execute_legacy_baseline(service, job, spec):
+    """Regenerate an authentic v1 receipt only for the existing stop study."""
+    if (spec.get('execution_model') != LEGACY_MODEL or
+            spec.get('purpose') != ITERATION_BASELINE_PURPOSE):
+        raise ValueError('GAP H2 v1 只能由策略迭代生成研究基线')
+    source_job = spec.get('baseline_source_job')
+    rows = service.store.rows("SELECT * FROM jobs WHERE id=? AND kind='backtest'", (source_job,))
+    if not rows:
+        raise ValueError('所选新版回测不存在')
+    try:
+        source_report = json.loads(rows[0]['result'])
+        source_spec = json.loads(rows[0]['spec'])
+    except (TypeError, ValueError):
+        raise ValueError('所选新版回测回执损坏，不能生成 v1 基线') from None
+    if source_report.get('execution_model') != MODEL:
+        raise ValueError('只能从 GAP H2 v2 回测生成隔离的 v1 研究基线')
+    ids = source_spec.get('datasets')
+    if not ids:
+        raise ValueError('所选新版回测没有完整行情快照范围')
+    inherited = dict(
+        strategy='STRATEGY_GAP_H2', timeframe='daily', execution_model=LEGACY_MODEL,
+        datasets=list(ids), start=source_report['start'], end=source_report['end'],
+        scope=source_report.get('scope', source_spec.get('scope', 'specified')),
+        boards=source_report.get('boards', source_spec.get('boards')),
+        h2_settings=dict(source_report.get('h2_settings', {})),
+        assumptions=dict(source_report.get('assumptions', {})),
+        use_cache=spec.get('use_cache', True), purpose=ITERATION_BASELINE_PURPOSE,
+        baseline_source_job=source_job,
+    )
+    return _execute_replay(service, job, inherited, LEGACY_MODEL)
+
+
+def _execute_replay(service, job, spec, execution_model):
     if spec.get('timeframe') != 'daily' or spec.get('strategy') != 'STRATEGY_GAP_H2':
         raise ValueError('当前执行回放仅支持原 GAP H2 日线')
     ids = spec.get('datasets', [])
@@ -106,17 +148,22 @@ def execute_replay(service, job, spec):
             def progress(i, total):
                 show_progress(n * 100 + int(100 * i / max(total, 1)),
                               f'已完成 {n}/{len(ids)} · 回放 {snapshot["code"]}：{i}/{total} 日 · 复用 {reused}')
-            key = cache_key(snapshot, strategy, spec['start'], end, settings, costs, engine)
+            key = cache_key(snapshot, strategy, spec['start'], end, settings, costs, engine,
+                            execution_model)
             trades = read_cache(service.store, key, job) if use_cache else None
             if trades is None:
                 trades = run_replay(strategy, frame, spec['start'], end, settings, costs,
-                                    progress, service.cancel_flags[job].is_set)
+                                    progress, service.cancel_flags[job].is_set,
+                                    execution_model=execution_model)
                 calculated += 1
                 if use_cache:
                     write_cache(service.store, key, trades, job)
             else:
                 reused += 1
             for trade in trades:
+                trade.setdefault('execution_model', execution_model)
+                trade.setdefault('pricing_basis', PRICING_BASIS if execution_model == MODEL
+                                 else LEGACY_PRICING_BASIS)
                 trade['dataset_id'] = did
                 trade['study_end'] = end
             records.extend(trades)
@@ -131,7 +178,21 @@ def execute_replay(service, job, spec):
                       f'完成 {n + 1}/{len(ids)} · 新回放 {calculated} · 复用 {reused} · 失败 {len(errors)}')
     report = summarize_replay(records)
     rel = f'research/{job}'
-    report.update(execution_model=MODEL, errors=errors, coverage_warnings=warnings,
+    if execution_model == MODEL:
+        execution_limits = [
+            '开盘已达到 Entry 且未先越过 MM／2R 时先模拟成交；盘中 Entry 与 Floor／MM 顺序不明仍保守不成交',
+            'A 股买入日按 T+1 不退出；开盘成交后买入日破 SL 则下一可交易日开盘延迟止损',
+            '正式 SL／2R 成交后固定；SL1 与 MM 仅保留结构参考；超过持有期限在可交易日收盘退出',
+            '前复权研究价按证券 tick 定向网格化，不等同于还原历史未复权委托价',
+        ]
+    else:
+        execution_limits = [
+            '本回执仅供策略迭代使用，按 PR #66 前的 SL1／MM v1 口径从完整行情重新生成',
+            '入场与结构失效／MM 同日发生时保守不成交',
+            'A 股买入日按 T+1 不退出；买入日破 SL1 则下一可交易日开盘延迟止损',
+            'SL1／MM 成交后固定；超过持有期限在可交易日收盘退出',
+        ]
+    report.update(execution_model=execution_model, errors=errors, coverage_warnings=warnings,
                   complete=not stopped and not errors and not warnings,
                   stop_reason='已停止；只保存完整回放完毕的标的，本次是部分结果' if stopped else '',
                   requested_datasets=len(ids), processed_datasets=len(snapshots),
@@ -141,16 +202,14 @@ def execute_replay(service, job, spec):
                   h2_settings=asdict(settings), assumptions={k: v for k, v in asdict(costs).items()
                       if k in ('holding_bars', 'commission_bps', 'sell_tax_bps', 'slippage_bps')}, timeframe='daily',
                   start=spec['start'], end=end, coverage_end=coverage_end, scope=spec.get('scope', 'specified'),
-                  research_version=digest((strategy.version + dumps(asdict(settings))).encode()),
+                  research_version=digest((execution_model + strategy.version + dumps(asdict(settings))).encode()),
                   engine_version=engine,
                   performance=dict(elapsed_seconds=time.perf_counter() - started,
                                    calculated=calculated, reused=reused, cache_enabled=bool(use_cache)),
                   limitations=['独立机会允许重叠；不模拟组合资金、仓位或复利',
                                '腾讯不复权历史跨除权可能影响信号；不包含分红及除权股数调整，不直接等同总回报',
                                '日线无法确认盘中先后、涨跌停排队及实际流动性；单一价格不成交',
-                               '入场与结构失效／MM 同日发生时保守不成交',
-                               'A 股买入日按 T+1 不退出；买入日破 SL1 则下一可交易日开盘延迟止损',
-                               'SL1／MM 成交后固定；超过持有期限在可交易日收盘退出',
+                               *execution_limits,
                                '未结束仓位不强制平仓，不计入胜率或 R 排名',
                                '使用当前历史快照，前复权不是当时可用数据版本；现存名单有幸存者偏差',
                                'CSV 来源未经行情源认证，仅作为导入研究，不作为真实行情验收证明',
@@ -158,6 +217,9 @@ def execute_replay(service, job, spec):
                                '额外风险／MM 筛选在 H2 成立时执行，不是原策略识别条件'],
                   records_path=rel + '/replay.json', report_path=rel + '/report.json',
                   trades_path=rel + '/trades.csv')
+    if execution_model == LEGACY_MODEL:
+        report.update(purpose=ITERATION_BASELINE_PURPOSE,
+                      baseline_source_job=spec['baseline_source_job'])
     if boards is not None:
         report['boards'] = [b for b in BOARDS if b in boards]
     service.store.write_artifact(report['records_path'], dumps(records).encode('utf-8'), job)
@@ -173,7 +235,7 @@ def load_receipt(store, job):
     if not rows:
         raise ValueError('回测回执不存在')
     report = json.loads(rows[0]['result'])
-    if report.get('execution_model') != MODEL:
+    if report.get('execution_model') not in SUPPORTED_MODELS:
         raise ValueError('此记录不属于 GAP H2 执行回放')
     records = json.loads(store.read_artifact(report['records_path']).decode('utf-8'))
     return rows[0], report, records

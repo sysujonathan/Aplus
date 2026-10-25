@@ -144,7 +144,12 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     owns_levels = not h2 and not structure_unavailable and owns_risk_lines(strategy_type)
     risk_levels = []
     lines, line_colors, styles = [], [], []
-    levels = (("entry", TARGET, ":"), ("stop", STOP, "-."), ("mm_target", TARGET, "--")) if h2 else (
+    new_h2_pricing = h2 and str(payload.get('pricing_basis', '')).startswith('gap-floor-sl-2r-')
+    h2_levels = (("entry", TARGET, ":"), ("stop", STOP, "-."),
+                 ("sl1_plan_price", ANNOTATION, ":"), ("target", TARGET, "--"),
+                 ("mm_target", ANNOTATION, "--")) if new_h2_pricing else (
+                 ("entry", TARGET, ":"), ("stop", STOP, "-."), ("mm_target", TARGET, "--"))
+    levels = h2_levels if h2 else (
         ("stop", STOP, "-."), ("target", TARGET, "--"))
     for key, color, dash in levels:
         if h2 and key != 'mm_target' and payload.get('pending_state') != 'PENDING':
@@ -276,8 +281,29 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                     edgecolor=BORDER,
                 ),
             )
-        labels = (("stop", "SL1", STOP), ("mm_target", "MM / TP", TARGET)) if h2 else (
+        h2_labels = (("stop", "SL", STOP), ("sl1_plan_price", "SL1", ANNOTATION),
+                     ("target", "2R", TARGET), ("mm_target", "MM", ANNOTATION)) if new_h2_pricing else (
+                     ("stop", "SL1", STOP), ("mm_target", "MM / TP", TARGET))
+        labels = h2_labels if h2 else (
             ("stop", "SL", STOP), ("target", "TP1", TARGET))
+        h2_label_offsets = {}
+        if new_h2_pricing:
+            visible_levels = sorted(
+                ((key, float(payload[key])) for key, _label, _color in h2_labels
+                 if payload.get(key) is not None and view_low <= float(payload[key]) <= view_high),
+                key=lambda item: item[1], reverse=True,
+            )
+            groups = []
+            for item in visible_levels:
+                if (not groups or
+                        groups[-1][-1][1] - item[1] >= (view_high - view_low) * .018):
+                    groups.append([item])
+                else:
+                    groups[-1].append(item)
+            for group in groups:
+                if len(group) > 1:
+                    for index, (key, _value) in enumerate(group):
+                        h2_label_offsets[key] = (len(group) - 1 - 2 * index) * 6
         for key, label, color in labels:
             if owns_levels:
                 continue
@@ -294,11 +320,21 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                         ha="right", va="bottom", color=color, fontsize=8,
                     )
                 else:
-                    ax.text(
-                        .99, value, f"{label}: {value:.{decimals}f}",
-                        transform=ax.get_yaxis_transform(), ha="right", va="bottom",
-                        color=color, fontsize=8,
-                    )
+                    offset = h2_label_offsets.get(key)
+                    if offset is None:
+                        ax.text(
+                            .99, value, f"{label}: {value:.{decimals}f}",
+                            transform=ax.get_yaxis_transform(), ha="right", va="bottom",
+                            color=color, fontsize=8,
+                        )
+                    else:
+                        ax.annotate(
+                            f"{label}: {value:.{decimals}f}",
+                            xy=(.99, value), xycoords=ax.get_yaxis_transform(),
+                            xytext=(0, offset), textcoords="offset points",
+                            ha="right", va="bottom" if offset > 0 else "top",
+                            color=color, fontsize=8,
+                        )
         if legend_handles:
             legend = ax.legend(
                 handles=legend_handles,

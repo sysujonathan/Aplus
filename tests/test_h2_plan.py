@@ -4,8 +4,9 @@ import pandas as pd
 import pytest
 from unittest.mock import Mock, patch
 
-from workbench.h2_plan import display_plan, plan_at_end, project_plan
-from workbench.prices import offset_tick, tick_size, reaches_entry_tick
+from workbench.h2_plan import display_plan, plan_at_end, project_legacy_plan, project_plan
+from workbench.prices import (grid_offset_tick, offset_tick, reaches_entry_tick,
+                              reaches_grid_entry, tick_size)
 from workbench.strategies import calculate, catalog, signal_at_end, verify_frozen
 from workbench.store import Store
 from gui.chart_panel import ChartPanel, render_chart
@@ -46,24 +47,28 @@ def anchored_plan(spec, bars, day):
     return plan_at_end(instance, calculated, 'sh.600000', day)
 
 
-def test_daily_entry_sl1_and_shared_risk_basis(h2_spec, h2_bars):
+def test_daily_entry_floor_sl_two_r_and_reference_levels(h2_spec, h2_bars):
     first = signal_at_end(h2_spec, h2_bars)
     assert first is not None
     assert first['h2_setup_date'] == h2_bars.date.iloc[-1]
     assert first['pending_state'] == 'PENDING'
     assert first['gap_floor'] == 10
     assert first['entry_plan_price'] == 11.61
+    assert first['sl_plan_price'] == first['stop'] == 9.99
     assert first['sl1_plan_price'] == 10.49
-    assert first['target'] == first['mm_target'] == 14
-    assert first['stop'] != first['gap_floor']
+    assert first['tp_plan_price'] == first['target'] == 14.85
+    assert first['mm_target'] == 14
+    assert first['tp_r_multiple'] == pytest.approx(2)
     second_bars = append_bar(h2_bars, 11.4, 10.3)
     second = signal_at_end(h2_spec, second_bars)
     assert second['setup_date'] == first['setup_date']
     assert second['entry_plan_price'] == 11.41
+    assert second['sl_plan_price'] == second['stop'] == 9.99
     assert second['sl1_plan_price'] == 10.29
     assert second['sl1_reference_date'] == second_bars.date.iloc[-1]
-    assert second['initial_risk_pct'] == pytest.approx((11.41 - 10.29) / 11.41 * 100)
-    assert second['mm_r_multiple'] == pytest.approx((14 - 11.41) / (11.41 - 10.29))
+    assert second['target'] == 14.25
+    assert second['initial_risk_pct'] == pytest.approx((11.41 - 9.99) / 11.41 * 100)
+    assert second['mm_r_multiple'] == pytest.approx((14 - 11.41) / (11.41 - 9.99))
     assert second['rating'] == first['rating']
     assert second['setup_evaluation'] == first['setup_evaluation']
     assert second['rating']['factors']
@@ -109,6 +114,25 @@ def test_sl1_excludes_breakout_and_includes_first_leg(h2_spec, h2_bars):
     assert plan['sl1_reference_low'] == 10.2
     assert plan['sl1_reference_date'] == h2_bars.date.iloc[127]
     assert plan['sl1_plan_price'] == 10.19
+    assert plan['stop'] == 9.99
+
+
+def test_acceptance_prices_are_exact_and_mm_remains_structural_reference():
+    frame = pd.DataFrame({
+        'date': ['2026-01-02', '2026-01-05', '2026-01-06'],
+        'open': [10.5, 11.0, 11.5], 'high': [11.0, 11.4, 11.85],
+        'low': [10.4, 10.7, 10.8], 'close': [10.9, 11.3, 11.8],
+        'volume': [1000., 1000., 1000.],
+    })
+    frame.attrs['code'] = 'sh.600000'
+    structure = dict(h2_setup_date='2026-01-06', bo_date='2026-01-02',
+                     gap_floor=10.40, mm_target=15.51, prior_gap_structures=[])
+    plan = project_plan(frame, structure, 'sh.600000')
+    assert plan['entry'] == 11.86
+    assert plan['stop'] == 10.39
+    assert plan['target'] == 14.80
+    assert plan['mm_target'] == 15.51
+    assert plan['target'] != plan['mm_target']
 
 
 def test_display_uses_latest_plan_and_preserves_original_h2(h2_spec, h2_bars):
@@ -117,7 +141,7 @@ def test_display_uses_latest_plan_and_preserves_original_h2(h2_spec, h2_bars):
     before = dict(payload)
     plan = display_plan(h2_spec, latest, payload, 'sh.600000', payload['setup_date'], 'watch')
     assert plan['entry'] == 11.41
-    assert plan['stop'] == 10.29
+    assert plan['stop'] == 9.99
     assert plan['plan_asof'] == latest.date.iloc[-1]
     assert plan['h2_setup_date'] == payload['setup_date']
     assert plan['bo_date'] == payload['bo_date']
@@ -186,7 +210,40 @@ def test_plan_candidate_survives_sub_tick_high_where_frozen_projection_ends(h2_s
     assert signal_at_end(h2_spec, latest, plan_prices=False) is None
     live = signal_at_end(h2_spec, latest)
     assert live['pending_state'] == 'PENDING'
-    assert live['entry'] == 11.615
+    assert live['entry'] == 11.62
+
+
+def test_directional_tick_grid_preserves_required_distance_and_exact_two_r():
+    from decimal import Decimal
+    from workbench.h2_plan import _two_r_target
+    entry = grid_offset_tick('sh.600000', Decimal('11.605'), 1)
+    stop = grid_offset_tick('sh.600000', Decimal('10.405'), -1)
+    sl1 = grid_offset_tick('sh.600000', Decimal('10.405'), -1)
+    target = _two_r_target(entry, stop, .01)
+    assert (entry, stop, sl1, target) == (11.62, 10.39, 10.39, 14.08)
+    assert Decimal(str(entry)) >= Decimal('11.605') + Decimal('.01')
+    assert Decimal(str(stop)) <= Decimal('10.405') - Decimal('.01')
+    assert Decimal(str(sl1)) <= Decimal('10.405') - Decimal('.01')
+    assert Decimal(str(target)) == Decimal(str(entry)) + 2 * (
+        Decimal(str(entry)) - Decimal(str(stop)))
+    assert not reaches_grid_entry('sh.600000', Decimal('11.605'), Decimal('11.619'))
+    assert reaches_grid_entry('sh.600000', Decimal('11.605'), Decimal('11.62'))
+
+
+def test_legacy_v1_plan_keeps_pre_upgrade_exact_offset_prices():
+    frame = pd.DataFrame({
+        'date': ['2026-01-02', '2026-01-05', '2026-01-06'],
+        'open': [10.5, 11.0, 11.5], 'high': [11.0, 11.4, 11.605],
+        'low': [10.405, 10.7, 10.8], 'close': [10.9, 11.3, 11.6],
+        'volume': [1000., 1000., 1000.],
+    })
+    frame.attrs['code'] = 'sh.600000'
+    structure = dict(h2_setup_date='2026-01-06', bo_date='2026-01-02',
+                     gap_floor=10.405, mm_target=15.51, prior_gap_structures=[])
+    plan = project_legacy_plan(frame, structure, 'sh.600000')
+    assert plan['entry'] == 11.615
+    assert plan['stop'] == 10.69
+    assert plan['target'] == 15.51
 
 
 def test_setup_evaluation_is_causal_and_rating_can_be_disabled(h2_spec, h2_bars):
@@ -287,7 +344,8 @@ def test_etf_plan_and_card_use_a_mill_tick(h2_spec, h2_bars):
     from matplotlib.axes import Axes
     h2_bars.attrs.update(code='sh.510300', instrument_type='etf')
     plan = signal_at_end(h2_spec, h2_bars)
-    assert plan['entry'] == 11.601 and plan['stop'] == 10.499
+    assert plan['entry'] == 11.601 and plan['stop'] == 9.999
+    assert plan['sl1_plan_price'] == 10.499 and plan['target'] == 14.805
     assert plan['price_tick'] == .001 and plan['price_decimals'] == 3
     halfway = append_bar(h2_bars, 11.6005, 10.5)
     assert signal_at_end(h2_spec, halfway)['pending_state'] == 'PENDING'
@@ -301,7 +359,7 @@ def test_etf_plan_and_card_use_a_mill_tick(h2_spec, h2_bars):
     with patch.object(Axes, 'text', capture):
         render_chart(calculated, plan, '', instance.get_metadata(),
                      strategy=instance, strategy_type=h2_spec.id)
-    assert any('Entry 11.601' in text and 'SL1 10.499' in text for text in labels)
+    assert any('Entry 11.601' in text and 'SL 9.999' in text and '2R 14.805' in text for text in labels)
 
 
 @pytest.mark.parametrize('high,low,state', [(11.4, 10.3, 'PENDING'), (11.7, 10.4, 'TRIGGERED')])
@@ -432,10 +490,60 @@ def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spe
                      strategy=instance, strategy_type=h2_spec.id)
     instance.annotate_chart.assert_not_called()
     assert any('风险' in text and '收益' in text for text in labels)
-    assert any('Entry 11.41' in text and 'SL1 10.29' in text for text in labels)
+    assert any('Entry 11.41' in text and 'SL 9.99' in text and '2R 14.25' in text for text in labels)
+    assert any('SL1参考 10.29' in text and 'MM参考 14.00' in text for text in labels)
     assert not any('Rating' in text or 'Quality' in text or 'PB bars' in text for text in labels)
     assert to_hex(colors['H1']).upper() == '#CBD5E1'
     assert plan['rating']['factors']  # Still archived for tracing, outside the decision card.
+
+
+def test_historical_h2_without_pricing_basis_keeps_sl1_mm_labels(h2_spec, h2_bars):
+    from matplotlib.axes import Axes
+    instance, calculated = calculate(h2_spec, h2_bars)
+    current = signal_at_end(h2_spec, h2_bars)
+    historical = dict(current)
+    historical.pop('pricing_basis', None)
+    historical.update(stop=10.49, sl1_plan_price=10.49,
+                      target=14.0, mm_target=14.0, mm_r_multiple=1.26)
+    labels, actual = [], Axes.text
+
+    def capture(ax, x, y, text, *args, **kwargs):
+        labels.append(text)
+        return actual(ax, x, y, text, *args, **kwargs)
+
+    with patch.object(Axes, 'text', capture):
+        render_chart(calculated, historical, '', instance.get_metadata(),
+                     strategy=instance, strategy_type=h2_spec.id)
+    assert any('Entry 11.61' in text and 'SL1 10.49' in text and 'MM 14.00' in text
+               for text in labels)
+    assert not any('SL 10.49' in text or '2R 14.00' in text for text in labels)
+
+
+def test_nearby_h2_price_labels_move_text_without_moving_price_lines(h2_spec, h2_bars):
+    from matplotlib.axes import Axes
+    instance, calculated = calculate(h2_spec, h2_bars)
+    plan = signal_at_end(h2_spec, h2_bars)
+    plan = dict(plan, sl1_plan_price=10.00, target=11.85, tp_plan_price=11.85,
+                mm_target=11.84)
+    annotations = []
+    original = Axes.annotate
+
+    def capture(self, text, *args, **kwargs):
+        if text in ('Gap Floor',) or text.startswith(('SL:', 'SL1:', '2R:', 'MM:')):
+            annotations.append((text, kwargs.get('xy') or args[0], kwargs.get('xytext')))
+        return original(self, text, *args, **kwargs)
+
+    with patch.object(Axes, 'annotate', capture):
+        render_chart(calculated, plan, '', instance.get_metadata(),
+                     strategy=instance, strategy_type=h2_spec.id)
+    prices = {text: xy[1] for text, xy, _offset in annotations if ':' in text}
+    assert prices == {'SL: 9.99': 9.99, 'SL1: 10.00': 10.0,
+                      '2R: 11.85': 11.85, 'MM: 11.84': 11.84}
+    offsets = {text: offset for text, _xy, offset in annotations if ':' in text}
+    assert offsets['SL: 9.99'] != offsets['SL1: 10.00']
+    assert offsets['2R: 11.85'] != offsets['MM: 11.84']
+    floor = next(item for item in annotations if item[0] == 'Gap Floor')
+    assert floor[1][1] == 10 and floor[2] == (-38, -42)
 
 
 def test_scan_archives_new_plan_without_replacing_legacy_or_duplicating_manual_plan(tmp_path, h2_spec, h2_bars):
@@ -464,14 +572,14 @@ def test_scan_archives_new_plan_without_replacing_legacy_or_duplicating_manual_p
         assert new_id != oid
         rows = store.rows('SELECT * FROM observations WHERE id=?', (new_id,))
         payload = json.loads(rows[0]['payload'])
-        assert payload['entry'] == 11.61 and payload['stop'] == 10.49
-        assert payload['target'] == 14
+        assert payload['entry'] == 11.61 and payload['stop'] == 9.99
+        assert payload['sl1_plan_price'] == 10.49 and payload['target'] == 14.85
         assert payload['plan_version']
         assert json.loads(store.rows('SELECT payload FROM observations WHERE id=?', (oid,))[0]['payload']) == legacy
         second = wait_for(store, service.submit('scan', settings))
         assert json.loads(second['result'])['reused'] == 1
         assert len(store.rows('SELECT * FROM plans')) == 1
-        assert store.save_plan(new_id, '观察', 11.61, 10.49, 14, 100, '测试更新') == pid
+        assert store.save_plan(new_id, '观察', 11.61, 9.99, 14.85, 100, '测试更新') == pid
         assert len(store.rows('SELECT * FROM plans')) == 1
     finally:
         service.pool.shutdown()
