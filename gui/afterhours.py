@@ -11,8 +11,9 @@ import ttkbootstrap as ttk
 from PIL import ImageTk
 
 from workbench.backtest import Assumptions
-from workbench.h2_replay import H2Settings, LABELS, MODEL
-from workbench.h2_replay_service import available_snapshots, load_receipt
+from workbench.h2_replay import H2Settings, LABELS, LEGACY_MODEL, MODEL, SUPPORTED_MODELS
+from workbench.h2_replay_service import (ITERATION_BASELINE_PURPOSE, available_snapshots,
+                                         load_receipt)
 from workbench.market import BOARDS, completed_date
 from .data import code_names
 from .h2_replay_chart import render_replay
@@ -422,7 +423,8 @@ class AfterhoursPage(ttk.Frame):
     def _sort_rows(self, column):
         self._sort_desc = not self._sort_desc if self._sort_column == column else True
         self._sort_column = column
-        for key, title in zip(self.tree['columns'], ['H2 日期', '代码', '名称', '成交/待挂', 'SL1', '风险', '结局', '净 R']):
+        stop_caption = 'SL1' if self.report.get('execution_model') == LEGACY_MODEL else 'SL'
+        for key, title in zip(self.tree['columns'], ['H2 日期', '代码', '名称', '成交/待挂', stop_caption, '风险', '结局', '净 R']):
             self.tree.heading(key, text=title + (' ↓' if self._sort_desc else ' ↑') if key == column else title)
         self._fill_rows()
 
@@ -535,12 +537,14 @@ class AfterhoursPage(ttk.Frame):
         self._schedule_preview()
 
     def _refresh_history(self):
-        rows = self.store.backtest_history(MODEL, include_deleted=True)
+        rows = self.store.backtest_history(SUPPORTED_MODELS, include_deleted=True)
         self.receipts = {}
         self._history_rows = {}
         self._deleted_history_rows = {}
         for row in rows:
             report = json.loads(row['result'])
+            if report.get('purpose') == ITERATION_BASELINE_PURPOSE:
+                continue
             if row['display']['deleted']:
                 self._deleted_history_rows[row['id']] = (row, report)
                 continue
@@ -620,6 +624,7 @@ class AfterhoursPage(ttk.Frame):
 
     def _show_report(self, row, report, records):
         self.report, self.records = report, records
+        self.tree.heading('stop', text='SL1' if report.get('execution_model') == LEGACY_MODEL else 'SL')
         self._trade = self._preview_trade = None
         self.preview_navigation.reset(False)
         self.chart_navigation.reset(False)

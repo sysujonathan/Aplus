@@ -72,7 +72,13 @@ def draw_h2(ax, plot, plan):
 
     dates = plot.date.astype(str).str[:10].tolist()
     state = plan.get('pending_state', 'UNAVAILABLE')
+    new_pricing = str(plan.get('pricing_basis', '')).startswith('gap-floor-sl-2r-')
     decimals = plan.get('price_decimals', 2)
+    floor_offset = (-12, -28)
+    if (new_pricing and plan.get('gap_floor') is not None and plan.get('sl_plan_price') is not None
+            and plan.get('price_tick')
+            and abs(plan['gap_floor'] - plan['sl_plan_price']) <= plan['price_tick'] * 1.01):
+        floor_offset = (-38, -42)
 
     def mark(label, day, price, color, offset):
         if day not in dates or price is None:
@@ -108,7 +114,7 @@ def draw_h2(ax, plot, plan):
         ('BO', 'bo_date', 'bo_high', ACCENT, (0, 16)),
         ('H1', 'h1_date', 'h1_high', '#8E24AA', (0, 30)),
         ('MM low', 'mm_low_date', 'mm_low', MUTED, (18, -18)),
-        ('Gap Floor', 'gap_floor_date', 'gap_floor', ACCENT, (-12, -28)),
+        ('Gap Floor', 'gap_floor_date', 'gap_floor', ACCENT, floor_offset),
     ):
         mark(label, plan.get(day_key), plan.get(price_key), color, offset)
     # The pullback setup is not the subsequent upside trigger. Only a verified
@@ -143,16 +149,26 @@ def draw_h2(ax, plot, plan):
              STOP, (18, -28))
 
     risk = plan.get('initial_risk_pct')
-    reward = plan.get('mm_r_multiple')
+    reward = plan.get('tp_r_multiple') if new_pricing else plan.get('mm_r_multiple')
     gaps = plan.get('prior_open_gap_count')
     if state == 'PENDING':
         headline = (plan.get('replay_caption', '明日挂单计划') + '\n'
                     + (f'风险  {risk:.2f}%' if risk is not None else '风险  待核对') + '\n'
                     + (f'收益  {reward:.2f}R' if reward is not None else '收益  待核对') + '\n'
                     + (f'趋势  前序开放缺口 {gaps}个' if gaps is not None else '趋势  数据不足'))
-        prices = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
-            ('Entry', 'entry_plan_price'), ('SL1', 'sl1_plan_price'), ('MM', 'mm_target'))
-                            if plan.get(key) is not None)
+        if new_pricing:
+            primary = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
+                ('Entry', 'entry_plan_price'), ('SL', 'sl_plan_price'), ('2R', 'tp_plan_price'))
+                               if plan.get(key) is not None)
+            references = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
+                ('SL1参考', 'sl1_plan_price'), ('MM参考', 'mm_target')) if plan.get(key) is not None)
+            if plan.get('mm_r_multiple') is not None:
+                references += f' ({plan["mm_r_multiple"]:.2f}R)'
+            prices = primary + ('\n' + references if references else '')
+        else:
+            prices = '   '.join(f'{label} {plan[key]:.{decimals}f}' for label, key in (
+                ('Entry', 'entry_plan_price'), ('SL1', 'sl1_plan_price'), ('MM', 'mm_target'))
+                                if plan.get(key) is not None)
     else:
         label = STATE_LABELS.get(state, state)
         if plan.get('state_reason') == 'target_already_reached':

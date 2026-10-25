@@ -313,6 +313,7 @@ class Store:
 
     def backtest_history(self, execution_model, *, include_deleted=False):
         """Stable display identities in existing meta; reports remain immutable."""
+        models = {execution_model} if isinstance(execution_model, str) else set(execution_model)
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             counter = db.execute("SELECT value FROM meta WHERE key='backtest_display_counter'").fetchone()
@@ -325,7 +326,7 @@ class Store:
                     report = json.loads(row['result'])
                 except (ValueError, TypeError):
                     continue
-                if not isinstance(report, dict) or report.get('execution_model') != execution_model:
+                if not isinstance(report, dict) or report.get('execution_model') not in models:
                     continue
                 key = 'backtest_display:' + row['id']
                 saved = db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
