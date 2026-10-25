@@ -268,6 +268,23 @@ def test_canary_and_accelerated_have_opposite_deterministic_split(
     assert fast_calls == len(keys) - expected_original
 
 
+@pytest.mark.parametrize('rate, expected', [(0, 0), (1, 4096)])
+def test_sampling_boundaries_are_exact(store, monkeypatch, rate, expected):
+    fast = controller(store, monkeypatch, 'ACCELERATED', rate=rate)
+    sampled = sum(fast._sampled(f'boundary-{index}') for index in range(4096))
+    assert sampled == expected
+
+
+def test_midrate_sampling_is_deterministic_and_close_to_configured_ratio(
+        store, monkeypatch):
+    fast = controller(store, monkeypatch, 'ACCELERATED', rate=0.37)
+    keys = [f'distribution-{index}' for index in range(4096)]
+    first = [fast._sampled(key) for key in keys]
+    second = [fast._sampled(key) for key in keys]
+    assert first == second
+    assert abs(sum(first) / len(first) - 0.37) < 0.02
+
+
 def test_version_runtime_and_approval_changes_fall_back(store, monkeypatch):
     spec = catalog(store)['STRATEGY_3K']
     monkeypatch.setenv(MODE_ENV, 'SHADOW')

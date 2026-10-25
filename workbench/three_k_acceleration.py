@@ -7,6 +7,7 @@ import os
 import platform
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -331,8 +332,14 @@ class ThreeKFastRejector:
             pass
 
     def _sampled(self, sample_key):
-        value = int(digest(str(sample_key).encode())[:16], 16) / float(0xffffffffffffffff)
-        return value < self.rate
+        if self.rate <= 0:
+            return False
+        if self.rate >= 1:
+            return True
+        sample_space = 1 << 64
+        threshold = int(Decimal(str(self.rate)) * sample_space)
+        value = int(digest(str(sample_key).encode())[:16], 16)
+        return value < threshold
 
     def _trip_fuse(self, reason, sample_key, original=None, exception=None):
         self.fused = True
