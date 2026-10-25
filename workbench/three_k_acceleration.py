@@ -22,6 +22,10 @@ VALID_MODES = {'OFF', 'SHADOW', 'CANARY', 'ACCELERATED'}
 EXPECTED_RELEASE = '185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c'
 EXPECTED_CALCULATION = '7ee2750c5c14e317f2755158589bf6eac37bf40ec5b4282e0bf4ab17ac5e19e5'
 EXPECTED_ADAPTER_SHA = '844f211f2b09eb10e8217d0aa8421b52cf738d7b56623b05925e4d9ccc138a92'
+EXPECTED_SUPPORT_SHAS = {
+    'workbench/scan_cache.py': '6c38124c10af76a74be214cdd2fbce936821ca701a975edb700150543ed48676',
+    'workbench/store.py': 'e6b1151a8d4ce3f3795ca24836cdfe82785a99ce02cc9f86badf3745769af048',
+}
 EXPECTED_METADATA = {
     'display_name': '3K',
     'signal_column': 'signal_3k_gap_test',
@@ -41,6 +45,10 @@ def _runtime():
             np.__version__, pd.__version__)
 
 
+def _support_shas():
+    return {path: digest((ROOT / path).read_bytes()) for path in EXPECTED_SUPPORT_SHAS}
+
+
 def current_binding_id():
     source_sha = digest(Path(__file__).read_bytes())
     service_sha = digest((ROOT / 'workbench/service.py').read_bytes())
@@ -53,6 +61,7 @@ def current_binding_id():
         'runtime': _runtime(),
         'source': source_sha,
         'service': service_sha,
+        'support': _support_shas(),
     }).encode())
 
 
@@ -124,9 +133,53 @@ def assess_latest_bar(frame, prepared):
         return GateAssessment(False, False, '公共阳线指标与原始价格不一致')
 
     qualifies = bool(expected_bullish[-1] and close[-1] > high[-2])
-    reason = ('末根可能形成3K回调确认' if qualifies
-              else '末根不是阳线或未收盘突破前一根最高价')
-    return GateAssessment(True, not qualifies, reason)
+    if qualifies:
+        # The full detector will run, so corrupted secondary indicators keep
+        # their original result/exception semantics without duplicate work.
+        return GateAssessment(True, False, '末根可能形成3K回调确认')
+
+    # A rejected sample skips the frozen detector, so every public value that
+    # detector consumes must be the exact value produced from the same OHLCV.
+    # Numeric coercion alone is insufficient: a finite but stale/corrupt value
+    # can alter the frozen detector just as a text value can hide its exception.
+    raw_open, raw_high, raw_low, raw_close = opening, high, low, close
+    candle_range = raw_high - raw_low
+    safe_range = np.where(candle_range == 0, 1e-9, candle_range)
+    expected_ema20 = np.empty(len(raw_close), dtype=float)
+    expected_ema20[0] = raw_close[0]
+    alpha = 2.0 / 21.0
+    for index in range(1, len(raw_close)):
+        expected_ema20[index] = (alpha * raw_close[index]
+                                 + (1.0 - alpha) * expected_ema20[index - 1])
+    true_range = np.full(len(raw_close), np.nan, dtype=float)
+    true_range[1:] = np.maximum(
+        candle_range[1:],
+        np.maximum(np.abs(raw_high[1:] - raw_close[:-1]),
+                   np.abs(raw_low[1:] - raw_close[:-1])))
+    expected_atr = np.full(len(raw_close), np.nan, dtype=float)
+    for index in range(1, len(raw_close)):
+        expected_atr[index] = true_range[max(1, index - 13):index + 1].mean()
+    expected_indicators = {
+        'ema20': expected_ema20,
+        'atr': expected_atr,
+        'body_pct': np.abs(raw_close - raw_open) / safe_range,
+        'upper_wick_pct': (raw_high - np.maximum(raw_open, raw_close)) / safe_range,
+        'lower_wick_pct': (np.minimum(raw_open, raw_close) - raw_low) / safe_range,
+        'close_loc': (raw_close - raw_low) / safe_range,
+    }
+    for column, expected in expected_indicators.items():
+        actual_source = prepared[column]
+        if not pd.api.types.is_numeric_dtype(actual_source.dtype):
+            return GateAssessment(False, False, f'公共指标 {column} 不是可信数值')
+        try:
+            actual = actual_source.to_numpy(dtype=float)
+        except (TypeError, ValueError):
+            return GateAssessment(False, False, f'公共指标 {column} 不是可信数值')
+        if not np.allclose(actual, expected,
+                           rtol=1e-12, atol=1e-12, equal_nan=True):
+            return GateAssessment(False, False, f'公共指标 {column} 与原始价格不一致')
+
+    return GateAssessment(True, True, '末根不是阳线或未收盘突破前一根最高价')
 
 
 class ThreeKFastRejector:
@@ -191,6 +244,8 @@ class ThreeKFastRejector:
             return False, '3K 策略版本变化，已回退原版'
         if digest((ROOT / 'workbench/strategies.py').read_bytes()) != EXPECTED_ADAPTER_SHA:
             return False, '正式输出适配层变化，已回退原版'
+        if _support_shas() != EXPECTED_SUPPORT_SHAS:
+            return False, '缓存或熔断持久化实现变化，已回退原版'
         from .scan_cache import calculation_versions
         if calculation_versions([self.spec])[self.spec.id] != EXPECTED_CALCULATION:
             return False, '3K 关键依赖变化，已回退原版'

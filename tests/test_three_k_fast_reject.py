@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -77,7 +78,10 @@ def test_gate_matches_frozen_latest_confirmation_necessity(frame):
     assert assess_latest_bar(bearish, prepare_indicators(bearish)).reject
 
 
-@pytest.mark.parametrize('mutation', ['bad_date', 'bad_price', 'changed_prepared', 'bad_bullish'])
+@pytest.mark.parametrize('mutation', [
+    'bad_date', 'bad_price', 'changed_prepared', 'bad_bullish',
+    'text_atr', 'infinite_ema', 'missing_body', 'stale_close_loc',
+])
 def test_untrusted_input_never_fast_rejects(frame, mutation):
     raw = reject_frame(frame)
     prepared = prepare_indicators(raw)
@@ -87,10 +91,55 @@ def test_untrusted_input_never_fast_rejects(frame, mutation):
         raw.loc[raw.index[-1], 'high'] = raw.close.iloc[-1] - 1
     elif mutation == 'changed_prepared':
         prepared.loc[prepared.index[-1], 'close'] += 1
-    else:
+    elif mutation == 'bad_bullish':
         prepared.loc[prepared.index[-1], 'is_bullish'] = False
+    elif mutation == 'text_atr':
+        prepared.loc[prepared.index[-1], 'atr'] = 'broken'
+    elif mutation == 'infinite_ema':
+        prepared.loc[prepared.index[-1], 'ema20'] = np.inf
+    elif mutation == 'missing_body':
+        prepared.loc[prepared.index[-1], 'body_pct'] = np.nan
+    else:
+        prepared.loc[prepared.index[-1], 'close_loc'] = 0.123456
     assessment = assess_latest_bar(raw, prepared)
     assert not assessment.safe and not assessment.reject
+
+
+def test_corrupt_public_indicator_runs_original_and_preserves_exception(
+        store, frame, monkeypatch):
+    fast = controller(store, monkeypatch, 'ACCELERATED', rate=0)
+    raw = reject_frame(frame)
+    prepared = prepare_indicators(raw)
+    prepared.loc[prepared.index[-1], 'atr'] = 'broken'
+
+    with pytest.raises(TypeError, match='冻结3K指标异常'):
+        fast.run(lambda: (_ for _ in ()).throw(TypeError('冻结3K指标异常')),
+                 raw, prepared, 'corrupt-atr')
+    assert not fast.fused and fast.mode == 'ACCELERATED'
+
+
+@pytest.mark.parametrize('relative', ['workbench/scan_cache.py', 'workbench/store.py'])
+def test_support_implementation_change_invalidates_binding_and_old_approval(
+        store, monkeypatch, relative):
+    old_binding = current_binding_id()
+    target = (Path(__file__).resolve().parents[1] / relative).resolve()
+    original_read_bytes = Path.read_bytes
+
+    def changed_bytes(path):
+        content = original_read_bytes(path)
+        return content + b'\n# changed in binding regression\n' if path.resolve() == target else content
+
+    monkeypatch.setattr(Path, 'read_bytes', changed_bytes)
+    new_binding = current_binding_id()
+    assert new_binding != old_binding
+
+    monkeypatch.setenv(MODE_ENV, 'ACCELERATED')
+    monkeypatch.setenv(APPROVAL_ENV, old_binding)
+    fast = ThreeKFastRejector(store, 'changed-support', catalog(store)['STRATEGY_3K'])
+    assert fast.mode == 'OFF'
+    fallback = store.rows(
+        "SELECT detail FROM events WHERE action='3K快速拒绝回退原版' ORDER BY seq DESC LIMIT 1")
+    assert fallback and '缓存或熔断持久化实现变化' in fallback[0]['detail']
 
 
 def test_shadow_preserves_payload_and_trips_fuse_on_difference(store, frame, monkeypatch):
