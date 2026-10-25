@@ -186,6 +186,13 @@ def test_store_contract_ignores_unrelated_code_but_tracks_required_behavior():
     assert _store_contract_sha(changed) != baseline
 
 
+def test_store_contract_fingerprint_does_not_depend_on_runtime_ast_dump(monkeypatch):
+    monkeypatch.setattr('workbench.three_k_acceleration.ast.dump',
+                        lambda *_args, **_kwargs: pytest.fail(
+                            '持久化契约不能依赖 Python 版本相关的 AST dump'))
+    assert _store_contract_sha()
+
+
 def test_shadow_preserves_payload_and_trips_fuse_on_difference(store, frame, monkeypatch):
     fast = controller(store, monkeypatch, 'SHADOW')
     payload = {'asof': '2024-08-09', 'setup_date': '2024-08-09',

@@ -27,7 +27,7 @@ EXPECTED_ADAPTER_SHA = '844f211f2b09eb10e8217d0aa8421b52cf738d7b56623b05925e4d9c
 STORE_CONTRACT_KEY = 'workbench/store.py:3k-persistence-contract'
 EXPECTED_SUPPORT_SHAS = {
     'workbench/scan_cache.py': '6c38124c10af76a74be214cdd2fbce936821ca701a975edb700150543ed48676',
-    STORE_CONTRACT_KEY: '97568e987daa3897c8a7865b35ca11eec7c5645a9d9063f6e9a4065b90e9fb29',
+    STORE_CONTRACT_KEY: 'a8f7c985ac8e125e0a2abe853d4ec2449ba36c99cd37e18f3d85fbcc2ba28418',
 }
 EXPECTED_METADATA = {
     'display_name': '3K',
@@ -84,10 +84,18 @@ def _store_contract_sha(source=None):
     if set(ddl) != {'meta', 'events', 'scan_cache'}:
         raise ValueError('Store 元数据、事件或缓存表契约不完整')
 
+    def stable_source(node):
+        body = ast.get_source_segment(source, node)
+        decorators = [ast.get_source_segment(source, decorator)
+                      for decorator in node.decorator_list]
+        if body is None or any(decorator is None for decorator in decorators):
+            raise ValueError('Store 持久化契约源码无法读取')
+        return '\n'.join([*(f'@{decorator}' for decorator in decorators), body])
+
     payload = {
-        'functions': {name: ast.dump(functions[name], include_attributes=False)
+        'functions': {name: stable_source(functions[name])
                       for name in required_functions},
-        'methods': {name: ast.dump(methods[name], include_attributes=False)
+        'methods': {name: stable_source(methods[name])
                     for name in required_methods},
         'ddl': ddl,
     }
