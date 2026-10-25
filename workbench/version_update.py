@@ -222,12 +222,11 @@ def _main_can_fast_forward(root, target):
 
 
 def compatible_store_extension(before, after):
-    """Static proof for additive Store APIs, not a schema-number-only exemption.
+    """Check storage boundaries, not byte identity of reviewed business logic.
 
-    Never import either revision or open a database. All module initialization,
-    class structure and existing methods must remain semantically identical.
-    The sole existing-method exception is the audited same-directory short
-    atomic temp name; every other statement in that writer stays unchanged.
+    Never import either revision or open a database. Keep initialization, data
+    location, schema and transaction/artifact infrastructure unchanged. Ordinary
+    business methods may evolve within that boundary on accepted official main.
     """
     def clean(node):
         node = copy.deepcopy(node)
@@ -265,39 +264,83 @@ def compatible_store_extension(before, after):
                 node.body[index] = copy.deepcopy(new_temp)
         return dump(node)
 
+    infrastructure = {'__init__', 'connect', 'atomic_write', 'rows', 'execute',
+                      'event', 'write_artifact', '_write_artifact', 'read_artifact'}
+    annotations_deferred = False
+
+    def business_method_safe(method, previous=None):
+        # Existing definition-time behavior must not gain execution. Optional
+        # literal arguments may be added without freezing the whole API shape.
+        annotations = [method.returns, *(arg.annotation for arg in
+            (*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs,
+             *([method.args.vararg] if method.args.vararg else []),
+             *([method.args.kwarg] if method.args.kwarg else [])))]
+        annotation_nodes = (ast.Name, ast.Load, ast.Attribute, ast.Subscript,
+                            ast.Tuple, ast.List, ast.Constant, ast.BinOp, ast.BitOr, ast.Slice)
+        if method.decorator_list or any(
+                not isinstance(part, annotation_nodes)
+                for annotation in annotations if annotation is not None
+                for part in ast.walk(annotation)):
+            return False
+        if any(annotation is not None for annotation in annotations) and not annotations_deferred:
+            return False  # Only postponed hints avoid definition-time type evaluation.
+        for default in (*method.args.defaults, *(v for v in method.args.kw_defaults if v is not None)):
+            try:
+                ast.literal_eval(default)
+            except (ValueError, TypeError):
+                return False
+        def transaction_sql(node):
+            return [part.args[0].value for part in ast.walk(node)
+                    if isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute)
+                    and part.func.attr in {'execute', 'executemany', 'executescript'}
+                    and part.args and isinstance(part.args[0], ast.Constant)
+                    and isinstance(part.args[0].value, str)
+                    and re.match(r'^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|END)\b', part.args[0].value, re.I)]
+        if previous is not None and transaction_sql(method) != transaction_sql(previous):
+            return False
+        for node in ast.walk(method):
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Delete)):
+                targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target]
+                if any(isinstance(part, ast.Attribute) and part.attr in
+                       {'root', 'path', '_files_lock', '_atomic_local'}
+                       for target in targets for part in ast.walk(target)):
+                    return False
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in {
+                        'exec', 'eval', 'compile', 'setattr', 'delattr', '__import__', 'getattr'}:
+                    return False
+                if isinstance(node.func, ast.Attribute):
+                    if node.func.attr in {'connect', 'commit', 'rollback', 'close'}:
+                        if node.func.attr != 'connect' or not isinstance(node.func.value, ast.Name) or node.func.value.id != 'self':
+                            return False  # Transactions belong to unchanged infrastructure.
+                    if node.func.attr in {'execute', 'executemany', 'executescript', 'rows'}:
+                        if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
+                            return False
+                        if re.search(r'\b(CREATE|ALTER|DROP|ATTACH|DETACH|VACUUM)\b|\bPRAGMA\b|schema_version',
+                                     node.args[0].value, re.I):
+                            return False
+        return True
+
     try:
         old_structure, old = split(before)
         new_structure, new = split(after)
+        annotations_deferred = any(isinstance(node, ast.ImportFrom) and node.module == '__future__'
+            and any(alias.name == 'annotations' for alias in node.names)
+            for node in ast.parse(after).body)
         if old_structure != new_structure or not old.keys() <= new.keys():
             return False
         for name, method in old.items():
-            normalize = writer if name == '_write_artifact' else dump
-            if normalize(method) != normalize(new[name]):
+            if name in infrastructure:
+                normalize = writer if name == '_write_artifact' else dump
+                if normalize(method) != normalize(new[name]):
+                    return False
+            elif dump(method) != dump(new[name]) and not business_method_safe(new[name], method):
                 return False
         for name in new.keys() - old.keys():
-            if name.startswith('_'):
+            if name.startswith('__') or name in infrastructure:
                 return False  # No new lifecycle/dispatch hooks.
-            method = new[name]
-            if method.decorator_list or method.returns or any(
-                    arg.annotation for arg in (*method.args.posonlyargs, *method.args.args, *method.args.kwonlyargs,
-                                              *([method.args.vararg] if method.args.vararg else []),
-                                              *([method.args.kwarg] if method.args.kwarg else []))):
-                return False  # No new class-definition-time execution.
-            for default in (*method.args.defaults, *(v for v in method.args.kw_defaults if v is not None)):
-                try:
-                    ast.literal_eval(default)
-                except (ValueError, TypeError):
-                    return False
-            for node in ast.walk(method):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str) and re.search(
-                        r'\b(CREATE|ALTER|DROP|ATTACH|DETACH|VACUUM)\b|\bPRAGMA\b|schema_version', node.value, re.I):
-                    return False
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name) and node.func.id in {'exec','eval','compile','setattr','delattr','__import__'}:
-                        return False
-                    if isinstance(node.func, ast.Attribute) and node.func.attr in {'execute','executemany','executescript','rows'}:
-                        if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
-                            return False  # Dynamic SQL cannot be proved safe here.
+            if not business_method_safe(new[name]):
+                return False
         return True
     except (SyntaxError, ValueError, TypeError, RecursionError):
         return False
