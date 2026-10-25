@@ -8,7 +8,8 @@ import pytest
 from workbench.backtest import Assumptions
 from workbench.h2_plan import _structure, project_plan
 from workbench.h2_replay import (H2Settings, LEGACY_MODEL, MODEL, ResearchSpec,
-                                 boundary_samples, run_replay, summarize_replay)
+                                 boundary_samples, replay_setup, run_replay,
+                                 summarize_replay)
 from workbench.h2_replay_service import (ITERATION_BASELINE_PURPOSE, available_snapshots,
                                          load_receipt)
 from workbench.market import save_dataset
@@ -165,6 +166,21 @@ def test_open_at_mm_invalidates_before_entry(h2_spec, h2_bars):
     r = study(h2_spec, bars)[0]
     assert r['triggered'] and not r['filled'] and r['status'] == 'mm_first'
     assert r['reason'] == '开盘已先达到 MM，原机会失效'
+
+
+def test_open_at_two_r_before_later_intraday_mm_is_unfilled_not_mm_first(h2_spec, h2_bars):
+    _, calculated = calculate(h2_spec, h2_bars)
+    structure = dict(_structure(calculated, len(calculated) - 1, 60), gap_floor=10.8)
+    bars = append_bar(h2_bars, 14.1, 11.0)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [13.3, 13.8]
+
+    r = replay_setup(bars, len(h2_bars) - 1, structure, H2Settings(), ZERO)
+
+    assert r['trigger_plan']['target'] == 13.25
+    assert r['trigger_plan']['mm_target'] == 14
+    assert r['triggered'] and not r['filled']
+    assert r['status'] == 'unfilled'
+    assert r['reason'] == '开盘已达到计划 2R，不追价成交'
 
 
 @pytest.mark.parametrize('mode', ['one_price', 'ambiguous_sl', 'floor', 'mm'])

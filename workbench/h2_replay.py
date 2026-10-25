@@ -159,12 +159,16 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
             opened_at_mm = opened and float(bar.open) >= prior['mm_target']
             opened_at_target = opened and float(bar.open) >= prior['target']
             fill_at_mm = fill >= prior['mm_target']
+            rejection_status = 'unfilled'
             if opened_at_mm:
                 reason = '开盘已先达到 MM，原机会失效'
+                rejection_status = 'mm_first'
             elif opened_at_target:
                 reason = '开盘已达到计划 2R，不追价成交'
             elif not opened and plan['pending_state'] != 'TRIGGERED':
                 reason = '同日触发与结构失效／MM 的先后无法确认，保守不成交'
+                if plan.get('state_reason') == 'target_already_reached':
+                    rejection_status = 'mm_first'
             elif not _executable(bar):
                 reason = '停牌／单一价格，无法保证成交'
             elif not opened and (bar.open <= prior['stop'] or bar.low <= prior['stop']):
@@ -174,8 +178,7 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
             elif fill >= prior['target']:
                 reason = '跳空／滑点后的入场价已达 2R'
             if reason:
-                record.update(status='mm_first' if opened_at_mm or plan.get('state_reason') == 'target_already_reached'
-                              else 'unfilled', reason=reason)
+                record.update(status=rejection_status, reason=reason)
                 _event(record, day, 'unfilled', reason, plan)
                 break
             record.update(status='open', filled=True, entry_date=day, entry=fill,
