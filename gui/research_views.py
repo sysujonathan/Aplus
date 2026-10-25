@@ -1,5 +1,70 @@
-"""Presentation of immutable research reports; no writes or calculations."""
+"""Read-only presentation and descriptive statistics of saved research trades."""
+import math
+from statistics import mean, median
+
 from workbench.h2_replay import LABELS
+
+
+def _finite_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def holding_distribution(records, category='全部'):
+    """Elapsed daily bars; filter only this distribution, never the report."""
+    if category not in ('全部', '盈利', '亏损'):
+        raise ValueError('未知持仓分布类别')
+    samples = []
+    for record in records:
+        bars, net_r = record.get('holding_bars'), record.get('r_multiple')
+        if record.get('status') != 'closed' or not _finite_number(bars) or bars < 1 or int(bars) != bars:
+            continue
+        if category != '全部' and (not _finite_number(net_r) or
+                (net_r <= 0 if category == '盈利' else net_r >= 0)):
+            continue
+        samples.append(int(bars))
+    bounds = [(1, '1根'), (3, '2–3根'), (5, '4–5根'), (10, '6–10根'),
+              (20, '11–20根'), (30, '21–30根'), (math.inf, '超过30根')]
+    counts = [0] * len(bounds)
+    for bars in samples:
+        index = next(i for i, (upper, _) in enumerate(bounds) if bars <= upper)
+        counts[index] += 1
+    # Keep the usual 1–20 bar scale. Show longer tails whenever present.
+    last = max(4, max((i for i, count in enumerate(counts) if count), default=4))
+    total = len(samples)
+    return dict(total=total, median=median(samples) if samples else None,
+                buckets=[dict(label=label, count=count, share=count/total if total else None)
+                         for (_, label), count in zip(bounds[:last+1], counts[:last+1])])
+
+
+def trade_statistics(records):
+    """Derive new display metrics without rewriting old receipts or prices."""
+    closed = [r for r in records if r.get('status') == 'closed']
+    values = [r['r_multiple'] for r in closed if _finite_number(r.get('r_multiple'))]
+    wins, losses = [r for r in values if r > 0], [r for r in values if r < 0]
+    exits = {}
+    for record in closed:
+        reason = record.get('reason')
+        if not isinstance(reason, str) or not reason.strip():
+            continue
+        if '止损' in reason:
+            label = '止损'
+        elif '止盈' in reason:
+            label = '2R止盈' if '2R' in reason else 'MM止盈' if 'MM' in reason else '止盈'
+        elif '期限' in reason or '到期' in reason:
+            label = '期限退出'
+        else:
+            label = '其他'
+        exits[label] = exits.get(label, 0) + 1
+    exit_total = sum(exits.values())
+    order = ('2R止盈', 'MM止盈', '止盈', '止损', '期限退出', '其他')
+    return dict(holding=holding_distribution(closed),
+                average_win_r=mean(wins) if wins else None,
+                average_loss_r=mean(losses) if losses else None,
+                valid_r_count=len(values), exit_count=exit_total,
+                exits=[dict(label=label, count=exits[label], share=exits[label]/exit_total)
+                       for label in order if label in exits],
+                loss_over_1r=sum(r < -1 for r in values)/len(values) if values else None,
+                loss_over_2r=sum(r < -2 for r in values)/len(values) if values else None)
 
 
 def receipt_time(created, full_date=False):
