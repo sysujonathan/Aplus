@@ -1,11 +1,14 @@
 from copy import deepcopy
+import json
+from unittest.mock import Mock
 import pytest
 
 from gui.research_views import comparison_rows, outcome, scope_caption
-from workbench.h2_replay_service import available_snapshots
+from gui.strategy_iteration import StrategyIterationPage
+from workbench.h2_replay import LEGACY_MODEL, MODEL
+from workbench.h2_replay_service import ITERATION_BASELINE_PURPOSE, available_snapshots
 from workbench.market import BOARDS, save_dataset
 from workbench.store import Store
-from workbench.h2_replay import MODEL
 from workbench.h2_replay_service import load_receipt
 from workbench.service import Service
 from tests.test_workbench import wait_for
@@ -18,6 +21,24 @@ def test_outcome_keeps_v1_mm_and_v2_two_r_semantics_distinct():
     assert outcome({'status': 'closed', 'reason': '人工止盈'}) == '人工止盈'
     assert outcome({'status': 'closed', 'reason': '持有期限退出'}) == '期限退出'
     assert outcome({'status': 'closed', 'reason': '跳空止损'}) == '止损'
+
+
+def test_strategy_iteration_ui_generates_scoped_v1_baseline_from_selected_v2():
+    page = object.__new__(StrategyIterationPage)
+    source = {'id': 'v2-job', 'result': json.dumps({'execution_model': MODEL})}
+    page.service = Mock()
+    page.service.submit.return_value = 'v1-job'
+    page.store = object()
+    page.sources = {'新版': source}
+    page.source = Mock();page.source.get.return_value = '新版'
+    page.run = Mock();page.generate = Mock();page.stop = Mock();page.status = Mock()
+    StrategyIterationPage._generate_baseline(page)
+    page.service.submit.assert_called_once_with('backtest', {
+        'execution_model': LEGACY_MODEL,
+        'purpose': ITERATION_BASELINE_PURPOSE,
+        'baseline_source_job': 'v2-job',
+    })
+    assert page.job == 'v1-job' and page.job_kind == 'baseline'
 
 
 def test_market_boards_use_shared_instrument_classification(tmp_path, h2_bars):

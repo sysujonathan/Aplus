@@ -8,7 +8,7 @@ import math
 import numpy as np
 
 from .backtest import Assumptions
-from .h2_plan import _structure, project_plan
+from .h2_plan import _structure, project_legacy_plan, project_plan
 from .store import digest, dumps
 from .strategies import calculate
 
@@ -16,6 +16,8 @@ from .strategies import calculate
 LEGACY_MODEL = 'gap-h2-daily-execution-v1'
 MODEL = 'gap-h2-daily-execution-v2'
 SUPPORTED_MODELS = (LEGACY_MODEL, MODEL)
+LEGACY_PRICING_BASIS = 'sl1-mm-v1'
+PRICING_BASIS = 'gap-floor-sl-2r-v2-grid'
 LABELS = {'pending': '仍待挂', 'invalidated': '结构失效', 'mm_first': 'MM 已先达到',
           'expired': '等待超时', 'unavailable': '无法复核', 'filtered': '条件过滤',
           'unfilled': '触发未成交', 'open': '持仓未结束', 'closed': '已结束'}
@@ -93,7 +95,7 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
     code = frame.attrs.get('code')
     record = dict(id=digest(f'{code}|{structure["bo_date"]}|{structure["h2_setup_date"]}'.encode())[:24],
                   code=code, setup_date=structure['h2_setup_date'], structure=dict(structure),
-                  execution_model=MODEL, pricing_basis='gap-floor-sl-2r-v1',
+                  execution_model=MODEL, pricing_basis=PRICING_BASIS,
                   status='pending', triggered=False, filled=False, events=[])
     plan = project_plan(frame.iloc[:setup_index + 1], structure, code,
                         lookback=settings.lookback, wait_bars=settings.wait_bars)
@@ -153,16 +155,26 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
                    observed_high=float(bar.high))
             fill = max(float(bar.open), prior['entry']) * (1 + costs.slippage_bps / 10000)
             reason = ''
-            if plan['pending_state'] != 'TRIGGERED':
+            opened = float(bar.open) >= prior['entry']
+            opened_at_mm = opened and float(bar.open) >= prior['mm_target']
+            opened_at_target = opened and float(bar.open) >= prior['target']
+            fill_at_mm = fill >= prior['mm_target']
+            if opened_at_mm:
+                reason = '开盘已先达到 MM，原机会失效'
+            elif opened_at_target:
+                reason = '开盘已达到计划 2R，不追价成交'
+            elif not opened and plan['pending_state'] != 'TRIGGERED':
                 reason = '同日触发与结构失效／MM 的先后无法确认，保守不成交'
             elif not _executable(bar):
                 reason = '停牌／单一价格，无法保证成交'
-            elif bar.open <= prior['stop'] or (bar.open < prior['entry'] and bar.low <= prior['stop']):
+            elif not opened and (bar.open <= prior['stop'] or bar.low <= prior['stop']):
                 reason = '入场与 SL 的先后无法确认，保守不成交'
+            elif fill_at_mm:
+                reason = '跳空／滑点后的入场价已达 MM'
             elif fill >= prior['target']:
                 reason = '跳空／滑点后的入场价已达 2R'
             if reason:
-                record.update(status='mm_first' if plan.get('state_reason') == 'target_already_reached'
+                record.update(status='mm_first' if opened_at_mm or plan.get('state_reason') == 'target_already_reached'
                               else 'unfilled', reason=reason)
                 _event(record, day, 'unfilled', reason, plan)
                 break
@@ -176,6 +188,8 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
             if bar.low <= prior['stop']:
                 t1_stop = True
                 _event(record, day, 't1', '买入日触及 SL；下一可交易日开盘模拟延迟止损')
+            elif bar.low <= prior['gap_floor']:
+                _event(record, day, 'holding', '开盘已成交；其后跌破 Floor 不倒推取消成交，尚未触及 SL')
             elif bar.high >= prior['target']:
                 _event(record, day, 't1', '买入日触及 2R；T+1 当日无法卖出')
             continue
@@ -194,8 +208,113 @@ def replay_setup(frame, setup_index, structure, settings, costs, cancelled=lambd
     return record
 
 
+def replay_setup_legacy(frame, setup_index, structure, settings, costs, cancelled=lambda: False):
+    """PR #66 pre-upgrade v1 semantics, isolated for strategy-iteration baselines."""
+    code = frame.attrs.get('code')
+    record = dict(id=digest(f'{code}|{structure["bo_date"]}|{structure["h2_setup_date"]}'.encode())[:24],
+                  code=code, setup_date=structure['h2_setup_date'], structure=dict(structure),
+                  execution_model=LEGACY_MODEL, pricing_basis=LEGACY_PRICING_BASIS,
+                  status='pending', triggered=False, filled=False, events=[])
+    plan = project_legacy_plan(frame.iloc[:setup_index + 1], structure, code,
+                               lookback=settings.lookback, wait_bars=settings.wait_bars)
+    record['latest_plan'] = plan
+    _event(record, _day(frame, setup_index), 'setup', 'H2 成立；收盘后生成次日计划', plan)
+    risk, rr = plan.get('initial_risk_pct'), plan.get('mm_r_multiple')
+    if plan['pending_state'] != 'PENDING' or risk is None or rr is None:
+        record['status'] = 'unavailable'
+        return record
+    if ((settings.max_risk_pct and risk > settings.max_risk_pct) or
+            (settings.min_mm_r and rr < settings.min_mm_r)):
+        record['status'] = 'filtered'
+        _event(record, _day(frame, setup_index), 'filtered', '被本次额外风险／MM 筛选条件排除')
+        return record
+    t1_stop = False
+    for i in range(setup_index + 1, len(frame)):
+        if cancelled():
+            raise InterruptedError('回测已停止；本次报告不作为完整结果')
+        bar, day = frame.iloc[i], _day(frame, i)
+        if record['filled']:
+            if not _executable(bar):
+                _event(record, day, 'blocked', '停牌／单一价格，保守不模拟退出')
+                continue
+            stop, target = record['stop'], record['target']
+            price, reason = None, ''
+            if t1_stop:
+                price, reason = float(bar.open), 'T+1 延迟止损'
+            elif bar.open <= stop:
+                price, reason = float(bar.open), '跳空止损'
+            elif bar.open >= target:
+                price, reason = target, 'MM 止盈'
+            elif bar.low <= stop:
+                price, reason = stop, 'SL1 止损（同日双触碰优先止损）'
+            elif bar.high >= target:
+                price, reason = target, 'MM 止盈'
+            elif i - record['_fill_pos'] >= costs.holding_bars:
+                price, reason = float(bar.close), '持有期限退出'
+            if price is not None:
+                _close(record, frame, i, price, reason, costs)
+                break
+            _event(record, day, 'holding', '持仓；SL1 与 MM 固定为模拟成交时的计划价')
+            continue
+
+        prior = plan
+        plan = project_legacy_plan(frame.iloc[:i + 1], structure, code,
+                                   lookback=settings.lookback, wait_bars=settings.wait_bars)
+        record['latest_plan'] = plan
+        touched = bar.high >= prior['entry']
+        if i - setup_index > settings.wait_bars:
+            record['status'] = 'expired'
+            _event(record, day, 'expired', '等待期限已过，本日不再有效', plan)
+            break
+        if touched:
+            record.update(triggered=True, trigger_date=day, trigger_plan=dict(prior))
+            _event(record, day, 'trigger', '达到前一日计划价；尚不代表成交', prior,
+                   observed_high=float(bar.high))
+            fill = max(float(bar.open), prior['entry']) * (1 + costs.slippage_bps / 10000)
+            reason = ''
+            if plan['pending_state'] != 'TRIGGERED':
+                reason = '同日触发与结构失效／MM 的先后无法确认，保守不成交'
+            elif not _executable(bar):
+                reason = '停牌／单一价格，无法保证成交'
+            elif bar.open <= prior['stop'] or (bar.open < prior['entry'] and bar.low <= prior['stop']):
+                reason = '入场与 SL1 的先后无法确认，保守不成交'
+            elif fill >= prior['target']:
+                reason = '跳空／滑点后的入场价已达 MM'
+            if reason:
+                record.update(status='mm_first' if plan.get('state_reason') == 'target_already_reached'
+                              else 'unfilled', reason=reason)
+                _event(record, day, 'unfilled', reason, plan)
+                break
+            record.update(status='open', filled=True, entry_date=day, entry=fill,
+                          planned_entry=prior['entry'], stop=prior['stop'], target=prior['target'],
+                          initial_risk_pct=(fill - prior['stop']) / fill * 100,
+                          _fill_pos=i)
+            _event(record, day, 'fill', '模拟成交；买入当日按 T+1 不退出', prior, price=fill,
+                   stop=prior['stop'], target=prior['target'])
+            if bar.low <= prior['stop']:
+                t1_stop = True
+                _event(record, day, 't1', '买入日触及 SL1；下一可交易日开盘模拟延迟止损')
+            elif bar.high >= prior['target']:
+                _event(record, day, 't1', '买入日触及 MM；T+1 当日无法卖出')
+            continue
+        state = plan['pending_state']
+        if state != 'PENDING':
+            status = {'INVALID': 'mm_first' if plan['state_reason'] == 'target_already_reached' else 'invalidated',
+                      'EXPIRED': 'expired'}.get(state, 'unavailable')
+            record['status'] = status
+            _event(record, day, status, LABELS[status], plan)
+            break
+        _event(record, day, 'plan', '收盘更新次日 Entry／SL1；原 MM 保持不变', plan)
+    if record['status'] == 'open':
+        record.update(mark_date=_day(frame, len(frame) - 1),
+                      unrealized_return=float(frame.iloc[-1].close / record['entry'] - 1))
+    record.pop('_fill_pos', None)
+    return record
+
+
 def run_replay(spec, frame, start, end, settings=None, costs=None,
-               progress=lambda *a: None, cancelled=lambda: False, *, prefilter=True):
+               progress=lambda *a: None, cancelled=lambda: False, *, prefilter=True,
+               execution_model=MODEL):
     settings, costs = settings or H2Settings(), costs or Assumptions()
     settings.validate()
     costs.validate()
@@ -203,6 +322,8 @@ def run_replay(spec, frame, start, end, settings=None, costs=None,
     date.fromisoformat(end)
     if start > end:
         raise ValueError('开始日期不能晚于结束日期')
+    if execution_model not in SUPPORTED_MODELS:
+        raise ValueError('不支持的 GAP H2 执行模型')
     source = frame[frame.date <= end].reset_index(drop=True).copy()
     source.attrs.update(frame.attrs)
     adapted = ResearchSpec(spec, settings)
@@ -233,7 +354,8 @@ def run_replay(spec, frame, start, end, settings=None, costs=None,
             structure = _structure(calculated, len(calculated) - 1, settings.lookback)
             if structure and structure['bo_date'] not in seen:
                 seen.add(structure['bo_date'])
-                records.append(replay_setup(source, i, structure, settings, costs, cancelled))
+                replay = replay_setup_legacy if execution_model == LEGACY_MODEL else replay_setup
+                records.append(replay(source, i, structure, settings, costs, cancelled))
         if n % 10 == 0 or n + 1 == len(indices):
             progress(n + 1, len(indices))
     return records

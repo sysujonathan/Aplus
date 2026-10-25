@@ -12,7 +12,8 @@ from PIL import ImageTk
 
 from workbench.backtest import Assumptions
 from workbench.h2_replay import H2Settings, LABELS, LEGACY_MODEL, MODEL, SUPPORTED_MODELS
-from workbench.h2_replay_service import available_snapshots, load_receipt
+from workbench.h2_replay_service import (ITERATION_BASELINE_PURPOSE, available_snapshots,
+                                         load_receipt)
 from workbench.market import BOARDS, completed_date
 from .data import code_names
 from .h2_replay_chart import render_replay
@@ -542,6 +543,8 @@ class AfterhoursPage(ttk.Frame):
         self._deleted_history_rows = {}
         for row in rows:
             report = json.loads(row['result'])
+            if report.get('purpose') == ITERATION_BASELINE_PURPOSE:
+                continue
             if row['display']['deleted']:
                 self._deleted_history_rows[row['id']] = (row, report)
                 continue

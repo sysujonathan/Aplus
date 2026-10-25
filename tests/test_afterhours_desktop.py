@@ -9,7 +9,8 @@ import pytest
 from PIL import Image
 
 from gui.main_window import AplusMainWindow
-from workbench.h2_replay import MODEL, run_replay, summarize_replay
+from workbench.h2_replay import LEGACY_MODEL, MODEL, run_replay, summarize_replay
+from workbench.h2_replay_service import ITERATION_BASELINE_PURPOSE
 from workbench.backtest import Assumptions
 from workbench.store import Store
 from workbench.market import save_dataset
@@ -218,7 +219,12 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             from workbench.stop_research import MODEL as STOP_MODEL
             from workbench.stop_research_service import load_experiment
             gc.collect()
-            experiment=service.submit('backtest',dict(execution_model=STOP_MODEL,source_job=jobs[0]))
+            baseline=service.submit('backtest',dict(execution_model=LEGACY_MODEL,
+                purpose=ITERATION_BASELINE_PURPOSE,baseline_source_job=jobs[0]))
+            assert wait_for(store,baseline)['status']=='completed'
+            page._refresh_history()
+            assert baseline not in page.receipts.values()
+            experiment=service.submit('backtest',dict(execution_model=STOP_MODEL,source_job=baseline))
             assert wait_for(store,experiment)['status']=='completed'
             iteration=window.strategy_iteration
             iteration.service=service
@@ -226,7 +232,7 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             window.update()
             iteration._load(experiment)
             window.update()
-            assert iteration.rows and iteration.report['source_job']==jobs[0]
+            assert iteration.rows and iteration.report['source_job']==baseline
             for geometry in ('1800x1100','1280x760'):
                 window.geometry(geometry);window.update()
                 assert iteration.run.winfo_rootx()+iteration.run.winfo_width()<=window.winfo_rootx()+window.winfo_width()

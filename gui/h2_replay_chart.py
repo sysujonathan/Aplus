@@ -13,7 +13,7 @@ def replay_view(frame, record, event_index, posthoc=False):
     fills = [event for event in events if event['kind'] == 'fill']
     if fills:
         fill = fills[0]
-        new_pricing = payload.get('pricing_basis') == 'gap-floor-sl-2r-v1'
+        new_pricing = str(payload.get('pricing_basis', '')).startswith('gap-floor-sl-2r-')
         payload.update(pending_state='PENDING', entry=fill['price'], stop=fill['stop'],
                        entry_plan_price=fill['price'], target=fill['target'],
                        replay_caption='历史成交计划（非当前待挂价）')

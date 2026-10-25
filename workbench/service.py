@@ -829,7 +829,8 @@ class Service:
         from .h2_replay import LEGACY_MODEL as h2_legacy_model, MODEL as h2_replay_model
         execution_model = spec.get('execution_model')
         if execution_model == h2_legacy_model:
-            raise ValueError('GAP H2 v1 仅用于读取既有 SL1／MM 历史回测；当前版本不能直接新建 v1 回放')
+            from .h2_replay_service import execute_legacy_baseline
+            return execute_legacy_baseline(self, job, spec)
         if execution_model == h2_replay_model:
             from .h2_replay_service import execute_replay
             return execute_replay(self, job, spec)

@@ -72,7 +72,7 @@ def draw_h2(ax, plot, plan):
 
     dates = plot.date.astype(str).str[:10].tolist()
     state = plan.get('pending_state', 'UNAVAILABLE')
-    new_pricing = plan.get('pricing_basis') == 'gap-floor-sl-2r-v1'
+    new_pricing = str(plan.get('pricing_basis', '')).startswith('gap-floor-sl-2r-')
     decimals = plan.get('price_decimals', 2)
     floor_offset = (-12, -28)
     if (new_pricing and plan.get('gap_floor') is not None and plan.get('sl_plan_price') is not None

@@ -10,7 +10,8 @@ from decimal import Decimal
 
 import numpy as np
 
-from .prices import offset_tick, reaches_entry_tick, tick_size
+from .prices import (grid_offset_tick, offset_tick, reaches_entry_tick,
+                     reaches_grid_entry, tick_size)
 from .store import ROOT, digest
 
 
@@ -41,10 +42,13 @@ def _number(value):
 
 
 def _two_r_target(entry, stop, tick):
-    """Return an executable tick-aligned target exactly two planned risks away."""
+    """Return exactly two planned risks from already grid-aligned prices."""
     unit = Decimal(str(tick))
     entry_value, stop_value = Decimal(str(entry)), Decimal(str(stop))
-    return float((entry_value + 2 * (entry_value - stop_value)).quantize(unit))
+    target = entry_value + 2 * (entry_value - stop_value)
+    if target / unit != (target / unit).to_integral_value():
+        raise ValueError('网格化 Entry／SL 未能生成精确 2R 价位')
+    return float(target)
 
 
 def _positions(frame, column):
@@ -116,7 +120,7 @@ def project_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT)
     """Follow one original setup; a newer setup must not replace a watched one."""
     plan = dict(structure or {})
     plan.update(plan_kind='gap-h2-next-session', plan_version=plan_version(),
-                pricing_basis='gap-floor-sl-2r-v1',
+                pricing_basis='gap-floor-sl-2r-v2-grid',
                 pending_state='UNAVAILABLE', state_reason='missing_structure',
                 plan_asof=_date(frame, len(frame) - 1) if len(frame) else None,
                 entry=None, stop=None, target=None, entry_plan_price=None,
@@ -147,6 +151,75 @@ def project_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT)
             state, reason = 'INVALID', 'target_already_reached'
         elif j - signal_pos > wait_bars:
             state, reason = 'EXPIRED', 'timeout'
+        elif reaches_grid_entry(code, ref_high, bar.high, instrument_type=instrument_type):
+            state, reason = 'TRIGGERED', 'previous_plan_price_reached'
+        if state != 'PENDING':
+            end_pos = j
+            break
+        ref_high = float(bar.high)
+    gaps = []
+    for gap in structure.get('prior_gap_structures', []):
+        if gap['date'] in dates:
+            post = frame.iloc[dates.index(gap['date']) + 1:]
+            if post.empty or float(post.low.min()) > gap['floor'] - 1e-3:
+                gaps.append(gap)
+    plan.update(pending_state=state, state_reason=reason,
+                pending_end_date=_date(frame, end_pos) if state != 'PENDING' else None,
+                prior_open_gap_count=len(gaps), prior_open_gaps=gaps,
+                open_gap_scope_start=structure.get('open_gap_scope_start', _date(frame, 0)))
+    if state != 'PENDING':
+        return plan
+    pullback = frame.iloc[bo + 1:]
+    low_pos = bo + 1 + int(np.argmin(pullback.low.to_numpy()))
+    ref_low = float(frame.iloc[low_pos].low)
+    entry = grid_offset_tick(code, ref_high, 1, instrument_type=instrument_type)
+    stop = grid_offset_tick(code, floor, -1, instrument_type=instrument_type)
+    sl1 = grid_offset_tick(code, ref_low, -1, instrument_type=instrument_type)
+    risk = entry - stop
+    formal_target = _two_r_target(entry, stop, tick)
+    plan.update(entry_reference_high=ref_high, entry_reference_date=dates[-1],
+                sl1_reference_low=ref_low, sl1_reference_date=dates[low_pos],
+                entry_plan_price=entry, sl_plan_price=stop, sl1_plan_price=sl1,
+                tp_plan_price=formal_target,
+                entry=entry, stop=stop, target=formal_target,
+                initial_risk_pct=risk / entry * 100 if 0 < stop < entry else None,
+                tp_r_multiple=(formal_target - entry) / risk if 0 < stop < entry < formal_target else None,
+                mm_r_multiple=(target - entry) / risk if 0 < stop < entry < target else None)
+    return plan
+
+
+def project_legacy_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT):
+    """Frozen v1 research plan: dynamic Entry/SL1 with MM as formal target."""
+    plan = dict(structure or {})
+    plan.update(plan_kind='gap-h2-next-session', plan_version=plan_version(),
+                pending_state='UNAVAILABLE', state_reason='missing_structure',
+                plan_asof=_date(frame, len(frame) - 1) if len(frame) else None,
+                entry=None, stop=None, target=None, entry_plan_price=None,
+                sl1_plan_price=None, initial_risk_pct=None, mm_r_multiple=None)
+    if not len(frame) or not structure:
+        return plan
+    dates = frame.date.astype(str).str[:10].tolist()
+    setup_day = structure['h2_setup_date']
+    if setup_day not in dates or structure['bo_date'] not in dates:
+        return plan
+    signal_pos, bo = dates.index(setup_day), dates.index(structure['bo_date'])
+    floor, target = structure['gap_floor'], structure['mm_target']
+    if bo >= signal_pos or not all(_number(v) is not None for v in (floor, target)):
+        return plan
+    ref_high = float(frame.iloc[signal_pos].high)
+    code = code or frame.attrs.get('code')
+    instrument_type = frame.attrs.get('instrument_type')
+    tick = tick_size(code, ref_high, instrument_type=instrument_type)
+    plan.update(price_tick=tick, price_decimals=max(0, -Decimal(str(tick)).as_tuple().exponent))
+    state, reason, end_pos = 'PENDING', '', len(frame) - 1
+    for j in range(signal_pos + 1, len(frame)):
+        bar = frame.iloc[j]
+        if bar.low <= floor + 1e-9:
+            state, reason = 'INVALID', 'gap_floor_broken'
+        elif bar.high >= target:
+            state, reason = 'INVALID', 'target_already_reached'
+        elif j - signal_pos > wait_bars:
+            state, reason = 'EXPIRED', 'timeout'
         elif reaches_entry_tick(code, ref_high, bar.high, instrument_type=instrument_type):
             state, reason = 'TRIGGERED', 'previous_plan_price_reached'
         if state != 'PENDING':
@@ -169,17 +242,13 @@ def project_plan(frame, structure, code=None, *, lookback=60, wait_bars=TIMEOUT)
     low_pos = bo + 1 + int(np.argmin(pullback.low.to_numpy()))
     ref_low = float(frame.iloc[low_pos].low)
     entry = offset_tick(code, ref_high, 1, instrument_type=instrument_type)
-    stop = offset_tick(code, floor, -1, instrument_type=instrument_type)
-    sl1 = offset_tick(code, ref_low, -1, instrument_type=instrument_type)
+    stop = offset_tick(code, ref_low, -1, instrument_type=instrument_type)
     risk = entry - stop
-    formal_target = _two_r_target(entry, stop, tick)
     plan.update(entry_reference_high=ref_high, entry_reference_date=dates[-1],
                 sl1_reference_low=ref_low, sl1_reference_date=dates[low_pos],
-                entry_plan_price=entry, sl_plan_price=stop, sl1_plan_price=sl1,
-                tp_plan_price=formal_target,
-                entry=entry, stop=stop, target=formal_target,
+                entry_plan_price=entry, sl1_plan_price=stop,
+                entry=entry, stop=stop, target=target,
                 initial_risk_pct=risk / entry * 100 if 0 < stop < entry else None,
-                tp_r_multiple=(formal_target - entry) / risk if 0 < stop < entry < formal_target else None,
                 mm_r_multiple=(target - entry) / risk if 0 < stop < entry < target else None)
     return plan
 

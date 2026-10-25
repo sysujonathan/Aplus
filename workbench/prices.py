@@ -1,5 +1,5 @@
 """Price increments selected by confirmed trading instrument, never by price digits."""
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from .market import board_of, code_of
 
@@ -26,10 +26,27 @@ def tick_size(code, price, *, instrument_type=None):
 
 
 def offset_tick(code, reference, direction, *, instrument_type=None):
+    """Legacy arithmetic offset; retained for v1 research and experiment C."""
     if direction not in (-1, 1):
         raise ValueError('tick 方向必须为 +1 或 -1')
     tick = tick_size(code, reference, instrument_type=instrument_type)
     return float(Decimal(str(reference)) + direction * Decimal(str(tick)))
+
+
+def grid_offset_tick(code, reference, direction, *, instrument_type=None):
+    """Offset once, then align outward so the requested distance is never reduced."""
+    if direction not in (-1, 1):
+        raise ValueError('tick 方向必须为 +1 或 -1')
+    value = Decimal(str(reference))
+    tick = Decimal(str(tick_size(code, reference, instrument_type=instrument_type)))
+    if not value.is_finite() or value <= 0:
+        raise ValueError('价格必须为有限正数')
+    raw = value + direction * tick
+    rounding = ROUND_CEILING if direction > 0 else ROUND_FLOOR
+    aligned = (raw / tick).to_integral_value(rounding=rounding) * tick
+    if aligned <= 0:
+        raise ValueError('按 tick 调整后的价格必须为正数')
+    return float(aligned)
 
 
 def reaches_entry_tick(code, reference_high, current_high, *, instrument_type=None):
@@ -39,3 +56,13 @@ def reaches_entry_tick(code, reference_high, current_high, *, instrument_type=No
     if not high.is_finite() or high <= 0:
         raise ValueError('价格必须为有限正数')
     return high >= Decimal(str(reference_high)) + tick
+
+
+def reaches_grid_entry(code, reference_high, current_high, *, instrument_type=None):
+    """Reach the actual outward-aligned v2 entry price, not an off-grid threshold."""
+    high = Decimal(str(current_high))
+    if not high.is_finite() or high <= 0:
+        raise ValueError('价格必须为有限正数')
+    entry = Decimal(str(grid_offset_tick(
+        code, reference_high, 1, instrument_type=instrument_type)))
+    return high >= entry

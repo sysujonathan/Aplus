@@ -9,7 +9,8 @@ from workbench.backtest import Assumptions
 from workbench.h2_plan import _structure, project_plan
 from workbench.h2_replay import (H2Settings, LEGACY_MODEL, MODEL, ResearchSpec,
                                  boundary_samples, run_replay, summarize_replay)
-from workbench.h2_replay_service import available_snapshots, load_receipt
+from workbench.h2_replay_service import (ITERATION_BASELINE_PURPOSE, available_snapshots,
+                                         load_receipt)
 from workbench.market import save_dataset
 from workbench.service import Service
 from workbench.store import Store, dumps
@@ -103,17 +104,67 @@ def test_post_fill_gap_exit_keeps_existing_conservative_prices(
 
 
 def test_t1_fill_day_then_blocked_day_and_next_tradable_stop(h2_spec, h2_bars):
-    bars = append_bar(h2_bars, 12, 10.8)
-    bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 11.8]
+    bars = append_bar(h2_bars, 12, 9.8)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 10.2]
     bars = append_bar(bars, 10.2, 10.2)
-    bars = append_bar(bars, 10.3, 9.9)
-    bars.loc[len(bars) - 1, 'open'] = 10.1
+    bars = append_bar(bars, 10.0, 9.4)
+    bars.loc[len(bars) - 1, 'open'] = 9.7
     r = study(h2_spec, bars)[0]
     assert r['filled'] and r['status'] == 'closed'
-    assert r['reason'].startswith('SL 止损')
-    assert r['exit'] == 9.99 and r['holding_bars'] == 2
+    assert r['reason'] == 'T+1 延迟止损'
+    assert r['exit'] == 9.7 and r['holding_bars'] == 2
     assert not any(e['kind'] == 'exit' and e['date'] == r['entry_date'] for e in r['events'])
-    assert any(e['kind'] == 'blocked' for e in r['events'])
+    assert any(e['kind'] == 't1' for e in r['events']) and any(e['kind'] == 'blocked' for e in r['events'])
+
+
+def test_legacy_v1_baseline_preserves_original_t1_sl1_path(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 12, 10.3)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 10.6]
+    bars = append_bar(bars, 10.2, 10.2)
+    bars = append_bar(bars, 10.1, 9.4)
+    bars.loc[len(bars) - 1, 'open'] = 9.7
+    r = run_replay(h2_spec, bars, bars.date.iloc[124], bars.date.iloc[-1],
+                   costs=ZERO, execution_model=LEGACY_MODEL)[0]
+    assert r['execution_model'] == LEGACY_MODEL
+    assert r['pricing_basis'] == 'sl1-mm-v1'
+    assert r['filled'] and r['status'] == 'closed'
+    assert r['reason'] == 'T+1 延迟止损'
+    assert r['stop'] == 10.49 and r['target'] == 14
+    assert r['exit'] == 9.7
+    assert any(e['kind'] == 't1' and 'SL1' in e['text'] for e in r['events'])
+
+
+def test_open_fill_floor_only_does_not_cancel_position(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 12, 9.995)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 10.2]
+    r = study(h2_spec, bars)[0]
+    assert r['filled'] and r['status'] == 'open'
+    assert not any(e['kind'] == 't1' for e in r['events'])
+    assert any('跌破 Floor 不倒推取消成交' in e['text'] for e in r['events'])
+
+
+def test_open_fill_then_intraday_mm_does_not_cancel_known_fill(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 14.1, 10.7)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [11.7, 13.8]
+    r = study(h2_spec, bars)[0]
+    assert r['filled'] and r['status'] == 'open'
+    assert r['entry_date'] == bars.date.iloc[-1]
+
+
+def test_intraday_entry_and_floor_remain_conservatively_unfilled(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 12, 9.8)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [10.8, 11.0]
+    r = study(h2_spec, bars)[0]
+    assert r['triggered'] and not r['filled'] and r['status'] == 'unfilled'
+    assert '先后无法确认' in r['reason']
+
+
+def test_open_at_mm_invalidates_before_entry(h2_spec, h2_bars):
+    bars = append_bar(h2_bars, 14.2, 10.7)
+    bars.loc[len(bars) - 1, ['open', 'close']] = [14.0, 13.8]
+    r = study(h2_spec, bars)[0]
+    assert r['triggered'] and not r['filled'] and r['status'] == 'mm_first'
+    assert r['reason'] == '开盘已先达到 MM，原机会失效'
 
 
 @pytest.mark.parametrize('mode', ['one_price', 'ambiguous_sl', 'floor', 'mm'])
@@ -261,16 +312,47 @@ def test_service_receipt_replay_and_database_isolation(tmp_path, h2_bars):
         service.pool.shutdown()
 
 
-def test_legacy_replay_request_fails_instead_of_becoming_generic_study(tmp_path):
+def test_unscoped_legacy_replay_request_fails_instead_of_becoming_generic_study(tmp_path):
     store = Store(tmp_path / 'legacy-route')
     service = Service(store)
     try:
         job = service.submit('backtest', {'execution_model': LEGACY_MODEL})
         row = wait_for(store, job)
         assert row['status'] == 'failed'
-        assert 'v1' in row['message'] and '不能直接新建' in row['message']
+        assert 'v1' in row['message'] and '策略迭代' in row['message']
         assert json.loads(row['result'])['stop_reason'] == row['message']
         assert not list((store.root / 'research').glob(f'{job}/*'))
+    finally:
+        service.pool.shutdown()
+
+
+def test_strategy_iteration_regenerates_authentic_v1_from_full_v2_scope(tmp_path, h2_bars):
+    store = Store(tmp_path / 'legacy-baseline')
+    bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 15, 11)
+    did = save_dataset(store, 'sh.600000', bars, 'csv', '合成工程测试，非真实验收')
+    service = Service(store)
+    try:
+        source = service.submit('backtest', dict(
+            strategy='STRATEGY_GAP_H2', timeframe='daily', execution_model=MODEL,
+            datasets=[did], start=bars.date.iloc[124], end=bars.date.iloc[-1],
+            h2_settings={}, assumptions={}))
+        assert wait_for(store, source)['status'] == 'completed'
+        baseline = service.submit('backtest', dict(
+            execution_model=LEGACY_MODEL, purpose=ITERATION_BASELINE_PURPOSE,
+            baseline_source_job=source))
+        assert wait_for(store, baseline)['status'] == 'completed'
+        _, report, records = load_receipt(store, baseline)
+        assert report['execution_model'] == LEGACY_MODEL
+        assert report['purpose'] == ITERATION_BASELINE_PURPOSE
+        assert report['baseline_source_job'] == source
+        assert [d['id'] for d in report['datasets']] == [did]
+        assert records[0]['pricing_basis'] == 'sl1-mm-v1'
+        assert records[0]['reason'] == 'MM 止盈'
+        assert records[0]['target'] == records[0]['structure']['mm_target']
+        assert records[0]['stop'] == records[0]['trigger_plan']['sl1_plan_price']
+        for table in ('observations', 'plans', 'plan_history', 'watchlist', 'accounts',
+                      'executions', 'positions', 'position_fills', 'closed_trades'):
+            assert not store.rows(f'SELECT * FROM {table}')
     finally:
         service.pool.shutdown()
 
@@ -299,7 +381,7 @@ def test_cancelled_service_preserves_finished_symbols_only(tmp_path, h2_bars):
            for code in ('sh.600000', 'sh.600012')]
     service = Service(store)
     calls = []
-    def replay(spec, frame, start, end, settings, costs, progress, cancelled):
+    def replay(spec, frame, start, end, settings, costs, progress, cancelled, **kwargs):
         calls.append(frame.attrs['code'])
         if len(calls) == 2:
             next(iter(service.cancel_flags.values())).set()

@@ -20,10 +20,11 @@ def engine_version():
                            'strategies.py', 'backtest.py', 'market.py')))
 
 
-def cache_key(snapshot, strategy, start, end, settings, costs, engine):
+def cache_key(snapshot, strategy, start, end, settings, costs, engine, execution_model):
     payload = dict(snapshot={k: snapshot[k] for k in ('id', 'sha256', 'code', 'source', 'adjustment', 'timeframe')},
                    strategy=strategy.version, start=start, end=end, settings=asdict(settings), costs=asdict(costs),
-                   engine=engine, pandas=pd.__version__, numpy=np.__version__, python=platform.python_version())
+                   engine=engine, execution_model=execution_model,
+                   pandas=pd.__version__, numpy=np.__version__, python=platform.python_version())
     return digest(dumps(payload).encode('utf-8'))
 
 

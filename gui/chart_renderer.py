@@ -144,7 +144,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     owns_levels = not h2 and not structure_unavailable and owns_risk_lines(strategy_type)
     risk_levels = []
     lines, line_colors, styles = [], [], []
-    new_h2_pricing = h2 and payload.get('pricing_basis') == 'gap-floor-sl-2r-v1'
+    new_h2_pricing = h2 and str(payload.get('pricing_basis', '')).startswith('gap-floor-sl-2r-')
     h2_levels = (("entry", TARGET, ":"), ("stop", STOP, "-."),
                  ("sl1_plan_price", ANNOTATION, ":"), ("target", TARGET, "--"),
                  ("mm_target", ANNOTATION, "--")) if new_h2_pricing else (

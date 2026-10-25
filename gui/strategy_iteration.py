@@ -5,7 +5,8 @@ from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 from PIL import ImageTk
 
-from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, MODEL as CURRENT_MODEL
+from workbench.h2_replay_service import ITERATION_BASELINE_PURPOSE
 from workbench.stop_research import AnchorSettings, GROUPS, MODEL
 from workbench.stop_research_service import load_experiment
 from .afterhours_workspace import label, button, tree
@@ -33,7 +34,7 @@ class StrategyIterationPage(ttk.Frame):
     def __init__(self,parent,service=None,store=None):
         super().__init__(parent,padding=10)
         self.service,self.store=service,store
-        self.job=self.shown_job=self.selected=None
+        self.job=self.job_kind=self.shown_job=self.selected=None
         self.rows=[];self.report={};self.sources={};self.histories={}
         self.sort_key='setup_date';self.sort_desc=True;self.photo=None;self.draw_id=None
         self.source=tk.StringVar();self.max_bars=tk.StringVar(value='30');self.pause=tk.StringVar(value='0')
@@ -76,6 +77,8 @@ class StrategyIterationPage(ttk.Frame):
         self.source_box.pack(side=tk.LEFT,fill=tk.X,expand=True)
         self.source_box.bind('<<ComboboxSelected>>',lambda e:self._source_context())
         button(source,'刷新',self.refresh).pack(side=tk.LEFT,padx=8)
+        self.generate=button(source,'生成 v1 基线',self._generate_baseline)
+        self.generate.pack(side=tk.RIGHT,padx=(0,8))
         self.run=button(source,'新建实验',self._run,True);self.run.pack(side=tk.RIGHT)
         self.stop=button(source,'停止',self._stop);self.stop.pack(side=tk.RIGHT,padx=8);self.stop.configure(state=tk.DISABLED)
         self.context=tk.StringVar(value='复用同一批机会与模拟入场，仅改变初始止损')
@@ -131,8 +134,10 @@ class StrategyIterationPage(ttk.Frame):
 
     def refresh(self):
         if self.store is None:return
-        sources=self.store.backtest_history(BASE_MODEL)
-        self.sources={display_name(r,'R'):r for r in sources}
+        sources=self.store.backtest_history((BASE_MODEL,CURRENT_MODEL))
+        self.sources={display_name(r,'R' if self._source_model(r)==BASE_MODEL else 'V')+
+                      (' · v1 基线' if self._source_model(r)==BASE_MODEL else ' · v2 来源'):r
+                      for r in sources}
         self.source_box.configure(values=list(self.sources))
         if self.source.get() not in self.sources:self.source.set(next(iter(self.sources),''))
         self._source_context()
@@ -146,17 +151,48 @@ class StrategyIterationPage(ttk.Frame):
         import json
         row=self.sources.get(self.source.get())
         if row:
-            r=json.loads(row['result']);self.context.set(f"{r['start']} → {r['end']} · {r['opportunities']} 次机会 · 持有上限 {r['assumptions']['holding_bars']} 根 · "+('完整样本' if r.get('complete') else '部分样本'))
+            r=json.loads(row['result']);model=r.get('execution_model')
+            prefix='可直接创建 SL1／MM 止损实验' if model==BASE_MODEL else '新版 SL／2R 回测；先生成隔离的 v1 基线'
+            self.context.set(prefix+f" · {r['start']} → {r['end']} · {r['opportunities']} 次机会 · 持有上限 {r['assumptions']['holding_bars']} 根 · "+('完整样本' if r.get('complete') else '部分样本'))
+            if not self.job:
+                self.run.configure(state=tk.NORMAL if model==BASE_MODEL else tk.DISABLED)
+                self.generate.configure(state=tk.NORMAL if model==CURRENT_MODEL else tk.DISABLED)
+        elif not self.job:
+            self.context.set('先在盘后回测完成一次 GAP H2 回测；新版回测可在此生成隔离的 v1 研究基线')
+            self.run.configure(state=tk.DISABLED);self.generate.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def _source_model(row):
+        import json
+        try:return json.loads(row['result']).get('execution_model')
+        except (TypeError,ValueError):return None
+
+    def _generate_baseline(self):
+        if self.service is None or self.store is None:return
+        try:
+            source=self.sources.get(self.source.get())
+            if not source or self._source_model(source)!=CURRENT_MODEL:
+                raise ValueError('请选择一份新版 SL／2R 回测作为行情与研究条件来源')
+            self.job=self.service.submit('backtest',dict(
+                execution_model=BASE_MODEL,purpose=ITERATION_BASELINE_PURPOSE,
+                baseline_source_job=source['id']))
+            self.job_kind='baseline';self.run.configure(state=tk.DISABLED)
+            self.generate.configure(state=tk.DISABLED);self.stop.configure(state=tk.NORMAL)
+            self.status.set('正在从完整行情重新生成原 SL1／MM v1 研究基线')
+        except Exception as exc:messagebox.showerror('无法生成研究基线',str(exc),parent=self)
 
     def _run(self):
         if self.service is None or self.store is None:return
         try:
             source=self.sources.get(self.source.get())
             if not source:raise ValueError('先在盘后回测完成一次 GAP H2 回测，再选择样本')
+            if self._source_model(source)!=BASE_MODEL:
+                raise ValueError('所选是新版 SL／2R 回测，请先生成 v1 研究基线')
             settings=AnchorSettings(int(self.max_bars.get()),int(self.pause.get()));settings.validate()
             from dataclasses import asdict
             self.job=self.service.submit('backtest',dict(execution_model=MODEL,source_job=source['id'],anchor_settings=asdict(settings)))
-            self.run.configure(state=tk.DISABLED);self.stop.configure(state=tk.NORMAL)
+            self.job_kind='experiment';self.run.configure(state=tk.DISABLED)
+            self.generate.configure(state=tk.DISABLED);self.stop.configure(state=tk.NORMAL)
             self.status.set('正在逐笔比较；实验结束或停止后保存结果')
         except Exception as exc:messagebox.showerror('无法开始研究',str(exc),parent=self)
 
@@ -169,9 +205,14 @@ class StrategyIterationPage(ttk.Frame):
             if jobs:
                 row=jobs[0];self.status.set(row['message'] or '正在研究')
                 if row['status'] not in ('queued','running'):
-                    done=self.job;self.job=None;self.run.configure(state=tk.NORMAL);self.stop.configure(state=tk.DISABLED)
-                    self.shown_job=done;self.refresh()
-                    if row.get('result'):self._load(done)
+                    done,kind=self.job,self.job_kind;self.job=self.job_kind=None
+                    self.stop.configure(state=tk.DISABLED);self.refresh()
+                    if row['status'] in ('completed','partial') and kind=='baseline':
+                        selected=next((name for name,item in self.sources.items() if item['id']==done),'')
+                        self.source.set(selected);self._source_context()
+                        self.status.set('v1 研究基线已生成；现在可以新建 SL1 对照 C 实验')
+                    elif row['status'] in ('completed','partial') and kind=='experiment':
+                        self.shown_job=done;self._load(done)
                     elif row['status']=='failed':messagebox.showerror('研究失败',row['message'],parent=self)
         self.poll_id=self.after(400,self._poll)
 

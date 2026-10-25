@@ -4,8 +4,9 @@ import pandas as pd
 import pytest
 from unittest.mock import Mock, patch
 
-from workbench.h2_plan import display_plan, plan_at_end, project_plan
-from workbench.prices import offset_tick, tick_size, reaches_entry_tick
+from workbench.h2_plan import display_plan, plan_at_end, project_legacy_plan, project_plan
+from workbench.prices import (grid_offset_tick, offset_tick, reaches_entry_tick,
+                              reaches_grid_entry, tick_size)
 from workbench.strategies import calculate, catalog, signal_at_end, verify_frozen
 from workbench.store import Store
 from gui.chart_panel import ChartPanel, render_chart
@@ -209,7 +210,40 @@ def test_plan_candidate_survives_sub_tick_high_where_frozen_projection_ends(h2_s
     assert signal_at_end(h2_spec, latest, plan_prices=False) is None
     live = signal_at_end(h2_spec, latest)
     assert live['pending_state'] == 'PENDING'
-    assert live['entry'] == 11.615
+    assert live['entry'] == 11.62
+
+
+def test_directional_tick_grid_preserves_required_distance_and_exact_two_r():
+    from decimal import Decimal
+    from workbench.h2_plan import _two_r_target
+    entry = grid_offset_tick('sh.600000', Decimal('11.605'), 1)
+    stop = grid_offset_tick('sh.600000', Decimal('10.405'), -1)
+    sl1 = grid_offset_tick('sh.600000', Decimal('10.405'), -1)
+    target = _two_r_target(entry, stop, .01)
+    assert (entry, stop, sl1, target) == (11.62, 10.39, 10.39, 14.08)
+    assert Decimal(str(entry)) >= Decimal('11.605') + Decimal('.01')
+    assert Decimal(str(stop)) <= Decimal('10.405') - Decimal('.01')
+    assert Decimal(str(sl1)) <= Decimal('10.405') - Decimal('.01')
+    assert Decimal(str(target)) == Decimal(str(entry)) + 2 * (
+        Decimal(str(entry)) - Decimal(str(stop)))
+    assert not reaches_grid_entry('sh.600000', Decimal('11.605'), Decimal('11.619'))
+    assert reaches_grid_entry('sh.600000', Decimal('11.605'), Decimal('11.62'))
+
+
+def test_legacy_v1_plan_keeps_pre_upgrade_exact_offset_prices():
+    frame = pd.DataFrame({
+        'date': ['2026-01-02', '2026-01-05', '2026-01-06'],
+        'open': [10.5, 11.0, 11.5], 'high': [11.0, 11.4, 11.605],
+        'low': [10.405, 10.7, 10.8], 'close': [10.9, 11.3, 11.6],
+        'volume': [1000., 1000., 1000.],
+    })
+    frame.attrs['code'] = 'sh.600000'
+    structure = dict(h2_setup_date='2026-01-06', bo_date='2026-01-02',
+                     gap_floor=10.405, mm_target=15.51, prior_gap_structures=[])
+    plan = project_legacy_plan(frame, structure, 'sh.600000')
+    assert plan['entry'] == 11.615
+    assert plan['stop'] == 10.69
+    assert plan['target'] == 15.51
 
 
 def test_setup_evaluation_is_causal_and_rating_can_be_disabled(h2_spec, h2_bars):
@@ -461,6 +495,28 @@ def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spe
     assert not any('Rating' in text or 'Quality' in text or 'PB bars' in text for text in labels)
     assert to_hex(colors['H1']).upper() == '#CBD5E1'
     assert plan['rating']['factors']  # Still archived for tracing, outside the decision card.
+
+
+def test_historical_h2_without_pricing_basis_keeps_sl1_mm_labels(h2_spec, h2_bars):
+    from matplotlib.axes import Axes
+    instance, calculated = calculate(h2_spec, h2_bars)
+    current = signal_at_end(h2_spec, h2_bars)
+    historical = dict(current)
+    historical.pop('pricing_basis', None)
+    historical.update(stop=10.49, sl1_plan_price=10.49,
+                      target=14.0, mm_target=14.0, mm_r_multiple=1.26)
+    labels, actual = [], Axes.text
+
+    def capture(ax, x, y, text, *args, **kwargs):
+        labels.append(text)
+        return actual(ax, x, y, text, *args, **kwargs)
+
+    with patch.object(Axes, 'text', capture):
+        render_chart(calculated, historical, '', instance.get_metadata(),
+                     strategy=instance, strategy_type=h2_spec.id)
+    assert any('Entry 11.61' in text and 'SL1 10.49' in text and 'MM 14.00' in text
+               for text in labels)
+    assert not any('SL 10.49' in text or '2R 14.00' in text for text in labels)
 
 
 def test_nearby_h2_price_labels_move_text_without_moving_price_lines(h2_spec, h2_bars):
