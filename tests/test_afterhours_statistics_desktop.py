@@ -16,13 +16,29 @@ from workbench.market import save_dataset
 from workbench.store import Store
 
 
+def set_test_geometry(window, size):
+    """Exercise the requested client size even on a smaller CI desktop."""
+    width, height = map(int, size.split('x'))
+    max_width, max_height = window.maxsize()
+    window.maxsize(max(width, max_width), max(height, max_height))
+    window.geometry(size)
+    window.update()
+    assert (window.winfo_width(), window.winfo_height()) == (width, height)
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
 def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h2_bars, h2_spec):
     store = Store(tmp_path/'isolated')
     window = ttk.Window(themename='darkly')
-    page = AfterhoursPage(window, service=Mock(), store=store)
-    page.pack(fill='both', expand=True)
     try:
+        # Reproduce the CI work-area ceiling locally, rather than assuming a
+        # geometry request guarantees a 1600x1000 window on every desktop.
+        window.maxsize(1008, 749)
+        window.geometry('1600x1000')
+        window.update()
+        assert window.winfo_width() <= 1008 and window.winfo_height() <= 749
+        page = AfterhoursPage(window, service=Mock(), store=store)
+        page.pack(fill='both', expand=True)
         bars = append_bar(append_bar(h2_bars, 11.8, 10.8), 15, 11)
         records = run_replay(h2_spec, bars, bars.date.iloc[124], bars.date.iloc[-1])
         dataset = save_dataset(store, 'sh.600000', bars, 'csv', '合成工程测试，非真实数据验收')
@@ -39,8 +55,7 @@ def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h
         saved.write_bytes(raw)
         page._show_report({'status': 'partial'}, report, records)
         for size in ('1600x1000', '1280x760'):
-            window.geometry(size)
-            window.update()
+            set_test_geometry(window, size)
             assert len(page.stats) == 6 and page.stats[4].get().endswith('根')
             assert '部分完成' in page.status.get()
             assert page.preview_chart.winfo_height() >= (100 if size == '1280x760' else 300), (
