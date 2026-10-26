@@ -10,6 +10,7 @@ import ttkbootstrap as ttk
 from gui.afterhours import AfterhoursPage
 from gui.research_views import holding_distribution
 from gui.theme import CONTROL_BG, MUTED
+from tests.native_ui import create_window
 from tests.test_h2_plan import h2_bars, h2_spec, append_bar
 from workbench.h2_replay import LEGACY_MODEL, MODEL, run_replay, summarize_replay
 from workbench.market import save_dataset
@@ -29,7 +30,7 @@ def set_test_geometry(window, size):
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
 def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h2_bars, h2_spec):
     store = Store(tmp_path/'isolated')
-    window = ttk.Window(themename='darkly')
+    window = create_window(lambda: ttk.Window(themename='darkly'))
     try:
         # Reproduce the CI work-area ceiling locally, rather than assuming a
         # geometry request guarantees a 1600x1000 window on every desktop.

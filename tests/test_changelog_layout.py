@@ -100,8 +100,9 @@ for width in (620,820,1200):
 # Mouse wheel on an embedded divider still scrolls the text.
 rule=text._release_rules[0]
 text.see(str(rule)); dialog.update()
+assert rule.winfo_ismapped()
 before=text.yview()[0]
-rule.event_generate('<MouseWheel>',delta=-120); dialog.update()
+rule.event_generate('<MouseWheel>',delta=-120,when='tail'); dialog.update()
 assert text.yview()[0]>before
 w.destroy()
 ''', scaling)
