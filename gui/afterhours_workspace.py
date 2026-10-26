@@ -31,9 +31,9 @@ def tree(parent, columns, height=5):
     return widget
 
 
-def panel(parent, caption, color=TEXT):
-    outer = ttk.Frame(parent, padding=10, style='ResearchPanel.TFrame')
-    label(outer, caption, bold=True, color=color).pack(anchor=tk.W, pady=(0, 6))
+def panel(parent, caption, color=TEXT, *, size=17, padding=10):
+    outer = ttk.Frame(parent, padding=padding, style='ResearchPanel.TFrame')
+    label(outer, caption, bold=True, color=color, size=size).pack(anchor=tk.W, pady=(0, 6))
     return outer
 
 
@@ -42,9 +42,14 @@ def build_workspace(page):
     style = ttk.Style()
     style.configure('ResearchPanel.TFrame', background=PANEL_BG, borderwidth=1, relief='solid')
     style.configure('ResearchPanel.TLabel', background=PANEL_BG)
+    style.configure('ResearchPanelBody.TFrame', background=PANEL_BG)
     style.configure('ResearchList.Treeview', rowheight=32, font=('Microsoft YaHei UI', -17),
                     background=PANEL_BG, fieldbackground=PANEL_BG, foreground=TEXT)
     style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', -17, 'bold'))
+    style.configure('ResearchBoundary.Treeview', rowheight=25, font=('Microsoft YaHei UI', -15),
+                    background=PANEL_BG, fieldbackground=PANEL_BG, foreground=TEXT)
+    style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', -14, 'bold'))
+    style.configure('Holding.Toolbutton', font=('Microsoft YaHei UI', -13), padding=(3, 2))
     for name, bg in [('ResearchAction.TButton', CONTROL_BG), ('ResearchRun.TButton', ACCENT)]:
         style.configure(name, font=('Microsoft YaHei UI', -17), padding=(8, 5), background=bg,
                         foreground=TEXT, bordercolor=BORDER)
@@ -136,35 +141,80 @@ def build_workspace(page):
     metrics = ttk.Frame(p.home)
     metrics.grid(row=1, column=0, sticky=tk.EW, pady=(0, 8))
     p.stats = []
-    for i, caption in enumerate(['机会数', '模拟成交', '胜率 · 已结束', '平均净 R', '初始风险中位数']):
+    for i, caption in enumerate(['机会数', '模拟成交', '胜率 · 已结束', '平均净 R',
+                                 '持仓K线中位数', '初始风险中位数']):
         metrics.columnconfigure(i, weight=1, uniform='metric')
-        card = ttk.Frame(metrics, padding=(10, 6), style='ResearchPanel.TFrame')
-        card.grid(row=0, column=i, sticky=tk.EW, padx=(0, 8 if i<4 else 0))
-        label(card, caption, color=MUTED, size=16).pack(anchor=tk.W)
+        card = ttk.Frame(metrics, padding=(8, 4), style='ResearchPanel.TFrame')
+        card.grid(row=0, column=i, sticky=tk.EW, padx=(0, 6 if i<5 else 0))
+        label(card, caption, color=MUTED, size=14).pack(anchor=tk.W)
         var = tk.StringVar(value='—')
-        label(card, variable=var, size=30, bold=True).pack(anchor=tk.W)
+        label(card, variable=var, size=28, bold=True).pack(anchor=tk.W)
         p.stats.append(var)
-    analysis = ttk.Frame(p.home)
+    p.analysis = analysis = ttk.Frame(p.home)
     analysis.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
     p.boundary_trees = {}
     for i, (group, caption) in enumerate([('profit', 'Top 盈利 · 净 R'), ('loss', 'Top 亏损 · 净 R')]):
         analysis.columnconfigure(i, weight=1, uniform='analysis')
-        box = panel(analysis, caption, UP if group == 'profit' else DOWN)
+        box = panel(analysis, caption, UP if group == 'profit' else DOWN, size=15, padding=(6, 4))
         box.grid(row=0, column=i, sticky=tk.NSEW)
         widget = tree(box, [('code', '代码 / H2 日期', 155, tk.W), ('r', '净 R', 70, tk.E)])
+        widget.configure(style='ResearchBoundary.Treeview')
         widget.pack(fill=tk.BOTH, expand=True)
         widget.bind('<Double-1>', lambda e, g=group: p._open_boundary(g))
         widget.bind('<Return>', lambda e, g=group: p._open_boundary(g))
         widget.bind('<<TreeviewSelect>>', lambda e, g=group: p._preview_boundary(g))
         p.boundary_trees[group] = widget
     analysis.columnconfigure(2, weight=1, uniform='analysis')
-    box = panel(analysis, '净 R 分布 · 已结束')
+    box = panel(analysis, '净 R 分布 · 已结束', size=15, padding=(6, 4))
     box.grid(row=0, column=2, sticky=tk.NSEW)
     p.histogram = tk.Canvas(box, height=178, bg=PANEL_BG, highlightthickness=0, width=240)
     p.histogram.configure(bg=PANEL_BG)
     p.histogram.pack(fill=tk.BOTH, expand=True)
     p.histogram.bind('<Configure>', lambda e: p._histogram())
     p.distribution = tk.StringVar()
+    analysis.columnconfigure(3, weight=1, uniform='analysis')
+    holding = ttk.Frame(analysis, padding=(6, 4), style='ResearchPanel.TFrame')
+    holding.grid(row=0, column=3, sticky=tk.NSEW)
+    heading = ttk.Frame(holding, style='ResearchPanelBody.TFrame')
+    heading.pack(fill=tk.X, pady=(0, 6))
+    label(heading, '持仓K线分布 · 已结束', bold=True, size=13).pack(side=tk.LEFT)
+    p.holding_category = tk.StringVar(value='全部')
+    p.holding_buttons = {}
+    for caption in ('亏损', '盈利', '全部'):
+        btn = ttk.Radiobutton(heading, text=caption, variable=p.holding_category, value=caption,
+                              style='Holding.Toolbutton', command=p._holding_changed)
+        btn.pack(side=tk.RIGHT)
+        p.holding_buttons[caption] = btn
+    p.holding_histogram = tk.Canvas(holding, height=120, bg=PANEL_BG, highlightthickness=0, width=220)
+    p.holding_histogram.pack(fill=tk.BOTH, expand=True)
+    p.holding_histogram.bind('<Configure>', lambda e: p._holding_histogram())
+    auxiliary = ttk.Frame(analysis)
+    auxiliary.grid(row=1, column=0, columnspan=4, sticky=tk.EW, pady=(6, 0))
+    p.aux_stats, p.aux_labels, p.aux_captions = {}, {}, {}
+    for i, (key, caption, color, weight) in enumerate([
+            ('win', '平均盈利R', UP, 1), ('loss', '平均亏损R', DOWN, 1),
+            ('exits', '退出原因分布', MUTED, 2), ('excess', '超额亏损占比', MUTED, 2)]):
+        auxiliary.columnconfigure(i, weight=weight, uniform='aux')
+        box = ttk.Frame(auxiliary, padding=(8, 3), style='ResearchPanel.TFrame')
+        box.grid(row=0, column=i, sticky=tk.NSEW, padx=(0, 4 if i<3 else 0))
+        box.pack_propagate(False)
+        box.configure(height=58)
+        caption_label = label(box, caption, color=color, size=13)
+        caption_label.pack(anchor=tk.W)
+        var = tk.StringVar(value='—')
+        value = label(box, variable=var, color=color if key in ('win', 'loss') else TEXT,
+                      size=16 if key in ('win', 'loss') else 13, bold=key in ('win', 'loss'))
+        value.pack(fill=tk.X)
+        def fit_auxiliary(event, w=value, host=box, title=caption_label):
+            w.configure(wraplength=max(1, event.width))
+            small = getattr(p, '_compact_auxiliary', False)
+            content_height = (max(title.winfo_reqheight(), w.winfo_reqheight()) if small else
+                              title.winfo_reqheight()+w.winfo_reqheight())
+            host.configure(height=max(round((30 if small else 48)*getattr(p, '_ui_scale', 1)),
+                                      content_height+8))
+        value.bind('<Configure>', fit_auxiliary)
+        p.aux_stats[key], p.aux_labels[key] = var, value
+        p.aux_captions[key] = caption_label
     filters = ttk.Frame(p.home)
     filters.grid(row=3, column=0, sticky=tk.EW, pady=(0, 8))
     label(filters, '逐笔复盘', bold=True).pack(side=tk.LEFT, padx=(0, 8))

@@ -17,7 +17,8 @@ from workbench.h2_replay_service import (ITERATION_BASELINE_PURPOSE, available_s
 from workbench.market import BOARDS, completed_date
 from .data import code_names
 from .h2_replay_chart import render_replay
-from .research_views import comparison_rows, outcome, receipt_time, scope_caption
+from .research_views import (comparison_rows, holding_distribution, outcome, receipt_time,
+                             scope_caption, trade_statistics)
 from .toolbar import format_board_scope
 from .theme import CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP
 
@@ -182,11 +183,21 @@ class AfterhoursPage(ttk.Frame):
         if event.widget is not self:
             return
         compact = event.height < 1100
-        if compact != self._compact_analysis:
-            self._compact_analysis = compact
+        rows = 2 if event.height < 850 else 3 if compact else 5
+        if (compact, rows) != self._compact_analysis:
+            self._compact_analysis = (compact, rows)
+            self._compact_auxiliary = event.height < 850
+            for key, value in self.aux_labels.items():
+                title = self.aux_captions[key]
+                title.pack_forget()
+                value.pack_forget()
+                side = tk.LEFT if self._compact_auxiliary else tk.TOP
+                title.pack(side=side, anchor=tk.W, padx=(0, 4) if self._compact_auxiliary else 0)
+                value.pack(side=side, fill=tk.X, expand=self._compact_auxiliary)
             for widget in self.boundary_trees.values():
-                widget.configure(height=3 if compact else 5)
-            self.histogram.configure(height=120 if compact else 178)
+                widget.configure(height=rows)
+            self.histogram.configure(height=96 if compact else 178)
+            self.holding_histogram.configure(height=96 if compact else 178)
         scale = 1.25 if event.width >= 2000 else 1
         if scale == self._ui_scale:
             return
@@ -197,12 +208,16 @@ class AfterhoursPage(ttk.Frame):
         style = ttk.Style()
         style.configure('ResearchList.Treeview', rowheight=round(32*scale), font=('Microsoft YaHei UI', -round(17*scale)))
         style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', -round(17*scale), 'bold'))
+        style.configure('ResearchBoundary.Treeview', rowheight=round(25*scale), font=('Microsoft YaHei UI', -round(15*scale)))
+        style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', -round(14*scale), 'bold'))
+        style.configure('Holding.Toolbutton', font=('Microsoft YaHei UI', -round(13*scale)), padding=(3, 2))
         for name in ('ResearchAction.TButton', 'ResearchRun.TButton', 'ResearchScope.TMenubutton'):
             style.configure(name, font=('Microsoft YaHei UI', -round(17*scale)))
         self.history_host.configure(width=round(270*scale))
         self.timeline_host.configure(width=round(300*scale))
         self._render_history()
         self._histogram()
+        self._holding_histogram()
         self._layout_list()
 
     def _scope_changed(self):
@@ -325,6 +340,7 @@ class AfterhoursPage(ttk.Frame):
         self.filter_box.configure(values=['全部'])
         for var in self.stats:
             var.set('—')
+        self._update_trade_statistics()
         for tree in (self.tree, self.timeline, *self.boundary_trees.values()):
             tree.delete(*tree.get_children())
         self._visible_ids = []
@@ -650,8 +666,11 @@ class AfterhoursPage(ttk.Frame):
         if performance:
             self.status.set(self.status.get() + f' · 耗时 {performance["elapsed_seconds"]:.1f} 秒'
                             + f' · 复用 {performance["reused"]} 个标的')
+        descriptive = self._update_trade_statistics()
+        bars = descriptive['holding']['median']
         values = [str(report['opportunities']), str(report['filled']),
                   number(report['win_rate'], '%', True), number(report['mean_r'], 'R'),
+                  f'{bars:g}根' if bars is not None else '—',
                   number(report['median_risk_pct'], '%')]
         for var, value in zip(self.stats, values):
             var.set(value)
@@ -678,20 +697,64 @@ class AfterhoursPage(ttk.Frame):
         if not values or not sum(values):
             self.histogram.create_text(10, 45, text='没有已结束交易', fill=MUTED, anchor=tk.W)
             return
-        width = max(240, self.histogram.winfo_width())
+        width = max(1, self.histogram.winfo_width())
         maximum = max(values)
         for i, value in enumerate(values):
-            step = min(27*self._ui_scale, max(20, self.histogram.winfo_height()/6))
+            step = self.histogram.winfo_height()/len(values)
+            font_size = round(min(14*self._ui_scale, step*.75))
             y = step/2 + i * step
             self.histogram.create_text(0, y, text=['< −2R', '−2～−1', '−1～0', '0～1', '1～2', '≥ 2R'][i],
-                                       fill=MUTED, anchor=tk.W, font=('Microsoft YaHei UI', -round(14*self._ui_scale)))
+                                       fill=MUTED, anchor=tk.W, font=('Microsoft YaHei UI', -font_size))
             left, right = 68, width - 72
             self.histogram.create_rectangle(left, y-4, right, y+4, fill=CONTROL_BG, outline='')
             self.histogram.create_rectangle(left, y-4, left+(right-left)*value/maximum, y+4,
                                             fill=DOWN if i < 3 else UP, outline='')
-            self.histogram.create_text(width-48, y, text=str(value), fill=TEXT, anchor=tk.E, font=('Consolas', -15))
+            self.histogram.create_text(width-48, y, text=str(value), fill=TEXT, anchor=tk.E, font=('Consolas', -font_size))
             self.histogram.create_text(width-2, y, text=f'{value/sum(values):.0%}', fill=MUTED, anchor=tk.E,
-                                       font=('Consolas', -15))
+                                       font=('Consolas', -font_size))
+
+    def _update_trade_statistics(self):
+        descriptive = trade_statistics(self.records)
+        self.aux_stats['win'].set(number(descriptive['average_win_r'], 'R'))
+        self.aux_stats['loss'].set(number(descriptive['average_loss_r'], 'R'))
+        self.aux_stats['exits'].set(' / '.join(f'{row["label"]} {row["share"]:.1%}'
+                                             for row in descriptive['exits']) or '—')
+        self.aux_stats['excess'].set(
+            '超过1R ' + number(descriptive['loss_over_1r'], '%', True) +
+            ' / 超过2R ' + number(descriptive['loss_over_2r'], '%', True))
+        self.holding_category.set('全部')
+        self._holding_data = descriptive['holding']
+        self._holding_histogram()
+        return descriptive
+
+    def _holding_changed(self):
+        self._holding_data = holding_distribution(self.records, self.holding_category.get())
+        self._holding_histogram()
+
+    def _holding_histogram(self):
+        canvas = self.holding_histogram
+        canvas.delete('all')
+        data = getattr(self, '_holding_data', {})
+        if not data.get('total'):
+            canvas.create_text(8, 40, text='数据不足（无有效持仓K线）', fill=MUTED,
+                               anchor=tk.W, font=('Microsoft YaHei UI', -12))
+            return
+        rows = data['buckets']
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        step = height / len(rows)
+        maximum = max(row['count'] for row in rows)
+        for i, row in enumerate(rows):
+            y = step*(i+.5)
+            font = ('Microsoft YaHei UI', -max(1, round(min(12*self._ui_scale, step*.75))))
+            canvas.create_text(0, y, text=row['label'], fill=MUTED, anchor=tk.W, font=font)
+            left, right = 66*self._ui_scale, max(66*self._ui_scale, width-96*self._ui_scale)
+            canvas.create_rectangle(left, y-3, right, y+3, fill=CONTROL_BG, outline='')
+            canvas.create_rectangle(left, y-3, left+(right-left)*row['count']/maximum, y+3,
+                                    fill=MUTED, outline='')
+            canvas.create_text(width-52*self._ui_scale, y, text=str(row['count']), fill=TEXT,
+                               anchor=tk.E, font=font)
+            canvas.create_text(width-1, y, text=f'{row["share"]:.1%}', fill=MUTED,
+                               anchor=tk.E, font=font)
 
     def _fill_rows(self):
         old = self.tree.selection()
