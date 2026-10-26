@@ -2,6 +2,10 @@
 from copy import deepcopy
 import json
 import os
+from pathlib import Path
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
 import pytest
@@ -29,6 +33,25 @@ def set_test_geometry(window, size):
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
 def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h2_bars, h2_spec):
+    # Run every assertion with fresh Tcl/ttkbootstrap process state. A full
+    # desktop suite creates many independent Tk roots, unlike the application.
+    # Retrying initialization in that same process cannot isolate those roots.
+    worker_flag = 'APLUS_TEST_STATISTICS_NATIVE_WORKER'
+    if os.environ.get(worker_flag) != '1':
+        environment = dict(os.environ, **{worker_flag: '1', 'PYTHONUTF8': '1'})
+        # Keep artifact paths below Windows MAX_PATH even in long worktrees.
+        with TemporaryDirectory(prefix='ap-ui-') as worker_root:
+            result = subprocess.run(
+                [sys.executable, '-m', 'pytest', '-q',
+                 'tests/test_afterhours_statistics_desktop.py::'
+                 'test_statistics_filters_legacy_receipts_and_layout_are_read_only',
+                 '--basetemp', worker_root],
+                cwd=Path(__file__).resolve().parents[1], env=environment,
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=120,
+            )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return
     store = Store(tmp_path/'isolated')
     window = create_window(lambda: ttk.Window(themename='darkly'))
     try:
