@@ -91,6 +91,82 @@ def test_clean_process_restart_reuses_file_without_five_environment_sets(
     assert all(row['effective'] == 'ACCELERATED' for row in status['strategies'].values())
 
 
+@pytest.mark.parametrize('expired_strategy', [*profile.STRATEGIES, None])
+def test_desktop_restart_rejects_stale_authorization_without_bypassing_controllers(
+        local_profile, tmp_path, expired_strategy):
+    runtime = tmp_path/'desktop-runtime'
+    profile.approve(confirmed=True, root=runtime)
+    environment = dict(os.environ, A_WORKBENCH_HOME=str(runtime))
+    for _strategy, prefix in profile.STRATEGIES.values():
+        for suffix in ('_MODE', '_APPROVED_BINDING', '_CANARY_RATE'):
+            environment.pop(prefix + suffix, None)
+    script = '''
+import json, sys
+from pathlib import Path
+from launch_dashboard import build_backend
+from workbench.acceleration_profile import STRATEGIES
+from workbench.mtr_acceleration import MTRFastRejector
+from workbench.three_k_acceleration import ThreeKFastRejector
+from workbench.gap_family_acceleration import GapFamilyFastRejector
+from workbench.strategies import catalog
+
+service, store = build_backend()
+assert service is not None, 'Desktop backend did not start'
+try:
+    specs = catalog(store)
+    actual = {}
+    for name, (strategy_id, _prefix) in STRATEGIES.items():
+        controller_type = (MTRFastRejector if name == 'MTR' else
+                           ThreeKFastRejector if name == '3K' else GapFamilyFastRejector)
+        controller = controller_type(store, None, specs[strategy_id])
+        actual[name] = dict(effective=controller.mode, rate=controller.rate)
+    Path(sys.argv[1]).write_text(json.dumps(dict(
+        startup=service.acceleration_status, actual=actual)))
+finally:
+    service.pool.shutdown()
+'''
+
+    def restart(name):
+        output = tmp_path/name
+        result = subprocess.run(
+            [str(Path(sys.executable).with_name('pythonw.exe')), '-c', script, str(output)],
+            cwd=profile.ROOT, env=environment, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert output.exists(), 'Desktop worker did not produce its actual-mode report'
+        return json.loads(output.read_text())
+
+    baseline = restart('before.json')
+    assert all(row['effective'] == 'ACCELERATED' and row['rate'] == .05
+               for row in baseline['actual'].values())
+    assert all(row['effective'] == 'ACCELERATED'
+               for row in baseline['startup']['strategies'].values())
+    if expired_strategy is None:
+        local_profile.write_text('{broken-authorization', encoding='utf-8')
+    else:
+        value = json.loads(local_profile.read_text(encoding='utf-8'))
+        binding = value['strategies'][expired_strategy]['binding']
+        # Keep the exact 64-hex format so only the real controller's current
+        # binding check, not the loader's format check, can reject it.
+        stale = ('1' if binding[0] != '1' else '2') + binding[1:]
+        assert len(stale) == 64 and stale != binding and int(stale, 16) >= 0
+        value['strategies'][expired_strategy]['binding'] = stale
+        local_profile.write_text(json.dumps(value), encoding='utf-8')
+    damaged = local_profile.read_bytes()
+    restarted = restart('after.json')
+    assert local_profile.read_bytes() == damaged  # No automatic repair/re-approval.
+    rows = restarted['startup']['strategies']
+    for name in profile.STRATEGIES:
+        expected = 'OFF' if expired_strategy in (None, name) else 'ACCELERATED'
+        assert rows[name]['effective'] == expected, (name, rows[name])
+        assert restarted['actual'][name]['effective'] == expected
+        if expected == 'ACCELERATED':
+            assert rows[name]['original_audit_rate'] == restarted['actual'][name]['rate'] == .05
+        else:
+            assert ('授权配置未生效' if expired_strategy is None else '人工授权') in rows[name]['reason']
+    assert restarted['startup']['profile']['loaded'] is (expired_strategy is not None)
+
+
 @pytest.mark.parametrize('mutation', ['startup_binding', 'runtime', 'json', 'audit_rate'])
 def test_invalid_global_authorization_fails_closed(local_profile, tmp_path, mutation):
     profile.approve(confirmed=True, root=tmp_path)
