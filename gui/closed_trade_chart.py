@@ -289,8 +289,10 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         payload = data if data is not None else load_holding_chart(store, row, quote=quote)
         # One bounded read before the window opens: the trader asked for live
         # bars, so the first frame must not wait for a later push to arrive.
-        primed = self._prime_minutes(row["code"]) if prime_minutes else None
+        primed, prime_error = (self._prime_minutes(row["code"]) if prime_minutes
+                               else (None, None))
         self._live_primed = bool(prime_minutes)
+        self._live_error = prime_error or ""
         if primed is not None:
             payload = {**payload, "minute_series": primed}
             self._last_live_at = str(primed.iloc[-1]["date"])
@@ -308,6 +310,10 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self.live_label.pack(side=tk.LEFT, padx=12)
         if self._last_live_at:
             self._show_live_status(self._last_live_at)
+        elif self._live_error:
+            # A failed first read must not leave the toolbar saying "读取中…"
+            # while the chart has already fallen back to daily bars.
+            self._show_live_status()
         if self.data.get("reference_needed"):
             self._start_reference()
         self._start_live()
@@ -321,6 +327,10 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         two reads for one frame. Priming through the poller keeps a single read
         in flight; when it is slower than the wait, the first live tick consumes
         that same result instead of repeating the request.
+
+        Returns ``(frame, error)``. The error is handed back instead of dropped:
+        a failed first read still opens on daily bars, and the toolbar has to
+        say why rather than keep claiming it is still reading.
         """
         poller = self._live_poller
         poller.start(code, attempts=1)
@@ -328,10 +338,12 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         while time.monotonic() < deadline:
             result = poller.take()
             if result is not None:
-                frame, _error = result
-                return frame if frame is not None and len(frame) >= 2 else None
+                frame, error = result
+                if frame is None or len(frame) < 2:
+                    return None, error or '分钟行情为空，本次按日线显示'
+                return frame, None
             time.sleep(.02)
-        return None
+        return None, None
 
     def _workspace_context(self):
         context = super()._workspace_context()
@@ -402,7 +414,10 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
 
     def _show_live_status(self, stamp=None):
         if self._live_error:
-            self.live_var.set("5 分钟读取失败，保留上一次成功数据：" + self._live_error[:80])
+            # With no earlier frame there is nothing to keep, so say what the
+            # chart actually shows instead of promising a preserved screen.
+            kept = "保留上一次成功数据" if self._last_live_at else "本次按日线显示"
+            self.live_var.set(f"5 分钟读取失败，{kept}：" + self._live_error[:80])
             self.live_label.configure(foreground="#f23645")
             return
         moment, calendar = china_now(), self._live_calendar()

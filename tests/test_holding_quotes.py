@@ -1023,6 +1023,36 @@ def test_holding_chart_opens_with_a_single_minute_request(tmp_path, quote_window
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_holding_chart_reports_a_failed_first_read(tmp_path, quote_window):
+    """A failed opening read falls back to daily and says so, not "读取中…"."""
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    from workbench.live_minutes import MinuteSourceError
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    calls = []
+
+    def failing(code, moment=None):
+        calls.append(code)
+        raise MinuteSourceError('腾讯拒绝')
+
+    chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                    interactive=False, minute_fetch=failing, prime_minutes=True)
+    try:
+        assert len(calls) == 1, '初次读数只发一次'
+        assert chart.data.get('minute_series') is None, '失败时按日线打开'
+        text = chart.live_var.get()
+        assert '读取失败' in text and '腾讯拒绝' in text
+        assert '本次按日线显示' in text
+        assert '读取中' not in text, '失败原因必须替换掉「读取中」占位'
+        chart.top.after_cancel(chart._live_after)
+        chart._live_after = None
+        chart._live_tick()                 # a later tick must not erase the reason
+        assert '读取失败' in chart.live_var.get()
+    finally:
+        chart.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
 def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote_window):
     from types import SimpleNamespace
     from gui.closed_trade_chart import HoldingTradeChartDialog
