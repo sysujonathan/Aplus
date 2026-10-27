@@ -22,6 +22,18 @@ def closed_label_scale(size):
     return min(2.75, max(1.25, min(size[0] / 1100, size[1] / 500)))
 
 
+def _rows_key(rows):
+    """Identity of the last delivered bar, its live OHLCV included.
+
+    The forming bar keeps moving while its timestamp and the row count stay the
+    same, so a timestamp-only key let the poller look live while the chart kept
+    an older copy of the current candle.
+    """
+    tail = rows[-1]
+    return (str(tail["date"]), len(rows), float(tail["open"]), float(tail["high"]),
+            float(tail["low"]), float(tail["close"]), float(tail["volume"]))
+
+
 def render_closed_chart(data, *, size=None, viewport=(None, 0, 1.0)):
     bars, offset, price_scale = viewport
     # Same-day batches would draw labels on top of one another. The graph
@@ -273,14 +285,22 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_error = ""
         self._last_live_at = ""
         self._live_poller = MinutePoller(fetch=fetch)
+        self._live_primed = False
         payload = data if data is not None else load_holding_chart(store, row, quote=quote)
         # One bounded read before the window opens: the trader asked for live
         # bars, so the first frame must not wait for a later push to arrive.
-        primed = self._prime_minutes(row["code"], fetch) if prime_minutes else None
+        primed = self._prime_minutes(row["code"]) if prime_minutes else None
+        self._live_primed = bool(prime_minutes)
         if primed is not None:
             payload = {**payload, "minute_series": primed}
-            self._live_sent = (str(primed.iloc[-1]["date"]), len(primed))
             self._last_live_at = str(primed.iloc[-1]["date"])
+            from workbench.live_minutes import minute_rows
+            try:
+                # Same row shape the poller publishes, so the first tick after
+                # the prime compares like for like instead of re-sending it.
+                self._live_sent = _rows_key(minute_rows(primed))
+            except ValueError:
+                self._live_sent = None
         super().__init__(parent, store, row, data=payload, interactive=interactive)
         self.top.title(f'持仓图 · {self.data["name"]} {self.data["code"]}')
         self.live_var = tk.StringVar(value="5 分钟行情：读取中…")
@@ -293,26 +313,25 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._start_live()
 
     # ---- live intraday reader -------------------------------------------
-    @staticmethod
-    def _prime_minutes(code, fetch, *, timeout=2.0):
-        """One short, bounded read so the chart opens on real 5-minute bars."""
-        outcome = {}
+    def _prime_minutes(self, code, *, timeout=2.0):
+        """One bounded read through the live poller, so a slow read is reused.
 
-        def work():
-            try:
-                outcome["frame"] = fetch(code, china_now())
-            except Exception as exc:
-                outcome["error"] = exc
-
-        worker = threading.Thread(target=work, daemon=True, name="holding-chart-prime")
-        started = time.monotonic()
-        worker.start()
-        worker.join(max(.1, timeout - (time.monotonic() - started)))
-        frame = outcome.get("frame")
-        try:
-            return frame if frame is not None and len(frame) >= 2 else None
-        except TypeError:
-            return None
+        Priming on a private thread used to leave the request running past the
+        wait while ``_start_live`` asked for the same bars again: one window,
+        two reads for one frame. Priming through the poller keeps a single read
+        in flight; when it is slower than the wait, the first live tick consumes
+        that same result instead of repeating the request.
+        """
+        poller = self._live_poller
+        poller.start(code, attempts=1)
+        deadline = time.monotonic() + max(.1, timeout)
+        while time.monotonic() < deadline:
+            result = poller.take()
+            if result is not None:
+                frame, _error = result
+                return frame if frame is not None and len(frame) >= 2 else None
+            time.sleep(.02)
+        return None
 
     def _workspace_context(self):
         context = super()._workspace_context()
@@ -335,7 +354,11 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             return None
 
     def _start_live(self):
-        self._live_poller.start(self.data["code"], attempts=2)
+        # Priming already asked for one frame, or left that request in flight.
+        # Asking again here is what made every window pay for two reads.
+        if not self._live_primed:
+            self._live_poller.start(self.data["code"], attempts=2)
+        self._live_due = time.monotonic() + self._live_poller.delay
         self._live_after = self.top.after(300, self._live_tick)
 
     def _live_tick(self):
@@ -366,7 +389,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             self._show_live_status()
             return
         self._live_error = ""
-        key = (rows[-1]["date"], len(rows))
+        key = _rows_key(rows)
         embedded = self._embedded
         if key != self._live_sent and embedded is not None and not embedded.closed():
             payload = {"series": {"m5": rows},

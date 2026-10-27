@@ -754,6 +754,30 @@ def test_reference_conversion_uses_saved_risk_and_each_fill_date_without_writes(
     assert any("部分成交日" in w for w in partial["warnings"])
 
 
+def test_chart_boot_keeps_both_price_bases_for_account_levels(tmp_path):
+    """Adjusted daily axis vs unadjusted live bars: one level, two heights."""
+    from gui.chart_bridge import workspace_boot
+    from workbench.holding_chart import apply_holding_reference
+    store, aid, _pid = ledger(tmp_path)
+    raw = bars()
+    adjusted = raw.copy()
+    for key in ("open", "high", "low", "close"):
+        adjusted[key] *= pd.Series([.5, .5, .25])
+    save_dataset(store, CODE, adjusted, "baostock", "前复权")
+    data = apply_holding_reference(
+        load_holding_chart(store, report(store, aid)["positions"][0]), raw)
+    boot = workspace_boot(store, dict(frame=data["frame"], record=data["dataset"], code=CODE,
+                                      name=data["name"], timeframe="daily",
+                                      holding_levels=data["levels"]))
+    levels = boot["holdingLevels"]
+    assert [level["unadjusted"] for level in levels] == pytest.approx(
+        [level["value"] for level in data["levels"]])
+    assert [level["price"] for level in levels] == pytest.approx([2.5025, 2.25, 3., 3.25, 3.5])
+    # A conversion factor other than one is the whole point: the raw basis the
+    # live minute axis draws must differ from the adjusted one the daily axis uses.
+    assert all(level["unadjusted"] != level["price"] for level in levels)
+
+
 @pytest.mark.parametrize("fault", ["missing_end", "future", "zero", "nan"])
 def test_invalid_raw_reference_never_fabricates_lines(tmp_path, fault):
     from workbench.holding_chart import apply_holding_reference
@@ -920,10 +944,82 @@ def test_holding_chart_publishes_verified_intraday_rows_once(tmp_path, quote_win
         assert "5 分钟" in chart.live_var.get()
         chart._live_tick()                      # unchanged rows are not re-sent
         assert len(pushes) == 1
+        # The forming bar keeps moving between two timestamps: same stamp, same
+        # row count, but the trader must see the new high/close/volume.
+        minute.loc[2, ["high", "close", "volume"]] = [11.2, 11.15, 1.8e5]
+        chart._publish_live(minute)
+        assert len(pushes) == 2
+        assert pushes[-1]["series"]["m5"][-1]["date"] == "2026-09-30 15:00"
+        assert pushes[-1]["series"]["m5"][-1]["close"] == 11.15
+        assert pushes[-1]["series"]["m5"][-1]["volume"] == 1.8e5
+        chart._publish_live(minute)             # identical frame is still deduplicated
+        assert len(pushes) == 2
     finally:
         lifecycle["closed"] = True
         chart.close()
         assert chart._live_cancel.is_set() and chart._live_after is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_holding_chart_opens_with_a_single_minute_request(tmp_path, quote_window, monkeypatch):
+    """Opening a chart must not spend two reads on the same five-minute bars."""
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    minute = pd.DataFrame({
+        "date": ["2026-09-30 14:55", "2026-09-30 15:00"],
+        "open": [10.8, 10.9], "high": [11.0, 11.05], "low": [10.75, 10.85],
+        "close": [10.9, 11.0], "volume": [1e5, 1.1e5]})
+
+    def opener(delay=0.0):
+        calls = []
+
+        def fetch(code, moment=None):
+            calls.append(code)
+            if delay:
+                threading.Event().wait(delay)
+            return minute
+        return calls, fetch
+
+    # (a) A read that finishes inside the wait is used as the opening frame and
+    #     the poller must not ask for the same bars again.
+    calls, fetch = opener()
+    chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                    interactive=False, minute_fetch=fetch, prime_minutes=True)
+    try:
+        assert len(calls) == 1, "开窗只读一次；初次读数与首次轮询不得重复"
+        assert chart.data.get("minute_series") is not None
+        chart.top.after_cancel(chart._live_after)
+        chart._live_after = None
+        chart._live_tick()
+        assert len(calls) == 1
+    finally:
+        chart.close()
+
+    # (b) A read slower than the bounded wait keeps running; the poller reuses
+    #     that in-flight request instead of starting a second one.
+    original = HoldingTradeChartDialog._prime_minutes
+
+    def short_wait(self, code, *, timeout=2.0):
+        return original(self, code, timeout=0.05)
+
+    monkeypatch.setattr(HoldingTradeChartDialog, "_prime_minutes", short_wait)
+    calls, slow_fetch = opener(delay=.25)
+    slow = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                   interactive=False, minute_fetch=slow_fetch, prime_minutes=True)
+    try:
+        assert len(calls) == 1 and slow._live_poller.busy
+        slow.top.after_cancel(slow._live_after)
+        slow._live_after = None
+        for _ in range(400):                   # wait for that same request to settle
+            if not slow._live_poller.results.empty():
+                break
+            threading.Event().wait(.01)
+        slow._live_tick()
+        assert len(calls) == 1, "超过等待时限的初次读数由首次轮询复用，不再重发"
+        assert slow._live_poller.results.empty()
+    finally:
+        slow.close()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")

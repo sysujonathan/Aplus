@@ -603,8 +603,12 @@ function drawHoldingLevels(ctx, view) {
   if (replayActive) return; // current account levels are not historical replay evidence
   const { left, width, right, y } = view;
   const plotRight = width - right;
+  // The ledger price is the raw fill/stop. A forward-adjusted daily axis needs
+  // the converted price, but live minute bars are unadjusted, so a level drawn
+  // there must keep the raw value or the cost line sits at the wrong height.
+  const intraday = /^m\d+$/.test(String(activeTimeframeUnit || ''));
   (chartBoot.holdingLevels || []).forEach(level => {
-    const price = Number(level.price ?? level.value);
+    const price = Number(intraday ? (level.unadjusted ?? level.value) : level.price);
     if (!Number.isFinite(price) || price <= 0) return;
     ctx.save(); ctx.strokeStyle = level.color || '#b8bdc8';
     ctx.setLineDash(level.style === '--' ? [7, 5] : level.style === '-.' ? [7, 4, 2, 4] : []);

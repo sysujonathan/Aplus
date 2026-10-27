@@ -32,6 +32,24 @@ def _native(value):
     return str(value)
 
 
+def _holding_levels(items):
+    """Account levels in both price bases, so each axis can pick its own.
+
+    The ledger stores the raw fill/stop prices. A forward-adjusted daily axis
+    needs the same-day converted ``price``, while live minute bars are
+    unadjusted and must keep the raw value: drawing a converted level on raw
+    bars would place the cost line at the wrong height. Sending both keeps the
+    daily behaviour untouched without ever rewriting the ledger.
+    """
+    result = []
+    for item in items:
+        row = _native(item)
+        if not isinstance(row, dict):
+            continue
+        result.append({**row, "unadjusted": row.get("value")})
+    return result
+
+
 def _bars(frame):
     required = ("date", "open", "high", "low", "close", "volume")
     missing = [key for key in required if key not in frame]
@@ -265,7 +283,7 @@ def workspace_boot(store, context):
         "contextKind": context_kind, "contextTitle": title,
         "strategyType": str(context.get("strategy_type") or ""), "evidence": payload,
         "strategyEvidence": _native(vectors),
-        "holdingLevels": _native(context.get("holding_levels") or ()),
+        "holdingLevels": _holding_levels(context.get("holding_levels") or ()),
         "tradeEvents": _native(context.get("replay_events") or ()),
         "latest": latest,
         "priceStep": price_step,

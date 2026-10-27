@@ -119,6 +119,23 @@ function run() {
                'an anchored window keeps the same left-hand bar');
   assert.equal(context.viewOffset, 14, 'offset absorbs the two inserted bars');
 
+  // ---- the forming bar updates in place, the view never shifts ---------
+  context.viewCount = 20;
+  context.viewOffset = 0;
+  const forming = context.bars.slice();
+  const stamp = forming.at(-1).date;
+  const leftEdge = context.bars[beginIndex()].date;
+  const moved = forming.slice(0, -1)
+    .concat({...forming.at(-1), close: 27.75, high: 27.9, low: 26.05, volume: 5000});
+  assert.equal(apply({series: {m5: moved}}), true);
+  assert.equal(context.bars.length, moved.length, 'an in-bar update must not add a bar');
+  assert.equal(context.bars.at(-1).date, stamp, 'the same stamp identifies the same bar');
+  assert.equal(context.bars.at(-1).close, 27.75, 'a same-stamp close change must reach the chart');
+  assert.equal(context.bars.at(-1).volume, 5000);
+  assert.equal(context.viewOffset, 0, 'pinned to the newest bar: an in-bar update never shifts');
+  assert.equal(context.bars[beginIndex()].date, leftEdge);
+  assert.equal(renders.at(-1), 'all', 'the updated bar is repainted, not reloaded');
+
   // ---- nothing is drawn while replay is frozen -------------------------
   context.replayActive = true;
   const frozen = context.bars.map(row => row.date).join();
