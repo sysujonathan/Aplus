@@ -1,6 +1,8 @@
 """All test entry points, including a bare import of app, use isolated storage."""
 import pytest
 
+pytest_plugins = ['tests.native_process']
+
 
 @pytest.fixture(autouse=True)
 def release_destroyed_tk_interpreters():

@@ -27,6 +27,7 @@ def collect_destroyed_desktop_on_main_thread():
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
+@pytest.mark.native_process
 def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_bars, h2_spec):
     store = Store(tmp_path / 'gui')
     window = AplusMainWindow(store=store)
