@@ -359,9 +359,13 @@ document.querySelector('[title="K线类型"]').addEventListener('click',()=>char
   {label:`${indicatorSettings.chart_type==='line'?'✓ ':''}折线图`,action:()=>setChartType('line')}
 ]));
 document.querySelector('[aria-label="更多周期"]').addEventListener('click',()=>chartControlMenu('时间周期',[
-  ...[['daily','1天'],['weekly','1周'],['monthly','1月']].map(([unit,label])=>({
-    label,disabled:!chartBoot.series?.[unit]?.length,action:()=>switchProductionTimeframe(unit)})),
-  {label:'分钟行情尚未接入；不以日线模拟分钟线。'}
+  ...[['m5','5分钟'],['daily','1天'],['weekly','1周'],['monthly','1月']].map(([unit,label])=>({
+    label:`${unit===activeTimeframeUnit?'✓ ':''}${label}`,
+    disabled:!chartBoot.series?.[unit]?.length,
+    action:()=>switchProductionTimeframe(unit)})),
+  {label: chartBoot.series?.m5?.length
+    ? `5 分钟实时来源：${chartBoot.live?.source||'盘中行情'}；${chartBoot.live?.note||'不写入正式行情。'}`
+    : '分钟行情未接入：需要实时源或导入真实 5 分钟 CSV；不以日线模拟分钟线。'}
 ]));
 window.openChartIconPicker=()=>chartControlMenu('选择图标',[
   ...['★','●','✓','!','?','↑','↓'].map(text=>({label:text,action:()=>{

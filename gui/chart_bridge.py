@@ -32,6 +32,24 @@ def _native(value):
     return str(value)
 
 
+def _holding_levels(items):
+    """Account levels in both price bases, so each axis can pick its own.
+
+    The ledger stores the raw fill/stop prices. A forward-adjusted daily axis
+    needs the same-day converted ``price``, while live minute bars are
+    unadjusted and must keep the raw value: drawing a converted level on raw
+    bars would place the cost line at the wrong height. Sending both keeps the
+    daily behaviour untouched without ever rewriting the ledger.
+    """
+    result = []
+    for item in items:
+        row = _native(item)
+        if not isinstance(row, dict):
+            continue
+        result.append({**row, "unadjusted": row.get("value")})
+    return result
+
+
 def _bars(frame):
     required = ("date", "open", "high", "low", "close", "volume")
     missing = [key for key in required if key not in frame]
@@ -79,6 +97,10 @@ def _coordinate_dates(rows, timeframe):
     """
     from datetime import timedelta
     from workbench.exchange_calendar import is_trading_day
+    if timeframe not in ('daily', 'weekly', 'monthly'):
+        # Intraday bars occupy verified minutes only. The axis ends at the last
+        # received bar instead of reserving future slots that never arrived.
+        return []
     first, last = pd.Timestamp(rows[0]['date']), pd.Timestamp(rows[-1]['date'])
     if timeframe in ('weekly', 'monthly'):
         rule = 'W-FRI' if timeframe == 'weekly' else 'ME'
@@ -224,11 +246,28 @@ def workspace_boot(store, context):
     if timeframe == "daily":
         series["weekly"] = _bars(_resample(frame, "W-FRI"))
         series["monthly"] = _bars(_resample(frame, "ME"))
+    # Live intraday bars are transport, not Store history. They are offered as a
+    # separate unit so a failed refresh can never be mistaken for daily prices.
+    minute = context.get("minute_series")
+    if minute is not None:
+        series["m5"] = _bars(minute)
     from .chart_evidence import strategy_evidence
     vectors = strategy_evidence(context)
     from workbench.chart_workspace import bar_close_time
     close_dates = {unit: {row['date']: str(bar_close_time(row['date'], unit).date()) for row in data}
-                   for unit, data in series.items()}
+                   for unit, data in series.items() if unit != "m5"}
+    if "m5" in series:
+        # Tencent labels each bar with its closing minute, so the watermark is
+        # the bar's own timestamp; adding the legacy five minutes would misdate it.
+        close_dates["m5"] = {row['date']: row['date'] for row in series["m5"]}
+    start_timeframe = str(context.get('display_timeframe') or '')
+    if start_timeframe not in series:
+        start_timeframe = ''
+    live = None
+    if "m5" in series:
+        live = {"interval": int(context.get("minute_interval") or 8),
+                "source": str(context.get("minute_source") or "腾讯 5 分钟"),
+                "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}
     return {
         "production": True, "identity": key, "revision": int(document["revision"]),
         "bars": rows, "drawings": state["objects"], "state": state,
@@ -238,12 +277,13 @@ def workspace_boot(store, context):
         "name": str(context.get("name") or context["code"]), "source": source,
         "adjustment": adjustment, "timeframe": timeframe, "series": series,
         "displayTimeframe": str(context.get('display_timeframe') or timeframe),
+        "startTimeframe": start_timeframe, "live": live,
         "seriesCloseDates": close_dates,
         "axisDates": {unit: _coordinate_dates(data, unit) for unit, data in series.items()},
         "contextKind": context_kind, "contextTitle": title,
         "strategyType": str(context.get("strategy_type") or ""), "evidence": payload,
         "strategyEvidence": _native(vectors),
-        "holdingLevels": _native(context.get("holding_levels") or ()),
+        "holdingLevels": _holding_levels(context.get("holding_levels") or ()),
         "tradeEvents": _native(context.get("replay_events") or ()),
         "latest": latest,
         "priceStep": price_step,

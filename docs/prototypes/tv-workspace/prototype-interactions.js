@@ -287,6 +287,11 @@ function saveFibTemplate(object) {
 }
 
 function objectVisibleAtTimeframe(object) {
+  // Drawings are anchored to daily dates. Projecting one onto a minute axis
+  // stretches it across unrelated sessions, so the read-only intraday view
+  // hides them unless an object explicitly opts in.
+  if (/^m\d+$/.test(String(activeTimeframeUnit || ''))
+      && object.visibility?.[activeTimeframeUnit] !== true) return false;
   if (object.type !== 'fib') return object.visibility?.[activeTimeframeUnit] !== false;
   const visibility = ensureFibSettings(object).fibVisibility;
   const key = activeTimeframeUnit === 'weekly' ? 'weeks' : activeTimeframeUnit === 'monthly' ? 'months' : 'days';
@@ -346,6 +351,7 @@ function drawingVisibleInWorkspace(object) {
 
 function timeAxisTicks(view) {
   const candidates=[];
+  const intradayMode=/^m\d+$/.test(activeTimeframeUnit);
   const stride=[1,2,5,10,20,50,100].find(step=>step>=72/view.candleWidth)||100;
   let previous=null;
   try{previous=chartCoordinates.dateAt(bars,view.begin-1,activeTimeframeUnit);}catch(_error){/* Start of verified dates. */}
@@ -357,8 +363,15 @@ function timeAxisTicks(view) {
     if(x>view.width-view.right-28)break;
     const newYear=previous&&day.slice(0,4)!==previous.slice(0,4);
     const newMonth=!previous||day.slice(0,7)!==previous.slice(0,7);
+    const newDay=!previous||day.slice(0,10)!==previous.slice(0,10);
     let label=null,priority=0;
-    if(newYear || (offset===0&&activeTimeframeUnit==='monthly')){label=day.slice(0,4);priority=3;}
+    if(intradayMode){
+      // A minute axis marks each session boundary with its date, so a bar can
+      // never be read as belonging to the wrong trading day.
+      if(newDay||offset===0){label=day.slice(5,10);priority=3;}
+      else if(view.candleWidth>=9&&index%stride===0){label=day.slice(11,16);priority=1;}
+    }
+    else if(newYear || (offset===0&&activeTimeframeUnit==='monthly')){label=day.slice(0,4);priority=3;}
     else if((newMonth||offset===0)&&(activeTimeframeUnit!=='monthly'||view.candleWidth>=36)){
       label=`${Number(day.slice(5,7))}月`;priority=2;
     }else if(activeTimeframeUnit==='daily'&&view.candleWidth>=9&&index%stride===0){
@@ -512,7 +525,12 @@ function renderWorkspace(mode = 'all') {
     ctx.fillRect(px - bodyWidth / 2, bodyTop, bodyWidth, Math.max(2, bodyBottom - bodyTop));
   });
 
-  if (indicatorSettings.strategy_visible !== false && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view);
+  // Strategy evidence is a daily-structure conclusion. It must not be redrawn
+  // on an intraday axis where its dates do not exist as bars.
+  const evidenceUnit = chartBoot.timeframe || 'daily';
+  if (indicatorSettings.strategy_visible !== false && activeTimeframeUnit === evidenceUnit
+      && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view);
+  drawHoldingLevels(ctx, canvas._view);
   ctx.restore();
 
   const topContext = foregroundContext || ctx;
@@ -579,6 +597,27 @@ function calculateEma() {
   emaSmoothing=Object.fromEntries(Object.entries(smoothed).map(([key,series])=>[key,series.length?merge(series):[]]));
 }
 
+function drawHoldingLevels(ctx, view) {
+  // Account levels are prices rather than dates, so they stay valid on every
+  // timeframe, including the read-only intraday axis.
+  if (replayActive) return; // current account levels are not historical replay evidence
+  const { left, width, right, y } = view;
+  const plotRight = width - right;
+  // The ledger price is the raw fill/stop. A forward-adjusted daily axis needs
+  // the converted price, but live minute bars are unadjusted, so a level drawn
+  // there must keep the raw value or the cost line sits at the wrong height.
+  const intraday = /^m\d+$/.test(String(activeTimeframeUnit || ''));
+  (chartBoot.holdingLevels || []).forEach(level => {
+    const price = Number(intraday ? (level.unadjusted ?? level.value) : level.price);
+    if (!Number.isFinite(price) || price <= 0) return;
+    ctx.save(); ctx.strokeStyle = level.color || '#b8bdc8';
+    ctx.setLineDash(level.style === '--' ? [7, 5] : level.style === '-.' ? [7, 4, 2, 4] : []);
+    ctx.beginPath(); ctx.moveTo(left, y(price)); ctx.lineTo(plotRight, y(price)); ctx.stroke();
+    ctx.fillStyle = level.color || '#b8bdc8'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'left';
+    ctx.fillText(`${level.label} ${chartPrice(price)}`, left + 8, y(price) - 5); ctx.restore();
+  });
+}
+
 function drawStrategyEvidence(ctx, view) {
   const { left, width, right, y, candleWidth, xGlobal } = view;
   const plotRight = width - right;
@@ -624,15 +663,6 @@ function drawStrategyEvidence(ctx, view) {
       const index = at(gap.date);if(index < 0 || (replayActive && replayIndex < setupIndex))return;
       ctx.save();ctx.strokeStyle='#787b86';ctx.globalAlpha=.6;ctx.lineWidth=.7;ctx.setLineDash([2,4]);
       ctx.beginPath();ctx.moveTo(xGlobal(index),y(Number(gap.floor)));ctx.lineTo(plotRight,y(Number(gap.floor)));ctx.stroke();ctx.restore();
-    });
-    (chartBoot.holdingLevels || []).forEach(level => {
-      if (replayActive) return; // current account levels are not historical replay evidence
-      const price = Number(level.price ?? level.value);
-      if (!Number.isFinite(price) || price <= 0) return;
-      ctx.save(); ctx.strokeStyle = level.color || '#b8bdc8'; ctx.setLineDash(level.style === '--' ? [7, 5] : level.style === '-.' ? [7, 4, 2, 4] : []);
-      ctx.beginPath(); ctx.moveTo(left, y(price)); ctx.lineTo(plotRight, y(price)); ctx.stroke();
-      ctx.fillStyle = level.color || '#b8bdc8'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'left';
-      ctx.fillText(`${level.label} ${chartPrice(price)}`, left + 8, y(price) - 5); ctx.restore();
     });
     if (evidence.plan_kind === 'gap-h2-next-session' && setupIndex >= 0 && (!replayActive || replayIndex >= setupIndex)) {
       [['entry_plan_price','Entry','#089981'],['sl1_plan_price','SL1','#f23645'],['mm_target','MM','#089981']].forEach(([key,label,color]) => {
@@ -1712,12 +1742,56 @@ function switchProductionTimeframe(timeframe, persist = true) {
   if (replayActive && typeof updateReplayUi === 'function') updateReplayUi();
   viewCount = Math.min(DEFAULT_VISIBLE_BARS, replayIndex+1, bars.length); viewOffset = 0; priceZoom = 1; priceCenterOffset = 0;
   document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === timeframe));
-  const period = timeframe === 'weekly' ? '1周' : timeframe === 'monthly' ? '1月' : '1天';
+  document.querySelector('[aria-label="更多周期"]')?.classList?.toggle('active-box',
+    !['daily','weekly','monthly'].includes(timeframe));
+  const period = timeframe === 'weekly' ? '1周' : timeframe === 'monthly' ? '1月'
+    : timeframe === 'm5' ? '5分钟 · 盘中' : '1天';
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
   updateReadout(bars[replayIndex]);
   document.querySelectorAll('.quote b').forEach(node=>{node.textContent=chartPrice(bars[replayIndex].close);});
   renderWorkspace(); if (persist) savePrototypeState(); return true;
 }
+
+/* Intraday rows arrive from the Tk transport while this page stays open.
+   Only the tail series is replaced: the viewport anchors to the bar the trader
+   was already reading, so a new bar slides the chart left instead of jumping
+   back to the right edge or redrawing the whole page. */
+window.aplusApplyLiveBars = payload => {
+  const incoming = payload?.series?.m5;
+  if (!Array.isArray(incoming) || incoming.length < 2) return false;
+  chartBoot.series = chartBoot.series || {};
+  chartBoot.seriesCloseDates = chartBoot.seriesCloseDates || {};
+  const firstIntraday = !(chartBoot.series.m5?.length);
+  chartBoot.series.m5 = incoming;
+  chartBoot.seriesCloseDates.m5 = Object.fromEntries(incoming.map(row => [row.date, row.date]));
+  if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live};
+  if (activeTimeframeUnit !== 'm5') {
+    if (firstIntraday && !replayActive && switchProductionTimeframe('m5', false))
+      showToast('已接入真实 5 分钟行情 · 最新一根 ' + incoming.at(-1).date.slice(5)
+        + ' · 只读视图：日线画线不投影，成本／止损／止盈线保留');
+    return true;
+  }
+  if (replayActive) return true; // never disturb a frozen replay frame
+  const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
+  userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
+  bars.splice(0, bars.length, ...structuredClone(incoming));
+  userObjects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit));
+  replayIndex = bars.length - 1;
+  if (anchorDate) {
+    const at = bars.findIndex(row => row.date === anchorDate);
+    if (at >= 0) {
+      const limits = panLimits();
+      viewOffset = clamp(bars.length - viewCount - at, limits.min, limits.max);
+    }
+  } else {
+    viewOffset = 0; // pinned to the newest bar: append one, everything shifts left
+  }
+  calculateEma();
+  updateReadout(bars[replayIndex]);
+  document.querySelectorAll('.quote b').forEach(node => {node.textContent = chartPrice(bars[replayIndex].close);});
+  renderWorkspace('all');
+  return true;
+};
 
 document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
   if(button.dataset.timeframe === activeTimeframeUnit)return;
@@ -2303,6 +2377,10 @@ workspaceResize.observe(wrap);
 applyProductionContext();
 if(!chartBoot.production && initialPrototypeState.timeframe && initialPrototypeState.timeframe!=='daily')
   switchProductionTimeframe(initialPrototypeState.timeframe,false);
+// An embedded chart that already carries verified intraday bars opens on them;
+// the daily unit stays one click away and remains the ledger-anchored series.
+if(chartBoot.production && chartBoot.startTimeframe && chartBoot.series?.[chartBoot.startTimeframe]?.length)
+  switchProductionTimeframe(chartBoot.startTimeframe,false);
 calculateEma();
 updateObjectTree(); renderWorkspace();
 updateUndoButtons();

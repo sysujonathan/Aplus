@@ -223,6 +223,7 @@ class EmbeddedChartHost:
         self.status = self.session.with_suffix('.status.json')
         self.actions = self.session.with_suffix('.actions.json')
         self.navigation = self.session.with_suffix('.navigation.json')
+        self.live = self.session.with_suffix('.live.json')
         self.focus = self.session.with_suffix('.focus.json')
         self._last_focus = None
         self._last_action = None
@@ -269,6 +270,17 @@ class EmbeddedChartHost:
             from datetime import date
             day = date.fromisoformat(str(day)).isoformat()
         atomic_json(self.navigation, dict(id=uuid.uuid4().hex, token=self.token, date=day))
+        return True
+
+    def push_live(self, payload):
+        """Hand new intraday bars to the open page without reloading it.
+
+        The page keeps its own viewport and scroll position; the transport only
+        replaces the tail series. Nothing here can write Store history.
+        """
+        if self.closed() or self.closing or not payload:
+            return False
+        atomic_json(self.live, dict(id=uuid.uuid4().hex, token=self.token, **payload))
         return True
 
     def _poll(self):
@@ -343,7 +355,8 @@ class EmbeddedChartHost:
             self.parent.after_cancel(self._timer)
             self._timer = None
         if self.closed():
-            for path in (self.control, self.status, self.actions, self.navigation, self.focus, self.session):
+            for path in (self.control, self.status, self.actions, self.navigation,
+                         self.live, self.focus, self.session):
                 path.unlink(missing_ok=True)
 
 
@@ -357,6 +370,7 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
         dict(id=uuid.uuid4().hex, token=token))
     last_mtime = None
     last_navigation = None
+    last_live = None
     while native.fit():
         if control.exists():
             modified = control.stat().st_mtime_ns
@@ -387,4 +401,15 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
                     + json.dumps(request, ensure_ascii=False) + ")")
                 if accepted:
                     last_navigation = request['id']
+        live_path = session.with_suffix('.live.json')
+        if live_path.exists() and not bridge.busy and window.events.loaded.is_set():
+            request = json.loads(live_path.read_text(encoding='utf-8'))
+            if request.get('id') != last_live:
+                last_live = request['id']
+                if request.get('token') == bridge.active_token:
+                    # A page that cannot accept intraday rows keeps its current
+                    # frame; the next tick retries after the page reloads.
+                    window.evaluate_js(
+                        "typeof window.aplusApplyLiveBars === 'function' && window.aplusApplyLiveBars("
+                        + json.dumps(request, ensure_ascii=False) + ")")
         time.sleep(.1)
