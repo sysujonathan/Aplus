@@ -56,9 +56,12 @@ def load_chart(store, service, code, source, timeframe, phase, check):
     if bars.empty:
         raise ValueError('该周期尚无已完成K线，可先查看日线')
     bars['ema20'] = bars.close.ewm(span=20, adjust=False).mean()
-    image = render_chart(bars, {}, '', {}, code=code)
+    # Funds use a 0.001 tick; the frame carries the confirmed instrument so the
+    # renderer never has to guess it from price digits.
+    instrument_type = frame.attrs.get('instrument_type')
+    image = render_chart(bars, {}, '', {}, code=code, instrument_type=instrument_type)
     check()
-    return dict(frame=frame, record=record, image=image,
+    return dict(frame=frame, record=record, image=image, instrument_type=instrument_type,
                 refresh=(phase == 'local' and record['end'] < chart_day()
                          and record.get('checked_through', '') < chart_day()))
 
@@ -110,7 +113,8 @@ class WatchChartController:
             panel._workspace_context = dict(frame=data['frame'], record=record, code=self.item.code,
                                            name=self.item.name, timeframe='daily', payload={},
                                            display_timeframe=self.timeframe,
-                                           metadata={}, strategy_type='', context_kind='watch')
+                                           metadata={}, strategy_type='', context_kind='watch',
+                                           instrument_type=data.get('instrument_type'))
             panel._workspace_request = {'manual': True}
             panel._analysis_btn.configure(state=tk.NORMAL)
             if getattr(panel, '_interactive', False):
