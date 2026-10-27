@@ -54,10 +54,10 @@ def build_backend():
     """尝试构建真实后端；失败返回 (None, None)，外壳以调试模式启动。"""
     try:
         from workbench.store import Store
-        from workbench.service import Service
+        from workbench.acceleration_profile import configure_service
 
         store = Store()
-        service = Service(store)
+        service = configure_service(store)
         return service, store
     except Exception:
         return None, None
