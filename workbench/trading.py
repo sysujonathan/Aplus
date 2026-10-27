@@ -344,12 +344,24 @@ def management_report(store, account_id, price_map=None):
     }
 
 
-def trading_dates(store, code=None, limit=180, today=None):
+# Ten years of sessions even in the densest case (every weekday = ~2609
+# sessions); a real calendar has fewer per year, so this reaches slightly past
+# ten years. A fill may be that old and the selector is the only way to record
+# it, hence ten years instead of the ~180 sessions a price download covers.
+HISTORY_SESSIONS = 2650
+
+
+def trading_dates(store, code=None, limit=HISTORY_SESSIONS, today=None):
     """Ledger dates through today, independent of prices and individual bars.
 
     ``code`` remains accepted for existing callers; a stock's stale/missing
     price file must never decide which dates a real fill can be recorded on.
     Covered public calendars take precedence over published annual schedules.
+
+    The default window is ten years of sessions, because a fill can be that
+    old: a position opened last year must stay recordable. Days outside the
+    verified calendar are still never guessed, so a shorter window only means
+    the public calendar does not cover those years yet.
     """
     from .exchange_calendar import is_trading_day
     from .sources import calendar_file
