@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import certifi
 import pandas as pd
 
 from .market import code_of, validate_bars, board_of
@@ -51,7 +52,12 @@ class TickFlowHTTP:
     """Runs only in the killable worker process; HTTP diagnostics survive IPC."""
     def __init__(self):
         self.last_request = 0
-        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        # Keep system trust and hostname verification; supplement Windows hosts
+        # whose local issuer store is incomplete with the already locked CA bundle.
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
 
     def __enter__(self): return self
     def __exit__(self,*args): pass
