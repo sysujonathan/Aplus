@@ -146,7 +146,10 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert 'value="上月"' in page and 'value="下月"' in page
     assert '"上年" if yearly else "上月"' in page
     assert 'while len(weeks) < 6' in page
-    assert 'for column, widget in enumerate(widgets):' in page
+    # 买入批次按列排布；日期列多一个日历按钮，日期框仍是 widgets[0]
+    assert 'for column, widget in enumerate(widgets[1:], start=1):' in page
+    assert 'text="日历", width=4' in page
+    assert 'pick_date(' in page
     assert "tree._measure_font.measure(str(tree.set(iid, column)))" in page
 
 

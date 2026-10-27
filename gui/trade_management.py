@@ -33,6 +33,7 @@ from workbench.trading import (
 from workbench.account_reconciliation import capture_reference, reconcile_reference
 
 from .data import StockNameLookup, code_names
+from .date_picker import pick_date
 from .theme import APP_BG, DOWN, MUTED, PANEL_BG, REPEAT, TEXT, UP
 from .tree_scroll import numeric_stock_code
 
@@ -1669,6 +1670,68 @@ class _IdentityDialog(_BaseDialog):
         return code or self._resolve_code()
 
 
+JUMP_RESET_MS = 1200
+
+
+def date_jump_target(dates, pending):
+    """Newest-first verified date matching a typed prefix, or None.
+
+    Readonly selectors now span ten years, so scrolling to last year is painful.
+    Typing the date instead (20250929 or 2025-09-29) jumps straight there while
+    the offered set stays exactly the verified sessions.
+    """
+    digits = ''.join(char for char in str(pending or '') if char.isdigit())
+    if not digits:
+        return None
+    for day in dates:
+        if ''.join(char for char in day if char.isdigit()).startswith(digits):
+            return day
+    return None
+
+
+def bind_date_jump(box, dates):
+    """Let a readonly date selector jump by typing; unrelated keys pass through."""
+    state = {'typed': '', 'reset': None}
+
+    def clear():
+        state['typed'], state['reset'] = '', None
+
+    def on_key(event):
+        char = event.char or ''
+        # Arrows, Home/End, Tab and function keys arrive with an empty char. An
+        # empty string counts as "in" any string, so this must be an explicit
+        # emptiness test: otherwise those keys fall through to `break` and the
+        # selector stops responding to its own keyboard navigation.
+        if not char or char not in '0123456789-':
+            clear()
+            return None
+        if state['reset'] is not None:
+            box.after_cancel(state['reset'])
+            state['reset'] = None
+        typed = state['typed'] + char
+        target = date_jump_target(dates, typed)
+        if target is None:
+            # A dead prefix restarts from the newest keystroke, so a wrong first
+            # digit does not block the next one.
+            typed = char if char.isdigit() else ''
+            target = date_jump_target(dates, typed)
+        if target is None:
+            clear()
+            return 'break'
+        state['typed'] = typed
+        box.set(target)
+        state['reset'] = box.after(JUMP_RESET_MS, clear)
+        return 'break'
+
+    box.bind('<KeyPress>', on_key)
+    # The handler is exposed for tests: keyboard events cannot be generated
+    # reliably on a hidden Tk window, so the pass-through decision is asserted
+    # directly instead of through a synthetic key press.
+    box.date_jump_key = on_key
+    box.bind('<BackSpace>', lambda _event: (clear(), 'break')[1])
+    return box
+
+
 class _BatchEditor:
     def __init__(self, parent, row, dates, batches=None, inherit_first=True, include_fees=False):
         self.parent = parent
@@ -1698,20 +1761,27 @@ class _BatchEditor:
         price_var = tk.StringVar(value=batch.get("price", ""))
         hands_var = tk.StringVar(value=batch.get("hands", ""))
         fees_var = tk.StringVar(value=batch.get("fees", "") if self.include_fees else "0")
+        cell = ttk.Frame(self.parent)
+        cell.grid(row=row_number, column=0, padx=3, pady=3, sticky=tk.EW)
+        picker = bind_date_jump(ttk.Combobox(cell, textvariable=date_var, values=self.dates,
+                                             width=11, state="readonly"), self.dates)
+        picker.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(cell, text="日历", width=4, bootstyle="secondary",
+                   command=lambda var=date_var, anchor=picker: pick_date(
+                       anchor, self.dates, var.get(), var.set)).pack(side=tk.LEFT, padx=(3, 0))
         widgets = [
-            ttk.Combobox(self.parent, textvariable=date_var, values=self.dates,
-                         width=13, state="readonly"),
+            picker,
             ttk.Entry(self.parent, textvariable=price_var, width=13),
             ttk.Entry(self.parent, textvariable=hands_var, width=15),
         ]
         if self.include_fees:
             widgets.append(ttk.Entry(self.parent, textvariable=fees_var, width=12))
-        for column, widget in enumerate(widgets):
+        for column, widget in enumerate(widgets[1:], start=1):
             widget.grid(row=row_number, column=column, padx=3, pady=3)
         remove = ttk.Button(self.parent, text="−", width=3, bootstyle="secondary-outline",
                             command=lambda record=None: self.remove_record(record))
         record = {"date": date_var, "price": price_var, "hands": hands_var, "fees": fees_var,
-                  "widgets": [*widgets, remove]}
+                  "widgets": [*widgets, remove], "cell": cell}
         remove.configure(command=lambda r=record: self.remove_record(r))
         remove.grid(row=row_number, column=4 if self.include_fees else 3, padx=4)
         self.rows.append(record)
@@ -1719,8 +1789,13 @@ class _BatchEditor:
     def remove_record(self, record):
         if len(self.rows) == 1 or record not in self.rows:
             return
+        cell = record.get("cell")
         for widget in record["widgets"]:
+            if cell is not None and widget is record["widgets"][0]:
+                continue  # destroyed together with the cell that holds it
             widget.destroy()
+        if cell is not None:
+            cell.destroy()
         self.rows.remove(record)
 
     def values(self):
@@ -1901,10 +1976,15 @@ class _ClosedDialog(_IdentityDialog):
         dates = trading_dates(store, row.get("code")) or trading_dates(store)
         ttk.Label(self.form, text="清仓日期").grid(row=1, column=0, sticky=tk.W, pady=4)
         self.close_date = tk.StringVar(value=row.get("close_date") or (dates[0] if dates else date.today().isoformat()))
-        ttk.Combobox(self.form, textvariable=self.close_date, values=dates,
-                     width=20, state="readonly").grid(
-            row=1, column=1, sticky=tk.EW, padx=(0, 12), pady=4
-        )
+        close_cell = ttk.Frame(self.form)
+        close_cell.grid(row=1, column=1, sticky=tk.EW, padx=(0, 12), pady=4)
+        close_picker = bind_date_jump(
+            ttk.Combobox(close_cell, textvariable=self.close_date, values=dates,
+                         width=18, state="readonly"), dates)
+        close_picker.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(close_cell, text="日历", width=4, bootstyle="secondary",
+                   command=lambda: pick_date(close_picker, dates, self.close_date.get(),
+                                             self.close_date.set)).pack(side=tk.LEFT, padx=(3, 0))
         self.days = self.entry(1, "持仓天数", row.get("holding_days", ""), column=1)
         self.pnl = self.entry(2, "盈亏", row.get("pnl", ""))
         self.return_pct = self.entry(2, "收益率 %", row.get("return_pct", ""), column=1)
@@ -2012,8 +2092,11 @@ class _ClosedBatchDialog(_BaseDialog):
         widgets = []
         for column, ((_label, width), variable) in enumerate(zip(self.COLUMNS, variables)):
             if column == 2:
-                widget = ttk.Combobox(self.form, textvariable=variable,
-                                      values=self.dates, width=width, state="readonly")
+                widget = bind_date_jump(ttk.Combobox(self.form, textvariable=variable,
+                                                     values=self.dates, width=width,
+                                                     state="readonly"), self.dates)
+                widget.bind('<Double-Button-1>', lambda _event, w=widget: (
+                    pick_date(w, self.dates, w.get(), w.set), 'break')[1])
             else:
                 widget = ttk.Entry(self.form, textvariable=variable, width=width)
             widget.grid(row=grid_row, column=column, sticky=tk.EW, padx=2, pady=2)
