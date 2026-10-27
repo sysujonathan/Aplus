@@ -113,6 +113,7 @@ def test_opening_capital_display_retains_independent_reverse_calculation(tmp_pat
     assert store.rows('SELECT initial_equity FROM accounts WHERE id=?',(aid,))[0]['initial_equity']==10000
 
 
+@pytest.mark.native_process
 def test_history_account_dialog_uses_dated_check_not_live_floating(tmp_path, quote_window):
     from gui.trade_management import _AccountDialog
     from workbench.account_reconciliation import capture_reference, reconcile_reference
@@ -402,6 +403,7 @@ def test_missing_etf_chart_failure_records_shared_cooldown_and_blocks_retry(tmp_
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_missing_history_loader_accepts_page_frame_as_parent(quote_window):
     import ttkbootstrap as ttk
     from gui.closed_trade_chart import fetch_missing_holding_chart_dialog
@@ -467,6 +469,7 @@ def test_holding_renderer_default_research_pixels_unchanged_and_scaled_level_lab
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_gui_live_overlay_keeps_rows_selection_calendar_and_ledger(tmp_path, quote_window):
     import ttkbootstrap as ttk
     from gui.trade_management import TradeManagementFrame, _PositionDialog
@@ -517,6 +520,7 @@ def test_gui_live_overlay_keeps_rows_selection_calendar_and_ledger(tmp_path, quo
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_snapshot_account_editor_keeps_cash_when_revalued(tmp_path, quote_window):
     import ttkbootstrap as ttk
     from gui.trade_management import _AccountDialog, _sort_value
@@ -537,6 +541,7 @@ def test_snapshot_account_editor_keeps_cash_when_revalued(tmp_path, quote_window
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_gui_background_fetch_responsive_and_auto_pauses_outside_verified_session(tmp_path, quote_window):
     import ttkbootstrap as ttk
     from gui.trade_management import TradeManagementFrame
@@ -610,6 +615,7 @@ def test_calendar_coverage_validation_and_local_overrides():
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_auto_polling_resumes_after_holiday_without_manual_refresh(tmp_path, quote_window):
     from gui.trade_management import TradeManagementFrame
     store, aid, _pid = ledger(tmp_path)
@@ -668,6 +674,7 @@ def test_auto_polling_resumes_after_holiday_without_manual_refresh(tmp_path, quo
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_page_entry_hides_account_calendar_before_raise_and_quotes_do_not_reveal(tmp_path, quote_window):
     from types import SimpleNamespace
     from gui.trade_management import TradeManagementFrame
@@ -813,6 +820,7 @@ def test_raw_reference_provider_is_bounded_cancelable_and_never_changes_default_
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
 @pytest.mark.parametrize("failed", [False, True])
+@pytest.mark.native_process
 def test_holding_reference_background_keeps_gui_responsive_and_fails_visibly(tmp_path, quote_window, failed):
     from gui.closed_trade_chart import HoldingTradeChartDialog
     store, aid, _pid = ledger(tmp_path)
@@ -859,6 +867,7 @@ def test_holding_reference_background_keeps_gui_responsive_and_fails_visibly(tmp
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+@pytest.mark.native_process
 def test_closing_holding_chart_cancels_pending_reference_without_late_gui_write(tmp_path, quote_window):
     from gui.closed_trade_chart import HoldingTradeChartDialog
     store, aid, _pid = ledger(tmp_path)

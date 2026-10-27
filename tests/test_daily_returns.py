@@ -148,6 +148,7 @@ def test_calendar_clipboard_supports_image_file_drop_and_wechat_path(tmp_path):
         _calendar_clipboard_images(None, "https://example.test/picture.png")
 
 
+@pytest.mark.native_process
 def test_calendar_date_color_and_grid_height_are_independent_of_returns(tmp_path, monkeypatch):
     import tkinter as tk
     import ttkbootstrap as ttk

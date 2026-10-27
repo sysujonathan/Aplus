@@ -192,6 +192,7 @@ def test_continuous_monitor_races_stop_without_overwriting_progress(tmp_path, mo
     assert saved['drawings'] == [] and saved['alerts'][0]['status'] == '后台更新 3'
 
 
+@pytest.mark.native_process
 def test_native_fallback_reads_web_text_and_ruler_without_changing_saved_objects(tmp_path, monkeypatch):
     import tkinter as tk
     from PIL import Image

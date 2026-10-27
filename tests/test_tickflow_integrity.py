@@ -209,6 +209,7 @@ def test_ui_cache_only_gate_never_parses_legacy_full_history_on_main_thread(stor
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows native Tk window')
+@pytest.mark.native_process
 def test_integrity_window_repair_selection_is_explicit_and_read_only(store):
     import tkinter as tk
     import ttkbootstrap as ttk
