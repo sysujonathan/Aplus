@@ -395,7 +395,7 @@ Object.assign(context,{wrap:{getBoundingClientRect:()=>({width:1000,height:600})
 context.canvas.getContext=()=>ctx;
 context.baseCanvas={width:0,height:0,getContext:()=>ctx};
 Object.assign(context.indicatorSettings,{ema:true,ema_daily:true,ema_width:1.5,ema_color:'#ff9800',ema_offset:-1});
-vm.runInContext([extract('sizeCanvas'),extract('renderWorkspace')].join('\n'),context);paths=[];
+vm.runInContext([extract('sizeCanvas'),extract('drawHoldingLevels'),extract('renderWorkspace')].join('\n'),context);paths=[];
 vm.runInContext('calculateEma();renderWorkspace()',context);
 assert.equal(vm.runInContext('sizeCanvas({width:100,height:50},100,50,1)',context),false,
   'an unchanged backing store must not be reset');
@@ -540,4 +540,23 @@ const exported=vm.runInContext('cleanSnapshotCanvas()',context);
 assert.equal(exported.height,468);
 assert.ok(labels.includes('回放截至 2026-08-12 · test-source · qfq'));
 assert.equal(context.selectedId,'keep-selection','export cannot clear the selected drawing');
+// ---- account levels follow the axis they are drawn on -------------------
+context.replayActive=false;
+context.chartBoot={production:true,priceStep:.001,
+  holdingLevels:[{label:'摊薄成本（含税费）',value:10,price:12.5,color:'#f6c85f',style:'-'}]};
+vm.runInContext(extract('drawHoldingLevels'),context);
+context.activeTimeframeUnit='m5';paths=[];labels=[];
+vm.runInContext('drawHoldingLevels(ctx,testView)',context);
+assert.equal(paths.at(-1).points[0][1],10,'a live minute axis draws the raw ledger price');
+context.activeTimeframeUnit='daily';paths=[];labels=[];
+vm.runInContext('drawHoldingLevels(ctx,testView)',context);
+assert.equal(paths.at(-1).points[0][1],12.5,'the adjusted daily axis keeps its converted price');
+context.chartBoot={production:true,priceStep:.001,holdingLevels:[{label:'止损 SL1',value:9}]};
+paths=[];vm.runInContext('drawHoldingLevels(ctx,testView)',context);
+context.activeTimeframeUnit='m5';paths=[];
+vm.runInContext('drawHoldingLevels(ctx,testView)',context);
+assert.equal(paths.at(-1).points[0][1],9,'the raw level is still valid on unadjusted bars');
+context.activeTimeframeUnit='daily';paths=[];
+vm.runInContext('drawHoldingLevels(ctx,testView)',context);
+assert.equal(paths.length,0,'an unverified level never lands on an adjusted axis as a raw price');
 console.log(JSON.stringify({ok:true}));

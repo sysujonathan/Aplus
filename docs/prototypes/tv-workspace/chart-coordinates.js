@@ -4,7 +4,14 @@ window.AplusChartCoordinates = (() => {
   const extensionCache = new Map();
   const configure = dates => { axisDates = dates || {}; extensionCache.clear(); };
   const dayOf = value => String(value || '').slice(0, 10);
+  // Intraday units are keyed by minute, not by day: two 5-minute bars on the
+  // same session must never collapse to one coordinate.
+  const intraday = timeframe => /^m\d+$/.test(String(timeframe || ''));
   function bucket(day, timeframe) {
+    if (intraday(timeframe)) {
+      const match = String(day || '').match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+      return match ? `${match[1]}T${match[2]}:${match[3]}` : null;
+    }
     const value = dayOf(day);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
     const stamp = new Date(`${value}T00:00:00Z`);
