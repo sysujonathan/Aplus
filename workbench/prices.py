@@ -1,4 +1,5 @@
 """Price increments selected by confirmed trading instrument, never by price digits."""
+import re
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 from .market import board_of, code_of
@@ -6,6 +7,26 @@ from .market import board_of, code_of
 
 TICK_RULES = {'a_share_stock': Decimal('.01'), 'etf': Decimal('.001'),
               'exchange_fund': Decimal('.001')}
+
+# Exchange code ranges allocated to on-exchange funds. Deliberately narrow: sz.1
+# also holds convertible bonds (sz.11/12) and repo (sz.13), which must never be
+# reported as funds just because they share a first digit.
+FUND_CODE = re.compile(r'(?:sh\.(?:50|51|52|56|58)\d{4}|sz\.(?:15|16|18)\d{4})')
+
+
+def instrument_type_of(code):
+    """Confirmed instrument from the exchange code range; None when unknown.
+
+    Charting needs the tick to render prices, and the same rules refuse to guess.
+    A stock's board and a fund's code range are both public allocations, so this
+    is evidence rather than an inference from price digits.
+    """
+    security = code_of(code)
+    if board_of(security) is not None:
+        return 'a_share_stock'
+    if FUND_CODE.fullmatch(security):
+        return 'etf'
+    return None
 
 
 def tick_size(code, price, *, instrument_type=None):

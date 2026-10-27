@@ -14,11 +14,24 @@ from contextlib import closing, contextmanager
 import pandas as pd
 
 from .market import code_of, completed_date, load_dataset, validate_bars
+from .prices import instrument_type_of
 from .provider_guard import ProviderGuard, ProviderError
 from .sources import market_source, UPDATE_SOURCES
 from .store import digest, dumps
 
 _CHART_LOCKS = {source: threading.Lock() for source in UPDATE_SOURCES}
+
+
+def _with_instrument(frame, code):
+    """Chart frames carry the confirmed instrument, so price ticks stay exact.
+
+    A CSV cache cannot persist frame attributes; tagging on read keeps stock and
+    fund charts on their own tick without guessing from price digits.
+    """
+    kind = instrument_type_of(code)
+    if kind:
+        frame.attrs['instrument_type'] = kind
+    return frame
 
 
 @contextmanager
@@ -103,7 +116,7 @@ def cached_history(store, code, source, adjustment=None):
     frame = validate_bars(pd.read_csv(io.BytesIO(raw)))
     if frame.date.iloc[0] != record['start'] or frame.date.iloc[-1] != record['end']:
         raise ValueError('关注K图缓存日期不一致')
-    return frame, record
+    return _with_instrument(frame, code), record
 
 
 def local_history(store, code, source=None):
@@ -127,7 +140,8 @@ def local_history(store, code, source=None):
     # A successful chart request can legitimately return the same final day
     # as an older scan snapshot. Keep its query watermark in that tie, or each
     # reopen would incorrectly schedule the same network request again.
-    return max(candidates, key=lambda item: (item[1]['end'], item[1].get('checked_through', ''))) if candidates else None
+    best = max(candidates, key=lambda item: (item[1]['end'], item[1].get('checked_through', ''))) if candidates else None
+    return (_with_instrument(best[0], code), best[1]) if best else None
 
 
 def fetch_history(store, code, source, cancel_event, *, provider_factory=None, end=None):
@@ -166,7 +180,14 @@ def _fetch_once(store, code, source, cancel_event, provider_factory, end):
                 # handing off from another session's last request.
                 _request_gap(cancel_event)
             try:
-                frame = validate_bars(provider.fetch_unadjusted(code, start, end))
+                raw = provider.fetch_unadjusted(code, start, end)
+                # An unlisted/unsupported security comes back empty rather than
+                # as a missing-column contract break; say so instead of leaking
+                # a column error the user cannot act on.
+                if raw is None or len(raw) == 0:
+                    raise ValueError(f'{code} 在 {source} 没有可用日线（可能已退市、长期停牌，'
+                                     f'或该品种未被该源覆盖）')
+                frame = validate_bars(raw)
             finally:
                 if source == 'tickflow':
                     # A business task may cancel this chart and start a fresh
@@ -194,4 +215,4 @@ def _fetch_once(store, code, source, cancel_event, provider_factory, end):
         store.write_artifact(record['path'], raw)
         store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                       ('watch_chart:' + source + ':' + code, dumps(record)))
-    return frame, record
+    return _with_instrument(frame, code), record
