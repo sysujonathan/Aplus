@@ -78,6 +78,36 @@ def test_typed_prefix_jumps_and_never_invents_a_date():
     assert date_jump_target(dates, '--') is None
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows Tk integration')
+def test_charless_keys_keep_their_own_selector_navigation():
+    """Arrows/Home/Tab must not be swallowed once typed jumping is bound."""
+    from types import SimpleNamespace
+    import ttkbootstrap as ttk
+    from tests.native_ui import create_window
+    from gui.trade_management import bind_date_jump
+    dates = ['2026-10-27', '2026-09-30', '2025-09-29']
+    ttk.Style.instance = None
+    root = create_window(lambda: ttk.Window(themename='darkly'))
+    root.withdraw()
+    try:
+        value = ttk.StringVar(root, value=dates[0])
+        box = bind_date_jump(ttk.Combobox(root, textvariable=value, values=dates,
+                                          state='readonly'), dates)
+        assert str(box.cget('state')) == 'readonly', 'the selector still only offers verified days'
+        # Every special key arrives with an empty char; an empty string counts as
+        # "in" any string, so a naive membership test would swallow these keys.
+        for char in ('', None, '\x1b', '\t'):
+            assert box.date_jump_key(SimpleNamespace(char=char)) is None, char
+            assert value.get() in dates
+        assert box.date_jump_key(SimpleNamespace(char='2')) == 'break'
+        assert value.get() == '2026-10-27'
+        # A digit prefix with no verified day consumes the key but changes nothing.
+        assert box.date_jump_key(SimpleNamespace(char='9')) == 'break'
+        assert value.get() == '2026-10-27'
+    finally:
+        root.destroy()
+
+
 @pytest.mark.parametrize('today, latest', [
     (date(2026,10,7), '2026-09-30'),
     (date(2026,10,8), '2026-10-08'),

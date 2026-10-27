@@ -20,12 +20,17 @@ def instrument_type_of(code):
     Charting needs the tick to render prices, and the same rules refuse to guess.
     A stock's board and a fund's code range are both public allocations, so this
     is evidence rather than an inference from price digits.
+
+    The fund ranges are wider than ETF: sz.16 also carries LOF and sz.18 carries
+    REITs, so ``exchange_fund`` is the honest name — they all trade on the 0.001
+    tick. Whether a market source actually serves one of those products is a
+    separate question answered by the fetch path, never by this classification.
     """
     security = code_of(code)
     if board_of(security) is not None:
         return 'a_share_stock'
     if FUND_CODE.fullmatch(security):
-        return 'etf'
+        return 'exchange_fund'
     return None
 
 

@@ -1697,7 +1697,11 @@ def bind_date_jump(box, dates):
 
     def on_key(event):
         char = event.char or ''
-        if char not in '0123456789-':
+        # Arrows, Home/End, Tab and function keys arrive with an empty char. An
+        # empty string counts as "in" any string, so this must be an explicit
+        # emptiness test: otherwise those keys fall through to `break` and the
+        # selector stops responding to its own keyboard navigation.
+        if not char or char not in '0123456789-':
             clear()
             return None
         if state['reset'] is not None:
@@ -1719,6 +1723,10 @@ def bind_date_jump(box, dates):
         return 'break'
 
     box.bind('<KeyPress>', on_key)
+    # The handler is exposed for tests: keyboard events cannot be generated
+    # reliably on a hidden Tk window, so the pass-through decision is asserted
+    # directly instead of through a synthetic key press.
+    box.date_jump_key = on_key
     box.bind('<BackSpace>', lambda _event: (clear(), 'break')[1])
     return box
 

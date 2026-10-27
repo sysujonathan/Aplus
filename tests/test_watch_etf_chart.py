@@ -38,8 +38,11 @@ class Provider:
 
 
 @pytest.mark.parametrize('code, kind', [
-    ('sh.510300', 'etf'), ('sh.518880', 'etf'), ('sh.588000', 'etf'),
-    ('sz.159915', 'etf'), ('sz.161725', 'etf'), ('sz.180101', 'etf'),
+    # On-exchange funds all use the 0.001 tick. The sz.16 range also carries LOF
+    # and sz.18 carries REITs, so the name is exchange_fund rather than ETF.
+    ('sh.510300', 'exchange_fund'), ('sh.518880', 'exchange_fund'),
+    ('sh.588000', 'exchange_fund'), ('sz.159915', 'exchange_fund'),
+    ('sz.161725', 'exchange_fund'), ('sz.180101', 'exchange_fund'),
     ('sh.600000', 'a_share_stock'), ('sz.000001', 'a_share_stock'),
     ('sz.300750', 'a_share_stock'), ('sh.688981', 'a_share_stock'),
     # Convertible bonds and repo share the first digit with funds but are neither.
@@ -52,7 +55,7 @@ def test_instrument_type_comes_from_exchange_code_range(code, kind):
 def test_unknown_instrument_still_refuses_to_borrow_a_stock_tick():
     with pytest.raises(ValueError, match='不能默认套用'):
         tick_size('sh.113001', 101.5)
-    assert tick_size('sh.510300', 3.901, instrument_type='etf') == 0.001
+    assert tick_size('sh.510300', 3.901, instrument_type='exchange_fund') == 0.001
     assert tick_size('sh.510300', 3.901, instrument_type=instrument_type_of('sh.510300')) == 0.001
 
 
@@ -63,7 +66,7 @@ def test_watch_etf_chart_renders_end_to_end(tmp_path, code):
                   provider_factory=lambda: Provider(bars()), end='2026-10-16')
     reply = load_chart(store, None, code, chart_source(store, code), 'daily', 'local', lambda: None)
     assert reply is not None
-    assert reply['instrument_type'] == 'etf'
+    assert reply['instrument_type'] == 'exchange_fund'
     assert reply['record']['end'] == '2026-10-16'
     assert reply['image'].size[0] > 100  # a real chart, not an error placeholder
 
