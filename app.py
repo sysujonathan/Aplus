@@ -24,8 +24,9 @@ st.set_page_config(page_title='A · PA 交易工作台', page_icon='◈', layout
 
 @st.cache_resource
 def resources(runtime_root=None):
+    from workbench.acceleration_profile import configure_service
     store = Store(Path(runtime_root)) if runtime_root else Store()
-    return store, Service(store)
+    return store, configure_service(store)
 
 
 store, service = resources(os.environ.get('A_WORKBENCH_HOME'))
