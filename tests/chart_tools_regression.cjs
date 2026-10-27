@@ -395,7 +395,7 @@ Object.assign(context,{wrap:{getBoundingClientRect:()=>({width:1000,height:600})
 context.canvas.getContext=()=>ctx;
 context.baseCanvas={width:0,height:0,getContext:()=>ctx};
 Object.assign(context.indicatorSettings,{ema:true,ema_daily:true,ema_width:1.5,ema_color:'#ff9800',ema_offset:-1});
-vm.runInContext([extract('sizeCanvas'),extract('renderWorkspace')].join('\n'),context);paths=[];
+vm.runInContext([extract('sizeCanvas'),extract('drawHoldingLevels'),extract('renderWorkspace')].join('\n'),context);paths=[];
 vm.runInContext('calculateEma();renderWorkspace()',context);
 assert.equal(vm.runInContext('sizeCanvas({width:100,height:50},100,50,1)',context),false,
   'an unchanged backing store must not be reset');

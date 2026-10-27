@@ -877,3 +877,134 @@ def test_closing_holding_chart_cancels_pending_reference_without_late_gui_write(
         release.set()
         chart._reference_results.get(timeout=2)
         quote_window.update()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_holding_chart_publishes_verified_intraday_rows_once(tmp_path, quote_window):
+    from types import SimpleNamespace
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    minute = pd.DataFrame({
+        "date": ["2026-09-30 14:50", "2026-09-30 14:55", "2026-09-30 15:00"],
+        "open": [10.7, 10.8, 10.9], "high": [10.85, 11.0, 11.05],
+        "low": [10.65, 10.75, 10.85], "close": [10.8, 10.9, 11.0],
+        "volume": [9e4, 1e5, 1.1e5]})
+    started = threading.Event()
+
+    def fake_fetch(code, moment=None):
+        started.set()
+        return minute
+
+    pushes, lifecycle = [], {"closed": False}
+    chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                    interactive=False, minute_fetch=fake_fetch, prime_minutes=False)
+    try:
+        chart._embedded = SimpleNamespace(closed=lambda: lifecycle["closed"],
+            push_live=lambda payload: pushes.append(payload) or True)
+        assert started.wait(2)
+        chart.top.after_cancel(chart._live_after)
+        chart._live_after = None
+        chart._live_tick()
+        assert pushes and pushes[-1]["series"]["m5"][-1]["date"] == "2026-09-30 15:00"
+        assert pushes[-1]["live"]["source"] == "腾讯 5 分钟"
+        assert "5 分钟" in chart.live_var.get()
+        chart._live_tick()                      # unchanged rows are not re-sent
+        assert len(pushes) == 1
+    finally:
+        lifecycle["closed"] = True
+        chart.close()
+        assert chart._live_cancel.is_set() and chart._live_after is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote_window):
+    from types import SimpleNamespace
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    from workbench.live_minutes import MinuteSourceError
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    calls = []
+    minute = pd.DataFrame({
+        "date": ["2026-09-30 14:55", "2026-09-30 15:00"],
+        "open": [10.8, 10.9], "high": [11.0, 11.05], "low": [10.75, 10.85],
+        "close": [10.9, 11.0], "volume": [1e5, 1.1e5]})
+
+    def flaky(code, moment=None):
+        calls.append(code)
+        if len(calls) == 1:
+            return minute
+        raise MinuteSourceError("供应商拒绝")
+
+    pushes, lifecycle = [], {"closed": False}
+    chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                    interactive=False, minute_fetch=flaky, prime_minutes=False)
+    try:
+        chart._embedded = SimpleNamespace(closed=lambda: lifecycle["closed"],
+            push_live=lambda payload: pushes.append(payload) or True)
+        for _ in range(300):
+            if chart._live_poller.busy or not chart._live_poller.results.empty():
+                break
+            threading.Event().wait(.01)
+        chart.top.after_cancel(chart._live_after)
+        chart._live_after = None
+        chart._live_tick()
+        assert len(pushes) == 1
+        chart._live_poller.start(CODE)
+        for _ in range(300):
+            if not chart._live_poller.busy:
+                break
+            quote_window.update()
+            threading.Event().wait(.01)
+        chart._live_tick()
+        assert len(pushes) == 1, "a failed read must not replace the last verified frame"
+        assert "读取失败" in chart.live_var.get()
+    finally:
+        lifecycle["closed"] = True
+        chart.close()
+        assert chart._live_cancel.is_set()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_holding_chart_opens_on_primed_intraday_bars(tmp_path, quote_window):
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+    minute = pd.DataFrame({
+        "date": ["2026-09-30 14:55", "2026-09-30 15:00"],
+        "open": [10.8, 10.9], "high": [11.0, 11.05], "low": [10.75, 10.85],
+        "close": [10.9, 11.0], "volume": [1e5, 1.1e5]})
+
+    chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                    interactive=False, minute_fetch=lambda code, moment=None: minute)
+    try:
+        context = chart._workspace_context()
+        assert context["display_timeframe"] == "m5"
+        assert len(context["minute_series"]) == 2
+        assert context["frame"] is chart.data["frame"], "the daily series stays the base frame"
+        assert "5 分钟" in chart.live_var.get() and "15:00" in chart.live_var.get()
+    finally:
+        chart.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
+def test_holding_chart_falls_back_to_daily_when_the_first_intraday_read_fails(tmp_path, quote_window):
+    from gui.closed_trade_chart import HoldingTradeChartDialog
+    from workbench.live_minutes import MinuteSourceError
+    store, aid, _pid = ledger(tmp_path)
+    save_dataset(store, CODE, bars(), "baostock", "前复权")
+
+    def broken(code, moment=None):
+        raise MinuteSourceError("供应商拒绝")
+
+    chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
+                                    interactive=False, minute_fetch=broken)
+    try:
+        assert chart._workspace_context().get("display_timeframe") is None
+        assert context_minute(chart) is None
+    finally:
+        chart.close()
+
+
+def context_minute(chart):
+    return chart.data.get("minute_series")

@@ -25,6 +25,19 @@ def test_production_tool_geometry_and_blind_rendering_in_javascript():
     assert json.loads(result.stdout)['ok']
 
 
+def test_intraday_live_update_keeps_the_viewport_anchored_in_javascript():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('JavaScript 行为回归需要 Node.js（CI Windows 镜像提供）')
+    result = subprocess.run([node, str(ROOT / 'tests' / 'chart_live_regression.cjs')],
+                            capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = json.loads(result.stdout)
+    assert output['ok']
+    # One canvas frame per tick; a page reload would show no render calls at all.
+    assert output['renders'] >= 3
+
+
 def test_production_cross_timeframe_behavior_in_javascript(tmp_path):
     node = shutil.which('node')
     if not node:

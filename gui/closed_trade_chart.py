@@ -1,12 +1,15 @@
 """Closed-trade chart viewer using the existing research renderer/navigation."""
+import json
 import tkinter as tk
 import queue
 import threading
+import time
 
 import ttkbootstrap as ttk
 from PIL import ImageTk
 
 from workbench.closed_chart import load_closed_chart
+from workbench.holding_quotes import china_now, session_status
 from .chart_renderer import render_chart
 from .replay_navigation import ReplayNavigation
 from .theme import APP_BG, CHART_BG, MUTED, TEXT
@@ -74,10 +77,12 @@ class ClosedTradeChartDialog:
         self.top.bind("<Escape>", lambda _e: self.close())
         self.top.bind("<Destroy>", self._destroyed, add="+")
         host = ttk.Frame(self.top, padding=10)
+        self.host = host
         host.pack(fill=tk.BOTH, expand=True)
         host.columnconfigure(0, weight=1)
         host.rowconfigure(3, weight=1)
         toolbar = ttk.Frame(host)
+        self.toolbar = toolbar
         toolbar.grid(row=0, column=0, sticky=tk.EW)
         caption = "历史记录推算 · 仅作位置参考" if self.data["estimated"] else "原始成交链路 · 全部买卖批次"
         if self.data.get("holding"):
@@ -245,17 +250,152 @@ class ClosedTradeChartDialog:
 
 
 class HoldingTradeChartDialog(ClosedTradeChartDialog):
-    def __init__(self, parent, store, row, *, quote=None, data=None, interactive=True):
+    """Holding chart with an optional live 5-minute reader.
+
+    The daily frame stays the only ledger-anchored series. Intraday bars are
+    transport for execution timing: they never reach Store history, strategies
+    or the trade ledger, and a failed read keeps the last verified frame.
+    """
+
+    def __init__(self, parent, store, row, *, quote=None, data=None, interactive=True,
+                 auto_quotes=False, minute_fetch=None, prime_minutes=True):
         from workbench.holding_chart import load_holding_chart
+        from workbench.live_minutes import MinutePoller, fetch_minute_bars
+        fetch = minute_fetch or fetch_minute_bars
         self._reference_cancel = threading.Event()
         self._reference_after = None
         self._reference_results = queue.Queue()
-        super().__init__(parent, store, row,
-                         data=data if data is not None else load_holding_chart(store, row, quote=quote),
-                         interactive=interactive)
+        self._auto_quotes = auto_quotes
+        self._live_cancel = threading.Event()
+        self._live_after = None
+        self._live_due = 0.0
+        self._live_sent = None
+        self._live_error = ""
+        self._last_live_at = ""
+        self._live_poller = MinutePoller(fetch=fetch)
+        payload = data if data is not None else load_holding_chart(store, row, quote=quote)
+        # One bounded read before the window opens: the trader asked for live
+        # bars, so the first frame must not wait for a later push to arrive.
+        primed = self._prime_minutes(row["code"], fetch) if prime_minutes else None
+        if primed is not None:
+            payload = {**payload, "minute_series": primed}
+            self._live_sent = (str(primed.iloc[-1]["date"]), len(primed))
+            self._last_live_at = str(primed.iloc[-1]["date"])
+        super().__init__(parent, store, row, data=payload, interactive=interactive)
         self.top.title(f'持仓图 · {self.data["name"]} {self.data["code"]}')
+        self.live_var = tk.StringVar(value="5 分钟行情：读取中…")
+        self.live_label = ttk.Label(self.toolbar, textvariable=self.live_var, foreground=MUTED)
+        self.live_label.pack(side=tk.LEFT, padx=12)
+        if self._last_live_at:
+            self._show_live_status(self._last_live_at)
         if self.data.get("reference_needed"):
             self._start_reference()
+        self._start_live()
+
+    # ---- live intraday reader -------------------------------------------
+    @staticmethod
+    def _prime_minutes(code, fetch, *, timeout=2.0):
+        """One short, bounded read so the chart opens on real 5-minute bars."""
+        outcome = {}
+
+        def work():
+            try:
+                outcome["frame"] = fetch(code, china_now())
+            except Exception as exc:
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=work, daemon=True, name="holding-chart-prime")
+        started = time.monotonic()
+        worker.start()
+        worker.join(max(.1, timeout - (time.monotonic() - started)))
+        frame = outcome.get("frame")
+        try:
+            return frame if frame is not None and len(frame) >= 2 else None
+        except TypeError:
+            return None
+
+    def _workspace_context(self):
+        context = super()._workspace_context()
+        minute = self.data.get("minute_series")
+        if minute is not None:
+            from workbench.live_minutes import INTERVAL
+            context["minute_series"] = minute
+            context["display_timeframe"] = "m5"
+            context["minute_interval"] = INTERVAL
+        return context
+
+    def _auto_enabled(self):
+        value = self._auto_quotes
+        return bool(value() if callable(value) else value)
+
+    def _live_calendar(self):
+        try:
+            return json.loads((self.store.root / "trading_calendar.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _start_live(self):
+        self._live_poller.start(self.data["code"], attempts=2)
+        self._live_after = self.top.after(300, self._live_tick)
+
+    def _live_tick(self):
+        self._live_after = None
+        if self._live_cancel.is_set() or not self.top.winfo_exists():
+            return
+        result = self._live_poller.take()
+        if result is not None:
+            frame, error = result
+            if frame is not None:
+                self._publish_live(frame)
+            else:
+                self._live_error = error or "分钟行情读取失败"
+                self._show_live_status()
+            self._live_due = time.monotonic() + self._live_poller.delay
+        moment, calendar = china_now(), self._live_calendar()
+        if self._auto_enabled() and session_status(moment, calendar) == "交易中":
+            if time.monotonic() >= self._live_due and not self._live_poller.busy:
+                self._live_poller.start(self.data["code"])
+        self._live_after = self.top.after(400, self._live_tick)
+
+    def _publish_live(self, frame):
+        from workbench.live_minutes import minute_rows, INTERVAL
+        try:
+            rows = minute_rows(frame)
+        except ValueError as exc:
+            self._live_error = str(exc)
+            self._show_live_status()
+            return
+        self._live_error = ""
+        key = (rows[-1]["date"], len(rows))
+        embedded = self._embedded
+        if key != self._live_sent and embedded is not None and not embedded.closed():
+            payload = {"series": {"m5": rows},
+                       "live": {"interval": INTERVAL, "source": "腾讯 5 分钟",
+                                "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
+            if embedded.push_live(payload):
+                self._live_sent = key
+                self._last_live_at = rows[-1]["date"]
+        self._show_live_status(rows[-1]["date"])
+
+    def _show_live_status(self, stamp=None):
+        if self._live_error:
+            self.live_var.set("5 分钟读取失败，保留上一次成功数据：" + self._live_error[:80])
+            self.live_label.configure(foreground="#f23645")
+            return
+        moment, calendar = china_now(), self._live_calendar()
+        state = session_status(moment, calendar)
+        tail = getattr(self, "_last_live_at", None) or stamp or ""
+        text = f"5 分钟 · 腾讯 · 最后 {tail[5:] if tail else '等待数据'}"
+        if self._auto_enabled() and state == "交易中":
+            text += f" · 自动左移更新（{self._live_poller.delay}秒）"
+            self.live_label.configure(foreground="#26a69a")
+        elif state == "交易中":
+            text += " · 自动行情未开启，仅此一次读取"
+            self.live_label.configure(foreground=MUTED)
+        else:
+            text += f" · 自动暂停：{state}"
+            self.live_label.configure(foreground=MUTED)
+        self.live_var.set(text)
 
     def _start_reference(self):
         from workbench.holding_chart import fetch_holding_reference
@@ -297,9 +437,16 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
     def _destroyed(self, event):
         if event.widget is self.top:
             self._reference_cancel.set()
-            if self._reference_after:
-                self.top.after_cancel(self._reference_after)
-                self._reference_after = None
+            self._live_cancel.set()
+            self._live_poller.invalidate()
+            for attribute in ("_reference_after", "_live_after"):
+                handle = getattr(self, attribute, None)
+                if handle:
+                    try:
+                        self.top.after_cancel(handle)
+                    except tk.TclError:
+                        pass
+                    setattr(self, attribute, None)
         super()._destroyed(event)
 
 

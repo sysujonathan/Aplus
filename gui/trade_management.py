@@ -863,7 +863,8 @@ class TradeManagementFrame(ttk.Frame):
                     if previous_grab is not None and previous_grab.winfo_exists():
                         previous_grab.grab_set()
                     return
-            dialog = HoldingTradeChartDialog(parent, self.store, row, quote=quote, data=data)
+            dialog = HoldingTradeChartDialog(parent, self.store, row, quote=quote, data=data,
+                                            auto_quotes=lambda: bool(self.auto_quote_var.get()))
         except Exception as exc:
             messagebox.showerror("无法查看 K 线", str(exc), parent=parent)
             if previous_grab is not None and previous_grab.winfo_exists():
