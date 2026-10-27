@@ -15,37 +15,38 @@ ROOT = Path(__file__).resolve().parents[1]
 PROTOTYPE = ROOT / 'docs' / 'prototypes' / 'tv-workspace'
 
 
-def test_production_tool_geometry_and_blind_rendering_in_javascript():
-    node = shutil.which('node')
-    if not node:
-        pytest.skip('JavaScript 行为回归需要 Node.js')
-    result = subprocess.run([node, str(ROOT / 'tests' / 'chart_tools_regression.cjs')],
-                            capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(result.stdout)['ok']
+def run_node(script):
+    """Run a Node regression script and parse its JSON verdict.
 
-
-def test_intraday_live_update_keeps_the_viewport_anchored_in_javascript():
+    Node always writes UTF-8, while ``text=True`` alone decodes with the locale
+    encoding. That difference is invisible on a ``PYTHONUTF8=1`` machine and
+    fatal on a Windows runner using cp1252: the reader thread raises, stdout
+    comes back empty and the JSON parse reports a type error instead of the real
+    problem. The encoding is therefore stated explicitly.
+    """
     node = shutil.which('node')
     if not node:
         pytest.skip('JavaScript 行为回归需要 Node.js（CI Windows 镜像提供）')
-    result = subprocess.run([node, str(ROOT / 'tests' / 'chart_live_regression.cjs')],
-                            capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stdout + result.stderr
-    output = json.loads(result.stdout)
+    result = subprocess.run([node, str(ROOT / 'tests' / script)],
+                            capture_output=True, text=True, encoding='utf-8', timeout=20)
+    assert result.returncode == 0, (result.stdout or '') + (result.stderr or '')
+    assert result.stdout, f'{script} 没有输出'
+    return json.loads(result.stdout)
+
+
+def test_production_tool_geometry_and_blind_rendering_in_javascript():
+    assert run_node('chart_tools_regression.cjs')['ok']
+
+
+def test_intraday_live_update_keeps_the_viewport_anchored_in_javascript():
+    output = run_node('chart_live_regression.cjs')
     assert output['ok']
     # One canvas frame per tick; a page reload would show no render calls at all.
     assert output['renders'] >= 3
 
 
 def test_production_cross_timeframe_behavior_in_javascript(tmp_path):
-    node = shutil.which('node')
-    if not node:
-        pytest.skip('JavaScript 行为回归需要 Node.js（CI Windows 镜像提供）')
-    result = subprocess.run([node, str(ROOT / 'tests' / 'chart_timeframe_regression.cjs')],
-                            capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stdout + result.stderr
-    output = json.loads(result.stdout)
+    output = run_node('chart_timeframe_regression.cjs')
     assert output['ok']
     # Feed the actual JS snapshots into the actual Python/Store boundary.
     import pandas as pd
