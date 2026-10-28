@@ -57,7 +57,7 @@ TickFlow 备用路线支持按日／周策略实际输入区间核验：历史�
 - [版本与验收](docs/版本与验收.md)：已实现范围、已知边界与验收方法。
 - [项目视觉规范](docs/项目视觉规范.md)：视觉规范父级索引，本轮只评估跨策略图表标注，不重设计整套界面。
 - [策略全周期总图规范](docs/策略全周期总图规范.md)：研究教学的一张图骨架、视觉规则与验收清单；实际行情主图另按图表工作台标注契约。
-- [TradingView 图表重构方案](docs/TradingView图表重构方案.md)：单图工作流与视觉契约；[跨策略图表标注方案](docs/TradingView图表重构方案.md#strategy-annotation-contract)统一角色颜色、术语、几何、状态、布局和导出，附[六个在用日线策略预览](docs/TradingView图表重构方案.md#six-daily-previews)（评估稿，尚未改造生产绘图）；可配合[高保真原型](docs/prototypes/tv-workspace/index.html)核对。
+- [TradingView 图表重构方案](docs/TradingView图表重构方案.md)：统一策略标注契约及[六个在用日线策略预览](docs/TradingView图表重构方案.md#six-daily-previews)；[MTR 标注已接入交互与静态绘图](docs/TradingView图表重构方案.md#mtr-implementation)，其余五策略仍为视觉评估稿，待人工验收。
 - [TV 原始需求与验收清单](docs/TV原始需求与验收清单.md)：保留本对话全部非分钟需求、历史评审结论与当前未完成项；不以原型或独立窗口替代默认主工作区验收。
 - [TV 复刻实施计划](docs/TV复刻实施计划.md)：实施顺序、阶段验收、剩余工时估算及进度风险。
 
