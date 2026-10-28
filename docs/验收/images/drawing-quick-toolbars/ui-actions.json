@@ -1,0 +1,126 @@
+[
+  {
+    "tool": "fib",
+    "color": "#f23645",
+    "alpha": 55,
+    "width": 3,
+    "all24Levels": true,
+    "fullToQuick": true,
+    "cancelRestores": true,
+    "undoRedo": true,
+    "nativeReopen": true
+  },
+  {
+    "tool": "long",
+    "colors": [
+      "#ffeb3b",
+      "#2962ff",
+      "#ff9800"
+    ],
+    "alphas": [
+      85,
+      35,
+      45
+    ],
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "ray",
+    "color": "#f23645",
+    "alpha": 65,
+    "width": 3,
+    "dash": "dotted",
+    "text": true,
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "trend",
+    "color": "#f23645",
+    "alpha": 65,
+    "width": 3,
+    "dash": "dotted",
+    "text": true,
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "short",
+    "colors": [
+      "#ffeb3b",
+      "#2962ff",
+      "#ff9800"
+    ],
+    "alphas": [
+      85,
+      35,
+      45
+    ],
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "rectangle",
+    "border": "#f23645",
+    "fill": "#2962ff",
+    "alphas": [
+      65,
+      25
+    ],
+    "width": 3,
+    "dash": "dashed",
+    "text": "#ff9800",
+    "fullToQuick": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "up",
+    "bodyColor": "#f23645",
+    "bodyAlpha": 55,
+    "textColor": "#ffeb3b",
+    "text": true,
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "down",
+    "bodyColor": "#f23645",
+    "bodyAlpha": 55,
+    "textColor": "#ffeb3b",
+    "text": true,
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "arrow",
+    "bodyColor": "#f23645",
+    "bodyAlpha": 55,
+    "textColor": "#ffeb3b",
+    "text": true,
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "path",
+    "color": "#f23645",
+    "alpha": 70,
+    "width": 3,
+    "dash": "dashed",
+    "noTextControl": true,
+    "fullSettings": true,
+    "undoRedo": true
+  },
+  {
+    "tool": "channel",
+    "mixedBefore": true,
+    "color": "#f23645",
+    "lineAlpha": 60,
+    "backgroundAlpha": 18,
+    "width": 3,
+    "textColor": "#ffeb3b",
+    "all7Levels": true,
+    "fullSettings": true,
+    "undoRedo": true
+  }
+]

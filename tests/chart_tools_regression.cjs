@@ -559,4 +559,87 @@ assert.equal(paths.at(-1).points[0][1],9,'the raw level is still valid on unadju
 context.activeTimeframeUnit='daily';paths=[];
 vm.runInContext('drawHoldingLevels(ctx,testView)',context);
 assert.equal(paths.length,0,'an unverified level never lands on an adjusted axis as a raw price');
+// Toolbar assignments must reach the real renderer, not just change a swatch.
+const quickSource=fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/drawing-quickbar.js'),'utf8');
+vm.runInContext(quickSource.split('/* UI adapter:')[0],context);
+const quick=context.window.AplusDrawingQuickbar;
+assert.ok(!quick.controls({type:'text'}).includes('width'),'existing text objects keep their minimal toolbar');
+for(const kind of ['fib','long','ray','trend','short','rectangle','up','down','arrow','path','channel']) {
+  const controls=quick.controls({type:kind,arrow_marker_version:1});
+  assert.ok(controls.includes('template')&&controls.includes('settings')&&controls.includes('lock')&&controls.includes('delete'));
+  if(['up','down','arrow','path'].includes(kind))assert.ok(!controls.includes('alert'));
+  if(['up','down','arrow','long','short'].includes(kind))assert.ok(!controls.includes('width'));
+}
+context.selectedId=null;context.chartBoot={production:false,priceStep:.01};context.replayActive=false;
+const makeQuickObject=type=>({id:'quick-'+type,type,a:{date:'2026-10-12',index:10,value:20},
+  b:{date:'2026-10-13',index:50,value:60},color:'#00bcd4',width:1,alpha:1});
+const quickFib={...makeQuickObject('fib'),fibTrendLine:true,fibTrendWidth:2,fibHorizontalWidth:4,
+  fibTrendDash:'dashed',fibLevels:[{value:0,enabled:true,color:'#fff000',alpha:.7},
+    {value:.5,enabled:true,color:'#001122',alpha:.3},{value:1,enabled:false,color:'#334455',alpha:1}]};
+const geometryBefore=JSON.stringify([quickFib.a,quickFib.b,quickFib.fibLevels.map(l=>[l.value,l.enabled])]);
+assert.equal(quick.value(quickFib,'lineColor'),null);assert.equal(quick.value(quickFib,'width'),null);
+quick.apply(quickFib,'lineColor','#f23645');quick.apply(quickFib,'width',3);
+assert.ok(quickFib.fibLevels.every(l=>l.color==='#f23645'));
+assert.equal(quickFib.fibTrendWidth,3);assert.equal(quickFib.fibHorizontalWidth,3);
+assert.equal(JSON.stringify([quickFib.a,quickFib.b,quickFib.fibLevels.map(l=>[l.value,l.enabled])]),geometryBefore);
+paths=[];context.drawUserObject(ctx,view,quickFib);
+assert.equal(paths.length,3);assert.ok(paths.every(p=>p.color==='#f23645'&&p.width===3));
+quick.apply(quickFib,'lineColor',.55,true);
+paths=[];context.drawUserObject(ctx,view,quickFib);
+assert.ok(paths.every(p=>p.alpha===.55),'Fib quick opacity reaches trend and every horizontal line');
+assert.ok(quickFib.fibLevels.every(l=>l.alpha===.55),'disabled Fib levels retain the chosen opacity too');
+const quickChannel={...makeQuickObject('channel'),c:{index:10,value:40},fill:false,
+  channelLevels:[-.25,0,.25,.5,.75,1,1.25].map((value,index)=>({value,enabled:[1,3,5].includes(index),
+    color:index===3?'#f23645':'#ffffff',width:index===3?4:1,dash:index===3?'dashed':'solid',alpha:.8}))};
+const channelGeometry=JSON.stringify([quickChannel.a,quickChannel.b,quickChannel.c]);
+quick.apply(quickChannel,'lineColor','#2962ff');quick.apply(quickChannel,'width',2);
+assert.ok(quickChannel.channelLevels.every(l=>l.color==='#2962ff'&&l.width===2));
+assert.equal(quickChannel.channelLevels[3].dash,'dashed','uniform width must preserve independent dashes');
+assert.equal(JSON.stringify([quickChannel.a,quickChannel.b,quickChannel.c]),channelGeometry);
+paths=[];context.drawUserObject(ctx,view,quickChannel);
+assert.equal(paths.length,3);assert.ok(paths.every(p=>p.color==='#2962ff'&&p.width===2));
+const coloredFills=[];ctx.fill=()=>coloredFills.push({color:ctx.fillStyle,alpha:ctx.globalAlpha});
+const quickEditedObjects=[];
+ctx.strokeRect=(...args)=>{rectangles.push(args);paths.push({color:ctx.strokeStyle,width:ctx.lineWidth,alpha:ctx.globalAlpha});};
+for(const type of ['ray','trend','rectangle','path','up','down','arrow']) {
+  const obj=makeQuickObject(type);if(type==='arrow')obj.arrow_marker_version=1;
+  if(type==='path')obj.points=[obj.a,{index:30,value:10},obj.b];
+  quick.apply(obj,type==='arrow'?'fillColor':'lineColor','#f23645');
+  quick.apply(obj,type==='arrow'?'fillColor':'lineColor',.65,true);
+  paths=[];coloredFills.length=0;context.drawUserObject(ctx,view,obj);
+  assert.ok([...paths,...coloredFills].some(p=>p.color==='#f23645'),type+' actually paints the chosen color');
+  if(['ray','trend','rectangle','path'].includes(type)) {
+    quick.apply(obj,'width',4);paths=[];context.drawUserObject(ctx,view,obj);
+    if(type==='rectangle')assert.equal(ctx.lineWidth,4);else assert.ok(paths.some(p=>p.width===4),type+' actual width');
+  }
+  quickEditedObjects.push(obj);
+}
+const regionFills=[];ctx.fillRect=()=>regionFills.push({color:ctx.fillStyle,alpha:ctx.globalAlpha});
+for(const type of ['long','short']) {
+  const obj={...makeQuickObject(type),position_version:1,b:{date:'2026-10-13',index:50,value:type==='long'?30:10},stop:type==='long'?15:25};
+  quick.apply(obj,'targetColor','#2962ff');quick.apply(obj,'stopColor','#ff9800');quick.apply(obj,'textColor','#ffffff');
+  quick.apply(obj,'targetColor',.35,true);quick.apply(obj,'stopColor',.65,true);
+  regionFills.length=0;context.drawUserObject(ctx,view,obj);
+  assert.ok(regionFills.some(p=>p.color==='#2962ff'&&p.alpha===.35));
+  assert.ok(regionFills.some(p=>p.color==='#ff9800'&&p.alpha===.65));
+  assert.equal(obj.textColor,'#ffffff');assert.equal(obj.stop,type==='long'?15:25);
+  quickEditedObjects.push(obj);
+}
+// Old global alpha is materialized only on an edit, preserving independent fills/text.
+const translucent={...structuredClone(quickChannel),id:'quick-translucent',alpha:.5,backgroundAlpha:.2,textAlpha:.6,fill:true};
+const untouched=JSON.stringify(translucent);quick.opacity(translucent,'lineColor');quick.value(translucent,'width');
+assert.equal(JSON.stringify(translucent),untouched,'reading a toolbar never migrates an old document');
+quick.apply(translucent,'lineColor',.9,true);assert.equal(translucent.alpha,1);
+assert.equal(translucent.backgroundAlpha,.1);assert.equal(translucent.textAlpha,.3);
+paths=[];context.drawUserObject(ctx,view,translucent);assert.ok(paths.every(p=>p.alpha===.9));
+const stateAfter=JSON.stringify(translucent);assert.equal(quick.apply(translucent,'width',NaN),false);
+assert.equal(JSON.stringify(translucent),stateAfter,'invalid width cannot damage saved state');
+const filledPath={...makeQuickObject('path'),alpha:.5,fill:true,backgroundAlpha:.2,
+  points:[{index:10,value:20},{index:30,value:40},{index:50,value:20}]};
+quick.apply(filledPath,'lineColor',.8,true);
+coloredFills.length=0;context.drawUserObject(ctx,view,filledPath);
+assert.ok(coloredFills.some(p=>p.alpha===.1),'editing a legacy filled path stroke must preserve its fill');
+// The snapshot consumed by Python below is the same edited object shape the page saves.
+if(process.env.APLUS_QUICKBAR_SNAPSHOT)fs.writeFileSync(process.env.APLUS_QUICKBAR_SNAPSHOT,
+  JSON.stringify([quickFib,quickChannel,translucent,...quickEditedObjects]));
 console.log(JSON.stringify({ok:true}));

@@ -1,0 +1,515 @@
+{
+  "environment": "isolated public BaoStock fixture; real ChartBridge + Store; no user runtime",
+  "drawings": [
+    {
+      "tool": "fib",
+      "color": "#f23645",
+      "width": 3,
+      "points": [
+        [
+          "2026-03-25",
+          3.99
+        ],
+        [
+          "2026-06-15",
+          5.79
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "fibLevels": [
+          {
+            "value": 0,
+            "enabled": true,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 0.236,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 0.382,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 0.5,
+            "enabled": true,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 0.618,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 0.786,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 1,
+            "enabled": true,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 1.618,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 2.618,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 3.618,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 4.236,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 1.272,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 1.414,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 2.272,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 2.414,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 2,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 3,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 3.272,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 3.414,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 4,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 4.272,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 4.414,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 4.618,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          },
+          {
+            "value": 4.764,
+            "enabled": false,
+            "color": "#f23645",
+            "alpha": 0.55
+          }
+        ],
+        "fibVisibility": {
+          "ticks": {
+            "enabled": true
+          },
+          "seconds": {
+            "enabled": true,
+            "min": 1,
+            "max": 59
+          },
+          "minutes": {
+            "enabled": true,
+            "min": 1,
+            "max": 59
+          },
+          "hours": {
+            "enabled": true,
+            "min": 1,
+            "max": 24
+          },
+          "days": {
+            "enabled": true,
+            "min": 1,
+            "max": 366
+          },
+          "weeks": {
+            "enabled": true,
+            "min": 1,
+            "max": 52
+          },
+          "months": {
+            "enabled": true,
+            "min": 1,
+            "max": 12
+          },
+          "ranges": {
+            "enabled": true
+          }
+        },
+        "fibExtend": "none",
+        "fibLevelFormat": "value",
+        "fibLabelHorizontal": "left",
+        "fibLabelVertical": "middle",
+        "fibTextHorizontal": "center",
+        "fibTextVertical": "middle",
+        "fibFontSize": 12,
+        "fibSingleColor": "#f23645",
+        "fibHorizontalWidth": 3,
+        "fibTrendWidth": 3,
+        "fibTrendAlpha": 0.55,
+        "textAlpha": 1,
+        "fibSingleAlpha": 0.55
+      }
+    },
+    {
+      "tool": "long",
+      "color": "#787b86",
+      "width": 1,
+      "points": [
+        [
+          "2026-04-20",
+          4.64
+        ],
+        [
+          "2026-06-08",
+          5.43
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "textColor": "#ffeb3b",
+        "strokeAlpha": 1,
+        "targetAlpha": 0.35,
+        "stopAlpha": 0.45,
+        "textAlpha": 0.85,
+        "targetColor": "#2962ff",
+        "stopColor": "#ff9800"
+      }
+    },
+    {
+      "tool": "ray",
+      "color": "#f23645",
+      "width": 3,
+      "points": [
+        [
+          "2026-03-25",
+          4.28
+        ],
+        [
+          "2026-03-25",
+          4.28
+        ]
+      ],
+      "styles": {
+        "dash": "dotted",
+        "alpha": 1,
+        "strokeAlpha": 0.65,
+        "textAlpha": 1,
+        "textColor": "#ffeb3b"
+      }
+    },
+    {
+      "tool": "trend",
+      "color": "#f23645",
+      "width": 3,
+      "points": [
+        [
+          "2026-03-25",
+          3.99
+        ],
+        [
+          "2026-06-15",
+          5.79
+        ]
+      ],
+      "styles": {
+        "dash": "dotted",
+        "alpha": 1,
+        "strokeAlpha": 0.65,
+        "textAlpha": 1,
+        "textColor": "#ffeb3b"
+      }
+    },
+    {
+      "tool": "short",
+      "color": "#787b86",
+      "width": 1,
+      "points": [
+        [
+          "2026-04-20",
+          4.64
+        ],
+        [
+          "2026-06-08",
+          3.85
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "textColor": "#ffeb3b",
+        "strokeAlpha": 1,
+        "targetAlpha": 0.35,
+        "stopAlpha": 0.45,
+        "textAlpha": 0.85,
+        "targetColor": "#2962ff",
+        "stopColor": "#ff9800"
+      }
+    },
+    {
+      "tool": "rectangle",
+      "color": "#f23645",
+      "width": 3,
+      "points": [
+        [
+          "2026-03-25",
+          3.99
+        ],
+        [
+          "2026-06-15",
+          5.79
+        ]
+      ],
+      "styles": {
+        "dash": "dashed",
+        "alpha": 1,
+        "strokeAlpha": 0.65,
+        "backgroundAlpha": 0.25,
+        "textAlpha": 1,
+        "backgroundColor": "#2962ff",
+        "fill": true,
+        "textColor": "#ff9800"
+      }
+    },
+    {
+      "tool": "up",
+      "color": "#f23645",
+      "width": 2,
+      "points": [
+        [
+          "2026-04-29",
+          4.64
+        ],
+        [
+          "2026-04-29",
+          4.64
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "strokeAlpha": 0.55,
+        "textAlpha": 1,
+        "textColor": "#ffeb3b"
+      }
+    },
+    {
+      "tool": "down",
+      "color": "#f23645",
+      "width": 2,
+      "points": [
+        [
+          "2026-04-29",
+          4.64
+        ],
+        [
+          "2026-04-29",
+          4.64
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "strokeAlpha": 0.55,
+        "textAlpha": 1,
+        "textColor": "#ffeb3b"
+      }
+    },
+    {
+      "tool": "arrow",
+      "color": "#f23645",
+      "width": 2,
+      "points": [
+        [
+          "2026-03-25",
+          3.99
+        ],
+        [
+          "2026-06-15",
+          5.79
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "strokeAlpha": 0.55,
+        "textAlpha": 1,
+        "textColor": "#ffeb3b"
+      }
+    },
+    {
+      "tool": "path",
+      "color": "#f23645",
+      "width": 3,
+      "points": [
+        [
+          "2026-03-25",
+          3.99
+        ],
+        [
+          "2026-06-15",
+          5.79
+        ]
+      ],
+      "styles": {
+        "dash": "dashed",
+        "alpha": 1,
+        "strokeAlpha": 0.7,
+        "textAlpha": 1
+      }
+    },
+    {
+      "tool": "channel",
+      "color": "#f23645",
+      "width": 3,
+      "points": [
+        [
+          "2026-03-25",
+          3.99
+        ],
+        [
+          "2026-06-15",
+          5.15
+        ],
+        [
+          "2026-06-15",
+          6.08
+        ]
+      ],
+      "styles": {
+        "dash": "solid",
+        "alpha": 1,
+        "channelLevels": [
+          {
+            "value": -0.25,
+            "enabled": false,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "solid",
+            "alpha": 0.6
+          },
+          {
+            "value": 0,
+            "enabled": true,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "solid",
+            "alpha": 0.6
+          },
+          {
+            "value": 0.25,
+            "enabled": false,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "solid",
+            "alpha": 0.6
+          },
+          {
+            "value": 0.5,
+            "enabled": true,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "dashed",
+            "alpha": 0.6
+          },
+          {
+            "value": 0.75,
+            "enabled": false,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "solid",
+            "alpha": 0.6
+          },
+          {
+            "value": 1,
+            "enabled": true,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "solid",
+            "alpha": 0.6
+          },
+          {
+            "value": 1.25,
+            "enabled": false,
+            "color": "#f23645",
+            "width": 3,
+            "dash": "solid",
+            "alpha": 0.6
+          }
+        ],
+        "backgroundAlpha": 0.18,
+        "textAlpha": 1,
+        "backgroundColor": "#2962ff",
+        "fill": true,
+        "textColor": "#ffeb3b"
+      }
+    }
+  ]
+}

@@ -72,7 +72,7 @@ window.openChartStrokePicker = (object,key,anchor) => {
   popup.className='chart-stroke-picker';popup.setAttribute('aria-label',key.endsWith('Width')?'水平线粗细':'水平线线型');
   appendChartStrokeChoices(popup,object,key,true);document.body.append(popup);positionChartPicker(popup,anchor);
 };
-window.openChartColorPicker = (input, anchor = input, objectOverride = null) => {
+window.openChartColorPicker = (input, anchor = input, objectOverride = null, options = {}) => {
   closeChartColorPicker();
   const popup = document.createElement('section');
   chartColorPopup = popup; popup.className = 'chart-color-picker'; popup.setAttribute('aria-label','颜色面板');
@@ -83,8 +83,10 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null) => 
   const isEma=Boolean(emaKey),emaAlphaField=input.id==='emaColor'?'alpha':input.id+'Alpha';
   const key = input.dataset.setting || input.dataset.fibSetting || 'color';
   const alphaKey = ({backgroundColor:'backgroundAlpha',middleColor:'middleAlpha',targetColor:'targetAlpha',stopColor:'stopAlpha',textColor:'textAlpha',fibSingleColor:'fibSingleAlpha'})[key] ||
-    (object?.type === 'fib' && key === 'color' ? 'fibTrendAlpha' : 'alpha');
-  const alpha = (level && object.type==='fib' && object.fibUseOneColor ? object.fibSingleAlpha ?? 1 : level?.alpha) ?? (isEma ? Number(document.querySelector('#emaModal').dataset[emaAlphaField] ?? indicatorSettings[emaKey] ?? 1) : object?.[alphaKey]) ?? (key==='backgroundColor'?(object?.type==='channel'?.1:.13):1);
+    (object?.type === 'fib' && key === 'color' ? 'fibTrendAlpha' : 'strokeAlpha');
+  const storedAlpha = (level && object.type==='fib' && object.fibUseOneColor ? object.fibSingleAlpha ?? 1 : level?.alpha) ?? object?.[alphaKey] ?? 1;
+  const alpha = (typeof options.alpha==='function'?options.alpha():options.alpha) ?? (isEma ? Number(document.querySelector('#emaModal').dataset[emaAlphaField] ?? indicatorSettings[emaKey] ?? 1)
+    : object && window.AplusDrawingQuickbar ? window.AplusDrawingQuickbar.alphaFor(object,alphaKey,level) : storedAlpha);
   popup.innerHTML = '<div class="chart-color-grid"></div><div class="chart-custom-swatches"></div><button type="button" class="custom-color-add" aria-label="添加自定义颜色">＋</button>' +
     '<label class="color-alpha-row">不透明度<input aria-label="颜色不透明度" type="range" min="0" max="100"><input aria-label="不透明度百分比" type="number" min="0" max="100">%</label>';
   const applyColor = color => {
@@ -97,18 +99,21 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null) => 
     button.dataset.swatch=color;button.style.background=color;button.classList.toggle('selected',color===input.value.toLowerCase());
     button.onclick=()=>applyColor(color);popup.querySelector(index<chartPaletteColors.length?'.chart-color-grid':'.chart-custom-swatches').append(button);
   });
-  popup.querySelector('.custom-color-add').onclick=()=>{showChartCustomColorEditor(popup,input,color=>{applyColor(color);window.openChartColorPicker(input,anchor,objectOverride);});positionChartPicker(popup,anchor);};
+  popup.querySelector('.custom-color-add').onclick=()=>{showChartCustomColorEditor(popup,input,color=>{applyColor(color);window.openChartColorPicker(input,anchor,objectOverride,options);});positionChartPicker(popup,anchor);};
   const range=popup.querySelector('input[type="range"]'),number=popup.querySelector('input[type="number"]');
   range.value=number.value=Math.round(alpha*100);
   const applyAlpha = control => {
     if(control.value.trim()==='')return;
     const value=Number(control.value);if(!Number.isFinite(value)||value<0||value>100)return;
     range.value=number.value=value;
+    if(options.onAlphaChange){options.onAlphaChange(value/100);return;}
     if(isEma) return; // EMA modal changes apply on confirmation below.
     if(!object)return;
-    const previous=level && object.type==='fib' && object.fibUseOneColor ? object.fibSingleAlpha ?? 1 : level?.alpha ?? object[alphaKey] ?? 1;
+    const previous=window.AplusDrawingQuickbar ? window.AplusDrawingQuickbar.alphaFor(object,alphaKey,level)
+      : level?.alpha ?? object[alphaKey] ?? 1;
     if(previous===value/100 && !(object.type==='fib' && key==='fibSingleColor' && object.fibLevels.some(item=>(item.alpha??1)!==value/100)))return;
     rememberObjects();
+    window.AplusDrawingQuickbar?.materializeOpacity(object);
     if(object.type==='fib' && key==='fibSingleColor')assignFibUniformAlpha(object,value/100);
     else if(level){if(object.type==='fib')materializeFibUniformColor(object);level.alpha=value/100;}
     else object[alphaKey]=value/100;
@@ -138,14 +143,3 @@ window.addEventListener('resize',()=>{
   if(!chartPopupAnchor.isConnected){closeChartColorPicker();return;}
   positionChartPicker(chartColorPopup,chartPopupAnchor);
 });
-window.openChartWidthPicker = () => {
-  const object=objectAtSelection();if(!object)return;
-  closeChartColorPicker();
-  const popup=document.createElement('section');chartColorPopup=popup;popup.className='chart-width-picker';
-  [1,2,3,4,5,6,7,8].forEach(width=>{
-    const button=document.createElement('button');button.type='button';button.textContent=width+' px';
-    button.onclick=()=>{rememberObjects();object.width=width;document.querySelector('#quickWidth').textContent=width+'px';savePrototypeState();renderWorkspace('overlay');closeChartColorPicker();};
-    popup.append(button);
-  });
-  document.body.append(popup);positionChartPicker(popup,document.querySelector('#quickWidth'));
-};

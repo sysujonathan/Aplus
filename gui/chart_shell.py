@@ -125,7 +125,7 @@ window.aplusSwitchContext=async()=>{if(switching)return;switching=true;try{
 window.aplusFlushAndClose=()=>window.pywebview.api.finish_close();</script>''', encoding='utf-8')
         return page, target
     for name in ("prototype.css", "historical-bars-v2.js", "prototype.js",
-                 "chart-coordinates.js", "chart-indicators.js", "chart-position.js", "drawing-settings.js",
+                 "chart-coordinates.js", "chart-indicators.js", "chart-position.js", "drawing-settings.js", "drawing-quickbar.js",
                  "prototype-interactions.js", "production-controls.js", "chart-palette.js"):
         shutil.copyfile(ASSETS / name, target / name)
     chart_script = (target / "prototype.js").read_text(encoding="utf-8")
