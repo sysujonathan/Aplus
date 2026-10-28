@@ -415,6 +415,9 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .color-alpha-row input[type="number"] {width:43px}.chart-color-picker button {color:#ccc}
 .color-alpha-row {flex-wrap:nowrap;gap:4px}.color-alpha-row input[type="range"] {width:96px;flex:1;min-width:40px}
 .color-alpha-row input[type="number"] {appearance:textfield;width:46px}.color-alpha-row input[type="number"]::-webkit-inner-spin-button {appearance:none;margin:0}
+.color-alpha-row input[type="range"].mixed {filter:grayscale(1)}
+.color-alpha-row input[type="range"].mixed::-webkit-slider-thumb {opacity:0}
+.color-alpha-row input[type="range"].mixed::-moz-range-thumb {opacity:0}
 .custom-color-row button,.chart-width-picker button {border:1px solid #555;background:#303030;border-radius:3px;padding:4px 7px;cursor:pointer}
 .chart-width-picker {display:grid;gap:4px;width:88px}.chart-width-picker button {color:#ddd;text-align:left}
 .stroke-preview-button {position:relative;display:inline-flex;align-items:center;justify-content:center;gap:7px;width:74px;height:34px;flex:0 0 auto;padding:5px;border:1px solid #555;border-radius:6px;background:#262626;color:#d1d4dc;cursor:pointer}

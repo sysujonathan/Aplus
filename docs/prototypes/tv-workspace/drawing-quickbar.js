@@ -48,6 +48,8 @@ window.AplusDrawingQuickbar = (() => {
     const global=object.alpha??1;
     if(level)return (object.type==='fib'&&object.fibUseOneColor?object.fibSingleAlpha??1:level.alpha??1)*global;
     if(key==='strokeAlpha')return object.strokeAlpha??global;
+    // Position statistics set textAlpha directly; drawAttachedText (which also
+    // multiplies global alpha) is not called for long/short in drawUserObject.
     if(key==='textAlpha')return (object.textAlpha??1)*(['long','short'].includes(object.type)?1:global);
     if(key==='backgroundAlpha')return (object.backgroundAlpha??(object.type==='channel'?.1:.13))*global;
     if(key==='targetAlpha'||key==='stopAlpha')return (object[key]??object.regionAlpha??.24)*global;
@@ -189,7 +191,7 @@ document.querySelector('#selectedObject').addEventListener('click',event=>{
   const input=document.createElement('input');input.type='color';input.value=drawingQuickbar.value(object,control)||object.color||'#2962ff';
   input.onchange=()=>commitQuickDrawingStyle(object,control,input.value);
   window.openChartColorPicker(input,button,object,{
-    alpha:()=>drawingQuickbar.opacity(object,control)??1,
+    alpha:()=>drawingQuickbar.opacity(object,control),
     onAlphaChange:value=>commitQuickDrawingStyle(object,control,value,true)
   });
 });

@@ -85,7 +85,9 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null, opt
   const alphaKey = ({backgroundColor:'backgroundAlpha',middleColor:'middleAlpha',targetColor:'targetAlpha',stopColor:'stopAlpha',textColor:'textAlpha',fibSingleColor:'fibSingleAlpha'})[key] ||
     (object?.type === 'fib' && key === 'color' ? 'fibTrendAlpha' : 'strokeAlpha');
   const storedAlpha = (level && object.type==='fib' && object.fibUseOneColor ? object.fibSingleAlpha ?? 1 : level?.alpha) ?? object?.[alphaKey] ?? 1;
-  const alpha = (typeof options.alpha==='function'?options.alpha():options.alpha) ?? (isEma ? Number(document.querySelector('#emaModal').dataset[emaAlphaField] ?? indicatorSettings[emaKey] ?? 1)
+  const overrideAlpha = typeof options.alpha==='function'?options.alpha():options.alpha;
+  // null means genuinely mixed levels; only an absent override uses the fallback.
+  const alpha = overrideAlpha !== undefined ? overrideAlpha : (isEma ? Number(document.querySelector('#emaModal').dataset[emaAlphaField] ?? indicatorSettings[emaKey] ?? 1)
     : object && window.AplusDrawingQuickbar ? window.AplusDrawingQuickbar.alphaFor(object,alphaKey,level) : storedAlpha);
   popup.innerHTML = '<div class="chart-color-grid"></div><div class="chart-custom-swatches"></div><button type="button" class="custom-color-add" aria-label="添加自定义颜色">＋</button>' +
     '<label class="color-alpha-row">不透明度<input aria-label="颜色不透明度" type="range" min="0" max="100"><input aria-label="不透明度百分比" type="number" min="0" max="100">%</label>';
@@ -101,11 +103,20 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null, opt
   });
   popup.querySelector('.custom-color-add').onclick=()=>{showChartCustomColorEditor(popup,input,color=>{applyColor(color);window.openChartColorPicker(input,anchor,objectOverride,options);});positionChartPicker(popup,anchor);};
   const range=popup.querySelector('input[type="range"]'),number=popup.querySelector('input[type="number"]');
-  range.value=number.value=Math.round(alpha*100);
+  const displayAlpha = percent => {
+    const mixed=percent===null;
+    range.value=mixed?50:percent;number.value=mixed?'':percent;
+    number.placeholder=mixed?'混合':'';
+    number.title=mixed?'多个层级的不透明度不一致':'不透明度百分比';
+    range.classList.toggle('mixed',mixed);
+    if(mixed)range.setAttribute('aria-valuetext','混合不透明度');
+    else range.removeAttribute('aria-valuetext');
+  };
+  displayAlpha(alpha===null?null:Math.round(alpha*100));
   const applyAlpha = control => {
     if(control.value.trim()==='')return;
     const value=Number(control.value);if(!Number.isFinite(value)||value<0||value>100)return;
-    range.value=number.value=value;
+    displayAlpha(value);
     if(options.onAlphaChange){options.onAlphaChange(value/100);return;}
     if(isEma) return; // EMA modal changes apply on confirmation below.
     if(!object)return;

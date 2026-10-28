@@ -639,6 +639,87 @@ const filledPath={...makeQuickObject('path'),alpha:.5,fill:true,backgroundAlpha:
 quick.apply(filledPath,'lineColor',.8,true);
 coloredFills.length=0;context.drawUserObject(ctx,view,filledPath);
 assert.ok(coloredFills.some(p=>p.alpha===.1),'editing a legacy filled path stroke must preserve its fill');
+// Position labels use drawPositionStats, not the global-alpha attached-text path.
+// Check the actual renderer before/after a first edit of either legacy region.
+for(const type of ['long','short'])for(const region of ['targetColor','stopColor'])
+for(const global of [0,.4,.8])for(const textAlpha of [undefined,.6]) {
+  const obj={...makeQuickObject(type),id:`legacy-${type}-${region}-${global}-${textAlpha??'default'}`,
+    position_version:1,alwaysShowStats:true,alpha:global,
+    b:{date:'2026-10-13',index:50,value:type==='long'?30:10},stop:type==='long'?15:25,
+    targetAlpha:.2,stopAlpha:.3,text:'not-an-attached-position-label'};
+  if(textAlpha!==undefined)obj.textAlpha=textAlpha;
+  let textPaints=[],fills=[];const stack=[];
+  const positionCtx=new Proxy({globalAlpha:1,
+    save(){stack.push(this.globalAlpha);},restore(){this.globalAlpha=stack.pop();},
+    measureText(text){return {width:String(text).length*6};},
+    fillText(text){textPaints.push([text,this.globalAlpha]);},
+    fillRect(){fills.push(this.globalAlpha);}
+  },{get:(target,key)=>key in target?target[key]:(()=>{})});
+  context.drawUserObject(positionCtx,view,obj);
+  const before=structuredClone(textPaints),geometry=JSON.stringify([obj.a,obj.b,obj.stop]);
+  assert.ok(before.some(([text,alpha])=>text.startsWith('目标:')&&alpha===(textAlpha??1)));
+  assert.ok(!before.some(([text])=>text===obj.text),'positions do not call drawAttachedText');
+  quick.apply(obj,region,.65,true);textPaints=[];fills=[];
+  context.drawUserObject(positionCtx,view,obj);
+  assert.deepEqual(textPaints,before,`${type} ${region}: preserve every rendered label opacity`);
+  assert.equal(fills[region==='targetColor'?0:1],.65);
+  assert.equal(fills[region==='targetColor'?1:0],(region==='targetColor'?.3:.2)*global);
+  assert.equal(JSON.stringify([obj.a,obj.b,obj.stop]),geometry);
+  quickEditedObjects.push(obj);
+}
+
+// Exercise the real quickbar click adapter and real color popup together. A
+// null mixed alpha must reach the UI without being replaced by a numeric value.
+const makePaletteNode=()=>({style:{},dataset:{},attributes:{},children:[],value:'',
+  classList:{values:new Set(),toggle(key,on){on?this.values.add(key):this.values.delete(key);},contains(key){return this.values.has(key);}},
+  setAttribute(key,value){this.attributes[key]=String(value);},removeAttribute(key){delete this.attributes[key];},
+  append(...nodes){this.children.push(...nodes);},remove(){},
+  dispatchEvent(){this.onchange?.();},getBoundingClientRect(){return {left:20,bottom:50};},offsetWidth:250,offsetHeight:250});
+let popupNodes,quickClick,paletteObject,paletteSaves=0;
+const paletteQuickBar={addEventListener(_event,handler){quickClick=handler;}};
+paletteContext.document={addEventListener(){},body:{append(){}},
+  querySelector:selector=>selector==='#selectedObject'?paletteQuickBar:null,
+  createElement(tag){
+    const node=makePaletteNode();if(tag!=='section')return node;
+    popupNodes=Object.fromEntries(['.chart-color-grid','.chart-custom-swatches','.custom-color-add',
+      'input[type="range"]','input[type="number"]'].map(key=>[key,makePaletteNode()]));
+    node.querySelector=key=>popupNodes[key];
+    node.querySelectorAll=()=>popupNodes['.chart-color-grid'].children;
+    return node;
+  }};
+Object.assign(paletteContext,{structuredClone,Event:class {},objectAtSelection:()=>paletteObject,
+  rememberObjects(){},savePrototypeState(){paletteSaves++;},renderWorkspace(){},
+  clamp:(value,min,max)=>Math.max(min,Math.min(max,value)),
+  channelLevels:context.channelLevels,ensureChannelLevels:context.ensureChannelLevels,
+  ensureFibSettings:context.ensureFibSettings,materializeFibUniformColor:context.materializeFibUniformColor,
+  assignFibUniformColor:context.assignFibUniformColor,assignFibUniformAlpha:context.assignFibUniformAlpha});
+Object.assign(paletteContext.window,{innerWidth:1000,innerHeight:700});
+vm.runInContext(quickSource,paletteContext);
+for(const original of [quickFib,quickChannel]) {
+  paletteObject=structuredClone(original);
+  const levels=paletteObject.type==='fib'?paletteObject.fibLevels:paletteObject.channelLevels;
+  levels[0].alpha=.12;
+  const before=JSON.stringify(paletteObject),savesBefore=paletteSaves;
+  const button=makePaletteNode();button.dataset.quickControl='lineColor';
+  const click=()=>quickClick({target:{closest:()=>button},stopPropagation(){}});
+  click();
+  const number=popupNodes['input[type="number"]'],range=popupNodes['input[type="range"]'];
+  assert.equal(number.value,'','mixed opacity must not pretend to be 100%');
+  assert.equal(number.placeholder,'混合');assert.ok(range.classList.contains('mixed'));
+  assert.equal(range.attributes['aria-valuetext'],'混合不透明度');
+  assert.equal(JSON.stringify(paletteObject),before,'opening the popup must not migrate or save');
+  assert.equal(paletteSaves,savesBefore);
+  const alphaBefore=levels.map(level=>level.alpha);
+  popupNodes['.chart-color-grid'].children.find(node=>node.dataset.swatch==='#f23645').onclick();
+  const currentLevels=paletteObject.type==='fib'?paletteObject.fibLevels:paletteObject.channelLevels;
+  assert.deepEqual(currentLevels.map(level=>level.alpha),alphaBefore,'color alone must retain mixed opacity');
+  number.value='100';number.oninput();
+  assert.equal(number.placeholder,'');assert.ok(!range.classList.contains('mixed'));
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),1);
+  click();assert.equal(Number(popupNodes['input[type="number"]'].value),100);
+  popupNodes['input[type="number"]'].value='0';popupNodes['input[type="number"]'].oninput();
+  click();assert.equal(Number(popupNodes['input[type="number"]'].value),0,'zero is not a mixed/default value');
+}
 // The snapshot consumed by Python below is the same edited object shape the page saves.
 if(process.env.APLUS_QUICKBAR_SNAPSHOT)fs.writeFileSync(process.env.APLUS_QUICKBAR_SNAPSHOT,
   JSON.stringify([quickFib,quickChannel,translucent,...quickEditedObjects]));
