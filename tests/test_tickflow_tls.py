@@ -1,9 +1,11 @@
-"""TickFlow supplements trust locally without bypassing TLS or recovery rules."""
+"""TickFlow uses a safe, isolated CA bundle without bypassing TLS or recovery rules."""
+import hashlib
 import json
 import ssl
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
+from pathlib import Path
 
 import certifi
 import pytest
@@ -11,24 +13,29 @@ import pytest
 from tests.test_tickflow_recovery import clock, fake_service
 from tests.test_workbench import store
 from workbench.provider_guard import ProviderError, ProviderGuard
-from workbench.tickflow import TickFlowHTTP
+from workbench.tickflow import TickFlow, TickFlowHTTP, UNSAFE_CA_SHA256
 from workbench.tickflow_recovery import request_with_recovery
 
 
-@pytest.mark.parametrize('system_trust', [False, True])
-def test_client_adds_bundle_to_system_trust_and_keeps_strict_local_https(
-        monkeypatch, system_trust):
-    context = (ssl.create_default_context() if system_trust else
-               ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
-    previous_roots = set(context.get_ca_certs(binary_form=True))
-    bundled_roots = set(ssl.create_default_context(cafile=certifi.where()).get_ca_certs(binary_form=True))
+UNSAFE_ROOT = Path(__file__).parent / 'fixtures' / 'tls' / 'emsign-ecc-root-g3.pem'
+
+
+@pytest.mark.parametrize('stale_system_trust', [False, True])
+def test_client_uses_only_safe_bundle_even_with_stale_system_and_environment_trust(
+        monkeypatch, stale_system_trust):
+    real_factory = ssl.create_default_context
+    stale_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if stale_system_trust:
+        stale_context.load_verify_locations(cafile=str(UNSAFE_ROOT))
+        assert {hashlib.sha256(d).hexdigest() for d in stale_context.get_ca_certs(binary_form=True)} == UNSAFE_CA_SHA256
+    bundled_roots = set(real_factory(cafile=certifi.where()).get_ca_certs(binary_form=True))
     original_global_factory = ssl._create_default_https_context
     factory_calls, handlers = [], []
     build_opener = urllib.request.build_opener
 
     def default_context(*args, **kwargs):
         factory_calls.append((args, kwargs))
-        return context
+        return real_factory(*args, **kwargs) if kwargs.get('cafile') else stale_context
 
     def opener(*args):
         handlers.extend(args)
@@ -37,16 +44,42 @@ def test_client_adds_bundle_to_system_trust_and_keeps_strict_local_https(
     monkeypatch.setattr('workbench.tickflow.ssl.create_default_context', default_context)
     monkeypatch.setattr('workbench.tickflow.urllib.request.build_opener', opener)
     monkeypatch.setenv('https_proxy', 'http://proxy.invalid:1234')
+    monkeypatch.setenv('SSL_CERT_FILE', str(UNSAFE_ROOT))
     provider = TickFlowHTTP()
-    assert factory_calls == [((), {})]
+    assert factory_calls == [((), {'cafile': certifi.where()})]
     assert isinstance(provider.opener, urllib.request.OpenerDirector)
     assert next(h for h in handlers if isinstance(h, urllib.request.ProxyHandler)).proxies == {}
-    assert next(h for h in handlers if isinstance(h, urllib.request.HTTPSHandler))._context is context
+    context = next(h for h in handlers if isinstance(h, urllib.request.HTTPSHandler))._context
+    assert context is not stale_context
     assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
     current_roots = set(context.get_ca_certs(binary_form=True))
-    assert bundled_roots and bundled_roots <= current_roots
-    assert previous_roots <= current_roots
+    assert bundled_roots and current_roots == bundled_roots
+    assert not {hashlib.sha256(d).hexdigest() for d in current_roots} & UNSAFE_CA_SHA256
     assert ssl._create_default_https_context is original_global_factory
+
+
+@pytest.mark.parametrize('version', ['2026.07.22', '2026.10.18', '2026.10.19', 'unknown', None])
+@pytest.mark.parametrize('client', [TickFlowHTTP, TickFlow])
+def test_old_or_unknown_actual_dependency_is_rejected_before_network(monkeypatch, version, client):
+    monkeypatch.setattr(certifi, '__version__', version)
+    monkeypatch.setattr('workbench.tickflow.ssl.create_default_context',
+                        lambda **_: pytest.fail('Old dependencies must not construct TLS'))
+    with pytest.raises(ProviderError, match='certifi>=2026.10.23') as caught:
+        client()
+    assert caught.value.source == 'tickflow' and caught.value.operation == 'tls'
+
+
+def test_contaminated_bundle_is_blocked_even_with_current_version(tmp_path, monkeypatch):
+    # Public CA certificate only; no private key or compromised leaf is shipped.
+    bad = UNSAFE_ROOT.read_text(encoding='ascii')
+    assert hashlib.sha256(ssl.PEM_cert_to_DER_cert(bad)).hexdigest() in UNSAFE_CA_SHA256
+    bundle = tmp_path / 'contaminated.pem'
+    bundle.write_text(certifi.contents() + '\n' + bad, encoding='ascii')
+    monkeypatch.setattr(certifi, 'where', lambda: str(bundle))
+    monkeypatch.setattr('workbench.tickflow.urllib.request.build_opener',
+                        lambda *_: pytest.fail('Unsafe context must not reach a network opener'))
+    with pytest.raises(ProviderError, match='已撤销信任'):
+        TickFlowHTTP()
 
 
 @pytest.mark.parametrize('bundle_kind', ['missing', 'malformed'])

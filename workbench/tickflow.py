@@ -1,5 +1,6 @@
 """TickFlow free daily bars: explicit qfq, batch <=100, no implicit retry."""
 from datetime import date, datetime, timedelta, timezone
+import hashlib
 import json
 import ssl
 import time
@@ -16,6 +17,31 @@ from .suspensions import announcement_evidence
 
 CHINA = timezone(timedelta(hours=8))
 BASE = 'https://free-api.tickflow.org'
+MIN_CERTIFI_VERSION = (2026, 10, 23)
+# GHSA-6q48-6c7w-9gw2: never reintroduce this CA from a stale/tampered bundle.
+UNSAFE_CA_SHA256 = frozenset({
+    '86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b',
+})
+
+
+def _require_safe_certifi():
+    try:
+        version = tuple(int(part) for part in certifi.__version__.split('.'))
+    except (AttributeError, TypeError, ValueError):
+        version = ()
+    if version < MIN_CERTIFI_VERSION:
+        raise ProviderError('tickflow', 'tls',
+                            '证书依赖过旧或版本无法确认，请人工安装 certifi>=2026.10.23 后重启')
+
+
+def _tls_context():
+    _require_safe_certifi()
+    # Explicit cafile avoids merging stale OS/env trust with the reviewed bundle.
+    context = ssl.create_default_context(cafile=certifi.where())
+    if any(hashlib.sha256(der).hexdigest() in UNSAFE_CA_SHA256
+           for der in context.get_ca_certs(binary_form=True)):
+        raise ProviderError('tickflow', 'tls', '证书库含已撤销信任的 CA，连接已停止，请重新安装修复版 certifi')
+    return context
 
 
 def symbol_of(code):
@@ -52,12 +78,8 @@ class TickFlowHTTP:
     """Runs only in the killable worker process; HTTP diagnostics survive IPC."""
     def __init__(self):
         self.last_request = 0
-        # Keep system trust and hostname verification; supplement Windows hosts
-        # whose local issuer store is incomplete with the already locked CA bundle.
-        context = ssl.create_default_context()
-        context.load_verify_locations(cafile=certifi.where())
         self.opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_tls_context()))
 
     def __enter__(self): return self
     def __exit__(self,*args): pass
@@ -113,6 +135,8 @@ class TickFlow(BaoStock):
     query_timeout = 45
 
     def __init__(self):
+        # Report stale dependencies before a worker startup could lose the reason.
+        _require_safe_certifi()
         super().__init__()
         self.cache = {}
 
