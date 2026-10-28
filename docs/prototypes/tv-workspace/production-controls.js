@@ -47,6 +47,71 @@ window.aplusNavigateChart = request => {
   highlightedTradeDate=request.date;
   renderWorkspace();savePrototypeState();showToast(`已定位至 ${request.date}`);return true;
 };
+function drawMtrEvidence(ctx, view, data, replayDate) {
+  // MTR only: dates/prices remain immutable; layout is recalculated in CSS px.
+  if (replayActive && data.availableDate && data.availableDate > replayDate) return;
+  const left=view.left, right=view.width-view.right, top=view.top, bottom=view.height-view.bottom;
+  const occupied=[], pending=[], outside=[];
+  const overlap=(a,b)=>Math.max(0,Math.min(a.right,b.right)-Math.max(a.left,b.left))
+    *Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top));
+  const point=p=>{
+    const index=chartCoordinates.indexForDate(bars,p.date,activeTimeframeUnit);
+    return index<0 ? null : {x:view.xGlobal(index),y:view.y(p.value)};
+  };
+  const inView=p=>p && p.x>=left && p.x<=right && p.y>=top && p.y<=bottom;
+  const obstacles=(view.rows||[]).map((row,i)=>({left:view.xGlobal(view.begin+i)-view.candleWidth/2-2,
+    right:view.xGlobal(view.begin+i)+view.candleWidth/2+2,top:view.y(row.high)-2,bottom:view.y(row.low)+2}));
+  ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
+  for (const item of data.items||[]) {
+    ctx.save();ctx.strokeStyle=item.color;ctx.fillStyle=item.color;ctx.lineWidth=item.selected?1.5:Number(item.width||1);
+    ctx.globalAlpha=item.alpha??1;ctx.setLineDash(Array.isArray(item.dash)?item.dash:item.dash==='--'?[6,4]:[]);
+    let p=item.a?point(item.a):null;
+    if(item.kind==='line') {
+      ctx.beginPath();let started=false;
+      for(const a of item.points||[]){const q=point(a);if(!q){started=false;continue;}started?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y);started=true;}ctx.stroke();
+    } else if(item.kind==='level' && p && p.x<right && p.y>=top && p.y<=bottom) {
+      ctx.beginPath();ctx.moveTo(Math.max(left,p.x),p.y);ctx.lineTo(right-8,p.y);ctx.stroke();
+      pending.push({text:`${item.text} ${chartPrice(item.a.value)}`,p:{x:right-8,y:p.y},offset:[-40,-12],color:item.color});
+    } else if(item.kind==='marker' && inView(p)) {
+      const offset=item.pixelOffset||[0,0];p={x:p.x+offset[0],y:p.y+offset[1]};
+      const r=item.size||3;ctx.setLineDash([]);ctx.beginPath();
+      if(item.marker==='o')ctx.arc(p.x,p.y,r,0,Math.PI*2);
+      else {ctx.moveTo(p.x,p.y-r);ctx.lineTo(p.x+r,p.y);ctx.lineTo(p.x,p.y+r);ctx.lineTo(p.x-r,p.y);ctx.closePath();}
+      ctx.stroke();
+    } else if(item.kind==='label') {
+      if(inView(p))pending.push({text:item.text,p,offset:item.offset,color:item.color});
+      else outside.push(item.text);
+    }
+    ctx.restore();
+  }
+  ctx.font='11px "Microsoft YaHei",sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  for(const item of pending) {
+    const w=ctx.measureText(item.text).width+8,h=18,p=item.p,preferred=item.offset||[22,-24];
+    const candidates=[preferred,[22,-24],[-22,-24],[22,26],[-22,26],[34,-34],[-34,-34],[34,34],[-34,34]];
+    let best=null;
+    for(const [dx,dy] of candidates){
+      const x=Math.max(left+8+w/2,Math.min(right-8-w/2,p.x+dx));
+      const y=Math.max(top+8+h/2,Math.min(bottom-8-h/2,p.y+dy));
+      const box={left:x-w/2,right:x+w/2,top:y-h/2,bottom:y+h/2};
+      const score=occupied.reduce((n,b)=>n+overlap(box,b),0)*1000
+        +obstacles.reduce((n,b)=>n+overlap(box,b),0)*10+(x-p.x-preferred[0])**2+(y-p.y-preferred[1])**2;
+      if(!best||score<best.score)best={box,x,y,score};
+    }
+    const {box,x,y}=best;
+    ctx.strokeStyle=item.color;ctx.lineWidth=.9;ctx.setLineDash([]);ctx.beginPath();
+    const length=Math.hypot(x-p.x,y-p.y),gap=Math.min(5,length/2);
+    if(length>gap){ctx.moveTo(p.x+(x-p.x)*gap/length,p.y+(y-p.y)*gap/length);ctx.lineTo(x,y);ctx.stroke();}
+    ctx.fillStyle='#171717';ctx.fillRect(box.left,box.top,w,h);ctx.fillStyle=item.color;ctx.fillText(item.text,x,y);
+    occupied.push(box);registerRect('strategy-evidence',box.left,box.top,box.right,box.bottom);
+  }
+  ctx.restore();
+  // A compact legend survives a clean snapshot; detail facts remain in sidebar.
+  ctx.save();ctx.font='11px "Microsoft YaHei",sans-serif';ctx.fillStyle='#9BA7B4';ctx.textAlign='left';
+  const legend=(outside.length?`${[...new Set(outside)].join('/')} 在窗口外`:'○ 结构 · ◇ S 信号（非成交）')+' · 计划有效期待核对';
+  if(right-left>180)ctx.fillText(legend,left+8,bottom-8,right-left-16);
+  ctx.restore();
+}
+
 function drawVectorEvidence(ctx, view) {
   const data = chartBoot.strategyEvidence || {};
   const replayDate = replayCutoffDate || bars[Math.min(replayIndex, bars.length - 1)].date;
@@ -68,7 +133,8 @@ function drawVectorEvidence(ctx, view) {
     }
     ctx.closePath();ctx.fill();
   };
-  if (!replayActive || !data.availableDate || data.availableDate <= replayDate) (data.items || []).forEach(item => {
+  if (data.contract==='mtr-v1') drawMtrEvidence(ctx,view,data,replayDate);
+  else if (!replayActive || !data.availableDate || data.availableDate <= replayDate) (data.items || []).forEach(item => {
     ctx.save();ctx.strokeStyle=item.color||'#cbd5e1';ctx.fillStyle=item.color||'#cbd5e1';
     ctx.lineWidth=Number(item.width||1);ctx.globalAlpha=Number(item.alpha ?? 1);
     ctx.setLineDash(Array.isArray(item.dash)?item.dash:item.dash==='--'?[6,4]:item.dash===':'?[2,4]:item.dash==='-.'?[6,3,2,3]:[]);

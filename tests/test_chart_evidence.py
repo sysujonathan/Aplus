@@ -48,7 +48,7 @@ def test_annotation_vectors_keep_original_dates_prices_and_prefix():
 
 
 @pytest.mark.parametrize('kind,column,labels', [
-    ('MTR_MASTER', 'signal_mtr', {'2. Sell Climax\n(抛售高潮)', '3. First Leg\n(一腿突破)', '4. SIGNAL (HL)\n(次低点确认)'}),
+    ('MTR_MASTER', 'signal_mtr', {'S'}),  # Missing node fields must not be guessed.
     ('STRATEGY_AWIL', 'signal_awil', {'H2 Signal\n(AWIL入场)'}),
     ('STRATEGY_3K', 'signal_3k', set()),
 ])
@@ -86,7 +86,7 @@ def test_mtr_trend_omits_non_finite_points_from_web_evidence():
     output = strategy_evidence(dict(frame=frame, payload=dict(asof=frame.date.iloc[20]),
         strategy=strategy, strategy_type='MTR_MASTER', metadata=strategy.get_metadata()))
     trend = next(item for item in output['items']
-                 if item['kind'] == 'line' and item['color'] == '#8B949E')
+                 if item['kind'] == 'line' and item['color'] == ANNOTATION)
     assert len(trend['points']) == 9
     assert all(point is not None for point in trend['points'])
     json.dumps(output, allow_nan=False)
