@@ -1378,6 +1378,16 @@ def apply_update(root, plan, backup, python, api=github_json, smoke=probe,
                  runtime=None, transaction_dir=None, on_stage=None):
     """Called only after old process exits and the global application mutex is held."""
     validate_plan(root, plan, api)
+    contract = plan.get("installation") or {}
+    if contract.get("database_changed"):
+        try:
+            if runtime is None or not str(runtime).strip():
+                raise ValueError("missing runtime")
+            runtime = Path(runtime).resolve(strict=True)
+            if not runtime.is_dir():
+                raise ValueError("runtime is not a directory")
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            raise UpdateError("数据库迁移缺少有效运行目录，未开始更新。") from exc
     old, target = plan["local"]["head"], plan["target"]
     payloads = _preserved_payloads(root, plan["local"])
     backup = Path(backup)
@@ -1399,10 +1409,7 @@ def apply_update(root, plan, backup, python, api=github_json, smoke=probe,
             target_python, environment_created = prepare_target_environment(
                 root, stage, plan, python, smoke=smoke, on_stage=on_stage
             )
-            contract = plan.get("installation") or {}
             if runtime is not None:
-                if runtime is None:
-                    raise UpdateError("数据库迁移缺少运行目录，正式库未改写。")
                 database_transaction = prepare_database_migration(
                     stage, target_python, runtime, transaction_dir, contract, on_stage=on_stage
                 )

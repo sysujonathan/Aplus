@@ -113,6 +113,36 @@ def make_database(runtime, schema=8):
     return database
 
 
+@pytest.mark.parametrize('invalid_runtime', ['missing', 'empty', 'whitespace', 'nonexistent', 'file'])
+def test_required_migration_rejects_invalid_runtime_before_any_update(repo, tmp_path, monkeypatch, invalid_runtime):
+    root, old, target = metadata_release(repo, lambda c: c['database'].update(schema=9))
+    api = api_for(target)
+    plan = v.check_version(root, force=True, api=api, fetch=Mock())
+    assert plan['can_update'] and plan['installation']['database_changed']
+    runtime = tmp_path/'runtime'; database = make_database(runtime)
+    before_database = database.read_bytes()
+    pointer = v.environment_pointer(root)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(sys.executable, encoding='utf-8')
+    before_pointer = pointer.read_bytes()
+    file_path = tmp_path/'not-a-directory'; file_path.write_text('sentinel')
+    invalid = {'missing': None, 'empty': '', 'whitespace': '  ',
+               'nonexistent': tmp_path/'absent', 'file': file_path}[invalid_runtime]
+    environment = Mock(); migration = Mock(); install = Mock(); stages = Mock()
+    monkeypatch.setattr(v, 'prepare_target_environment', environment)
+    monkeypatch.setattr(v, 'prepare_database_migration', migration)
+    monkeypatch.setattr(v, '_install_target', install)
+    backup = tmp_path/'old-code.zip'
+    with pytest.raises(v.UpdateError, match='有效运行目录'):
+        v.apply_update(root, plan, backup, sys.executable, api=api, runtime=invalid, on_stage=stages)
+    assert git(root, 'rev-parse', 'HEAD') == old
+    assert database.read_bytes() == before_database
+    assert pointer.read_bytes() == before_pointer
+    assert not backup.exists()
+    environment.assert_not_called(); migration.assert_not_called()
+    install.assert_not_called(); stages.assert_not_called()
+
+
 @pytest.mark.parametrize('actual', [7, 10])
 def test_actual_schema_mismatch_stops_even_without_static_store_change(tmp_path, actual):
     runtime = tmp_path/'runtime'; make_database(runtime, actual)
