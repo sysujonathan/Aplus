@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import ast
 import copy
+import contextlib
 import ctypes
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -18,6 +19,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -33,8 +35,13 @@ API = f"https://api.github.com/repos/{REPOSITORY}"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DATA_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROTECTED = {"runtime", "data", ".git", ".venv", "venv", ".workbuddy", "upgrade-backups"}
-MANUAL_FILES = {"requirements.txt",
-                "requirements-lock.txt", "setup.cmd"}
+MANUAL_FILES = {"setup.cmd"}
+DEPENDENCY_FILES = {"requirements.txt", "requirements-lock.txt"}
+RELEASE_INSTALLATION = "release_installation.json"
+INSTALLATION_PROTOCOL = 1
+ENVIRONMENT_ID = re.compile(r"^py\d{3}-[0-9a-f]{12}$")
+COUNTED_TABLES = ("accounts", "executions", "positions", "position_fills", "closed_trades",
+                  "cash_flows", "datasets", "observations", "plans", "watchlist")
 PRESERVED_LOCAL_FILES = {"push.cmd"}
 MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
 DISCARDABLE_RELEASE_PATHS = {"README.md", "release_catalog.json"}
@@ -404,7 +411,96 @@ def release_manifest_valid(root, target):
         return False
 
 
-def compatible_target(root, current, target, local=None):
+def _revision_bytes(root, revision, name):
+    try:
+        return run_git(root, "show", f"{revision}:{name}", binary=True)
+    except UpdateError:
+        return None
+
+
+def release_installation(root, revision, required=False):
+    """Read the release transaction contract without importing target code."""
+    raw = _revision_bytes(root, revision, RELEASE_INSTALLATION)
+    if raw is None:
+        if required:
+            raise ManualUpdateError("正式版缺少自动迁移清单，请维护者补齐后再更新。", "installation")
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+        if set(value) != {"protocol", "python", "environment_id", "requirements_sha256", "database"}:
+            raise ValueError
+        if value["protocol"] != INSTALLATION_PROTOCOL:
+            raise ValueError
+        python_version = value["python"]
+        if not re.fullmatch(r"\d+\.\d+", python_version):
+            raise ValueError
+        requirements_hash = value["requirements_sha256"]
+        lock = _revision_bytes(root, revision, "requirements-lock.txt")
+        if lock is None or not DATA_SHA256.fullmatch(requirements_hash):
+            raise ValueError
+        if hashlib.sha256(lock).hexdigest() != requirements_hash:
+            raise ValueError
+        expected_environment = f"py{python_version.replace('.', '')}-{requirements_hash[:12]}"
+        if value["environment_id"] != expected_environment or not ENVIRONMENT_ID.fullmatch(expected_environment):
+            raise ValueError
+        database = value["database"]
+        if set(database) != {"schema", "supported_from", "migration"}:
+            raise ValueError
+        schema = database["schema"]
+        supported = database["supported_from"]
+        if (not isinstance(schema, int) or schema < 1
+                or not isinstance(supported, list) or not supported
+                or any(not isinstance(item, int) or item < 1 for item in supported)
+                or len(set(supported)) != len(supported)
+                or not isinstance(database["migration"], str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", database["migration"])):
+            raise ValueError
+        return copy.deepcopy(value)
+    except (UnicodeDecodeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        raise ManualUpdateError("正式版自动迁移清单无效，未安装或打开正式数据。", "installation") from None
+
+
+def installation_plan(root, current, target, changed, store_compatible=True):
+    """Return a deterministic, re-checkable environment/database transaction."""
+    dependency_changed = bool(changed & DEPENDENCY_FILES)
+    target_contract = release_installation(root, target, required=False)
+    source_contract = release_installation(root, current, required=False)
+    if target_contract is None:
+        if dependency_changed:
+            raise ManualUpdateError("新版依赖变化但缺少自动安装清单，请维护者补齐。", "dependencies")
+        if store_compatible is False:
+            raise ManualUpdateError("新版数据结构变化但缺少自动迁移清单，正式数据未打开。", "data")
+        return {"protocol": INSTALLATION_PROTOCOL, "environment_changed": False,
+                "database_changed": False}
+    environment_changed = dependency_changed and (
+        source_contract is None
+        or source_contract["environment_id"] != target_contract["environment_id"]
+    )
+    running_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if environment_changed and target_contract["python"] != running_python:
+        raise ManualUpdateError(
+            f"正式版需要 Python {target_contract['python']}；当前更新助手只使用已验收的 {running_python} 运行时。",
+            "python",
+        )
+    database_changed = store_compatible is False
+    source_schema = (source_contract or {}).get("database", {}).get("schema")
+    if database_changed:
+        if source_schema is None or source_schema not in target_contract["database"]["supported_from"]:
+            raise ManualUpdateError("正式版未声明支持当前数据库版本，未打开或改写正式数据。", "data")
+    return {
+        "protocol": INSTALLATION_PROTOCOL,
+        "python": target_contract["python"],
+        "environment_id": target_contract["environment_id"],
+        "requirements_sha256": target_contract["requirements_sha256"],
+        "environment_changed": environment_changed,
+        "database_changed": database_changed,
+        "source_schema": source_schema,
+        "target_schema": target_contract["database"]["schema"],
+        "migration": target_contract["database"]["migration"],
+    }
+
+
+def compatible_target(root, current, target, local=None, details=None):
     if not SHA.fullmatch(current) or not SHA.fullmatch(target):
         raise UpdateError("版本编号无效，未更新。")
     # A fast forward cannot discard local commits or move back to an old main.
@@ -422,14 +518,15 @@ def compatible_target(root, current, target, local=None):
     if ('frozen_manifest.json' in changed or any(p.startswith(('core/', 'config/')) for p in changed)):
         if not release_manifest_valid(root, target):
             raise ManualUpdateError("正式版文件与校验清单不一致，请等待项目负责人修复发布。", 'release_integrity')
+    store_compatible = True
     if 'workbench/store.py' in changed:
         try:
             before = run_git(root, 'show', f'{current}:workbench/store.py')
             after = run_git(root, 'show', f'{target}:workbench/store.py')
         except UpdateError:
             raise ManualUpdateError('无法核对数据保存程序的兼容性，请人工安装。', 'data') from None
-        if not compatible_store_extension(before, after):
-            raise ManualUpdateError('新版改变了数据结构、已有保存逻辑或无法确认的初始化行为，请人工安装并验收。', 'data')
+        store_compatible = compatible_store_extension(before, after)
+    transaction = installation_plan(root, current, target, changed, store_compatible)
     files = run_git(root, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", target).splitlines()
     if local and any(name not in files for name in local.get("preserved", {})):
         raise UpdateError("新版不再包含本机受保护启动文件，请维护者核对。")
@@ -454,6 +551,8 @@ def compatible_target(root, current, target, local=None):
     for name in files:
         if name not in tracked and (Path(root) / name).exists():
             raise UpdateError("新版文件与本地保留文件重名，未覆盖。")
+    if details is not None:
+        details["installation"] = transaction
     return managed
 
 
@@ -538,9 +637,11 @@ def check_version(root, force=False, api=github_json, fetch=None):
                 result["block_reason"] = "development"
                 raise UpdateError("当前不是main日常使用分支，请先人工对齐；不会切分支覆盖修复。")
             result["block_reason"] = "manual"
-            managed = compatible_target(root, local["head"], target, local)
+            details = {}
+            managed = compatible_target(root, local["head"], target, local, details)
             if managed:
                 result["migration"] = "managed_release"
+            result["installation"] = details["installation"]
             result["summary"] = run_git(root, "log", "--format=%h %s", "-8", f'{local["head"]}..{target}')
             result["can_update"] = True
             result.pop("block_reason", None)
@@ -564,8 +665,11 @@ def validate_plan(root, plan, api=github_json):
         raise UpdateError("本地版本或文件已经变化，未更新；请重新检查。")
     if api("/branches/main")["commit"]["sha"] != plan["target"] or not acceptance(plan["target"], api):
         raise UpdateError("目标版本或验收状态已经变化，请重新检查。")
-    if compatible_target(root, local["head"], plan["target"], local) != managed:
+    details = {}
+    if compatible_target(root, local["head"], plan["target"], local, details) != managed:
         raise UpdateError("本机与正式版的安全关系已经变化，请重新检查。")
+    if details.get("installation") != plan.get("installation"):
+        raise UpdateError("运行环境或数据库迁移计划已经变化，请重新检查。")
 
 
 def extract_archive(data, folder):
@@ -672,7 +776,177 @@ def _install_target(root, plan, payloads):
         raise
 
 
-def apply_update(root, plan, backup, python, api=github_json, smoke=probe):
+def _environment_python(folder, windowless=False):
+    name = "pythonw.exe" if windowless and os.name == "nt" else ("python.exe" if os.name == "nt" else "python")
+    return Path(folder) / ("Scripts" if os.name == "nt" else "bin") / name
+
+
+def _run_checked(command, *, cwd=None, env=None, timeout=900, message):
+    process = subprocess.run([str(item) for item in command], cwd=cwd, env=env, capture_output=True,
+                             timeout=timeout,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    if process.returncode:
+        raise UpdateError(message)
+
+
+def _build_environment(folder, current_python, stage, contract):
+    expected = contract["python"]
+    version = subprocess.run(
+        [str(current_python), "-I", "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        capture_output=True, text=True, timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    if version.returncode or version.stdout.strip() != expected:
+        raise ManualUpdateError(
+            f"正式版需要 Python {expected}；当前尚无已验收的同版本解释器，未替换旧环境。", "python"
+        )
+    _run_checked([current_python, "-I", "-m", "venv", folder], timeout=180,
+                 message="新版独立运行环境创建失败；旧环境仍可使用。")
+    python = _environment_python(folder)
+    _run_checked([python, "-I", "-m", "pip", "install", "--disable-pip-version-check",
+                  "--requirement", Path(stage) / "requirements-lock.txt"], timeout=1800,
+                 message="新版依赖安装失败；旧环境和代码均未替换。")
+    _run_checked([python, "-I", "-m", "pip", "check"], timeout=180,
+                 message="新版依赖完整性检查失败；旧环境和代码均未替换。")
+
+
+def prepare_target_environment(root, stage, plan, current_python, smoke=probe):
+    contract = plan.get("installation") or {}
+    if not contract.get("environment_changed"):
+        smoke(Path(stage), current_python)
+        return Path(current_python), None
+    environment_id = contract.get("environment_id", "")
+    if not ENVIRONMENT_ID.fullmatch(environment_id):
+        raise UpdateError("运行环境编号无效，未替换旧环境。")
+    base = metadata_dir(root) / "environments"
+    base.mkdir(parents=True, exist_ok=True)
+    final = base / environment_id
+    if final.exists():
+        python = _environment_python(final)
+        if not python.is_file():
+            raise UpdateError("已存在的新版运行环境不完整，未切换环境。")
+        smoke(Path(stage), python)
+        return python, None
+    staging = base / (".staging-" + uuid.uuid4().hex)
+    try:
+        _build_environment(staging, current_python, stage, contract)
+        python = _environment_python(staging)
+        smoke(Path(stage), python)
+        os.replace(staging, final)
+        return _environment_python(final), final
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def environment_pointer(root):
+    return metadata_dir(root) / "current-python.txt"
+
+
+def write_environment_pointer(root, python):
+    python = Path(python).resolve()
+    if not python.is_file():
+        raise UpdateError("新版解释器不存在，未切换启动环境。")
+    pointer = environment_pointer(root)
+    temporary = pointer.with_name(pointer.name + "." + uuid.uuid4().hex + ".tmp")
+    temporary.write_text(str(python), encoding="utf-8")
+    os.replace(temporary, pointer)
+
+
+def _sqlite_snapshot(source, destination):
+    source, destination = Path(source), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    with contextlib.closing(sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True)) as src:
+        with contextlib.closing(sqlite3.connect(destination)) as dst:
+            src.backup(dst)
+
+
+def _database_state(path):
+    with contextlib.closing(sqlite3.connect(
+            f"file:{Path(path).as_posix()}?mode=ro", uri=True)) as db:
+        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise UpdateError("数据库完整性检查失败，未继续自动迁移。")
+        row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        schema = int(row[0]) if row else None
+        tables = {item[0] for item in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        counts = {name: db.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+                  for name in COUNTED_TABLES if name in tables}
+    return {"schema": schema, "counts": counts, "sha256": _digest(path)}
+
+
+def _run_store_migration(code, python, runtime):
+    script = ("import sys;sys.path.insert(0,sys.argv[1]);"
+              "from workbench.store import Store;Store(sys.argv[2])")
+    env = dict(os.environ, A_WORKBENCH_HOME=str(runtime))
+    env.pop("APLUS_UPDATE_ACK", None)
+    _run_checked([python, "-I", "-c", script, str(code), str(runtime)], cwd=code, env=env, timeout=300,
+                 message="新版数据库迁移执行失败；正式库已保留备份。")
+
+
+def prepare_database_migration(stage, target_python, runtime, folder, contract):
+    if not contract.get("database_changed"):
+        return {"changed": False}
+    runtime = Path(runtime).resolve()
+    database = runtime / "workbench.sqlite3"
+    if not database.exists():
+        return {"changed": False, "schema_before": None,
+                "schema_after": contract.get("target_schema"), "backup": None}
+    before = _database_state(database)
+    if before["schema"] != contract.get("source_schema"):
+        raise UpdateError("正式数据库版本与迁移计划不一致，未改写数据。")
+    backup = Path(folder) / "workbench-before.sqlite3"
+    _sqlite_snapshot(database, backup)
+    trial_root = Path(folder) / "trial-runtime"
+    trial_root.mkdir()
+    trial = trial_root / "workbench.sqlite3"
+    _sqlite_snapshot(backup, trial)
+    _run_store_migration(stage, target_python, trial_root)
+    after = _database_state(trial)
+    if after["schema"] != contract.get("target_schema"):
+        raise UpdateError("数据库副本迁移后版本不符，正式库未改写。")
+    if any(after["counts"].get(name, 0) < count for name, count in before["counts"].items()):
+        raise UpdateError("数据库副本迁移出现记录减少，正式库未改写。")
+    return {"changed": True, "database": str(database), "backup": str(backup),
+            "backup_sha256": _digest(backup), "schema_before": before["schema"],
+            "schema_after": after["schema"], "counts_before": before["counts"]}
+
+
+def migrate_formal_database(root, target_python, runtime, transaction):
+    if not transaction.get("changed"):
+        return transaction
+    _run_store_migration(root, target_python, runtime)
+    after = _database_state(transaction["database"])
+    if after["schema"] != transaction["schema_after"]:
+        raise UpdateError("正式数据库迁移后的版本无法确认。")
+    if any(after["counts"].get(name, 0) < count
+           for name, count in transaction.get("counts_before", {}).items()):
+        raise UpdateError("正式数据库迁移后记录数异常。")
+    transaction["formal_sha256"] = after["sha256"]
+    return transaction
+
+
+def restore_database(transaction):
+    if not transaction or not transaction.get("changed"):
+        return
+    database = Path(transaction["database"])
+    backup = Path(transaction["backup"])
+    if not backup.is_file() or _digest(backup) != transaction["backup_sha256"]:
+        raise UpdateError("数据库备份校验失败，不能自动回退；请保留现场并联系维护者。")
+    temporary = database.with_name(database.name + ".restore-" + uuid.uuid4().hex)
+    shutil.copy2(backup, temporary)
+    if _database_state(temporary)["schema"] != transaction["schema_before"]:
+        temporary.unlink(missing_ok=True)
+        raise UpdateError("数据库备份版本校验失败，不能自动回退。")
+    os.replace(temporary, database)
+    for suffix in ("-wal", "-shm", "-journal"):
+        database.with_name(database.name + suffix).unlink(missing_ok=True)
+    if _digest(database) != transaction["backup_sha256"]:
+        raise UpdateError("数据库回退后的校验值不一致，请停止使用并联系维护者。")
+
+
+def apply_update(root, plan, backup, python, api=github_json, smoke=probe,
+                 runtime=None, transaction_dir=None):
     """Called only after old process exits and the global application mutex is held."""
     validate_plan(root, plan, api)
     old, target = plan["local"]["head"], plan["target"]
@@ -680,22 +954,60 @@ def apply_update(root, plan, backup, python, api=github_json, smoke=probe):
     backup = Path(backup)
     backup.write_bytes(run_git(root, "archive", "--format=zip", old, binary=True))
     _append_preserved_backup(backup, payloads)
-    with tempfile.TemporaryDirectory(prefix="aplus-code-") as stage:
-        extract_archive(run_git(root, "archive", "--format=zip", target, binary=True), stage)
-        smoke(Path(stage), python)
-    # Revalidate after the slow probe, including fresh CI and any local edits.
-    validate_plan(root, plan, api)
-    _install_target(root, plan, payloads)
-    if run_git(root, "rev-parse", "HEAD") != target:
-        _restore_preserved(root, payloads)
-        raise UpdateError("更新结果未能确认，请人工检查；代码备份已保留。")
+    transaction_dir = Path(transaction_dir or backup.parent)
+    environment_created = None
+    database_transaction = {"changed": False}
+    installed = False
+    target_python = Path(python)
     try:
-        smoke(Path(root), python)
-    except Exception:
-        # No reset/stash/clean: refuse if someone edited code meanwhile.
-        rollback(root, target, old, plan["local"].get("branch"), payloads)
-        raise UpdateError("更新后启动检查失败，已回到旧代码；数据未回退，请查看更新回执。")
-    _restore_preserved(root, payloads)
+        with tempfile.TemporaryDirectory(prefix="aplus-code-") as stage_name:
+            stage = Path(stage_name)
+            extract_archive(run_git(root, "archive", "--format=zip", target, binary=True), stage)
+            target_python, environment_created = prepare_target_environment(
+                root, stage, plan, python, smoke=smoke
+            )
+            contract = plan.get("installation") or {}
+            if contract.get("database_changed"):
+                if runtime is None:
+                    raise UpdateError("数据库迁移缺少运行目录，正式库未改写。")
+                database_transaction = prepare_database_migration(
+                    stage, target_python, runtime, transaction_dir, contract
+                )
+        # Revalidate after the slow probes, including fresh CI and local edits.
+        validate_plan(root, plan, api)
+        _install_target(root, plan, payloads)
+        installed = True
+        if run_git(root, "rev-parse", "HEAD") != target:
+            raise UpdateError("更新结果未能确认，请人工检查；代码备份已保留。")
+        smoke(Path(root), target_python)
+        if database_transaction.get("changed"):
+            migrate_formal_database(root, target_python, runtime, database_transaction)
+        _restore_preserved(root, payloads)
+        return {"python": str(Path(target_python).resolve()),
+                "environment_id": (plan.get("installation") or {}).get("environment_id"),
+                "environment_changed": bool((plan.get("installation") or {}).get("environment_changed")),
+                "environment_created": str(environment_created) if environment_created else None,
+                "database": database_transaction}
+    except Exception as exc:
+        rollback_error = None
+        if installed:
+            try:
+                rollback(root, target, old, plan["local"].get("branch"), payloads)
+            except Exception as rollback_exc:
+                rollback_error = rollback_exc
+        try:
+            restore_database(database_transaction)
+        except Exception as data_exc:
+            rollback_error = rollback_error or data_exc
+        if environment_created:
+            shutil.rmtree(environment_created, ignore_errors=True)
+        if not installed and isinstance(exc, UpdateError) and rollback_error is None:
+            raise
+        if rollback_error:
+            raise UpdateError("更新失败且自动回退未能完整确认；请保留代码和数据库备份并联系维护者。") from rollback_error
+        if isinstance(exc, ManualUpdateError):
+            raise
+        raise UpdateError("更新验收失败，已回到旧代码并恢复原数据库；旧环境仍可使用。") from exc
 
 
 def rollback(root, target, old, old_branch=None, payloads=None):
@@ -792,6 +1104,7 @@ def worker(request_path):
               "target": request["plan"]["target"]}
     exited = False
     restarted = False
+    transaction = None
     try:
         if os.name != "nt":
             raise UpdateError("自动重启仅支持已验收的Windows桌面安装。")
@@ -812,28 +1125,56 @@ def worker(request_path):
         with application_mutex():
             require_web_closed()
             verify_maintenance_data(request)
-            apply_update(root, request["plan"], folder / "old-code.zip", request["python"])
-            verify_maintenance_data(request)
-            if request.get('data_checksum'):
+            transaction = apply_update(
+                root, request["plan"], folder / "old-code.zip", request["python"],
+                github_json, probe, request["runtime"], folder
+            ) or {"python": request["python"], "database": {"changed": False}}
+            if not transaction.get("database", {}).get("changed"):
+                verify_maintenance_data(request)
+            if request.get('data_checksum') and not transaction.get("database", {}).get("changed"):
                 result['data_unchanged_before_restart'] = True
+            result["environment_id"] = transaction.get("environment_id")
+            result["environment_changed"] = bool(transaction.get("environment_changed"))
+            result["database_schema_before"] = transaction.get("database", {}).get("schema_before")
+            result["database_schema_after"] = transaction.get("database", {}).get("schema_after")
+        target_python = transaction.get("python") or request["python"]
         env = dict(os.environ, A_WORKBENCH_HOME=request["runtime"], APLUS_UPDATE_ACK=str(folder / "started.json"))
-        launched = subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
+        launched = subprocess.Popen([target_python, str(root / "launch_dashboard.py")], cwd=root, env=env,
                                     creationflags=subprocess.CREATE_NO_WINDOW)
         restarted = True
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline and launched.poll() is None and not (folder / "started.json").exists():
             time.sleep(.2)
         if (folder / "started.json").exists():
+            write_environment_pointer(root, target_python)
             version = request["plan"].get("target_release", {}).get("version")
             label = f"v{version}" if version else "最新正式版"
-            result.update(state="completed", message=f"已更新到{label}并重新启动。\n行情和交易记录保持不变。")
+            data_message = ("行情和交易记录已完成兼容迁移并保留。"
+                            if transaction.get("database", {}).get("changed")
+                            else "行情和交易记录保持不变。")
+            result.update(state="completed", message=f"已更新到{label}并重新启动。\n{data_message}")
         elif launched.poll() is not None:
+            recovery_error = None
             with application_mutex():
-                rollback(root, result["target"], result["old"], result.get("old_branch"))
+                try:
+                    rollback(root, result["target"], result["old"], result.get("old_branch"))
+                except Exception as exc:
+                    recovery_error = exc
+                try:
+                    restore_database(transaction.get("database"))
+                except Exception as exc:
+                    recovery_error = recovery_error or exc
+                if recovery_error is None:
+                    created = transaction.get("environment_created")
+                    if created:
+                        shutil.rmtree(created, ignore_errors=True)
             env.pop("APLUS_UPDATE_ACK", None)
-            subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
-                             creationflags=subprocess.CREATE_NO_WINDOW)
-            raise UpdateError("新桌面启动失败，已恢复旧代码并尝试重启；请检查回执及分支。")
+            if recovery_error is None:
+                subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                raise UpdateError("新桌面启动失败，自动回退未能完整确认；请保留回执和备份并联系维护者。")
+            raise UpdateError("新桌面启动失败，已恢复旧代码、原数据库和旧环境并尝试重启。")
         else:
             result.update(state="unconfirmed", message="代码已更新，但桌面启动尚未确认；未强制关闭进程或回退数据。")
     except Exception as exc:

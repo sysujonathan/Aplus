@@ -1,8 +1,10 @@
 """All repositories, runtime folders and update processes here are synthetic."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -61,6 +63,40 @@ def api_for(target, conclusion='success', extra=()):
 def plan_for(repo):
     root, old, target = repo
     return v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+
+
+def installation_contract(lock, schema=8, supported=(1, 2, 3, 4, 5, 6, 7, 8), migration='store-v8'):
+    digest = hashlib.sha256(lock).hexdigest()
+    return {
+        'protocol': 1, 'python': f'{sys.version_info.major}.{sys.version_info.minor}',
+        'environment_id': f'py{sys.version_info.major}{sys.version_info.minor}-{digest[:12]}',
+        'requirements_sha256': digest,
+        'database': {'schema': schema, 'supported_from': list(supported), 'migration': migration},
+    }
+
+
+def installation_release(repo, *, invalid_hash=False):
+    root, _, _ = repo
+    git(root, 'switch', 'main')
+    first = b'example-package==1.0\n'
+    (root/'requirements-lock.txt').write_bytes(first)
+    (root/v.RELEASE_INSTALLATION).write_text(json.dumps(installation_contract(first)), encoding='utf-8')
+    git(root, 'add', '.')
+    git(root, 'commit', '-m', 'installation baseline')
+    old = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', '-c', 'installation-release')
+    second = b'example-package==2.0\n'
+    (root/'requirements-lock.txt').write_bytes(second)
+    contract = installation_contract(second)
+    if invalid_hash:
+        contract['requirements_sha256'] = '0' * 64
+    (root/v.RELEASE_INSTALLATION).write_text(json.dumps(contract), encoding='utf-8')
+    git(root, 'add', '.')
+    git(root, 'commit', '-m', 'dependency release')
+    target = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', 'main')
+    git(root, 'update-ref', 'refs/aplus-update/main', target)
+    return root, old, target
 
 
 def test_check_is_readonly_for_code_and_runtime(repo):
@@ -144,6 +180,100 @@ def test_missing_main_ci_is_not_mistaken_for_running_or_success(repo):
     api=lambda path: {'commit':{'sha':target}} if path=='/branches/main' else {'workflow_runs':[]}
     result=v.check_version(root,force=True,api=api,fetch=Mock())
     assert result['ci_status']=='missing' and result['state']=='pending' and not result['can_update']
+
+
+def test_declared_dependency_release_builds_a_parallel_environment_plan(repo):
+    root, _, target = installation_release(repo)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=Mock())
+    assert plan['can_update']
+    assert plan['installation']['environment_changed'] is True
+    assert plan['installation']['database_changed'] is False
+    assert plan['installation']['environment_id'].startswith(
+        f'py{sys.version_info.major}{sys.version_info.minor}-'
+    )
+
+
+def test_dependency_release_with_unbound_manifest_is_rejected(repo):
+    root, old, target = installation_release(repo, invalid_hash=True)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=Mock())
+    assert not plan['can_update'] and plan['manual_kind'] == 'installation'
+    assert git(root, 'rev-parse', 'HEAD') == old
+
+
+def test_parallel_environment_failure_keeps_existing_launch_pointer(repo, tmp_path, monkeypatch):
+    root, _, _ = repo
+    pointer = v.environment_pointer(root)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text('C:\\old\\python.exe', encoding='utf-8')
+    stage = tmp_path/'target-code'; stage.mkdir()
+    plan = {'installation': {'environment_changed': True,
+                             'environment_id': 'py312-1234567890ab', 'python': '3.12'}}
+    def fail(folder, *_args):
+        folder.mkdir(parents=True)
+        raise v.UpdateError('synthetic install failure')
+    monkeypatch.setattr(v, '_build_environment', fail)
+    with pytest.raises(v.UpdateError, match='synthetic'):
+        v.prepare_target_environment(root, stage, plan, sys.executable, smoke=Mock())
+    assert pointer.read_text(encoding='utf-8') == 'C:\\old\\python.exe'
+    assert not list((pointer.parent/'environments').glob('.staging-*'))
+
+
+def test_release_manifest_matches_exact_lock_and_current_schema(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    contract = json.loads((root/v.RELEASE_INSTALLATION).read_text(encoding='utf-8'))
+    lock = (root/'requirements-lock.txt').read_bytes()
+    assert contract['requirements_sha256'] == hashlib.sha256(lock).hexdigest()
+    runtime = tmp_path/'runtime'
+    store = Store(runtime)
+    with store.connect() as db:
+        schema = int(db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
+    assert contract['database']['schema'] == schema
+
+
+def test_database_migration_is_proved_on_copy_and_can_restore_exact_backup(tmp_path):
+    runtime = tmp_path/'runtime'
+    runtime.mkdir()
+    database = runtime/'workbench.sqlite3'
+    db = sqlite3.connect(database)
+    try:
+        db.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+        db.execute("INSERT INTO meta VALUES('schema_version','8')")
+        db.execute('CREATE TABLE observations(id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        db.execute("INSERT INTO observations VALUES('kept','signal')")
+        db.commit()
+    finally:
+        db.close()
+    stage = tmp_path/'stage'
+    (stage/'workbench').mkdir(parents=True)
+    (stage/'workbench'/'__init__.py').write_text('', encoding='utf-8')
+    (stage/'workbench'/'store.py').write_text(
+        "import sqlite3\nfrom pathlib import Path\n"
+        "class Store:\n"
+        " def __init__(self,root):\n"
+        "  p=Path(root)/'workbench.sqlite3'\n"
+        "  with sqlite3.connect(p) as db:\n"
+        "   db.execute('ALTER TABLE observations ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0')\n"
+        "   db.execute(\"UPDATE meta SET value='9' WHERE key='schema_version'\")\n",
+        encoding='utf-8')
+    folder = tmp_path/'transaction'
+    folder.mkdir()
+    contract = {'database_changed': True, 'source_schema': 8, 'target_schema': 9}
+    transaction = v.prepare_database_migration(stage, sys.executable, runtime, folder, contract)
+    assert transaction['changed'] and v._database_state(database)['schema'] == 8
+    assert v._database_state(folder/'trial-runtime'/'workbench.sqlite3')['schema'] == 9
+    v.migrate_formal_database(stage, sys.executable, runtime, transaction)
+    assert v._database_state(database)['schema'] == 9
+    v.restore_database(transaction)
+    assert v._database_state(database)['schema'] == 8
+    assert v._digest(database) == transaction['backup_sha256']
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT payload FROM observations WHERE id=?', ('kept',)).fetchone()[0] == 'signal'
+
+
+def test_launchers_prefer_committed_environment_pointer_without_configuring_users():
+    root = Path(__file__).resolve().parents[1]
+    assert '.git\\aplus-update\\current-python.txt' in (root/'启动A.vbs').read_text(encoding='utf-8')
+    assert '.git\\aplus-update\\current-python.txt' in (root/'启动A.cmd').read_text(encoding='utf-8')
 
 
 @pytest.mark.parametrize('mutation', ['tracked', 'untracked', 'branch', 'ahead', 'diverged', 'origin'])

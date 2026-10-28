@@ -1,0 +1,11 @@
+{
+  "protocol": 1,
+  "python": "3.12",
+  "environment_id": "py312-5bf2f2557202",
+  "requirements_sha256": "5bf2f2557202a04e354c20b3adbf5009437f69af9b4506227600d399f44048c6",
+  "database": {
+    "schema": 8,
+    "supported_from": [1, 2, 3, 4, 5, 6, 7, 8],
+    "migration": "store-v8"
+  }
+}
