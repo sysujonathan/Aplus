@@ -1,0 +1,54 @@
+[
+  {
+    "stage": "before",
+    "revision": 2,
+    "fibLevelCount": 24,
+    "fibAlphas": [
+      0.12,
+      0.55
+    ]
+  },
+  {
+    "stage": "typing_6",
+    "revision": 2,
+    "fibLevelCount": 24,
+    "fibAlphas": [
+      0.12,
+      0.55
+    ]
+  },
+  {
+    "stage": "typing_65",
+    "revision": 2,
+    "fibLevelCount": 24,
+    "fibAlphas": [
+      0.12,
+      0.55
+    ]
+  },
+  {
+    "stage": "committed_65",
+    "revision": 3,
+    "fibLevelCount": 24,
+    "fibAlphas": [
+      0.65
+    ]
+  },
+  {
+    "stage": "one_undo",
+    "revision": 4,
+    "fibLevelCount": 24,
+    "fibAlphas": [
+      0.12,
+      0.55
+    ]
+  },
+  {
+    "stage": "one_redo",
+    "revision": 5,
+    "fibLevelCount": 24,
+    "fibAlphas": [
+      0.65
+    ]
+  }
+]

@@ -670,13 +670,13 @@ for(const global of [0,.4,.8])for(const textAlpha of [undefined,.6]) {
 
 // Exercise the real quickbar click adapter and real color popup together. A
 // null mixed alpha must reach the UI without being replaced by a numeric value.
-const makePaletteNode=()=>({style:{},dataset:{},attributes:{},children:[],value:'',
-  classList:{values:new Set(),toggle(key,on){on?this.values.add(key):this.values.delete(key);},contains(key){return this.values.has(key);}},
+const makePaletteNode=()=>({style:{},dataset:{},attributes:{},children:[],_value:'',get value(){return this._value;},set value(value){this._value=String(value);},
+  classList:{values:new Set(),toggle(key,on){on?this.values.add(key):this.values.delete(key);},contains(key){return this.values.has(key);},remove(key){this.values.delete(key);}},
   setAttribute(key,value){this.attributes[key]=String(value);},removeAttribute(key){delete this.attributes[key];},
   append(...nodes){this.children.push(...nodes);},remove(){},
   dispatchEvent(){this.onchange?.();},getBoundingClientRect(){return {left:20,bottom:50};},offsetWidth:250,offsetHeight:250});
 let popupNodes,quickClick,paletteObject,paletteSaves=0;
-const paletteQuickBar={addEventListener(_event,handler){quickClick=handler;}};
+const paletteQuickBar={...makePaletteNode(),addEventListener(_event,handler){quickClick=handler;}};
 paletteContext.document={addEventListener(){},body:{append(){}},
   querySelector:selector=>selector==='#selectedObject'?paletteQuickBar:null,
   createElement(tag){
@@ -715,11 +715,117 @@ for(const original of [quickFib,quickChannel]) {
   assert.deepEqual(currentLevels.map(level=>level.alpha),alphaBefore,'color alone must retain mixed opacity');
   number.value='100';number.oninput();
   assert.equal(number.placeholder,'');assert.ok(!range.classList.contains('mixed'));
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),null,'input only previews');
+  number.onchange();
   assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),1);
   click();assert.equal(Number(popupNodes['input[type="number"]'].value),100);
   popupNodes['input[type="number"]'].value='0';popupNodes['input[type="number"]'].oninput();
+  popupNodes['input[type="number"]'].onchange();
   click();assert.equal(Number(popupNodes['input[type="number"]'].value),0,'zero is not a mixed/default value');
 }
+
+// Use the actual shared history functions and undo/redo handlers, not a separate
+// palette history. Both typing digits and dragging are one committed gesture.
+const historyHandlers={},historyElements=new Map();
+paletteContext.document.querySelector=selector=>{
+  if(selector==='#selectedObject')return paletteQuickBar;
+  if(!historyElements.has(selector))historyElements.set(selector,{...makePaletteNode(),
+    addEventListener(_event,handler){historyHandlers[selector]=handler;}});
+  return historyElements.get(selector);
+};
+Object.assign(paletteContext,{objectSettingsSnapshot:null,objectSettingsHistory:null,
+  userObjects:[],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[],indicatorSettings:{},
+  chartCoordinates:{capture(){}},bars:context.bars,activeTimeframeUnit:'daily',
+  calculateEma(){},syncWorkspaceControls(){},updateObjectTree(){},showToast(){}});
+vm.runInContext(['rememberObjects','restoreIndicatorSettings','updateUndoButtons'].map(extract).join('\n'),paletteContext);
+const undoStart=source.indexOf("document.querySelector('#undoAction').addEventListener");
+vm.runInContext(source.slice(undoStart,source.indexOf('\nfunction applyProductionContext',undoStart)),paletteContext);
+const oldPreview=context.window.previewDrawingForRender;
+context.window.previewDrawingForRender=paletteContext.window.previewDrawingForRender;
+for(const [original,control] of [[quickFib,'lineColor'],[quickChannel,'lineColor'],
+  [{...makeQuickObject('long'),position_version:1,stop:15},'targetColor'],
+  [{...makeQuickObject('short'),position_version:1,stop:25},'stopColor']]) {
+  paletteContext.closeChartColorPicker();paletteObject=structuredClone(original);
+  if(paletteObject.type==='fib')paletteObject.fibLevels[0].alpha=.12;
+  if(paletteObject.type==='channel')paletteObject.channelLevels[0].alpha=.12;
+  const before=JSON.stringify(paletteObject),savesBefore=paletteSaves;
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const button=makePaletteNode();button.dataset.quickControl=control;
+  quickClick({target:{closest:()=>button},stopPropagation(){}});
+  const number=popupNodes['input[type="number"]'];
+  number.value='6';number.oninput();number.value='65';number.oninput();
+  assert.equal(JSON.stringify(paletteObject),before,'intermediate digits never enter canonical drawings');
+  assert.equal(paletteContext.undoStack.length,0);assert.equal(paletteSaves,savesBefore);
+  const preview=paletteContext.window.previewDrawingForRender(paletteObject);
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(preview,control),.65);
+  paths=[];regionFills.length=0;context.drawUserObject(ctx,view,paletteObject);
+  assert.ok((['long','short'].includes(paletteObject.type)?regionFills:paths).some(p=>p.alpha===.65),'actual renderer shows the draft');
+  number.onchange();number.onblur();number.onchange();
+  assert.equal(paletteContext.undoStack.length,1);assert.equal(paletteSaves,savesBefore+1,'change/blur cannot save twice');
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,control),.65);
+  historyHandlers['#undoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(JSON.stringify(paletteObject),before,'one undo restores the entire original mixed/legacy state');
+  historyHandlers['#redoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,control),.65,'one redo restores 65%, not 6%');
+}
+context.window.previewDrawingForRender=oldPreview;
+
+for(const finish of ['blur','Enter','flush','slider']) {
+  paletteContext.closeChartColorPicker();paletteObject=makeQuickObject('trend');
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const button=makePaletteNode();button.dataset.quickControl='lineColor';
+  quickClick({target:{closest:()=>button},stopPropagation(){}});
+  const control=popupNodes[finish==='slider'?'input[type="range"]':'input[type="number"]'],saved=paletteSaves;
+  control.value='6';control.oninput();control.value='65';control.oninput();
+  if(finish==='Enter')control.onkeydown({key:'Enter',preventDefault(){},stopPropagation(){}});
+  else if(finish==='flush')paletteContext.window.flushChartColorEditor();
+  else if(finish==='slider')control.onchange();else control.onblur();
+  paletteContext.window.flushChartColorEditor();
+  assert.equal(paletteContext.undoStack.length,1,finish+' commits one history step');
+  assert.equal(paletteSaves,saved+1,finish+' persists once');
+}
+for(const finalValue of ['100','','105']) {
+  paletteContext.closeChartColorPicker();paletteObject=makeQuickObject('trend');
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const before=JSON.stringify(paletteObject),saved=paletteSaves,button=makePaletteNode();button.dataset.quickControl='lineColor';
+  quickClick({target:{closest:()=>button},stopPropagation(){}});
+  const number=popupNodes['input[type="number"]'];number.value='6';number.oninput();
+  number.value=finalValue;number.oninput();number.onblur();
+  assert.equal(JSON.stringify(paletteObject),before,'returning to baseline or invalid input leaves the model intact');
+  assert.equal(paletteContext.undoStack.length,0);assert.equal(paletteSaves,saved);
+}
+paletteContext.closeChartColorPicker();paletteObject=makeQuickObject('trend');
+Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+const repeatedButton=makePaletteNode();repeatedButton.dataset.quickControl='lineColor';
+quickClick({target:{closest:()=>repeatedButton},stopPropagation(){}});
+const repeatedNumber=popupNodes['input[type="number"]'];
+for(const value of ['65','100']){repeatedNumber.value=value;repeatedNumber.oninput();repeatedNumber.onkeydown({key:'Enter',preventDefault(){},stopPropagation(){}});}
+assert.equal(paletteContext.undoStack.length,2,'two explicitly finished edits in one popup stay distinct');
+assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),1);
+// The complete-settings palette uses the same edit boundary for an individual level.
+for(const original of [quickFib,quickChannel]) {
+  paletteContext.closeChartColorPicker();paletteObject=structuredClone(original);
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const before=JSON.stringify(paletteObject),saved=paletteSaves,input=makePaletteNode();input.type='color';
+  const index=paletteObject.type==='fib'?0:3,key=paletteObject.type==='fib'?'fibLevels':'channelLevels';
+  if(paletteObject.type==='fib')input.dataset.fibLevelColor=String(index);
+  else {input.dataset.channelField='color';input.closest=()=>({dataset:{channelIndex:String(index)}});}
+  paletteContext.window.openChartColorPicker(input,input,paletteObject);
+  const number=popupNodes['input[type="number"]'];number.value='6';number.oninput();number.value='65';number.oninput();
+  assert.equal(JSON.stringify(paletteObject),before);
+  assert.equal(paletteContext.window.previewDrawingForRender(paletteObject)[key][index].alpha,.65);
+  number.onchange();number.onblur();
+  assert.equal(paletteContext.undoStack.length,1);assert.equal(paletteSaves,saved+1);
+  historyHandlers['#undoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(JSON.stringify(paletteObject),before);
+  historyHandlers['#redoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(paletteObject[key][index].alpha,.65);
+}
+// Close/context-switch flushing must finish the palette before returning the save chain.
+let colorFlushes=0;const closeSaveContext=vm.createContext({window:{flushChartColorEditor(){colorFlushes++;}},
+  bridgeSaveFailed:false,bridgeSaveChain:Promise.resolve()});
+vm.runInContext(extract('savePrototypeState'),closeSaveContext);
+closeSaveContext.savePrototypeState(true);assert.equal(colorFlushes,1);
 // The snapshot consumed by Python below is the same edited object shape the page saves.
 if(process.env.APLUS_QUICKBAR_SNAPSHOT)fs.writeFileSync(process.env.APLUS_QUICKBAR_SNAPSHOT,
   JSON.stringify([quickFib,quickChannel,translucent,...quickEditedObjects]));

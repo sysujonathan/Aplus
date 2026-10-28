@@ -2,6 +2,10 @@
 const chartPaletteColors = ["#ffffff","#dbdbdb","#b8b8b8","#9c9c9c","#808080","#636363","#4a4a4a","#2e2e2e","#0f0f0f","#000000","#f23645","#ff9800","#ffeb3b","#4caf50","#089981","#00bcd4","#2962ff","#673ab7","#9c27b0","#e91e63","#fccbcd","#ffe0b2","#fff9c4","#c8e6c9","#ace5dc","#b2ebf2","#bbd9fb","#d1c4e9","#e1bee7","#f8bbd0","#faa1a4","#ffcc80","#fff59d","#a5d6a7","#70ccbd","#80deea","#90bff9","#b39ddb","#ce93d8","#f48fb1","#f77c80","#ffb74d","#fff176","#81c784","#42bda8","#4dd0e1","#5b9cf6","#9575cd","#ba68c8","#f06292","#f7525f","#ffa726","#ffee58","#66bb6a","#22ab94","#26c6da","#3179f5","#7e57c2","#ab47bc","#ec407a","#b22833","#f57c00","#fbc02d","#388e3c","#056656","#0097a7","#1848cc","#512da8","#7b1fa2","#c2185b","#801922","#e65100","#f57f17","#1b5e20","#00332a","#006064","#0c3299","#311b92","#4a148c","#880e4f"];
 let chartColorPopup = null;
 let chartPopupAnchor = null;
+let chartOpacityEdit = null;
+// A typing/dragging preview never enters the canonical objects, undo stack or Store.
+window.previewDrawingForRender = object => chartOpacityEdit?.object===object?chartOpacityEdit.draft:object;
+window.flushChartColorEditor = () => chartOpacityEdit?.finish();
 const chartCustomColors = [];
 function chartHexFromHsv(h,s,v) {
   const chroma=v*s,part=((h%360)+360)%360/60,x=chroma*(1-Math.abs(part%2-1)),base=v-chroma;
@@ -39,7 +43,7 @@ function showChartCustomColorEditor(popup,input,accept) {
   hex.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();add();}};
   refresh();
 }
-function closeChartColorPicker() { chartColorPopup?.remove(); chartColorPopup = null; chartPopupAnchor = null; }
+function closeChartColorPicker() { window.flushChartColorEditor();chartColorPopup?.remove(); chartColorPopup = null; chartPopupAnchor = null; }
 function appendChartStrokeChoices(popup, object, key, closeOnChoice = false) {
   const width = key==='width'||key.endsWith('Width');
   const group = document.createElement('div');group.className = 'stroke-choice-group';
@@ -52,6 +56,7 @@ function appendChartStrokeChoices(popup, object, key, closeOnChoice = false) {
     line.style.borderTopWidth=(width?value:1)+'px';line.style.borderTopStyle=width?'solid':value;button.append(line);
     if(!width){const text=document.createElement('span');text.textContent=label;button.append(text);}
     button.onclick=()=>{
+      window.flushChartColorEditor();
       rememberObjects();object[key]=value;savePrototypeState();renderWorkspace('overlay');refreshFibStylePreviews(objectAtSelection());
       group.querySelectorAll('button').forEach(choice=>choice.setAttribute('aria-pressed',String(choice===button)));
       if(closeOnChoice)closeChartColorPicker();
@@ -93,6 +98,7 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null, opt
     '<label class="color-alpha-row">不透明度<input aria-label="颜色不透明度" type="range" min="0" max="100"><input aria-label="不透明度百分比" type="number" min="0" max="100">%</label>';
   const applyColor = color => {
     if(!/^#[0-9a-f]{6}$/i.test(color)){showToast('颜色格式为 #RRGGBB');return;}
+    window.flushChartColorEditor();
     input.value=color;input.dispatchEvent(new Event('change',{bubbles:true}));
     popup.querySelectorAll('[data-swatch]').forEach(button=>button.classList.toggle('selected',button.dataset.swatch===color.toLowerCase()));
   };
@@ -101,7 +107,7 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null, opt
     button.dataset.swatch=color;button.style.background=color;button.classList.toggle('selected',color===input.value.toLowerCase());
     button.onclick=()=>applyColor(color);popup.querySelector(index<chartPaletteColors.length?'.chart-color-grid':'.chart-custom-swatches').append(button);
   });
-  popup.querySelector('.custom-color-add').onclick=()=>{showChartCustomColorEditor(popup,input,color=>{applyColor(color);window.openChartColorPicker(input,anchor,objectOverride,options);});positionChartPicker(popup,anchor);};
+  popup.querySelector('.custom-color-add').onclick=()=>{window.flushChartColorEditor();showChartCustomColorEditor(popup,input,color=>{applyColor(color);window.openChartColorPicker(input,anchor,objectOverride,options);});positionChartPicker(popup,anchor);};
   const range=popup.querySelector('input[type="range"]'),number=popup.querySelector('input[type="number"]');
   const displayAlpha = percent => {
     const mixed=percent===null;
@@ -113,24 +119,51 @@ window.openChartColorPicker = (input, anchor = input, objectOverride = null, opt
     else range.removeAttribute('aria-valuetext');
   };
   displayAlpha(alpha===null?null:Math.round(alpha*100));
-  const applyAlpha = control => {
-    if(control.value.trim()==='')return;
-    const value=Number(control.value);if(!Number.isFinite(value)||value<0||value>100)return;
-    displayAlpha(value);
-    if(options.onAlphaChange){options.onAlphaChange(value/100);return;}
-    if(isEma) return; // EMA modal changes apply on confirmation below.
-    if(!object)return;
+  const assignAlpha = (target,value) => {
+    const targetLevel=level?(object.type==='fib'?target.fibLevels:target.channelLevels)[
+      (object.type==='fib'?object.fibLevels:object.channelLevels).indexOf(level)]:null;
+    window.AplusDrawingQuickbar?.materializeOpacity(target);
+    if(target.type==='fib' && key==='fibSingleColor')assignFibUniformAlpha(target,value);
+    else if(targetLevel){if(target.type==='fib')materializeFibUniformColor(target);targetLevel.alpha=value;}
+    else target[alphaKey]=value;
+  };
+  const commitAlpha = value => {
+    if(options.onAlphaChange)return options.onAlphaChange(value/100);
     const previous=window.AplusDrawingQuickbar ? window.AplusDrawingQuickbar.alphaFor(object,alphaKey,level)
       : level?.alpha ?? object[alphaKey] ?? 1;
-    if(previous===value/100 && !(object.type==='fib' && key==='fibSingleColor' && object.fibLevels.some(item=>(item.alpha??1)!==value/100)))return;
-    rememberObjects();
-    window.AplusDrawingQuickbar?.materializeOpacity(object);
-    if(object.type==='fib' && key==='fibSingleColor')assignFibUniformAlpha(object,value/100);
-    else if(level){if(object.type==='fib')materializeFibUniformColor(object);level.alpha=value/100;}
-    else object[alphaKey]=value/100;
+    if(previous===value/100 && !(object.type==='fib' && key==='fibSingleColor' && object.fibLevels.some(item=>(item.alpha??1)!==value/100)))return false;
+    rememberObjects();assignAlpha(object,value/100);
     savePrototypeState();renderWorkspace('overlay');
+    return true;
   };
-  range.onchange=()=>applyAlpha(range);number.oninput=number.onchange=()=>applyAlpha(number);
+  const finishAlpha = () => {
+    if(chartOpacityEdit?.popup!==popup)return;
+    const value=chartOpacityEdit.value;
+    chartOpacityEdit=null; // Clear before commit/save/render to prevent reentrant commits.
+    if(!commitAlpha(value))renderWorkspace('overlay');
+  };
+  const previewAlpha = control => {
+    const value=Number(control.value);
+    if(control.value.trim()===''||!Number.isFinite(value)||value<0||value>100){
+      if(chartOpacityEdit?.popup===popup){chartOpacityEdit=null;renderWorkspace('overlay');}return;
+    }
+    displayAlpha(value);if(!object)return;
+    // Read the committed value afresh: Enter may finish one edit while the same
+    // popup stays open for another. Returning to it creates no history or save.
+    const currentAlpha=typeof options.alpha==='function'?options.alpha():
+      window.AplusDrawingQuickbar?window.AplusDrawingQuickbar.alphaFor(object,alphaKey,level):level?.alpha??object[alphaKey]??1;
+    if(value/100===currentAlpha && !(object.type==='fib'&&key==='fibSingleColor'&&object.fibLevels.some(item=>(item.alpha??1)!==value/100))){
+      if(chartOpacityEdit?.popup===popup){chartOpacityEdit=null;renderWorkspace('overlay');}return;
+    }
+    const draft=options.onAlphaPreview?options.onAlphaPreview(value/100):structuredClone(object);
+    if(!draft)return;
+    if(!options.onAlphaPreview)assignAlpha(draft,value/100);
+    chartOpacityEdit={object,draft,popup,value,finish:finishAlpha};renderWorkspace('overlay');
+  };
+  range.oninput=()=>previewAlpha(range);number.oninput=()=>previewAlpha(number);
+  range.onchange=()=>{previewAlpha(range);finishAlpha();};number.onchange=()=>{previewAlpha(number);finishAlpha();};
+  range.onblur=number.onblur=finishAlpha;
+  number.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();event.stopPropagation();finishAlpha();number.blur?.();}};
   if(isEma){range.onchange=number.oninput=number.onchange=event=>{
     const value=Number(event.target.value);if(!Number.isFinite(value)||value<0||value>100)return;
     range.value=number.value=value;document.querySelector('#emaModal').dataset[emaAlphaField]=String(value/100);
@@ -145,6 +178,9 @@ document.addEventListener('click', event => {
   const input=event.target.closest('input[type="color"]');
   if(input&&!input.disabled){event.preventDefault();window.openChartColorPicker(input);}
   else if(chartColorPopup&&!chartColorPopup.contains(event.target))closeChartColorPicker();
+},true);
+document.addEventListener('pointerdown',event=>{
+  if(chartColorPopup&&!chartColorPopup.contains(event.target))closeChartColorPicker();
 },true);
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape' && chartColorPopup){event.preventDefault();event.stopPropagation();closeChartColorPicker();}

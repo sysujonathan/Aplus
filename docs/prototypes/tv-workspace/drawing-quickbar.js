@@ -162,11 +162,12 @@ function syncDrawingQuickbar(object) {
   });
 }
 function commitQuickDrawingStyle(object, control, value, alpha=false) {
-  if(objectAtSelection()!==object)return;
+  if(objectAtSelection()!==object)return false;
   // Validate on a copy first: invalid edits must not consume an undo step.
   const draft=structuredClone(object);
-  if(!drawingQuickbar.apply(draft,control,value,alpha)||JSON.stringify(draft)===JSON.stringify(object))return;
+  if(!drawingQuickbar.apply(draft,control,value,alpha)||JSON.stringify(draft)===JSON.stringify(object))return false;
   rememberObjects();Object.assign(object,draft);savePrototypeState();renderWorkspace('overlay');
+  return true;
 }
 function openDrawingQuickChoice(control,anchor) {
   const object=objectAtSelection();if(!object)return;
@@ -192,6 +193,7 @@ document.querySelector('#selectedObject').addEventListener('click',event=>{
   input.onchange=()=>commitQuickDrawingStyle(object,control,input.value);
   window.openChartColorPicker(input,button,object,{
     alpha:()=>drawingQuickbar.opacity(object,control),
+    onAlphaPreview:value=>{const draft=structuredClone(object);return drawingQuickbar.apply(draft,control,value,true)?draft:null;},
     onAlphaChange:value=>commitQuickDrawingStyle(object,control,value,true)
   });
 });

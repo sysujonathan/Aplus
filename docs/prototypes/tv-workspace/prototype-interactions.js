@@ -151,6 +151,7 @@ function loadPrototypeState() {
 
 function savePrototypeState(flushOnly = false) {
   try {
+    if(flushOnly)window.flushChartColorEditor?.();
     if (flushOnly && typeof viewSaveTimer !== 'undefined' && viewSaveTimer !== null) {
       clearTimeout(viewSaveTimer); viewSaveTimer = null; flushOnly = false;
     }
@@ -706,6 +707,7 @@ function drawReplayBoundary(ctx, view) {
 }
 
 function drawUserObject(ctx, view, object, draft = false) {
+  object=window.previewDrawingForRender?.(object)||object;
   if (!object || !object.a) return;
   const { left, width, right, top, height, bottom, y, xGlobal } = view;
   const plotRight = width - right;
