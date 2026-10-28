@@ -576,7 +576,8 @@ def test_failed_postflight_restores_old_code_not_data(repo, tmp_path):
     with pytest.raises(v.UpdateError, match='回到旧代码'):
         v.apply_update(root, plan, tmp_path/'backup.zip', sys.executable, api=api_for(target), smoke=smoke)
     assert git(root, 'rev-parse', 'HEAD') == old
-    assert git(root, 'branch', '--show-current') == ''
+    assert git(root, 'branch', '--show-current') == 'main'
+    assert plan_for(repo)['can_update']
 
 
 @pytest.mark.parametrize('changed', ['local', 'main', 'ci'])
@@ -964,6 +965,7 @@ def test_worker_timeout_persists_unfinished_transaction_and_keeps_gate(repo, tmp
         'python': sys.executable, 'database': {'changed': False}}))
     monkeypatch.setattr(v.subprocess, 'Popen', Mock(return_value=SimpleNamespace(pid=777, poll=lambda: None)))
     stamps = iter([0, 100])
+    monkeypatch.setattr(v, 'supervise_delayed_start', Mock(return_value=None))
     monkeypatch.setattr(v.time, 'monotonic', lambda: next(stamps))
     recover = Mock()
     monkeypatch.setattr(v, 'recover_transaction', recover)

@@ -101,8 +101,20 @@ for width in (620,820,1200):
 rule=text._release_rules[0]
 text.see(str(rule)); dialog.update()
 assert rule.winfo_ismapped()
+# Finish Text's asynchronous height calculation after the three resizes.
+# A queued wheel event can otherwise normalize the estimated total height at
+# the same time it scrolls, making the yview fraction an unstable oracle.
+text.tk.call(text._w,'count','-update','-ypixels','1.0','end')
+dialog.update_idletasks()
 before=text.yview()[0]
+assert text.yview()[1]<1.0
 rule.event_generate('<MouseWheel>',delta=-120,when='tail'); dialog.update()
+assert text.yview()[0]>before
+# The actual one-pixel child under the pointer must scroll as well.
+text.see(str(rule)); dialog.update()
+text.tk.call(text._w,'count','-update','-ypixels','1.0','end')
+before=text.yview()[0]
+rule.winfo_children()[0].event_generate('<MouseWheel>',delta=-120,when='tail'); dialog.update()
 assert text.yview()[0]>before
 w.destroy()
 ''', scaling)

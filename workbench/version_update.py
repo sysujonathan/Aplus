@@ -183,7 +183,10 @@ def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    with temporary.open("w", encoding="utf-8") as output:
+        json.dump(value, output, ensure_ascii=False)
+        output.flush()
+        os.fsync(output.fileno())
     os.replace(temporary, path)
 
 
@@ -488,22 +491,25 @@ def installation_plan(root, current, target, changed, store_compatible=True):
             raise ManualUpdateError("新版数据结构变化但缺少自动迁移清单，正式数据未打开。", "data")
         return {"protocol": INSTALLATION_PROTOCOL, "environment_changed": False,
                 "database_changed": False}
-    environment_changed = dependency_changed and (
-        source_contract is None
-        or source_contract["environment_id"] != target_contract["environment_id"]
+    environment_changed = (source_contract is None and dependency_changed) or (
+        source_contract is not None and any(source_contract[key] != target_contract[key]
+            for key in ("python", "environment_id", "requirements_sha256", "requirements_hashes_sha256"))
     )
     if dependency_changed and target_contract["requirements_hashes_sha256"] is None:
         raise ManualUpdateError(
             "正式版依赖变化但缺少逐包哈希锁定清单，旧环境保持可用。", "dependencies"
         )
     running_python = f"{sys.version_info.major}.{sys.version_info.minor}"
-    if environment_changed and target_contract["python"] != running_python:
+    if target_contract["python"] != running_python:
         raise ManualUpdateError(
             f"正式版需要 Python {target_contract['python']}；当前更新助手只使用已验收的 {running_python} 运行时。",
             "python",
         )
-    database_changed = store_compatible is False
     source_schema = (source_contract or {}).get("database", {}).get("schema")
+    target_schema = target_contract["database"]["schema"]
+    if source_schema is not None and target_schema < source_schema:
+        raise ManualUpdateError("正式版未允许数据库降级，已保留旧版本。", "data")
+    database_changed = store_compatible is False or (source_schema is not None and source_schema != target_schema)
     if database_changed:
         if source_schema is None or source_schema not in target_contract["database"]["supported_from"]:
             raise ManualUpdateError("正式版未声明支持当前数据库版本，未打开或改写正式数据。", "data")
@@ -1003,6 +1009,7 @@ def _database_state(path, data_root=None, fact_columns=None):
     data_root = Path(data_root or path.parent)
     with contextlib.closing(sqlite3.connect(
             f"file:{path.as_posix()}?mode=ro", uri=True)) as db:
+        db.execute("BEGIN")
         if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise UpdateError("数据库完整性检查失败，未继续自动迁移。")
         if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
@@ -1018,8 +1025,16 @@ def _database_state(path, data_root=None, fact_columns=None):
         facts = {name: _table_facts(db, name, (fact_columns or {}).get(name))
                  for name in PROTECTED_FACT_TABLES if name in tables}
         external = _dataset_files(db, data_root)
+        # Read through SQLite, including committed WAL pages. A main-file hash
+        # alone cannot certify that the database has not received new writes.
+        logical = {name: _table_facts(db, name) for name in sorted(tables)
+                   if not name.startswith("sqlite_")}
+        definitions = sorted(db.execute(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall())
+        logical_sha = hashlib.sha256(json.dumps(
+            [definitions, logical], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return {"schema": schema, "counts": counts, "objects": objects, "facts": facts,
-            "external": external, "sha256": _digest(path)}
+            "external": external, "sha256": _digest(path), "logical_sha256": logical_sha}
 
 
 def _migration_boundary(state):
@@ -1049,20 +1064,22 @@ def _run_store_migration(code, python, runtime):
 
 
 def prepare_database_migration(stage, target_python, runtime, folder, contract, on_stage=None):
-    if not contract.get("database_changed"):
-        return {"changed": False}
     runtime = Path(runtime).resolve()
     database = runtime / "workbench.sqlite3"
     if not database.exists():
         return {"changed": False, "schema_before": None,
                 "schema_after": contract.get("target_schema"), "backup": None}
     before = _database_state(database, runtime)
-    if before["schema"] != contract.get("source_schema"):
+    expected_schema = contract.get("source_schema") or contract.get("target_schema")
+    if expected_schema is not None and before["schema"] != expected_schema:
         raise UpdateError("正式数据库版本与迁移计划不一致，未改写数据。")
+    if not contract.get("database_changed"):
+        return {"changed": False}
     backup = Path(folder) / "workbench-before.sqlite3"
     _sqlite_snapshot(database, backup)
     transaction = {"changed": True, "database": str(database), "backup": str(backup),
                    "backup_sha256": _digest(backup), "pre_migration_sha256": before["sha256"],
+                   "pre_logical_sha256": before["logical_sha256"],
                    "schema_before": before["schema"], "schema_after": contract.get("target_schema"),
                    "before_boundary": _migration_boundary(before)}
     if on_stage:
@@ -1091,6 +1108,7 @@ def migrate_formal_database(root, target_python, runtime, transaction):
     if _migration_boundary(after) != transaction.get("trial_boundary"):
         raise UpdateError("正式数据库迁移结果与副本演练不一致。")
     transaction["post_migration_sha256"] = after["sha256"]
+    transaction["post_logical_sha256"] = after["logical_sha256"]
     return transaction
 
 
@@ -1102,7 +1120,15 @@ def restore_database(transaction, expected_current=None):
     if not backup.is_file() or _digest(backup) != transaction["backup_sha256"]:
         raise UpdateError("数据库备份校验失败，不能自动回退；请保留现场并联系维护者。")
     current = _digest(database)
-    if expected_current is not None and current not in set(expected_current):
+    if transaction.get("post_logical_sha256"):
+        if _database_state(database)["logical_sha256"] != transaction["post_logical_sha256"]:
+            raise UpdateError("数据库在新版开放后又有写入，不能自动覆盖新增交易记录。")
+    elif any(database.with_name(database.name + suffix).exists() and
+             database.with_name(database.name + suffix).stat().st_size
+             for suffix in ("-wal", "-journal")):
+        raise UpdateError("数据库存在未核验的附属日志，不能自动覆盖新增交易记录。")
+    if (not transaction.get("post_logical_sha256") and expected_current is not None
+            and current not in set(expected_current)):
         raise UpdateError("数据库在新版开放后又有写入，不能自动覆盖新增交易记录。")
     temporary = database.with_name(database.name + ".restore-" + uuid.uuid4().hex)
     shutil.copy2(backup, temporary)
@@ -1226,10 +1252,20 @@ def _reconcile_interrupted_changes(root, request, transaction):
         raise UpdateError("更新中断后的代码版本无法识别，已阻止启动。")
     database = transaction.get("database") or {"changed": False}
     if database.get("changed") and Path(database.get("database", "")).is_file():
-        current = _digest(database["database"])
-        if current == database.get("backup_sha256"):
+        state_now = _database_state(database["database"], request_payload["runtime"])
+        current = state_now["sha256"]
+        logical = state_now["logical_sha256"]
+        if database.get("post_logical_sha256") and logical not in {
+                database["post_logical_sha256"], database.get("pre_logical_sha256")}:
+            raise UpdateError("数据库逻辑内容已发生未知写入，已阻止自动覆盖。")
+        has_logical = bool(database.get("pre_logical_sha256") or database.get("post_logical_sha256"))
+        if (not has_logical and any(Path(str(database["database"]) + suffix).exists() and
+                Path(str(database["database"]) + suffix).stat().st_size
+                for suffix in ("-wal", "-journal"))):
+            raise UpdateError("数据库存在未知附属日志，已阻止自动恢复。")
+        if logical == database.get("pre_logical_sha256") or (not has_logical and current == database.get("backup_sha256")):
             transaction = _persist_transaction(request, database_changed=False)
-        elif current == database.get("post_migration_sha256"):
+        elif logical == database.get("post_logical_sha256") or (not has_logical and current == database.get("post_migration_sha256")):
             transaction = _persist_transaction(request, database_changed=True)
         elif transaction.get("phase") == "database_migrating" and database.get("trial_boundary"):
             columns = {name: fact["columns"]
@@ -1237,6 +1273,7 @@ def _reconcile_interrupted_changes(root, request, transaction):
             state = _database_state(database["database"], request_payload["runtime"], columns)
             if _migration_boundary(state) == database["trial_boundary"]:
                 database["post_migration_sha256"] = state["sha256"]
+                database["post_logical_sha256"] = state["logical_sha256"]
                 transaction = _persist_transaction(request, database=database, database_changed=True)
             elif current == database.get("pre_migration_sha256"):
                 transaction = _persist_transaction(request, database_changed=False)
@@ -1363,7 +1400,7 @@ def apply_update(root, plan, backup, python, api=github_json, smoke=probe,
                 root, stage, plan, python, smoke=smoke, on_stage=on_stage
             )
             contract = plan.get("installation") or {}
-            if contract.get("database_changed"):
+            if runtime is not None:
                 if runtime is None:
                     raise UpdateError("数据库迁移缺少运行目录，正式库未改写。")
                 database_transaction = prepare_database_migration(
@@ -1427,7 +1464,7 @@ def rollback(root, target, old, old_branch=None, payloads=None):
     payloads = payloads if payloads is not None else _preserved_payloads(root, local)
     _clean_preserved(root, target, payloads)
     try:
-        if old_branch and MANAGED_RELEASE_BRANCH.fullmatch(old_branch):
+        if old_branch and (old_branch == "main" or MANAGED_RELEASE_BRANCH.fullmatch(old_branch)):
             branch_head = run_git(root, "rev-parse", f"refs/heads/{old_branch}")
             if branch_head == target:
                 # A normal main checkout is fast-forwarded by the installer.  Move
@@ -1586,6 +1623,17 @@ def verify_maintenance_data(request):
         raise UpdateError('运行数据在升级期间发生变化，请停止其他程序后核对；未回退或删除数据。')
 
 
+def supervise_delayed_start(request_path, launched, timeout=300):
+    """Bounded supervision after the visible startup deadline; never kill a writer."""
+    deadline = time.monotonic() + timeout
+    ack = Path(request_path).parent / "started.json"
+    while time.monotonic() < deadline and launched.poll() is None and not ack.exists():
+        time.sleep(.2)
+    if ack.exists() or launched.poll() is not None:
+        return recover_transaction(request_path)
+    return None
+
+
 def worker(request_path):
     request_path = Path(request_path).resolve()
     folder = request_path.parent
@@ -1671,6 +1719,10 @@ def worker(request_path):
             result = {"state": "startup_unconfirmed",
                       "message": "新版进程仍在启动确认中；下次启动会继续确认，期间不会混用旧环境。"}
             _write_receipt(request_path, transaction, result["message"])
+            outcome = supervise_delayed_start(request_path, launched)
+            if outcome:
+                transaction = outcome["transaction"]
+                result = {"state": transaction["phase"], "message": "延迟启动确认已安全收尾。"}
         else:
             raise UpdateError("新版桌面在确认前退出，正在恢复上一组版本。")
     except Exception as exc:
