@@ -157,15 +157,22 @@ BO、H1、H2、MM low 和 Gap Floor 的文字及引线继续使用灰白中性�
 
 ### 线色、线型与区间（目标参数）
 
-以下以 CSS 逻辑像素为基准。结构注释统一中性灰白；价位可按角色着色，文字、线型必须独立可辨。行情沿用既有主题，不能给 K 线换色来迁就标注。
+以下以 CSS 逻辑像素为基准。**全部策略采用同一角色色表，不再按策略单独配色。** 结构注释统一中性灰白，Entry、SL、TP 按角色固定；颜色、文字、线型共同表达，不允许换一个策略就改变同一角色的颜色。以下为待人工评估的目标样式，未改生产代码。行情沿用既有主题，不能给 K 线换色来迁就标注。
 
 | 角色 | 目标颜色／线型 | 范围与文字 |
 |---|---|---|
 | 结构标签、锚点、引线 | `#CBD5E1`；引线 0.9–1px 实线 | 引线只连接标签与真实节点，不连成未经输出的“趋势证明线” |
+| leg／趋势线／Gap／Floor | `#CBD5E1`；分别为有限实线段／虚线／无填充虚线框／细实线 | 详见几何表；方向用箭头、类型用短词，不用红绿表示涨跌腿 |
+| MM 锚点／测量段／投影段 | `#CBD5E1`；节点空心圆、测量点线＋端点刻度、投影虚线 | 这是结构测量；只有实际计划把其定为正式 TP 时，目标水平线才用 TP 沙金 |
+| signal／Trig／fill／exit | `#CBD5E1`；保留策略专属信号形状，触发为空心三角、买卖成交为实心上／下三角 | 依赖短词和模拟／实盘来源区分；不以 Entry 青绿给信号或买点染色 |
 | Entry | `#089981` 青绿；1px，点线 `[2,4]` | `Entry 价格`；仅代表计划价，不能以此标成交 |
 | SL | `#F23645` 红；1px，虚线 `[6,4]` | `SL 价格`；不能把 GAP 的 SL1 改名搬入 MTR |
 | TP1 | `#D6B86A` 沙金；1px，点划线 `[8,3,2,3]` | `TP1 价格`；不与橙色 EMA 混称，必须保留线型与标签 |
-| 结构参考价／研究候选价 | `#9BA7B4`；0.8px，疏点线 `[1,5]` | 明写 `参考` 或 `研究候选`；只有该策略实际提供时才画 |
+| 结构参考价／MM参考／SL1参考 | `#9BA7B4`；0.8px，疏点线 `[1,5]` | 只是结构参考、未成为当前正式计划的价位；明写 `参考`，不因名字含 SL1 或 MM 就自动变成红／金 |
+| 研究／PA参考／历史的 Entry、SL、TP 价格 | 仍用对应的青绿／红／沙金；0.8px，疏点线 `[1,5]` | 明写 `[研]`、`参考` 或 `历史`；研究候选 C 止损也是 SL 角色，不另给紫色。结构 MM 参考不属于此项 |
+| 历史信号／未确认／失效／过期 | 历史信号保留原中性形状、小尺寸，符号约 0.45 透明度；状态文字 `#9BA7B4` | 不增设红黄绿状态色；失效不等于亏损，未确认不等于计算失败；文字不随符号降至不可读透明度 |
+
+同一个价格承担两个角色时只画一条几何线，正式计划角色在其作用区间优先着色，结构名称以中性文字保留（如 `SL · Floor`，详情说明同价）。TP2 等多目标沿用 TP 色，编号与数值分别标明；MM 参考价与正式 2R 目标必须分开，不能一律涂沙金。TV K 线继续上涨白 `#FFFFFF`、下跌蓝 `#2962FF`、EMA 橙 `#FF9800`；兼容静态路径的已有涨跌／EMA 主题及用户设置保持不变，本轮只统一策略注释的角色色。
 
 价位线从选中机会的已知计划生效日期起，画到已知失效／结束时点与当前视口右端中较早者，禁止从全图最左边穿过无关历史。若没有计划有效期证据，只画从选中信号到当前视口右端的**显示参考区间**，详情标“有效期未核验”，不得暗示一直有效或补造终止日期。起点或价位缺失则省略该线并解释；不把结构低点当 Entry。离开视口的价位可在详情列出，不为强塞全部目标而过度压扁 K 线。
 
@@ -239,6 +246,54 @@ BO、H1、H2、MM low 和 Gap Floor 的文字及引线继续使用灰白中性�
 | 窄图与导出 | `_gap_label()` 有渲染时实测框和边界适配 | 借其避让方法，增加全部 MTR 标签／计划价的互相避让；不声称现成全局排版器已存在 |
 
 “当前规则”写策略版本及原输出；“PA 解释”只放释义；“研究候选”在详情／图例明示并与正式价分开。更换图形样式是展示设计，不构成策略规则升级或候选条件已获验证。
+
+<a id="six-daily-previews"></a>
+
+### 六个在用日线策略：映射、覆盖与预览
+
+**本轮范围固定为 6 个在用日线策略，覆盖 6/6。** 以 `core/strategy_registry.py:_OFFICIAL_LIST` 和各类 `get_metadata()` 交叉核对，GitHub 插件复核同一 main；显示名 AIL 对应代码 AWIL。仓库研究项、月线、周线及用户运行仓自定义策略不在此次图稿／验收范围，不读取个人启停状态。抽象基类、MTR 结构／几何引擎不计独立策略。
+
+图稿均为**合成概念 K 线**，只按代码已知角色构造模板，未调用策略函数、未判定命中、未生成交易事件；不是真实行情、没有日期／报价／复权身份，也不是已改造的生产截图。图示截至模板信号 K，右侧只留计划展示区，不虚构随后突破、成交或退出。节点齐全仅说明“证据齐全时如何排版”，不证明任何真实样本具备这些节点；图下列出当前字段缺口。
+
+统一入口：[可缩放图册](assets/strategy-annotations/index.html) · [六图总览 PNG](assets/strategy-annotations/00-overview.png)／[SVG](assets/strategy-annotations/00-overview.svg) · [统一色板 PNG](assets/strategy-annotations/00-palette.png)／[SVG](assets/strategy-annotations/00-palette.svg)。单图 PNG 为 1960×1120，SVG 保留矢量及文字，点击图册图片可放大；总览仅保留核心标签，完整差异看单图与下表。
+
+| 在用日线策略／注册键 | 结构与锚点来源 | 信号／计划／MM 的映射 | 缺失、限制与单图 |
+|---|---|---|---|
+| MTR／`MTR_MASTER` | 信号行 `mtr_{H0,L1,H1,TL}_idx/price`；先从原序列索引转日期再投影，不复用窗口极值近似 | `signal_mtr` 为 S；`entry_price / sl_price / tp1_price / tp2_price` 分别用统一角色色；无原生 MM | H2 为空，不画；TL 与 S 分开。Leg↑1 仅连接 L1→H1 作 PA 阅读辅助，不新增量化条件；TP2 可用，本图只展开 TP1。[PNG](assets/strategy-annotations/01-mtr.png)／[SVG](assets/strategy-annotations/01-mtr.svg) |
+| 3K／`STRATEGY_3K` | `signal_3k` 锚定 K3，K1／K2 为同组前两根；后续 `signal_3k_gap_test` 为 GT·S。缺口下界为原式 `max(K1 high, prior swing high)`，上界 K3 low | 原始 3K 与 GT 保留不同符号；正式使用 `entry_3k_gap_test / sl_3k_gap_test / tp_3k_gap_test`；`measured_gap_target` 成为该正式 TP 时用沙金 `TP(MM)`，量距锚点仍灰白 | 3K 缺口及 prior swing low 等部分为计算局部变量，须按原组重建日期／几何，不能假称已有完整独立日期列；重建证据不足就不画框／MM low。[PNG](assets/strategy-annotations/02-3k.png)／[SVG](assets/strategy-annotations/02-3k.svg) |
+| GAP H1／`STRATEGY_STRUCTURAL_GAP` | `is_breakout`、`struct_gap_{prior_low,floor_exact,top_exact}` 与同组原序列；日期辅助列存在时仍须核对 | `signal_struct_gap_confirm` 为 S；`entry_struct_gap / sl_struct_gap / tp_struct_gap`；该策略以有效缺口中点投影生成 TP，标 `TP(MM)`，MM low 仍为测量锚点 | 不新增独立 H2；名称中的 H1 不等于 MTR 的反弹高点 H1。旧通用绘图器显式锚点模式写 H2，不能照搬为本策略语义。[PNG](assets/strategy-annotations/03-gap-h1.png)／[SVG](assets/strategy-annotations/03-gap-h1.svg) |
+| Gap Pinbar／`STRATEGY_GAP_PINBAR` | `is_breakout_gp`、`gap_pinbar_{prior_low,floor_exact,top_exact}`；Pinbar 信号 K 为 PB·S | `signal_gap_pinbar`、`entry_gap_pinbar / sl_gap_pinbar / tp_gap_pinbar`；Floor 与正式 SL 同价时几何合并、保留双角色；`TP(MM)` 为该策略正式目标 | 不强加 H1／H2 序列；日期辅助列可能缺失，需原突破组核验，不用估算低点代替。首次刺 EMA 规则不改变。[PNG](assets/strategy-annotations/04-gap-pinbar.png)／[SVG](assets/strategy-annotations/04-gap-pinbar.svg) |
+| GAP H2／`STRATEGY_GAP_H2` | 冻结输出 `is_breakout_h2`、`gap_h2_{prior_low,floor_exact,top_exact}`；计划适配器提供 `bo_date / h1_date / h2_setup_date / gap_floor_date / mm_low_date` 等 | S 是第二次回调准备；H1 是首腿后的恢复节点，H2／Trig 仅凭明确触发事件画。次日 v2 用 `entry_plan_price / sl_plan_price / tp_plan_price`，青绿 Entry／红 SL／沙金 TP(2R)；SL1／MM 只是参考时灰色 | 冻结／固定价研究仍可用 `entry_gap_h2 / sl_gap_h2 / tp_gap_h2`，其正式 TP(MM) 用沙金；不得把 v2 2R 覆盖到旧口径。图示采用 v2，未画触发／成交。[PNG](assets/strategy-annotations/05-gap-h2.png)／[SVG](assets/strategy-annotations/05-gap-h2.svg) |
+| AIL（AWIL）／`STRATEGY_AWIL` | `signal_awil` 所在 K；`awil_swing_high` 仅提供波段高点价，未提供其日期时用 `SH参考` 水平线，不画一个猜测的高点圆 | H2·S 是本策略两腿回调后恢复的信号，**不等于 GAP H2 的后续触发**；`entry_awil / sl_awil / tp_awil` 映射统一三色，目标是 2R | 没有直接输出 L1／H1／L2 日期，不补这些节点／连腿；没有原生 Gap／MM 不画。原绘图 `sig_pos+.5` 偏移须在以后展示适配时核对中心，本轮未改。[PNG](assets/strategy-annotations/06-ail.png)／[SVG](assets/strategy-annotations/06-ail.svg) |
+
+日期列不是“存在就可信”：缺口策略在 `try` 内生成部分 rolling 日期列，可能因接口不支持而省略；部分 `bars_since_breakout_*` 是分组编号而非距离，不能直接用信号索引减该值算 BO 日期。预览只展现确定有语义依据的模板角色，生产接入必须从同组原行情和归档身份核验精确锚点。
+
+#### 实际绘图入口与特殊适配（同一六策略，不重复计数）
+
+| 场景／代码入口 | 现行绘制路径与目标规范落点 | 本轮证据／边界 |
+|---|---|---|
+| 桌面候选、策略关注、交互主图／多图、兼容窗口 | `chart_panel.py / chart_workspace.py` → `chart_bridge.py:workspace_boot` → `chart_evidence.py` → 实际加载的 `production-controls.js:drawVectorEvidence`；失败回退 `chart_renderer.py` | 6 策略统一角色色与排版目标；目前生产仍是旧样式，未以图稿冒充运行截图 |
+| GAP H2 次日计划及交互专用层 | `prototype-interactions.js:drawStrategyEvidence`；静态为 `h2_chart.py:draw_h2` | 计划 v2 正式 SL／2R 与 SL1／MM 参考分别处理；H2／Trig 要有明确事件，S 不替代触发 |
+| 静态图、Web 研究／候选 | `workbench/dashboard.py`、桌面回退 → `chart_renderer.py` → 原 `annotate_chart()`／`chart_annotations.py`；GAP 三策略调用 `_annotate_gap_strategy()` | 复用同一角色表；3K 原 `annotate_chart` 为基类空实现，专属标记由 GUI 适配；MTR／AIL 的旧锚点近似与偏移仍待以后修正 |
+| H2 事件回放与止损对照研究 | `h2_replay_chart.py:replay_view/render_replay`；`stop_research_chart.py:render_comparison` → 共享 renderer | 保留当时可见边界、v1／v2 口径和 `event_source`；研究 C 用 SL 红＋疏点线＋`[研C]`，不新增独立策略色。本轮不另交研究图、不运行回放 |
+| 持仓／已清仓买卖点 | `closed_trade_chart.py:render_closed_chart` → 共享 renderer，交互桥接传递 `tradeEvents / holdingLevels` | 来源是实际账本或明确参考事件，与策略 S／计划层分开；符号灰白＋模拟／实盘类型文字，不从价格碰线补成交。本轮不打开交易数据、不制作个人交易图 |
+| 手动关注的普通 K 图 | `watch_chart.py:load_chart` → 共享 renderer（无策略参数） | 不强加六策略任何节点；普通图不计成第七个策略 |
+| 快照／导出 | `prototype-interactions.js:cleanSnapshotCanvas`／快照；`chart_snapshot.py` 处理 PNG 剪贴板，静态图走 renderer | 按相同角色色、图例与最终尺寸重排；本轮仅交静态 PNG／SVG 及无脚本本地图册，生产 DPI／窗口交互仍待验收 |
+
+#### 本轮六策略预览验收矩阵
+
+“完成”仅指代码映射、概念图和静态排版，不代表算法命中或生产验收。
+
+| 日线策略 | 字段／语义核对 | 角色色统一 | 有 K 线主体的 PNG／SVG | 短标签测框与人工看图 | 真实信号／生产主图 |
+|---|---|---|---|---|---|
+| MTR | 完成 | 完成 | 完成 | 完成 | 未执行 |
+| 3K | 完成（标明需重建的几何） | 完成 | 完成 | 完成 | 未执行 |
+| GAP H1 | 完成（不套 H2 文案） | 完成 | 完成 | 完成 | 未执行 |
+| Gap Pinbar | 完成（缺日期不估点） | 完成 | 完成 | 完成 | 未执行 |
+| GAP H2 | 完成（v2 与冻结口径分开） | 完成 | 完成 | 完成 | 未执行 |
+| AIL（AWIL） | 完成（缺节点日期不补） | 完成 | 完成 | 完成 | 未执行 |
+
+图稿的角色颜色与覆盖清单见[可机读覆盖记录](assets/strategy-annotations/coverage.json)；本轮没有范围内未覆盖项。生产六策略逐图真实观察、实际缩放／DPR／导出链路仍属于下方未勾选门槛。
 
 ### 实现落点（公共排版与 MTR 适配示例，后续任务）
 
