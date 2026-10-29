@@ -1,5 +1,6 @@
 """Real Store boundaries for embedded switches and forward-only alert edits."""
 from copy import deepcopy
+import os
 
 import pandas as pd
 import pytest
@@ -387,6 +388,33 @@ def test_slot_asset_urls_change_with_content_but_not_symbol(tmp_path, monkeypatc
     page, _ = shell._materialize_page(session, boot)
     changed = asset_urls(page)
     assert all(changed[name] != url for name, url in first.items())
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows share modes block os.replace')
+def test_atomic_json_outlasts_a_reader_holding_the_previous_notification(tmp_path):
+    # A reader without FILE_SHARE_DELETE makes os.replace fail with WinError 5.
+    # The retry budget must cover real contention, not just two quick attempts.
+    import json
+    import threading
+    from gui.chart_embed import atomic_json
+    target = tmp_path / 'own-session.json'
+    atomic_json(target, {'token': 0})
+    holding, release = threading.Event(), threading.Event()
+
+    def reader():
+        with target.open(encoding='utf-8') as handle:
+            handle.read()
+            holding.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    assert holding.wait(10)
+    threading.Timer(.3, release.set).start()
+    atomic_json(target, {'token': 1})
+    thread.join(10)
+    assert json.loads(target.read_text(encoding='utf-8')) == {'token': 1}
+    assert list(tmp_path.iterdir()) == [target]
 
 
 @pytest.mark.parametrize('writer', ['embedded', 'shell'])
