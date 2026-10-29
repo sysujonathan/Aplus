@@ -17,7 +17,7 @@ from workbench.version_update import (UpdateError, _digest, application_mutex, c
     prepare_worker, require_web_closed)
 
 
-def prepare(root, runtime, python):
+def prepare(root, runtime, python, expected_target=None):
     root, runtime = Path(root).resolve(), Path(runtime).resolve()
     database = runtime/'workbench.sqlite3'
     if not database.is_file():
@@ -33,6 +33,8 @@ def prepare(root, runtime, python):
         plan = check_version(root,force=True)
         if not plan.get('can_update'):
             raise UpdateError(plan.get('message','当前版本不能安全升级'))
+        if expected_target is not None and plan.get('target') != expected_target:
+            raise UpdateError('正式版在过渡准备期间发生变化，请重新运行过渡入口。')
         folder = prepare_worker(root,plan,runtime,python=python,data_checksum=checksum)
         # Worker cannot install before this maintainer process exits.
         try:
@@ -58,9 +60,10 @@ if __name__=='__main__':
     parser.add_argument('--root',required=True)
     parser.add_argument('--runtime',required=True)
     parser.add_argument('--python',required=True)
+    parser.add_argument('--expected-target')
     options=parser.parse_args()
     try:
-        folder=prepare(options.root,options.runtime,options.python)
+        folder=prepare(options.root,options.runtime,options.python,options.expected_target)
         print(json.dumps({'prepared':str(folder)},ensure_ascii=False))
     except (UpdateError,OSError,sqlite3.Error) as exc:
         print(str(exc),file=sys.stderr)
