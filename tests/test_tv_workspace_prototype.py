@@ -38,6 +38,10 @@ def test_production_tool_geometry_and_blind_rendering_in_javascript():
     assert run_node('chart_tools_regression.cjs')['ok']
 
 
+def test_mtr_selected_evidence_and_layout_in_production_javascript():
+    assert run_node('chart_mtr_regression.cjs')['ok']
+
+
 def test_intraday_live_update_keeps_the_viewport_anchored_in_javascript():
     output = run_node('chart_live_regression.cjs')
     assert output['ok']

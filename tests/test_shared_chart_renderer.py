@@ -52,6 +52,9 @@ def test_other_strategy_annotation_routes_survive_h2_integration(key):
         frame.loc[frame.index[-1], prefix+'_top_exact'] = 9.5
         frame.loc[frame.index[-1], prefix+'_prior_low'] = 6.5 if prefix == 'struct_gap' else 6.
     render_chart(frame, payload, '', strategy.get_metadata(), strategy=strategy, strategy_type=key)
+    if key == 'MTR_MASTER':
+        strategy.annotate_chart.assert_not_called()  # Frozen approximate labels are replaced only for MTR.
+        return
     strategy.annotate_chart.assert_called_once()
     args, kwargs = strategy.annotate_chart.call_args
     assert args[2] == key

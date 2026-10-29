@@ -42,19 +42,16 @@ def test_strategy_marker_contracts_are_distinct():
     mtr = marker_specs("MTR_MASTER", {"signal_column": "signal_mtr"})
     three_k = marker_specs("STRATEGY_3K", {"signal_column": "signal_3k"})
 
-    assert [(item.column, item.marker) for item in mtr] == [
-        ("is_sw_h_geometric", "v"),
-        ("signal_mtr", "*"),
-    ]
+    assert mtr == []  # Selected structure adapter owns MTR; no duplicate scatter.
     assert [(item.column, item.marker) for item in three_k] == [
         ("signal_3k", "^"),
         ("signal_3k_gap_test", "*"),
     ]
     assert marker_specs("STRATEGY_GAP_PINBAR", {"signal_column": "signal_gap_pinbar"}) == []
-    assert trend_specs("MTR_MASTER")[0].column == "geometric_trendline"
+    assert trend_specs("MTR_MASTER") == []  # Same adapter preserves supplied geometry.
     assert owns_risk_lines("STRATEGY_GAP_H2")
     assert owns_risk_lines("STRATEGY_AWIL")
-    assert not owns_risk_lines("MTR_MASTER")
+    assert owns_risk_lines("MTR_MASTER")
 
 
 def test_known_strategies_keep_a_dedicated_annotation_route():

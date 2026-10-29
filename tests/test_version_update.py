@@ -1,8 +1,11 @@
 """All repositories, runtime folders and update processes here are synthetic."""
 import io
+import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -61,6 +64,45 @@ def api_for(target, conclusion='success', extra=()):
 def plan_for(repo):
     root, old, target = repo
     return v.check_version(root, force=True, api=api_for(target), fetch=lambda sha: None)
+
+
+def installation_contract(lock, schema=8, supported=(1, 2, 3, 4, 5, 6, 7, 8),
+                          migration='store-v8', hashes=None):
+    digest = hashlib.sha256(lock).hexdigest()
+    return {
+        'protocol': 1, 'python': f'{sys.version_info.major}.{sys.version_info.minor}',
+        'environment_id': (f'py{sys.version_info.major}{sys.version_info.minor}-{digest[:12]}'
+                           + ('-' + hashlib.sha256(hashes).hexdigest()[:12] if hashes is not None else '')),
+        'requirements_sha256': digest,
+        'requirements_hashes_sha256': hashlib.sha256(hashes).hexdigest() if hashes is not None else None,
+        'database': {'schema': schema, 'supported_from': list(supported), 'migration': migration},
+    }
+
+
+def installation_release(repo, *, invalid_hash=False):
+    root, _, _ = repo
+    git(root, 'switch', 'main')
+    first = b'example-package==1.0\n'
+    (root/'requirements-lock.txt').write_bytes(first)
+    (root/v.RELEASE_INSTALLATION).write_text(json.dumps(installation_contract(first)), encoding='utf-8')
+    git(root, 'add', '.')
+    git(root, 'commit', '-m', 'installation baseline')
+    old = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', '-c', 'installation-release')
+    second = b'example-package==2.0\n'
+    hashes = b'example-package==2.0 --hash=sha256:' + b'1' * 64 + b'\n'
+    (root/'requirements-lock.txt').write_bytes(second)
+    (root/'requirements-hashes.txt').write_bytes(hashes)
+    contract = installation_contract(second, hashes=hashes)
+    if invalid_hash:
+        contract['requirements_sha256'] = '0' * 64
+    (root/v.RELEASE_INSTALLATION).write_text(json.dumps(contract), encoding='utf-8')
+    git(root, 'add', '.')
+    git(root, 'commit', '-m', 'dependency release')
+    target = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', 'main')
+    git(root, 'update-ref', 'refs/aplus-update/main', target)
+    return root, old, target
 
 
 def test_check_is_readonly_for_code_and_runtime(repo):
@@ -144,6 +186,200 @@ def test_missing_main_ci_is_not_mistaken_for_running_or_success(repo):
     api=lambda path: {'commit':{'sha':target}} if path=='/branches/main' else {'workflow_runs':[]}
     result=v.check_version(root,force=True,api=api,fetch=Mock())
     assert result['ci_status']=='missing' and result['state']=='pending' and not result['can_update']
+
+
+def test_declared_dependency_release_builds_a_parallel_environment_plan(repo):
+    root, _, target = installation_release(repo)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=Mock())
+    assert plan['can_update']
+    assert plan['installation']['environment_changed'] is True
+    assert plan['installation']['database_changed'] is False
+    assert plan['installation']['environment_id'].startswith(
+        f'py{sys.version_info.major}{sys.version_info.minor}-'
+    )
+
+
+def test_dependency_release_with_unbound_manifest_is_rejected(repo):
+    root, old, target = installation_release(repo, invalid_hash=True)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=Mock())
+    assert not plan['can_update'] and plan['manual_kind'] == 'installation'
+    assert git(root, 'rev-parse', 'HEAD') == old
+
+
+def test_parallel_environment_failure_keeps_existing_launch_pointer(repo, tmp_path, monkeypatch):
+    root, _, _ = repo
+    pointer = v.environment_pointer(root)
+    pointer.parent.mkdir(parents=True, exist_ok=True)
+    pointer.write_text('C:\\old\\python.exe', encoding='utf-8')
+    stage = tmp_path/'target-code'; stage.mkdir()
+    plan = {'installation': {'environment_changed': True,
+                             'environment_id': 'py312-1234567890ab', 'python': '3.12'}}
+    def fail(folder, *_args):
+        folder.mkdir(parents=True, exist_ok=True)
+        raise v.UpdateError('synthetic install failure')
+    monkeypatch.setattr(v, '_build_environment', fail)
+    with pytest.raises(v.UpdateError, match='synthetic'):
+        v.prepare_target_environment(root, stage, plan, sys.executable, smoke=Mock())
+    assert pointer.read_text(encoding='utf-8') == 'C:\\old\\python.exe'
+    assert not list((pointer.parent/'environments').glob('.staging-*'))
+    assert not (pointer.parent/'environments'/'py312-1234567890ab').exists()
+
+
+def test_parallel_environment_is_created_and_started_at_its_final_path(repo, tmp_path):
+    root, _, _ = repo
+    stage = tmp_path/'target-code'; stage.mkdir()
+    lock = b''
+    (stage/'requirements-lock.txt').write_bytes(lock)
+    digest = hashlib.sha256(lock).hexdigest()
+    environment_id = f'py{sys.version_info.major}{sys.version_info.minor}-{digest[:12]}'
+    contract = {
+        'environment_changed': True, 'environment_id': environment_id,
+        'python': f'{sys.version_info.major}.{sys.version_info.minor}',
+        'requirements_sha256': digest, 'requirements_hashes_sha256': None,
+    }
+    seen = {}
+    def smoke(_stage, python):
+        seen['python'] = Path(python).resolve()
+        assert subprocess.run([python, '-I', '-c', 'import sys;print(sys.executable)'],
+                              capture_output=True, text=True).returncode == 0
+    python, created = v.prepare_target_environment(
+        root, stage, {'installation': contract}, sys.executable, smoke=smoke)
+    final = v.metadata_dir(root)/'environments'/environment_id
+    assert created == final and Path(python).resolve() == v._environment_python(final).resolve()
+    assert seen['python'] == Path(python).resolve()
+    assert json.loads(v._environment_marker(final).read_text(encoding='utf-8'))['state'] == 'ready'
+    assert not list(final.parent.glob('.staging-*'))
+
+
+def test_release_manifest_matches_exact_lock_and_current_schema(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    contract = json.loads((root/v.RELEASE_INSTALLATION).read_text(encoding='utf-8'))
+    lock = (root/'requirements-lock.txt').read_bytes()
+    assert contract['requirements_sha256'] == hashlib.sha256(lock).hexdigest()
+    runtime = tmp_path/'runtime'
+    store = Store(runtime)
+    with store.connect() as db:
+        schema = int(db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
+    assert contract['database']['schema'] == schema
+
+
+def test_database_migration_is_proved_on_copy_and_can_restore_exact_backup(tmp_path):
+    runtime = tmp_path/'runtime'
+    runtime.mkdir()
+    database = runtime/'workbench.sqlite3'
+    db = sqlite3.connect(database)
+    try:
+        db.execute('CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
+        db.execute("INSERT INTO meta VALUES('schema_version','8')")
+        db.execute('CREATE TABLE observations(id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        db.execute("INSERT INTO observations VALUES('kept','signal')")
+        db.commit()
+    finally:
+        db.close()
+    stage = tmp_path/'stage'
+    (stage/'workbench').mkdir(parents=True)
+    (stage/'workbench'/'__init__.py').write_text('', encoding='utf-8')
+    (stage/'workbench'/'store.py').write_text(
+        "import sqlite3\nfrom pathlib import Path\n"
+        "class Store:\n"
+        " def __init__(self,root):\n"
+        "  p=Path(root)/'workbench.sqlite3'\n"
+        "  with sqlite3.connect(p) as db:\n"
+        "   db.execute('ALTER TABLE observations ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0')\n"
+        "   db.execute(\"UPDATE meta SET value='9' WHERE key='schema_version'\")\n",
+        encoding='utf-8')
+    folder = tmp_path/'transaction'
+    folder.mkdir()
+    contract = {'database_changed': True, 'source_schema': 8, 'target_schema': 9}
+    transaction = v.prepare_database_migration(stage, sys.executable, runtime, folder, contract)
+    assert transaction['changed'] and v._database_state(database)['schema'] == 8
+    assert v._database_state(folder/'trial-runtime'/'workbench.sqlite3')['schema'] == 9
+    v.migrate_formal_database(stage, sys.executable, runtime, transaction)
+    assert v._database_state(database)['schema'] == 9
+    v.restore_database(transaction)
+    assert v._database_state(database)['schema'] == 8
+    assert v._digest(database) == transaction['backup_sha256']
+    with sqlite3.connect(database) as db:
+        assert db.execute('SELECT payload FROM observations WHERE id=?', ('kept',)).fetchone()[0] == 'signal'
+
+
+def test_database_state_rejects_broken_foreign_keys_and_dataset_files(tmp_path):
+    runtime = tmp_path/'runtime'; runtime.mkdir()
+    database = runtime/'workbench.sqlite3'
+    with sqlite3.connect(database) as db:
+        db.executescript(
+            "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
+            "INSERT INTO meta VALUES('schema_version','8');"
+            "CREATE TABLE parent(id TEXT PRIMARY KEY);"
+            "CREATE TABLE child(id TEXT PRIMARY KEY,parent_id TEXT REFERENCES parent(id));"
+            "INSERT INTO child VALUES('broken','missing');"
+        )
+    with pytest.raises(v.UpdateError, match='外键'):
+        v._database_state(database, runtime)
+
+    database = runtime/'datasets.sqlite3'
+    market = runtime/'market.csv'; market.write_bytes(b'prices')
+    digest = hashlib.sha256(market.read_bytes()).hexdigest()
+    with sqlite3.connect(database) as db:
+        db.executescript(
+            "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
+            "INSERT INTO meta VALUES('schema_version','8');"
+            "CREATE TABLE datasets(id TEXT PRIMARY KEY,path TEXT NOT NULL,sha256 TEXT NOT NULL);"
+        )
+        db.execute('INSERT INTO datasets VALUES(?,?,?)', ('daily', 'market.csv', digest))
+    assert v._database_state(database, runtime)['external']['count'] == 1
+    market.write_bytes(b'changed')
+    with pytest.raises(v.UpdateError, match='行情文件'):
+        v._database_state(database, runtime)
+
+
+def test_new_business_writes_after_open_are_never_overwritten(tmp_path):
+    runtime = tmp_path/'runtime'; runtime.mkdir()
+    database = runtime/'workbench.sqlite3'
+    with sqlite3.connect(database) as db:
+        db.executescript(
+            "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
+            "INSERT INTO meta VALUES('schema_version','8');"
+            "CREATE TABLE executions(id TEXT PRIMARY KEY,amount REAL NOT NULL);"
+            "INSERT INTO executions VALUES('old',100.0);"
+        )
+    backup = tmp_path/'before.sqlite3'
+    v._sqlite_snapshot(database, backup)
+    before_sha = v._digest(backup)
+    with sqlite3.connect(database) as db:
+        db.execute("UPDATE meta SET value='9' WHERE key='schema_version'")
+    migrated_sha = v._digest(database)
+    transaction = {
+        'changed': True, 'database': str(database), 'backup': str(backup),
+        'backup_sha256': before_sha, 'schema_before': 8,
+        'post_migration_sha256': migrated_sha,
+    }
+    with sqlite3.connect(database) as db:
+        db.execute("INSERT INTO executions VALUES('new-after-open',250.0)")
+    with pytest.raises(v.UpdateError, match='新增交易记录'):
+        v.restore_database(transaction, expected_current={migrated_sha})
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT amount FROM executions WHERE id='new-after-open'").fetchone()[0] == 250.0
+
+
+def test_migration_rejects_changed_protected_ledger_facts():
+    fact = {'columns': ['id', 'amount'], 'count': 1, 'sha256': 'a'*64}
+    before = {'objects': ['table:executions'], 'facts': {'executions': fact},
+              'external': {'count': 0, 'sha256': 'b'*64}}
+    after = {'schema': 9, 'objects': ['table:executions'],
+             'facts': {'executions': {**fact, 'sha256': 'c'*64}},
+             'external': before['external']}
+    with pytest.raises(v.UpdateError, match='受保护'):
+        v._validate_migration(before, after, 9)
+
+
+def test_launchers_prefer_committed_environment_pointer_without_configuring_users():
+    root = Path(__file__).resolve().parents[1]
+    for name in ('启动A.vbs', '启动A.cmd'):
+        text = (root/name).read_text(encoding='utf-8')
+        assert '.git\\aplus-update\\current-python.txt' in text
+        assert '.git\\aplus-update\\active-request.txt' in text
+        assert '--recover' in text
 
 
 @pytest.mark.parametrize('mutation', ['tracked', 'untracked', 'branch', 'ahead', 'diverged', 'origin'])
@@ -341,7 +577,8 @@ def test_failed_postflight_restores_old_code_not_data(repo, tmp_path):
     with pytest.raises(v.UpdateError, match='回到旧代码'):
         v.apply_update(root, plan, tmp_path/'backup.zip', sys.executable, api=api_for(target), smoke=smoke)
     assert git(root, 'rev-parse', 'HEAD') == old
-    assert git(root, 'branch', '--show-current') == ''
+    assert git(root, 'branch', '--show-current') == 'main'
+    assert plan_for(repo)['can_update']
 
 
 @pytest.mark.parametrize('changed', ['local', 'main', 'ci'])
@@ -477,10 +714,7 @@ def test_prepared_helper_pins_runtime_and_leaves_git_version_untouched(repo, tmp
         v.prepare_worker(root, plan, runtime)
 
 
-@pytest.mark.skipif(os.name != 'nt', reason='Windows update handshake')
-@pytest.mark.parametrize('scenario', ['success', 'parent_running', 'cancelled', 'preflight_failed',
-                                     'other_instance', 'startup_failed', 'startup_unconfirmed'])
-def test_worker_waits_for_old_process_and_confirms_actual_startup(repo, tmp_path, monkeypatch, scenario):
+def synthetic_worker_request(repo, tmp_path):
     root, old, target = repo
     plan = plan_for(repo)
     folder = v.metadata_dir(root) / 'synthetic-worker'
@@ -490,61 +724,258 @@ def test_worker_waits_for_old_process_and_confirms_actual_startup(repo, tmp_path
     request_path = folder/'request.json'
     v.write_json(request_path, dict(root=str(root), plan=plan, runtime=str(tmp_path/'private-runtime'),
                                     python=sys.executable, parent_pid=12345))
-    if scenario == 'cancelled':
-        v.write_json(folder/'cancelled.json', {'cancelled': True})
+    v._persist_transaction(request_path, 'prepared', protocol=1, old=old, old_branch='main',
+                           target=target, old_python=sys.executable, old_pointer=None,
+                           target_python=None, code_changed=False, database_changed=False,
+                           database={'changed': False}, recovery={'outcome': 'pending'})
+    v.active_transaction_path(root).write_text(str(request_path.resolve()), encoding='utf-8')
+    return root, old, target, folder, lock, request_path
+
+
+def interrupted_transaction(repo, tmp_path, phase='code_installed'):
+    root, old, target = repo
+    plan = plan_for(repo)
+    git(root, 'merge', '--ff-only', target)
+    folder = v.metadata_dir(root)/('interrupted-' + phase)
+    folder.mkdir(parents=True)
+    request_path = folder/'request.json'
+    runtime = tmp_path/'private-runtime'; runtime.mkdir(exist_ok=True)
+    v.write_json(request_path, {
+        'root': str(root), 'plan': plan, 'runtime': str(runtime),
+        'python': sys.executable, 'parent_pid': 1,
+    })
+    v._persist_transaction(
+        request_path, phase, protocol=v.INSTALLATION_PROTOCOL,
+        old=old, old_branch='main', target=target,
+        old_python=sys.executable, target_python=sys.executable,
+        old_pointer=None, code_changed=True, database_changed=False,
+        database={'changed': False}, recovery={'outcome': 'pending'},
+    )
+    v.active_transaction_path(root).write_text(str(request_path.resolve()), encoding='utf-8')
+    (v.metadata_dir(root)/'update.lock').touch()
+    return root, old, target, folder, request_path
+
+
+def allow_isolated_recovery(monkeypatch, *, alive=False):
+    monkeypatch.setattr(v, '_process_alive', lambda _pid: alive)
+    monkeypatch.setattr(v, 'application_mutex', lambda: contextlib.nullcontext())
+    monkeypatch.setattr(v, 'require_web_closed', Mock())
+
+
+def test_hard_interruption_is_recognized_and_rolled_back_on_next_start(repo, tmp_path, monkeypatch):
+    root, old, _, folder, request_path = interrupted_transaction(repo, tmp_path)
+    allow_isolated_recovery(monkeypatch)
+    outcome = v.recover_transaction(request_path)
+    assert outcome['transaction']['phase'] == 'rolled_back'
+    assert git(root, 'rev-parse', 'HEAD') == old
+    assert not v.active_transaction_path(root).exists()
+    assert not (v.metadata_dir(root)/'update.lock').exists()
+    assert json.loads((folder/'receipt.json').read_text(encoding='utf-8'))['state'] == 'rolled_back'
+
+
+def test_interruption_after_formal_migration_restores_code_and_database(repo, tmp_path, monkeypatch):
+    root, old, _, _, request_path = interrupted_transaction(repo, tmp_path, 'database_migrated')
+    runtime = Path(json.loads(request_path.read_text(encoding='utf-8'))['runtime'])
+    database = runtime/'workbench.sqlite3'
+    with contextlib.closing(sqlite3.connect(database)) as db:
+        with db:
+            db.executescript(
+                "CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);"
+                "INSERT INTO meta VALUES('schema_version','8');"
+                "CREATE TABLE observations(id TEXT PRIMARY KEY,payload TEXT NOT NULL);"
+                "INSERT INTO observations VALUES('kept','signal');"
+            )
+    backup = request_path.parent/'workbench-before.sqlite3'
+    v._sqlite_snapshot(database, backup)
+    backup_sha = v._digest(backup)
+    with contextlib.closing(sqlite3.connect(database)) as db:
+        with db:
+            db.execute('ALTER TABLE observations ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0')
+            db.execute("UPDATE meta SET value='9' WHERE key='schema_version'")
+    post_sha = v._digest(database)
+    v._persist_transaction(
+        request_path, 'database_migrated', database_changed=True,
+        database={'changed': True, 'database': str(database), 'backup': str(backup),
+                  'backup_sha256': backup_sha, 'pre_migration_sha256': backup_sha,
+                  'post_migration_sha256': post_sha, 'schema_before': 8, 'schema_after': 9},
+    )
+    allow_isolated_recovery(monkeypatch)
+    assert v.recover_transaction(request_path)['transaction']['phase'] == 'rolled_back'
+    assert git(root, 'rev-parse', 'HEAD') == old
+    assert v._database_state(database, runtime)['schema'] == 8
+    with contextlib.closing(sqlite3.connect(database)) as db:
+        assert db.execute("SELECT payload FROM observations WHERE id='kept'").fetchone()[0] == 'signal'
+
+
+def test_alive_unconfirmed_startup_blocks_second_instance_then_recovers(repo, tmp_path, monkeypatch):
+    root, old, _, _, request_path = interrupted_transaction(repo, tmp_path, 'startup_wait')
+    v._persist_transaction(request_path, startup_pid=777)
+    allow_isolated_recovery(monkeypatch, alive=True)
+    assert v.recover_transaction(request_path)['action'] == 'block'
+    assert v._load_transaction(request_path)['phase'] == 'startup_unconfirmed'
+    assert git(root, 'rev-parse', 'HEAD') != old
+    monkeypatch.setattr(v, '_process_alive', lambda _pid: False)
+    assert v.recover_transaction(request_path)['transaction']['phase'] == 'rolled_back'
+    assert git(root, 'rev-parse', 'HEAD') == old
+
+
+def test_pointer_commit_failure_keeps_transaction_and_is_retryable(repo, tmp_path, monkeypatch):
+    root, _, _, folder, request_path = interrupted_transaction(repo, tmp_path, 'startup_wait')
+    v.write_json(folder/'started.json', {'started': True})
+    original = v.write_environment_pointer
+    monkeypatch.setattr(v, 'write_environment_pointer', Mock(side_effect=OSError('pointer denied')))
+    assert v.recover_for_startup(request_path) == v.RECOVERY_BLOCKED
+    assert v._load_transaction(request_path)['phase'] == 'recovery_failed'
+    assert v.active_transaction_path(root).exists()
+    monkeypatch.setattr(v, 'write_environment_pointer', original)
+    assert v.recover_for_startup(request_path) == 0
+    assert v._load_transaction(request_path)['phase'] == 'completed'
+    assert Path(v.environment_pointer(root).read_text(encoding='utf-8')).resolve() == Path(sys.executable).resolve()
+
+
+@pytest.mark.parametrize('failed_part', ['database', 'code'])
+def test_partial_rollback_failure_preserves_precise_recovery_state(repo, tmp_path, monkeypatch, failed_part):
+    _, _, _, _, request_path = interrupted_transaction(repo, tmp_path)
+    transaction = v._load_transaction(request_path)
+    transaction.update(database_changed=True, database={
+        'changed': True, 'post_migration_sha256': 'a'*64,
+    })
+    v._persist_transaction(request_path, database_changed=True, database=transaction['database'])
+    monkeypatch.setattr(v, '_reconcile_interrupted_changes', lambda *_args: transaction)
+    if failed_part == 'database':
+        monkeypatch.setattr(v, 'rollback', Mock())
+        monkeypatch.setattr(v, 'restore_database', Mock(side_effect=v.UpdateError('db failed')))
+    else:
+        monkeypatch.setattr(v, 'rollback', Mock(side_effect=v.UpdateError('code failed')))
+        monkeypatch.setattr(v, 'restore_database', Mock())
+    with pytest.raises(v.UpdateError, match='恢复失败'):
+        v._rollback_transaction(request_path)
+    state = v._load_transaction(request_path)
+    assert state['phase'] == 'recovery_failed'
+    assert state['code_changed'] is (failed_part == 'code')
+    assert state['database_changed'] is (failed_part == 'database')
+    assert v.active_transaction_path(json.loads(request_path.read_text(encoding='utf-8'))['root']).exists()
+
+
+def test_cleanup_keeps_current_two_recoverable_versions_and_all_failures(repo):
+    root, _, _ = repo
+    base = v.metadata_dir(root); base.mkdir(parents=True, exist_ok=True)
+    environments = base/'environments'; environments.mkdir()
+    env_paths = {}
+    for name in ('current', 'previous-1', 'previous-2', 'expired', 'failed', 'orphan'):
+        folder = environments/name; folder.mkdir()
+        python = v._environment_python(folder); python.parent.mkdir(parents=True, exist_ok=True)
+        python.touch()
+        v.write_json(v._environment_marker(folder), {'state': 'ready', 'environment_id': name})
+        env_paths[name] = python.resolve()
+    v.write_environment_pointer(root, env_paths['current'])
+
+    folders = {}
+    for index, name in enumerate(('expired', 'previous-2', 'previous-1', 'current')):
+        folder = base/name; folder.mkdir(); folders[name] = folder
+        v.write_json(folder/v.TRANSACTION_FILE, {
+            'phase': 'completed', 'updated_at': f'2026-10-{20 + index:02d}T00:00:00+00:00',
+            'old_python': str(env_paths[name]), 'target_python': str(env_paths[name]),
+        })
+    failed = base/'failed-transaction'; failed.mkdir()
+    v.write_json(failed/v.TRANSACTION_FILE, {
+        'phase': 'recovery_failed', 'updated_at': '2026-10-25T00:00:00+00:00',
+        'old_python': str(env_paths['failed']), 'target_python': str(env_paths['failed']),
+    })
+    v.cleanup_committed_transactions(root, folders['current'])
+    assert not folders['expired'].exists()
+    assert all(folders[name].exists() for name in ('current', 'previous-1', 'previous-2'))
+    assert failed.exists()
+    assert all(env_paths[name].parent.parent.exists()
+               for name in ('current', 'previous-1', 'previous-2', 'failed'))
+    assert not env_paths['expired'].parent.parent.exists()
+    assert not env_paths['orphan'].parent.parent.exists()
+
+
+def worker_kernel(order):
+    return SimpleNamespace(OpenProcess=Mock(return_value=111), CloseHandle=Mock(),
+                           CreateMutexW=Mock(return_value=222), GetLastError=Mock(return_value=0),
+                           WaitForSingleObject=Mock(side_effect=lambda *args: order.append('wait') or 0))
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows update handshake')
+def test_worker_commits_only_after_actual_startup_ack(repo, tmp_path, monkeypatch):
+    root, old, target, folder, lock, request_path = synthetic_worker_request(repo, tmp_path)
     order = []
     message = Mock()
-    k = SimpleNamespace(OpenProcess=Mock(return_value=111), CloseHandle=Mock(),
-                        CreateMutexW=Mock(return_value=222),
-                        GetLastError=Mock(return_value=183 if scenario == 'other_instance' else 0),
-                        WaitForSingleObject=Mock(side_effect=lambda *args: order.append('wait') or
-                                                (258 if scenario == 'parent_running' else 0)))
+    k = worker_kernel(order)
     monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(kernel32=k, user32=SimpleNamespace(MessageBoxW=message)))
     def apply(*args):
         order.append('apply')
-        if scenario == 'preflight_failed':
-            raise v.UpdateError('preflight failed; old code retained')
-    applied = Mock(side_effect=apply)
-    monkeypatch.setattr(v, 'apply_update', applied)
+        return {'python': sys.executable, 'database': {'changed': False}}
+    monkeypatch.setattr(v, 'apply_update', Mock(side_effect=apply))
     monkeypatch.setattr(v, 'require_web_closed', Mock())
-    rolled_back = Mock()
-    monkeypatch.setattr(v, 'rollback', rolled_back)
-    monkeypatch.setattr(v, 'run_git', lambda *args, **kwargs: old)
-    monkeypatch.setattr(v, 'local_version', lambda *args: dict(head=old, dirty=False, branch='main'))
     def launch(*args, **kwargs):
         order.append('launch')
         ack = kwargs['env'].get('APLUS_UPDATE_ACK')
-        if scenario == 'success' and ack:
+        if ack:
             v.write_json(ack, {'started': True})
-        return SimpleNamespace(poll=lambda: 1 if scenario == 'startup_failed' and ack else None)
+        return SimpleNamespace(pid=777, poll=lambda: None)
     launched = Mock(side_effect=launch)
     monkeypatch.setattr(v.subprocess, 'Popen', launched)
-    if scenario == 'startup_unconfirmed':
-        stamps = iter([0, 100])
-        monkeypatch.setattr(v.time, 'monotonic', lambda: next(stamps))
+    def commit(path):
+        tx = v._persist_transaction(path, 'completed', pointer_committed=True)
+        v._clear_active_transaction(root, path)
+        return {'action': 'block', 'transaction': tx}
+    monkeypatch.setattr(v, 'recover_transaction', Mock(side_effect=commit))
     v.worker(request_path)
     receipt = json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
-    assert order[0] == 'wait'
+    assert order == ['wait', 'apply', 'launch']
+    assert receipt['state'] == 'completed'
     assert not lock.exists()
-    if scenario == 'success':
-        assert order == ['wait', 'apply', 'launch']
-        assert receipt['state'] == 'completed'
-        assert '重新启动' in receipt['message'] and '行情和交易记录保持不变' in receipt['message']
-        assert message.call_args.args[2:] == ('Aplus更新完成', 0x40)
-        assert launched.call_args.kwargs['env']['A_WORKBENCH_HOME'] == str(tmp_path/'private-runtime')
-    elif scenario in {'parent_running', 'cancelled', 'other_instance'}:
-        applied.assert_not_called()
-        assert receipt['state'] == 'failed'
-        rolled_back.assert_not_called()
-    elif scenario == 'startup_failed':
-        rolled_back.assert_called_once_with(root, target, old, 'main')
-        assert launched.call_count == 2 and receipt['state'] == 'failed'
-    elif scenario == 'startup_unconfirmed':
-        assert receipt['state'] == 'unconfirmed'
-        rolled_back.assert_not_called()
-        assert launched.call_count == 1
-    else:
-        assert receipt['state'] == 'failed' and launched.call_count == 1
+    assert message.call_args.args[2:] == ('Aplus更新完成', 0x40)
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows update handshake')
+def test_worker_popen_failure_uses_unified_persisted_rollback(repo, tmp_path, monkeypatch):
+    root, old, target, folder, lock, request_path = synthetic_worker_request(repo, tmp_path)
+    order = []
+    k = worker_kernel(order)
+    monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(
+        kernel32=k, user32=SimpleNamespace(MessageBoxW=Mock())))
+    monkeypatch.setattr(v, 'require_web_closed', Mock())
+    monkeypatch.setattr(v, 'apply_update', Mock(return_value={
+        'python': sys.executable, 'database': {'changed': False}}))
+    def recover(path):
+        tx = v._persist_transaction(path, 'rolled_back', code_changed=False,
+                                    database_changed=False, recovery={'outcome': 'rolled_back'})
+        v._clear_active_transaction(root, path)
+        return {'action': 'proceed', 'transaction': tx}
+    monkeypatch.setattr(v, 'recover_transaction', Mock(side_effect=recover))
+    monkeypatch.setattr(v.subprocess, 'Popen', Mock(side_effect=[OSError('create failed'),
+                                                               SimpleNamespace(pid=2)]))
+    v.worker(request_path)
+    receipt = json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
+    assert receipt['state'] == 'rolled_back' and not lock.exists()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows update handshake')
+def test_worker_timeout_persists_unfinished_transaction_and_keeps_gate(repo, tmp_path, monkeypatch):
+    root, old, target, folder, lock, request_path = synthetic_worker_request(repo, tmp_path)
+    order = []
+    k = worker_kernel(order)
+    monkeypatch.setattr(v.ctypes, 'windll', SimpleNamespace(
+        kernel32=k, user32=SimpleNamespace(MessageBoxW=Mock())))
+    monkeypatch.setattr(v, 'require_web_closed', Mock())
+    monkeypatch.setattr(v, 'apply_update', Mock(return_value={
+        'python': sys.executable, 'database': {'changed': False}}))
+    monkeypatch.setattr(v.subprocess, 'Popen', Mock(return_value=SimpleNamespace(pid=777, poll=lambda: None)))
+    stamps = iter([0, 100])
+    monkeypatch.setattr(v, 'supervise_delayed_start', Mock(return_value=None))
+    monkeypatch.setattr(v.time, 'monotonic', lambda: next(stamps))
+    recover = Mock()
+    monkeypatch.setattr(v, 'recover_transaction', recover)
+    v.worker(request_path)
+    receipt = json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
+    assert receipt['state'] == 'startup_unconfirmed'
+    assert v._load_transaction(request_path)['phase'] == 'startup_unconfirmed'
+    assert lock.exists() and v.active_transaction_path(root).exists()
+    recover.assert_not_called()
 
 
 def test_ui_refuses_update_when_edit_form_is_open(tmp_path, monkeypatch):

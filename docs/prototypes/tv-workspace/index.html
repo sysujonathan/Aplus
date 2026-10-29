@@ -139,7 +139,7 @@
 
           <div class="selected-object" id="selectedObject" aria-label="所选图形快捷设置">
             <button class="drag-handle" id="selectedDragHandle" title="拖动图形设置栏" aria-label="拖动图形设置栏"><i></i><i></i><i></i><i></i><i></i><i></i></button>
-            <button id="quickColor" title="选择颜色"><span class="color-swatch"></span></button><button id="quickWidth" title="设置线宽">2px</button><span>—</span>
+            <button id="quickColor" title="选择颜色"><span class="color-swatch"></span></button><button id="quickWidth" title="设置线宽">2px</button><span class="quick-legacy-divider">—</span>
             <button id="quickSettings" title="打开对象设置"><svg><use href="#i-settings"/></svg></button>
             <button id="quickDelete" title="删除所选图形"><svg><use href="#i-trash"/></svg></button>
           </div>
@@ -317,7 +317,7 @@
     <label class="remove-lock-row">始终删除锁定的绘图<input type="checkbox" id="removeLockedDrawings"></label>
     <small>策略证据为只读，移除可撤销</small>
   </div>
-  <div class="chart-context-menu" id="templateMenu"><button data-template-action="apply">应用保存的模板</button><button data-template-action="save">保存当前设置为模板</button></div>
+  <div class="chart-context-menu" id="templateMenu"><button id="quickNamedTemplate" class="quick-template-unimplemented" aria-disabled="true" title="功能暂未实现" hidden>保存模板为…<small aria-hidden="true">#</small></button><button data-template-action="apply">应用本机默认模板</button><button data-template-action="save">保存当前设置为本机默认模板</button></div>
   <script>window.tvPrototypeV2 = true;</script>
   <script src="historical-bars-v2.js"></script>
   <script src="prototype.js?v=20261021-1"></script>
@@ -325,6 +325,7 @@
   <script src="chart-indicators.js"></script>
   <script src="chart-position.js"></script>
   <script src="drawing-settings.js?v=20261019-1"></script>
+  <script src="drawing-quickbar.js"></script>
   <script src="prototype-interactions.js?v=20261021-1"></script>
   <script src="production-controls.js?v=20261019-1"></script>
   <script src="chart-palette.js?v=20261019-1"></script>

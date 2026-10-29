@@ -346,7 +346,9 @@ def test_invalid_alert_mutations_do_not_write(tmp_path, changes):
     assert store.chart_document(boot['identity']) == before
 
 
-def test_slot_asset_urls_change_with_content_but_not_symbol(tmp_path, monkeypatch):
+@pytest.mark.parametrize('changed_asset', [
+    'chart-indicators.js', 'drawing-quickbar.js', 'prototype.css'])
+def test_slot_asset_urls_change_with_content_but_not_symbol(tmp_path, monkeypatch, changed_asset):
     """A reused WebView must not load a mixture of old and current scripts."""
     import re
     import shutil
@@ -356,16 +358,35 @@ def test_slot_asset_urls_change_with_content_but_not_symbol(tmp_path, monkeypatc
     monkeypatch.setattr(shell, 'ASSETS', assets)
     _, _, boot = setup(tmp_path / 'runtime')
     session = tmp_path / 'slot.json'
+    expected_assets = {
+        'prototype.css', 'historical-bars-v2.js', 'prototype.js',
+        'chart-coordinates.js', 'chart-indicators.js', 'chart-position.js',
+        'drawing-settings.js', 'drawing-quickbar.js', 'prototype-interactions.js',
+        'production-controls.js', 'chart-palette.js',
+    }
+
+    def asset_urls(page):
+        # Include unversioned references too, so a duplicate or missing build
+        # cannot disappear from the inventory merely by failing the build regex.
+        urls = re.findall(r'(?:src|href)="([^"?]+\.(?:js|css)(?:\?[^"\s]*)?)"',
+                          page.read_text(encoding='utf-8'))
+        names = [url.partition('?')[0] for url in urls]
+        assert len(names) == len(set(names)), 'Duplicate chart resource references'
+        assert set(names) == expected_assets
+        assert all((page.parent / name).is_file() for name in names)
+        assert all(re.fullmatch(r'[^?]+\?build=[a-f0-9]{16}', url) for url in urls)
+        assert len({url.partition('?')[2] for url in urls}) == 1
+        return dict(zip(names, urls))
+
     page, _ = shell._materialize_page(session, boot)
-    first = re.findall(r'(?:src|href)="([^"?]+\.(?:js|css)\?build=[a-f0-9]+)"',
-                       page.read_text(encoding='utf-8'))
-    assert len(first) == 10
-    page, _ = shell._materialize_page(session, {**boot, 'name': 'another symbol'})
-    assert all(url in page.read_text(encoding='utf-8') for url in first)
-    script = assets / 'chart-indicators.js'
-    script.write_text(script.read_text(encoding='utf-8') + '\n// new build\n', encoding='utf-8')
+    first = asset_urls(page)
+    page, _ = shell._materialize_page(session, {**boot, 'code': 'sz.000002', 'name': 'another symbol'})
+    assert asset_urls(page) == first
+    script = assets / changed_asset
+    script.write_text(script.read_text(encoding='utf-8') + '\n/* new build */\n', encoding='utf-8')
     page, _ = shell._materialize_page(session, boot)
-    assert all(url not in page.read_text(encoding='utf-8') for url in first)
+    changed = asset_urls(page)
+    assert all(changed[name] != url for name, url in first.items())
 
 
 @pytest.mark.parametrize('writer', ['embedded', 'shell'])

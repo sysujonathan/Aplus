@@ -1,0 +1,582 @@
+[
+  {
+    "tool": "fib",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "width",
+        "unimplemented": false,
+        "width": "4px"
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "long",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(41, 98, 255)",
+        "control": "targetColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 152, 0)",
+        "control": "stopColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "order",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "ray",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "width",
+        "unimplemented": false,
+        "width": "3px"
+      },
+      {
+        "control": "dash",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "trend",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "width",
+        "unimplemented": false,
+        "width": "3px"
+      },
+      {
+        "control": "dash",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "short",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(41, 98, 255)",
+        "control": "targetColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 152, 0)",
+        "control": "stopColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "order",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "rectangle",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(41, 98, 255)",
+        "control": "backgroundColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 152, 0)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "width",
+        "unimplemented": false,
+        "width": "3px"
+      },
+      {
+        "control": "dash",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "up",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "down",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "arrow",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "fillColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "path",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "width",
+        "unimplemented": false,
+        "width": "3px"
+      },
+      {
+        "control": "dash",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  },
+  {
+    "tool": "channel",
+    "visible": true,
+    "controls": [
+      {
+        "control": "template",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(242, 54, 69)",
+        "control": "lineColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(41, 98, 255)",
+        "control": "backgroundColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "color": "rgb(255, 235, 59)",
+        "control": "textColor",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "width",
+        "unimplemented": false,
+        "width": "3px"
+      },
+      {
+        "control": "settings",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "alert",
+        "unimplemented": true,
+        "width": null
+      },
+      {
+        "control": "lock",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "delete",
+        "unimplemented": false,
+        "width": null
+      },
+      {
+        "control": "more",
+        "unimplemented": true,
+        "width": null
+      }
+    ]
+  }
+]

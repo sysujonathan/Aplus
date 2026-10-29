@@ -91,10 +91,14 @@ function channelLevels(object) {
     {value:0,enabled:true}, ...(object.showMiddle===false?[]:[{value:.5,enabled:true,dash:'dashed'}]),
     {value:1,enabled:true}];
 }
-function renderChannelSettings(object) {
+function ensureChannelLevels(object) {
   object.channelLevels ||= [-.25,0,.25,.5,.75,1,1.25].map(value=>({value,
     enabled:value===0||value===1||(value===.5&&object.showMiddle!==false),
     color:object.color,width:object.width||1,dash:value===.5?'dashed':object.dash||'solid'}));
+  return object.channelLevels;
+}
+function renderChannelSettings(object) {
+  ensureChannelLevels(object);
   const host=document.querySelector('#toolSpecificSettings');
   const boundary=index=>object.channelLevels.length===7?[1,5].includes(index):[0,object.channelLevels.length-1].includes(index);
   const extensionLabel=()=>object.extendLeft?(object.extendRight?'双向延伸':'延伸左边线条'):object.extendRight?'延伸右边线条':'不要扩大';
