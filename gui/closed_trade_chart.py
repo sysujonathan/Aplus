@@ -450,7 +450,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
                 except ValueError:
                     continue
             payload = {"series": series,
-                       "live": {"interval": INTERVAL, "source": "腾讯 5 分钟",
+                       "live": {"interval": INTERVAL, "source": "腾讯分钟行情",
                                 "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
             if embedded.push_live(payload):
                 self._live_sent = key

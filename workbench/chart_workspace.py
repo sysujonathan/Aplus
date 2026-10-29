@@ -265,7 +265,9 @@ def aggregate_minutes(frame, minutes, *, allow_open_tail=False, closing_labelled
     # Closing minute of each slice inside one session. A bar that is still
     # forming is placed where it will close rather than at whichever minute
     # arrived last, which would read as an extra candle between two closed ones.
-    grid = [9 * 60 + 30 + 60 * step for step in range(1, 5)] if minutes == 60 \
+    # The afternoon's two hours are 14:00 and 15:00, not a continuation of the
+    # morning count: lunch break means 11:30 + 60 minutes is not a real close.
+    grid = [10 * 60 + 30, 11 * 60 + 30, 14 * 60, 15 * 60] if minutes == 60 \
         else [11 * 60 + 30, 15 * 60]
     span = 60 if minutes == 60 else 120
 

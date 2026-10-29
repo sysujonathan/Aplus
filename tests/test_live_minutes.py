@@ -209,7 +209,7 @@ def test_workspace_boot_offers_intraday_unit_without_writing_history(tmp_path):
     # Tencent labels a bar with its closing minute, so the watermark is the bar.
     assert boot["seriesCloseDates"]["m5"]["2026-10-26 14:30"] == "2026-10-26 14:30"
     assert boot["startTimeframe"] == "m5"
-    assert boot["live"]["source"] == "腾讯 5 分钟"
+    assert boot["live"]["source"] == "腾讯分钟行情"
 
 
 def test_workspace_boot_without_intraday_bars_keeps_daily_only(tmp_path):
@@ -356,6 +356,134 @@ def test_coarse_series_keeps_history_and_replaces_only_the_live_tail():
     assert merged.date.tolist() == ["2026-10-23 14:00", "2026-10-23 15:00",
                                     "2026-10-26 10:30", "2026-10-26 11:30"]
     assert merged.iloc[-1]["volume"] == pytest.approx(330.)
-    # A half-day bar waits for its own slice, so the forming one is the morning.
-    assert coarse_series(history.iloc[:1], live, 240).date.tolist() == [
-        "2026-10-23 14:00", "2026-10-26 11:30"]
+    # A lone hourly bar is not a half session: with only 14:00 in it the history
+    # contributes nothing and the half-day unit shows just the live morning.
+    assert coarse_series(history.iloc[:1], live, 240).date.tolist() == ["2026-10-26 11:30"]
+
+
+def test_halfday_unit_never_keeps_hourly_history():
+    """8 months of hourly bars must be halved, never passed through as 4-hour."""
+    history = pd.DataFrame({
+        "date": ["2026-10-23 10:30", "2026-10-23 11:30",
+                 "2026-10-23 14:00", "2026-10-23 15:00"],
+        "open": [24., 24.4, 24.6, 25.], "high": [24.5, 24.7, 25.1, 25.2],
+        "low": [23.9, 24.3, 24.5, 24.9], "close": [24.4, 24.6, 25., 25.1],
+        "volume": [1e5, 2e5, 3e5, 4e5]})
+    live = pd.DataFrame({
+        "date": ["2026-10-26 10:35", "2026-10-26 10:40", "2026-10-26 10:45"],
+        "open": [25., 25.1, 25.2], "high": [25.3, 25.4, 25.5],
+        "low": [24.9, 25., 25.1], "close": [25.1, 25.2, 25.3], "volume": [100., 110., 120.]})
+    merged = coarse_series(history, live, 240)
+    assert merged.date.tolist() == ["2026-10-23 11:30", "2026-10-23 15:00",
+                                    "2026-10-26 11:30"]
+    assert "2026-10-23 10:30" not in merged.date.tolist()
+    assert "2026-10-23 14:00" not in merged.date.tolist()
+    assert merged.iloc[0]["volume"] == pytest.approx(3e5)   # 上午两根小时线相加
+    assert merged.iloc[1]["volume"] == pytest.approx(7e5)
+
+
+def test_halfday_history_drops_a_half_session_that_is_still_forming():
+    from workbench.live_minutes import halfday_from_hourly
+    history = pd.DataFrame({
+        "date": ["2026-10-23 10:30", "2026-10-23 11:30", "2026-10-23 14:00"],
+        "open": [24., 24.4, 24.6], "high": [24.5, 24.7, 25.1],
+        "low": [23.9, 24.3, 24.5], "close": [24.4, 24.6, 25.],
+        "volume": [1e5, 2e5, 3e5]})
+    assert halfday_from_hourly(history).date.tolist() == ["2026-10-23 11:30"]
+    assert halfday_from_hourly(history.iloc[2:]) is None
+
+
+@pytest.mark.parametrize("last_minute", ["1431", "1432", "1433", "1434"])
+def test_forming_one_minute_tail_is_dated_at_the_five_minute_close(last_minute):
+    """14:31-14:34 belong to the 14:35 bar; dating them 14:31 would clone it."""
+    frame = parse_minute_bars(
+        payload([row("202610261425"), row("202610261430"), row(f"20261026{last_minute}")],
+                period="m1"),
+        CODE, NOW.replace(minute=35), period="m1")
+    derived = aggregate_minute_bars(frame, 5)
+    assert derived.date.tolist()[-1] == "2026-10-26 14:35"
+
+    skeleton = minute_frame()          # ends at 14:30, so 14:35 must be new
+    merged = merge_live_tail(skeleton, frame, minutes=5)
+    assert merged.date.tolist() == ["2026-10-26 14:20", "2026-10-26 14:25",
+                                    "2026-10-26 14:30", "2026-10-26 14:35"]
+    # Every date stays on the five-minute grid, so the coarse units keep working.
+    assert len(merged) == merged.date.nunique()
+
+
+def test_forming_tail_replaces_its_skeleton_bar_instead_of_adding_one():
+    frame = parse_minute_bars(
+        payload([row("202610261425"), row("202610261430"), row("202610261431"),
+                 row("202610261432")], period="m1"),
+        CODE, NOW.replace(minute=35), period="m1")
+    skeleton = pd.DataFrame({
+        "date": ["2026-10-26 14:25", "2026-10-26 14:30", "2026-10-26 14:35"],
+        "open": [25.0, 25.1, 25.2], "high": [25.1, 25.2, 25.3],
+        "low": [24.9, 25.0, 25.1], "close": [25.1, 25.2, 25.25],
+        "volume": [1e5, 1.1e5, 1.2e5]})
+    merged = merge_live_tail(skeleton, frame, minutes=5)
+    assert merged.date.tolist() == ["2026-10-26 14:25", "2026-10-26 14:30",
+                                    "2026-10-26 14:35"]
+    # The live window speaks for 14:35, so its volume wins over the skeleton's.
+    # 14:31 and 14:32 are two one-minute lots at Tencent's hundred-share unit.
+    assert merged.iloc[-1]["volume"] == pytest.approx(2 * 100 * 100.)
+
+
+def test_watch_tile_reads_intraday_even_when_the_market_is_shut():
+    """A noon or evening look at the watch list must not leave dead buttons."""
+    from gui.chart_panel import should_read_intraday
+    assert should_read_intraday(loaded=False, in_session=False) is True
+    assert should_read_intraday(loaded=False, in_session=True) is True
+    assert should_read_intraday(loaded=True, in_session=True) is True
+    assert should_read_intraday(loaded=True, in_session=False) is False
+
+
+def test_hourly_history_refreshes_once_its_hour_is_up():
+    from workbench.live_minutes import HourlyHistory
+    clock = [1000.0]
+    calls = []
+
+    def fetch(code, *a, **k):
+        calls.append(code)
+        return pd.DataFrame({"date": ["2026-10-26 15:00"], "open": [1.], "high": [1.],
+                             "low": [1.], "close": [1.], "volume": [1.]})
+
+    book = HourlyHistory(fetch=fetch, clock=lambda: clock[0])
+    assert book.request(CODE) is True
+    while not book.take():
+        pass
+    assert book.history(CODE) is not None
+    assert book.request(CODE) is False            # fresh, no second read
+    clock[0] += book.REFRESH_SECONDS + 1
+    assert book.request(CODE) is True             # stale, refetch
+    while not book.take():
+        pass
+    assert len(calls) == 2
+
+
+def test_hourly_history_keeps_the_cache_and_backs_off_after_a_failure():
+    from workbench.live_minutes import HourlyHistory
+    clock = [0.0]
+    state = {"fail": False}
+
+    def fetch(code, *a, **k):
+        if state["fail"]:
+            raise RuntimeError("boom")
+        return pd.DataFrame({"date": ["2026-10-26 15:00"], "open": [1.], "high": [1.],
+                             "low": [1.], "close": [1.], "volume": [1.]})
+
+    book = HourlyHistory(fetch=fetch, clock=lambda: clock[0])
+    book.request(CODE)
+    while not book.take():
+        pass
+    cached = book.history(CODE).copy()
+
+    state["fail"] = True
+    clock[0] += book.REFRESH_SECONDS + 1
+    assert book.request(CODE) is True
+    while not book.take():
+        pass
+    assert book.history(CODE).equals(cached)        # eight months kept
+    assert book.request(CODE) is False              # backing off, not hammering
+    clock[0] += book.RETRY_SECONDS + 1
+    assert book.request(CODE) is True

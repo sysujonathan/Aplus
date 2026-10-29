@@ -1714,9 +1714,12 @@ function updateObjectTree() {
 }
 
 document.querySelectorAll('.timeframes .disabled').forEach(button => button.addEventListener('click', () => showToast(button.dataset.unavailable)));
-const INTRADAY_LABELS = {m5:'5分钟 · 盘中', m60:'1小时 · 盘中', m240:'4小时 · 盘中'};
-const periodLabel = unit => unit === 'weekly' ? '1周' : unit === 'monthly' ? '1月'
-  : INTRADAY_LABELS[unit] || '1天';
+// Self-contained on purpose: the Node regression extracts single functions into
+// an empty context, so this must not read any module-level constant.
+function periodLabel(unit) {
+  const labels = {m5: '5分钟 · 盘中', m60: '1小时 · 盘中', m240: '4小时 · 盘中'};
+  return unit === 'weekly' ? '1周' : unit === 'monthly' ? '1月' : labels[unit] || '1天';
+}
 function switchProductionTimeframe(timeframe, persist = true) {
   const target = chartBoot.series?.[timeframe];
   if (!target?.length || timeframe === activeTimeframeUnit) return false;
@@ -1739,10 +1742,7 @@ function switchProductionTimeframe(timeframe, persist = true) {
   document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === timeframe));
   document.querySelector('[aria-label="更多周期"]')?.classList?.toggle('active-box',
     !['daily','weekly','monthly'].includes(timeframe));
-  const period = timeframe === 'weekly' ? '1周' : timeframe === 'monthly' ? '1月'
-    : timeframe === 'm5' ? '5分钟 · 盘中'
-    : timeframe === 'm60' ? '1小时 · 盘中'
-    : timeframe === 'm240' ? '4小时 · 盘中' : '1天';
+  const period = periodLabel(timeframe);
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
   updateReadout(bars[replayIndex]);
   document.querySelectorAll('.quote b').forEach(node=>{node.textContent=chartPrice(bars[replayIndex].close);});

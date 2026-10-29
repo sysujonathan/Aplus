@@ -273,7 +273,7 @@ def workspace_boot(store, context):
     live = None
     if "m5" in series:
         live = {"interval": int(context.get("minute_interval") or 8),
-                "source": str(context.get("minute_source") or "腾讯 5 分钟"),
+                "source": str(context.get("minute_source") or "腾讯分钟行情"),
                 "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}
     return {
         "production": True, "identity": key, "revision": int(document["revision"]),

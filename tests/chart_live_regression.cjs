@@ -61,7 +61,7 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync(path.join(assets, 'chart-coordinates.js'), 'utf8'), context);
 context.chartCoordinates = context.window.AplusChartCoordinates;
-vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'switchProductionTimeframe']
+vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'periodLabel', 'switchProductionTimeframe']
   .map(functionSource).join('\n') + '\n' + arrowSource('aplusApplyLiveBars'), context);
 
 const apply = payload => context.window.aplusApplyLiveBars(payload);

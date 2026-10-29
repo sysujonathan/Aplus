@@ -174,6 +174,29 @@ def test_aggregate_keeps_the_forming_bar_only_when_the_session_is_open():
     assert live.date.tolist() == ['2026-10-12 10:30:00', '2026-10-12 11:30:00']
 
 
+@pytest.mark.parametrize("last, expected", [
+    ('13:05', '2026-10-12 14:00:00'),
+    ('13:55', '2026-10-12 14:00:00'),
+    ('14:05', '2026-10-12 15:00:00'),
+    ('14:55', '2026-10-12 15:00:00'),
+])
+def test_afternoon_forming_hour_closes_at_fourteen_or_fifteen(last, expected):
+    """Lunch break means 11:30 + 60 minutes is not a real close.
+
+    Counting one hour at a time across the break labelled the afternoon's first
+    forming bar 12:30 and its second 13:30, so they could never replace the
+    provider's own 14:00 and 15:00 bars.
+    """
+    start = pd.Timestamp('2026-10-12 13:05')
+    stop = pd.Timestamp(f'2026-10-12 {last}')
+    times = pd.DatetimeIndex([*pd.date_range(start, stop, freq='5min')])
+    frame = pd.DataFrame({'date': times.strftime('%Y-%m-%d %H:%M:%S'),
+                          'open': 10., 'high': 10.2, 'low': 9.9, 'close': 10.1,
+                          'volume': 100.})
+    live = aggregate_minutes(frame, 60, allow_open_tail=True, closing_labelled=True)
+    assert live.date.tolist()[-1] == expected
+
+
 
 def test_minute_import_rejects_daily_data_and_duplicate_bars():
     value = bars(dates=['2026-01-05','2026-01-05'])

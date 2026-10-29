@@ -58,9 +58,22 @@ def _configure_chart_styles():
     style.configure("ChartHost.TFrame", background=APP_BG)
 
 
+def should_read_intraday(*, loaded, in_session):
+    """Whether this tick should ask the provider for minutes.
+
+    The first read of a symbol happens even with the market shut: opening the
+    watch list at noon or in the evening must still fill the five-minute, hourly
+    and half-day units instead of leaving three dead buttons.  Only the repeat
+    polling is limited to the session.
+    """
+    return bool(in_session or not loaded)
+
+
 class ChartPanel(native_ttk.Frame):
     """一个独立图格：自身标的、活动状态以及独立 TradingView 入口。"""
 
+    #: 休市时只做一次首帧读取；失败后隔这么久再试，避免离线时反复打网络。
+    CLOSED_RETRY_SECONDS = 300
     def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None):
         _configure_chart_styles()
         super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
@@ -88,6 +101,7 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_due = 0.0
         self._intraday_code = None
         self._intraday_sent = None
+        self._intraday_loaded = False
         self._intraday_calendar = None
         self.bind('<Destroy>', self._destroy_manual, add='+')
         self.columnconfigure(0, weight=1)
@@ -266,14 +280,23 @@ class ChartPanel(native_ttk.Frame):
         if result is not None and result[0] is not None:
             self._publish_intraday(result[0])
         from workbench.holding_quotes import china_now, session_status
-        if self._code and session_status(china_now(), self._intraday_calendar_state()) == "交易中":
+        if self._code and poller is not None:
+            in_session = session_status(
+                china_now(), self._intraday_calendar_state()) == "交易中"
             if self._code != self._intraday_code:
                 poller.invalidate()
                 self._intraday_code, self._intraday_sent = self._code, None
+                self._intraday_loaded = False
                 self._intraday_due = 0.0
-            if time.monotonic() >= self._intraday_due and not poller.busy:
+            # The first read for a symbol happens even with the market shut: a
+            # trader opening the watch list at noon or in the evening must still
+            # get the five-minute, hourly and half-day units instead of three
+            # dead buttons.  Only the repeat polling is limited to the session.
+            if should_read_intraday(loaded=self._intraday_loaded, in_session=in_session) \
+                    and time.monotonic() >= self._intraday_due and not poller.busy:
                 poller.start(self._code)
-                self._intraday_due = time.monotonic() + poller.delay
+                self._intraday_due = time.monotonic() + (
+                    poller.delay if in_session else self.CLOSED_RETRY_SECONDS)
         if self._hourly is not None and self._hourly.take():
             # The hourly history arrived after the first frame was drawn.
             self._intraday_sent = None
@@ -305,10 +328,11 @@ class ChartPanel(native_ttk.Frame):
             except ValueError:
                 continue
         payload = {"series": series,
-                   "live": {"interval": INTERVAL, "source": "腾讯 5 分钟",
+                   "live": {"interval": INTERVAL, "source": "腾讯分钟行情",
                             "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
         if embedded.push_live(payload):
             self._intraday_sent = key
+            self._intraday_loaded = True
 
     def set_drop_target(self, active):
         if active:

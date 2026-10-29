@@ -116,7 +116,10 @@ def parse_minute_bars(text, code, moment, *, period='m5', count=DEFAULT_BARS):
         # closing minute -- five minutes ahead for m5, one minute for m1. Only
         # the final row may sit ahead of the local clock, and never by more than
         # one period, so a stale or fabricated earlier row is still rejected.
-        limit = timedelta(minutes=minutes) if index == last else timedelta(0)
+        # The extra minute is clock skew: the afternoon's first hour closes at
+        # 14:00, and a local clock still reading 12:59:55 must not throw away
+        # eight months of history over five seconds.
+        limit = timedelta(minutes=minutes, seconds=60) if index == last else timedelta(0)
         if stamp > moment + limit:
             raise MinuteSourceError('腾讯返回了本机当前时间之后的分钟 K 线')
         if previous is not None and stamp <= previous:
@@ -208,7 +211,12 @@ def aggregate_minute_bars(frame, minutes):
             else minutes
         if len(group) < expected and (day, slot) != (newest_day, newest_slot):
             continue          # truncated head or a hole: never repaired
-        rows.append(dict(date=str(group.date.iloc[-1]), open=float(group.open.iloc[0]),
+        # The slot is the bar's own close, not the minute that happened to arrive
+        # last: a window that is still forming must be dated where it will end,
+        # or it stops replacing the skeleton bar it belongs to and shows up as a
+        # second candle with a timestamp off the five-minute grid.
+        rows.append(dict(date=f'{day} {slot // 60:02d}:{slot % 60:02d}',
+                         open=float(group.open.iloc[0]),
                          high=float(group.high.max()), low=float(group.low.min()),
                          close=float(group.close.iloc[-1]), volume=float(group.volume.sum())))
     if not rows:
@@ -232,20 +240,59 @@ def merge_live_tail(skeleton, minutes_frame, *, minutes=5):
         return skeleton
     if derived is None or derived.empty:
         return skeleton
-    keep = skeleton[~skeleton['date'].isin(set(derived['date']))]
+    # Compare as timestamps, not strings: a skeleton row written as "...14:30:00"
+    # and a derived row written as "...14:30" are the same bar, and a missed
+    # match would show up as two candles for one close.
+    stamped = pd.to_datetime(skeleton['date'])
+    keep = skeleton[~stamped.isin(pd.to_datetime(derived['date']))]
     merged = pd.concat([keep, derived], ignore_index=True)
     return merged.sort_values('date').reset_index(drop=True)
+
+
+def halfday_from_hourly(history, *, per_half=2):
+    """Merge the provider's native 60-minute bars into one bar per half session.
+
+    The half-day unit is two bars a day -- morning 09:30-11:30 closes at 11:30,
+    afternoon 13:00-15:00 closes at 15:00 -- so the eight months of hourly
+    history has to be halved before it can stand in for a 4-hour series.  A half
+    session that does not hold both of its hours is dropped rather than
+    averaged into something the exchange never printed; the live minutes fill
+    the newest half anyway.
+    """
+    if history is None or len(history) == 0:
+        return history
+    value = history.copy()
+    stamp = pd.to_datetime(value['date'])
+    value['_day'] = stamp.dt.strftime('%Y-%m-%d')
+    value['_half'] = [0 if int(t.hour) * 60 + int(t.minute) <= MORNING_CLOSE else 1
+                      for t in stamp]
+    rows = []
+    for (_day, _half), group in value.groupby(['_day', '_half'], sort=True):
+        if len(group) < per_half:
+            continue
+        rows.append(dict(date=str(group.date.iloc[-1]),
+                         open=float(group.open.iloc[0]),
+                         high=float(group.high.max()), low=float(group.low.min()),
+                         close=float(group.close.iloc[-1]),
+                         volume=float(group.volume.sum())))
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
 
 
 def coarse_series(history, live, minutes):
     """Replace the newest bar of a coarse unit with one built from live minutes.
 
     ``history`` is the provider's own 60-minute series (about eight months) and
-    ``live`` is the five-minute frame being polled.  Only the bars that the live
-    frame can speak for are replaced, so a coarse bar is never dropped for lack
-    of history that the provider simply does not serve any more.
+    ``live`` is the five-minute frame being polled.  The half-day unit needs that
+    history halved first: keeping hourly bars would leave 10:30 and 14:00 in a
+    series that is only supposed to hold 11:30 and 15:00.  Only the bars that
+    the live frame can speak for are replaced, so a coarse bar is never dropped
+    for lack of history that the provider simply does not serve any more.
     """
     from .chart_workspace import aggregate_minutes
+    if int(minutes) == 240:
+        history = halfday_from_hourly(history)
     if live is None or len(live) < 2:
         return history
     try:
@@ -257,7 +304,9 @@ def coarse_series(history, live, minutes):
         return history
     if history is None or history.empty:
         return derived
-    keep = history[~history['date'].isin(set(derived['date']))]
+    # Timestamps, not strings, so "...11:30:00" and "...11:30" are one bar.
+    stamped = pd.to_datetime(history['date'])
+    keep = history[~stamped.isin(pd.to_datetime(derived['date']))]
     merged = pd.concat([keep, derived], ignore_index=True)
     return merged.sort_values('date').reset_index(drop=True)
 
@@ -266,20 +315,37 @@ class HourlyHistory:
     """One provider 60-minute read per symbol, kept off the Tk thread.
 
     The 60-minute series is the only source of an eight-month intraday context;
-    it changes four times a session, so it is read once per symbol and reused.
-    Results are handed back through a queue that the caller drains on its own
-    timer, which keeps every network call out of the UI thread.
+    it grows by four bars a session, so it is refetched once an hour rather than
+    on every poll.  Without that refresh a session left open past thirteen
+    trading days would slowly lose the dates the five-minute skeleton can no
+    longer reach.  Results are handed back through a queue that the caller
+    drains on its own timer, which keeps every network call out of the UI
+    thread.
     """
 
-    def __init__(self, fetch=fetch_minute_bars):
+    REFRESH_SECONDS = 3600
+    RETRY_SECONDS = 60
+
+    def __init__(self, fetch=fetch_minute_bars, clock=time.monotonic):
         self.fetch = fetch
+        self.clock = clock
         self.frames = {}
         self.pending = set()
         self.results = queue.Queue()
+        self._at = {}
+        self._failed_at = {}
 
     def request(self, code):
         code = code_of(code)
-        if code in self.frames or code in self.pending:
+        if code in self.pending:
+            return False
+        now = self.clock()
+        settled = self._at.get(code)
+        if code in self.frames and settled is not None \
+                and now - settled < self.REFRESH_SECONDS:
+            return False
+        failed = self._failed_at.get(code)
+        if failed is not None and now - failed < self.RETRY_SECONDS:
             return False
         self.pending.add(code)
         threading.Thread(target=self._work, args=(code,), daemon=True,
@@ -305,6 +371,13 @@ class HourlyHistory:
             landed.append(code)
             if frame is not None and len(frame):
                 self.frames[code] = frame
+                self._at[code] = self.clock()
+                self._failed_at.pop(code, None)
+            else:
+                # Keep whatever was cached: eight months of context is not worth
+                # losing to one failed read.  Back off briefly instead of
+                # hammering the provider on every poll.
+                self._failed_at[code] = self.clock()
 
     def history(self, code):
         return self.frames.get(code_of(code))
