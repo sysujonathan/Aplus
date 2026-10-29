@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import ast
 import copy
+import contextlib
 import ctypes
 from datetime import datetime, timezone, timedelta
 import hashlib
@@ -18,6 +19,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -33,8 +35,21 @@ API = f"https://api.github.com/repos/{REPOSITORY}"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DATA_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROTECTED = {"runtime", "data", ".git", ".venv", "venv", ".workbuddy", "upgrade-backups"}
-MANUAL_FILES = {"requirements.txt",
-                "requirements-lock.txt", "setup.cmd"}
+MANUAL_FILES = {"setup.cmd"}
+DEPENDENCY_FILES = {"requirements.txt", "requirements-lock.txt"}
+RELEASE_INSTALLATION = "release_installation.json"
+INSTALLATION_PROTOCOL = 1
+ENVIRONMENT_ID = re.compile(r"^py\d{3}-[0-9a-f]{12}(?:-[0-9a-f]{12})?$")
+COUNTED_TABLES = ("accounts", "executions", "positions", "position_fills", "closed_trades",
+                  "cash_flows", "datasets", "observations", "plans", "watchlist")
+PROTECTED_FACT_TABLES = ("accounts", "executions", "positions", "position_fills",
+                         "closed_trades", "cash_flows", "datasets", "observations",
+                         "plans", "watchlist")
+ENVIRONMENT_MARKER = ".aplus-environment.json"
+ACTIVE_TRANSACTION = "active-request.txt"
+TRANSACTION_FILE = "transaction.json"
+TERMINAL_PHASES = {"completed", "rolled_back"}
+RECOVERY_BLOCKED = 20
 PRESERVED_LOCAL_FILES = {"push.cmd"}
 MANAGED_RELEASE_BRANCH = re.compile(r"^codex/local-release-\d{8}$")
 DISCARDABLE_RELEASE_PATHS = {"README.md", "release_catalog.json"}
@@ -168,7 +183,10 @@ def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    with temporary.open("w", encoding="utf-8") as output:
+        json.dump(value, output, ensure_ascii=False)
+        output.flush()
+        os.fsync(output.fileno())
     os.replace(temporary, path)
 
 
@@ -404,7 +422,117 @@ def release_manifest_valid(root, target):
         return False
 
 
-def compatible_target(root, current, target, local=None):
+def _revision_bytes(root, revision, name):
+    try:
+        return run_git(root, "show", f"{revision}:{name}", binary=True)
+    except UpdateError:
+        return None
+
+
+def _release_environment_id(python_version, requirements_hash, hashes_hash):
+    base = f"py{python_version.replace('.', '')}-{requirements_hash[:12]}"
+    return base + (f"-{hashes_hash[:12]}" if hashes_hash else "")
+
+
+def release_installation(root, revision, required=False):
+    """Read the release transaction contract without importing target code."""
+    raw = _revision_bytes(root, revision, RELEASE_INSTALLATION)
+    if raw is None:
+        if required:
+            raise ManualUpdateError("正式版缺少自动迁移清单，请维护者补齐后再更新。", "installation")
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+        if set(value) != {"protocol", "python", "environment_id", "requirements_sha256",
+                          "requirements_hashes_sha256", "database"}:
+            raise ValueError
+        if value["protocol"] != INSTALLATION_PROTOCOL:
+            raise ValueError
+        python_version = value["python"]
+        if not re.fullmatch(r"\d+\.\d+", python_version):
+            raise ValueError
+        requirements_hash = value["requirements_sha256"]
+        lock = _revision_bytes(root, revision, "requirements-lock.txt")
+        if lock is None or not DATA_SHA256.fullmatch(requirements_hash):
+            raise ValueError
+        if hashlib.sha256(lock).hexdigest() != requirements_hash:
+            raise ValueError
+        hashes_hash = value["requirements_hashes_sha256"]
+        if hashes_hash is not None:
+            hashes = _revision_bytes(root, revision, "requirements-hashes.txt")
+            if (hashes is None or not isinstance(hashes_hash, str)
+                    or not DATA_SHA256.fullmatch(hashes_hash)
+                    or hashlib.sha256(hashes).hexdigest() != hashes_hash):
+                raise ValueError
+        expected_environment = _release_environment_id(python_version, requirements_hash, hashes_hash)
+        if value["environment_id"] != expected_environment or not ENVIRONMENT_ID.fullmatch(expected_environment):
+            raise ValueError
+        database = value["database"]
+        if set(database) != {"schema", "supported_from", "migration"}:
+            raise ValueError
+        schema = database["schema"]
+        supported = database["supported_from"]
+        if (not isinstance(schema, int) or schema < 1
+                or not isinstance(supported, list) or not supported
+                or any(not isinstance(item, int) or item < 1 for item in supported)
+                or len(set(supported)) != len(supported)
+                or not isinstance(database["migration"], str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", database["migration"])):
+            raise ValueError
+        return copy.deepcopy(value)
+    except (UnicodeDecodeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        raise ManualUpdateError("正式版自动迁移清单无效，未安装或打开正式数据。", "installation") from None
+
+
+def installation_plan(root, current, target, changed, store_compatible=True):
+    """Return a deterministic, re-checkable environment/database transaction."""
+    dependency_changed = bool(changed & DEPENDENCY_FILES)
+    target_contract = release_installation(root, target, required=False)
+    source_contract = release_installation(root, current, required=False)
+    if target_contract is None:
+        if dependency_changed:
+            raise ManualUpdateError("新版依赖变化但缺少自动安装清单，请维护者补齐。", "dependencies")
+        if store_compatible is False:
+            raise ManualUpdateError("新版数据结构变化但缺少自动迁移清单，正式数据未打开。", "data")
+        return {"protocol": INSTALLATION_PROTOCOL, "environment_changed": False,
+                "database_changed": False}
+    environment_changed = (source_contract is None and dependency_changed) or (
+        source_contract is not None and any(source_contract[key] != target_contract[key]
+            for key in ("python", "environment_id", "requirements_sha256", "requirements_hashes_sha256"))
+    )
+    running_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if target_contract["python"] != running_python:
+        raise ManualUpdateError(
+            f"正式版需要 Python {target_contract['python']}；当前更新助手只使用已验收的 {running_python} 运行时。",
+            "python",
+        )
+    if (dependency_changed or environment_changed) and target_contract["requirements_hashes_sha256"] is None:
+        raise ManualUpdateError(
+            "正式版环境变化但缺少逐包哈希锁定清单，旧环境保持可用。", "dependencies"
+        )
+    source_schema = (source_contract or {}).get("database", {}).get("schema")
+    target_schema = target_contract["database"]["schema"]
+    if source_schema is not None and target_schema < source_schema:
+        raise ManualUpdateError("正式版未允许数据库降级，已保留旧版本。", "data")
+    database_changed = store_compatible is False or (source_schema is not None and source_schema != target_schema)
+    if database_changed:
+        if source_schema is None or source_schema not in target_contract["database"]["supported_from"]:
+            raise ManualUpdateError("正式版未声明支持当前数据库版本，未打开或改写正式数据。", "data")
+    return {
+        "protocol": INSTALLATION_PROTOCOL,
+        "python": target_contract["python"],
+        "environment_id": target_contract["environment_id"],
+        "requirements_sha256": target_contract["requirements_sha256"],
+        "requirements_hashes_sha256": target_contract["requirements_hashes_sha256"],
+        "environment_changed": environment_changed,
+        "database_changed": database_changed,
+        "source_schema": source_schema,
+        "target_schema": target_contract["database"]["schema"],
+        "migration": target_contract["database"]["migration"],
+    }
+
+
+def compatible_target(root, current, target, local=None, details=None):
     if not SHA.fullmatch(current) or not SHA.fullmatch(target):
         raise UpdateError("版本编号无效，未更新。")
     # A fast forward cannot discard local commits or move back to an old main.
@@ -422,14 +550,15 @@ def compatible_target(root, current, target, local=None):
     if ('frozen_manifest.json' in changed or any(p.startswith(('core/', 'config/')) for p in changed)):
         if not release_manifest_valid(root, target):
             raise ManualUpdateError("正式版文件与校验清单不一致，请等待项目负责人修复发布。", 'release_integrity')
+    store_compatible = True
     if 'workbench/store.py' in changed:
         try:
             before = run_git(root, 'show', f'{current}:workbench/store.py')
             after = run_git(root, 'show', f'{target}:workbench/store.py')
         except UpdateError:
             raise ManualUpdateError('无法核对数据保存程序的兼容性，请人工安装。', 'data') from None
-        if not compatible_store_extension(before, after):
-            raise ManualUpdateError('新版改变了数据结构、已有保存逻辑或无法确认的初始化行为，请人工安装并验收。', 'data')
+        store_compatible = compatible_store_extension(before, after)
+    transaction = installation_plan(root, current, target, changed, store_compatible)
     files = run_git(root, "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", target).splitlines()
     if local and any(name not in files for name in local.get("preserved", {})):
         raise UpdateError("新版不再包含本机受保护启动文件，请维护者核对。")
@@ -454,6 +583,8 @@ def compatible_target(root, current, target, local=None):
     for name in files:
         if name not in tracked and (Path(root) / name).exists():
             raise UpdateError("新版文件与本地保留文件重名，未覆盖。")
+    if details is not None:
+        details["installation"] = transaction
     return managed
 
 
@@ -538,9 +669,11 @@ def check_version(root, force=False, api=github_json, fetch=None):
                 result["block_reason"] = "development"
                 raise UpdateError("当前不是main日常使用分支，请先人工对齐；不会切分支覆盖修复。")
             result["block_reason"] = "manual"
-            managed = compatible_target(root, local["head"], target, local)
+            details = {}
+            managed = compatible_target(root, local["head"], target, local, details)
             if managed:
                 result["migration"] = "managed_release"
+            result["installation"] = details["installation"]
             result["summary"] = run_git(root, "log", "--format=%h %s", "-8", f'{local["head"]}..{target}')
             result["can_update"] = True
             result.pop("block_reason", None)
@@ -564,8 +697,11 @@ def validate_plan(root, plan, api=github_json):
         raise UpdateError("本地版本或文件已经变化，未更新；请重新检查。")
     if api("/branches/main")["commit"]["sha"] != plan["target"] or not acceptance(plan["target"], api):
         raise UpdateError("目标版本或验收状态已经变化，请重新检查。")
-    if compatible_target(root, local["head"], plan["target"], local) != managed:
+    details = {}
+    if compatible_target(root, local["head"], plan["target"], local, details) != managed:
         raise UpdateError("本机与正式版的安全关系已经变化，请重新检查。")
+    if details.get("installation") != plan.get("installation"):
+        raise UpdateError("运行环境或数据库迁移计划已经变化，请重新检查。")
 
 
 def extract_archive(data, folder):
@@ -672,30 +808,695 @@ def _install_target(root, plan, payloads):
         raise
 
 
-def apply_update(root, plan, backup, python, api=github_json, smoke=probe):
+def _environment_python(folder, windowless=False):
+    name = "pythonw.exe" if windowless and os.name == "nt" else ("python.exe" if os.name == "nt" else "python")
+    return Path(folder) / ("Scripts" if os.name == "nt" else "bin") / name
+
+
+def _run_checked(command, *, cwd=None, env=None, timeout=900, message):
+    process = subprocess.run([str(item) for item in command], cwd=cwd, env=env, capture_output=True,
+                             timeout=timeout,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    if process.returncode:
+        raise UpdateError(message)
+
+
+def _environment_marker(folder):
+    return Path(folder) / ENVIRONMENT_MARKER
+
+
+def _environment_contract(contract, python):
+    return {"state": "ready", "environment_id": contract["environment_id"],
+            "python": contract["python"], "requirements_sha256": contract["requirements_sha256"],
+            "requirements_hashes_sha256": contract.get("requirements_hashes_sha256"),
+            "executable": str(Path(python).resolve())}
+
+
+def _python_identity(python):
+    process = subprocess.run(
+        [str(python), "-I", "-c",
+         "import json,platform,sys;print(json.dumps({'executable':sys.executable,'version':platform.python_version()}))"],
+        capture_output=True, text=True, timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    if process.returncode:
+        raise UpdateError("无法确认更新解释器身份，未开始更新。")
+    try:
+        return json.loads(process.stdout)
+    except ValueError:
+        raise UpdateError("更新解释器身份回执无效，未开始更新。") from None
+
+
+def _verify_environment(folder, stage, contract):
+    folder = Path(folder).resolve()
+    python = _environment_python(folder).resolve()
+    if not python.is_file():
+        raise UpdateError("新版环境缺少解释器，未切换日常启动环境。")
+    try:
+        marker = json.loads(_environment_marker(folder).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise UpdateError("新版环境缺少完整的验收标记，未复用该环境。") from None
+    if marker != _environment_contract(contract, python):
+        raise UpdateError("新版环境身份与正式依赖清单不一致，未复用该环境。")
+    return _verify_python_environment(python, stage, contract)
+
+
+def _verify_python_environment(python, stage, contract):
+    python = Path(python).resolve()
+    if not python.is_file():
+        raise UpdateError("待复用环境缺少解释器，未开始更新。")
+    script = (
+        "import importlib.metadata as m,json,pathlib,sys;"
+        "lock=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines();"
+        "wanted={};"
+        "[(wanted.__setitem__(*line.split('==',1))) for line in lock "
+        "if line.strip() and not line.lstrip().startswith('#') and '==' in line];"
+        "actual={name:m.version(name) for name in wanted};"
+        "ok=(actual==wanted and pathlib.Path(sys.executable).resolve()==pathlib.Path(sys.argv[2]).resolve() "
+        "and f'{sys.version_info.major}.{sys.version_info.minor}'==sys.argv[3]);"
+        "print(json.dumps({'ok':ok,'actual':actual},sort_keys=True));"
+        "raise SystemExit(0 if ok else 3)"
+    )
+    _run_checked([python, "-I", "-c", script, Path(stage) / "requirements-lock.txt",
+                  python, contract["python"]], timeout=180,
+                 message="新版环境中的解释器或依赖版本与正式清单不一致。")
+    _run_checked([python, "-I", "-m", "pip", "check"], timeout=180,
+                 message="新版环境依赖完整性检查失败；旧环境仍可使用。")
+    return python
+
+
+def _build_environment(folder, current_python, stage, contract):
+    expected = contract["python"]
+    version = subprocess.run(
+        [str(current_python), "-I", "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+        capture_output=True, text=True, timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    if version.returncode or version.stdout.strip() != expected:
+        raise ManualUpdateError(
+            f"正式版需要 Python {expected}；当前尚无已验收的同版本解释器，未替换旧环境。", "python"
+        )
+    _run_checked([current_python, "-I", "-m", "venv", folder], timeout=180,
+                 message="新版独立运行环境创建失败；旧环境仍可使用。")
+    python = _environment_python(folder)
+    hashed = contract.get("requirements_hashes_sha256")
+    requirements = Path(stage) / ("requirements-hashes.txt" if hashed else "requirements-lock.txt")
+    hash_args = ["--require-hashes"] if hashed else []
+    _run_checked([python, "-I", "-m", "pip", "install", "--disable-pip-version-check",
+                  *hash_args, "--requirement", requirements], timeout=1800,
+                 message="新版依赖安装失败；旧环境和代码均未替换。")
+
+
+def prepare_target_environment(root, stage, plan, current_python, smoke=probe, on_stage=None):
+    contract = plan.get("installation") or {}
+    if not contract.get("environment_changed"):
+        if contract.get("requirements_sha256"):
+            python = Path(current_python).resolve()
+            folder = python.parent.parent
+            if folder.parent == (metadata_dir(root) / "environments").resolve():
+                _verify_environment(folder, stage, contract)
+            else:
+                # Existing .venv/global interpreters have no managed marker.
+                # Record adoption outside that environment, only after all
+                # identity/dependency checks and the real startup probe pass.
+                key = hashlib.sha256(str(python).encode("utf-8")).hexdigest()
+                marker = metadata_dir(root) / "adopted-environments" / (key + ".json")
+                expected = _environment_contract(contract, python)
+                if marker.exists():
+                    try:
+                        if json.loads(marker.read_text(encoding="utf-8")) != expected:
+                            raise UpdateError("旧环境接纳记录与正式清单不一致，未复用。")
+                    except (OSError, ValueError) as exc:
+                        raise UpdateError("旧环境接纳记录无效，未复用。") from exc
+                _verify_python_environment(python, stage, contract)
+                smoke(Path(stage), python)
+                if not marker.exists():
+                    write_json(marker, expected)
+                return python, None
+        smoke(Path(stage), current_python)
+        return Path(current_python), None
+    environment_id = contract.get("environment_id", "")
+    if not ENVIRONMENT_ID.fullmatch(environment_id):
+        raise UpdateError("运行环境编号无效，未替换旧环境。")
+    base = metadata_dir(root) / "environments"
+    base.mkdir(parents=True, exist_ok=True)
+    final = base / environment_id
+    if final.exists():
+        python = _verify_environment(final, stage, contract)
+        smoke(Path(stage), python)
+        return python, None
+    final.mkdir()
+    write_json(_environment_marker(final), {"state": "building", "environment_id": environment_id})
+    if on_stage:
+        on_stage("environment_building", target_environment=str(final),
+                 created_environment=str(final))
+    try:
+        _build_environment(final, current_python, stage, contract)
+        python = _environment_python(final).resolve()
+        write_json(_environment_marker(final), _environment_contract(contract, python))
+        python = _verify_environment(final, stage, contract)
+        smoke(Path(stage), python)
+        if on_stage:
+            on_stage("environment_ready", target_python=str(python),
+                     target_environment=str(final), created_environment=str(final))
+        return python, final
+    except Exception:
+        pointer = environment_pointer(root)
+        pointer_value = pointer.read_text(encoding="utf-8").strip() if pointer.exists() else None
+        if pointer_value != str(_environment_python(final).resolve()):
+            shutil.rmtree(final, ignore_errors=True)
+        raise
+
+
+def environment_pointer(root):
+    return metadata_dir(root) / "current-python.txt"
+
+
+def write_environment_pointer(root, python):
+    python = Path(python).resolve()
+    if not python.is_file():
+        raise UpdateError("新版解释器不存在，未切换启动环境。")
+    pointer = environment_pointer(root)
+    temporary = pointer.with_name(pointer.name + "." + uuid.uuid4().hex + ".tmp")
+    temporary.write_text(str(python), encoding="utf-8")
+    os.replace(temporary, pointer)
+
+
+def restore_environment_pointer(root, value):
+    pointer = environment_pointer(root)
+    if value is None:
+        pointer.unlink(missing_ok=True)
+        return
+    temporary = pointer.with_name(pointer.name + "." + uuid.uuid4().hex + ".tmp")
+    temporary.write_text(value, encoding="utf-8")
+    os.replace(temporary, pointer)
+
+
+def _sqlite_snapshot(source, destination):
+    source, destination = Path(source), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+    with contextlib.closing(sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True)) as src:
+        with contextlib.closing(sqlite3.connect(destination)) as dst:
+            src.backup(dst)
+
+
+def _stable_cell(value):
+    if isinstance(value, bytes):
+        return {"blob": value.hex()}
+    return value
+
+
+def _table_facts(db, table, columns=None):
+    available = [row[1] for row in db.execute(f'PRAGMA table_info("{table}")')]
+    columns = list(columns or available)
+    if not set(columns).issubset(available):
+        raise UpdateError("数据库迁移意外删除了受保护业务字段。")
+    quoted = ",".join(f'"{name}"' for name in columns)
+    rows = [[_stable_cell(value) for value in row]
+            for row in db.execute(f'SELECT {quoted} FROM "{table}"')]
+    encoded = sorted(json.dumps(row, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":"), allow_nan=False) for row in rows)
+    payload = "\n".join(encoded).encode("utf-8")
+    return {"columns": columns, "count": len(rows),
+            "sha256": hashlib.sha256(payload).hexdigest()}
+
+
+def _dataset_files(db, data_root):
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "datasets" not in tables:
+        return {"count": 0, "sha256": hashlib.sha256(b"").hexdigest()}
+    facts = []
+    for dataset_id, raw_path, expected in db.execute(
+            "SELECT id,path,sha256 FROM datasets ORDER BY id"):
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = Path(data_root) / path
+        if not path.is_file() or not DATA_SHA256.fullmatch(str(expected)) or _digest(path) != expected:
+            raise UpdateError("数据库引用的行情文件缺失或校验不一致，未继续迁移。")
+        facts.append([dataset_id, str(raw_path), expected])
+    payload = json.dumps(facts, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return {"count": len(facts), "sha256": hashlib.sha256(payload).hexdigest()}
+
+
+def _database_state(path, data_root=None, fact_columns=None):
+    path = Path(path)
+    data_root = Path(data_root or path.parent)
+    with contextlib.closing(sqlite3.connect(
+            f"file:{path.as_posix()}?mode=ro", uri=True)) as db:
+        db.execute("BEGIN")
+        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise UpdateError("数据库完整性检查失败，未继续自动迁移。")
+        if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise UpdateError("数据库外键关系检查失败，未继续自动迁移。")
+        row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        schema = int(row[0]) if row else None
+        tables = {item[0] for item in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        counts = {name: db.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
+                  for name in COUNTED_TABLES if name in tables}
+        objects = sorted(f"{kind}:{name}" for kind, name in db.execute(
+            "SELECT type,name FROM sqlite_master WHERE type IN ('table','index','trigger') "
+            "AND name NOT LIKE 'sqlite_%'") if not name.startswith("sqlite_autoindex"))
+        facts = {name: _table_facts(db, name, (fact_columns or {}).get(name))
+                 for name in PROTECTED_FACT_TABLES if name in tables}
+        external = _dataset_files(db, data_root)
+        # Read through SQLite, including committed WAL pages. A main-file hash
+        # alone cannot certify that the database has not received new writes.
+        logical = {name: _table_facts(db, name) for name in sorted(tables)
+                   if not name.startswith("sqlite_")}
+        definitions = sorted(db.execute(
+            "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall())
+        logical_sha = hashlib.sha256(json.dumps(
+            [definitions, logical], sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return {"schema": schema, "counts": counts, "objects": objects, "facts": facts,
+            "external": external, "sha256": _digest(path), "logical_sha256": logical_sha}
+
+
+def _migration_boundary(state):
+    return {name: copy.deepcopy(state[name])
+            for name in ("schema", "objects", "facts", "external")}
+
+
+def _validate_migration(before, after, target_schema):
+    if after["schema"] != target_schema:
+        raise UpdateError("数据库迁移后的版本与正式清单不一致。")
+    if not set(before["objects"]).issubset(after["objects"]):
+        raise UpdateError("数据库迁移意外丢失数据表、索引或触发器。")
+    for table, fact in before["facts"].items():
+        if after["facts"].get(table) != fact:
+            raise UpdateError("数据库迁移改变了受保护的交易或行情事实。")
+    if after["external"] != before["external"]:
+        raise UpdateError("数据库迁移改变了行情文件引用关系。")
+
+
+def _run_store_migration(code, python, runtime):
+    script = ("import sys;sys.path.insert(0,sys.argv[1]);"
+              "from workbench.store import Store;Store(sys.argv[2])")
+    env = dict(os.environ, A_WORKBENCH_HOME=str(runtime))
+    env.pop("APLUS_UPDATE_ACK", None)
+    _run_checked([python, "-I", "-c", script, str(code), str(runtime)], cwd=code, env=env, timeout=300,
+                 message="新版数据库迁移执行失败；正式库已保留备份。")
+
+
+def prepare_database_migration(stage, target_python, runtime, folder, contract, on_stage=None):
+    runtime = Path(runtime).resolve()
+    database = runtime / "workbench.sqlite3"
+    if not database.exists():
+        return {"changed": False, "schema_before": None,
+                "schema_after": contract.get("target_schema"), "backup": None}
+    before = _database_state(database, runtime)
+    expected_schema = contract.get("source_schema") or contract.get("target_schema")
+    if expected_schema is not None and before["schema"] != expected_schema:
+        raise UpdateError("正式数据库版本与迁移计划不一致，未改写数据。")
+    if not contract.get("database_changed"):
+        return {"changed": False}
+    backup = Path(folder) / "workbench-before.sqlite3"
+    _sqlite_snapshot(database, backup)
+    transaction = {"changed": True, "database": str(database), "backup": str(backup),
+                   "backup_sha256": _digest(backup), "pre_migration_sha256": before["sha256"],
+                   "pre_logical_sha256": before["logical_sha256"],
+                   "schema_before": before["schema"], "schema_after": contract.get("target_schema"),
+                   "before_boundary": _migration_boundary(before)}
+    if on_stage:
+        on_stage("database_backup_ready", database=copy.deepcopy(transaction))
+    trial_root = Path(folder) / "trial-runtime"
+    trial_root.mkdir(exist_ok=True)
+    trial = trial_root / "workbench.sqlite3"
+    _sqlite_snapshot(backup, trial)
+    _run_store_migration(stage, target_python, trial_root)
+    columns = {name: fact["columns"] for name, fact in before["facts"].items()}
+    after = _database_state(trial, runtime, columns)
+    _validate_migration(before, after, contract.get("target_schema"))
+    transaction["trial_boundary"] = _migration_boundary(after)
+    if on_stage:
+        on_stage("database_trial_ready", database=copy.deepcopy(transaction))
+    return transaction
+
+
+def migrate_formal_database(root, target_python, runtime, transaction):
+    if not transaction.get("changed"):
+        return transaction
+    _run_store_migration(root, target_python, runtime)
+    columns = {name: fact["columns"]
+               for name, fact in transaction["before_boundary"]["facts"].items()}
+    after = _database_state(transaction["database"], runtime, columns)
+    if _migration_boundary(after) != transaction.get("trial_boundary"):
+        raise UpdateError("正式数据库迁移结果与副本演练不一致。")
+    transaction["post_migration_sha256"] = after["sha256"]
+    transaction["post_logical_sha256"] = after["logical_sha256"]
+    return transaction
+
+
+def restore_database(transaction, expected_current=None):
+    if not transaction or not transaction.get("changed"):
+        return
+    database = Path(transaction["database"])
+    backup = Path(transaction["backup"])
+    if not backup.is_file() or _digest(backup) != transaction["backup_sha256"]:
+        raise UpdateError("数据库备份校验失败，不能自动回退；请保留现场并联系维护者。")
+    current = _digest(database)
+    if transaction.get("post_logical_sha256"):
+        if _database_state(database)["logical_sha256"] != transaction["post_logical_sha256"]:
+            raise UpdateError("数据库在新版开放后又有写入，不能自动覆盖新增交易记录。")
+    elif any(database.with_name(database.name + suffix).exists() and
+             database.with_name(database.name + suffix).stat().st_size
+             for suffix in ("-wal", "-journal")):
+        raise UpdateError("数据库存在未核验的附属日志，不能自动覆盖新增交易记录。")
+    if (not transaction.get("post_logical_sha256") and expected_current is not None
+            and current not in set(expected_current)):
+        raise UpdateError("数据库在新版开放后又有写入，不能自动覆盖新增交易记录。")
+    temporary = database.with_name(database.name + ".restore-" + uuid.uuid4().hex)
+    shutil.copy2(backup, temporary)
+    if _database_state(temporary)["schema"] != transaction["schema_before"]:
+        temporary.unlink(missing_ok=True)
+        raise UpdateError("数据库备份版本校验失败，不能自动回退。")
+    for attempt in range(10):
+        try:
+            os.replace(temporary, database)
+            break
+        except PermissionError:
+            # SQLite/antivirus handles can linger briefly on Windows after the
+            # validation connection closes.  Keep the original intact and retry
+            # for a bounded interval rather than deleting either side.
+            if attempt == 9:
+                raise
+            time.sleep(0.1 * (attempt + 1))
+    for suffix in ("-wal", "-shm", "-journal"):
+        database.with_name(database.name + suffix).unlink(missing_ok=True)
+    if _digest(database) != transaction["backup_sha256"]:
+        raise UpdateError("数据库回退后的校验值不一致，请停止使用并联系维护者。")
+
+
+def active_transaction_path(root):
+    return metadata_dir(root) / ACTIVE_TRANSACTION
+
+
+def _transaction_path(request_path):
+    return Path(request_path).resolve().parent / TRANSACTION_FILE
+
+
+def _load_transaction(request_path):
+    try:
+        value = json.loads(_transaction_path(request_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise UpdateError("更新事务记录缺失或损坏；为保护数据已阻止启动。") from None
+    if value.get("protocol") != INSTALLATION_PROTOCOL:
+        raise UpdateError("更新事务版本无法识别；为保护数据已阻止启动。")
+    return value
+
+
+def _persist_transaction(request_path, phase=None, **changes):
+    path = _transaction_path(request_path)
+    current = {}
+    if path.exists():
+        current = _load_transaction(request_path)
+    current.update(copy.deepcopy(changes))
+    if phase is not None:
+        current["phase"] = phase
+    current["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    write_json(path, current)
+    return current
+
+
+def _clear_active_transaction(root, request_path):
+    active = active_transaction_path(root)
+    try:
+        recorded = active.read_text(encoding="utf-8").strip()
+    except OSError:
+        recorded = ""
+    if recorded and Path(recorded).resolve() == Path(request_path).resolve():
+        active.unlink(missing_ok=True)
+    (metadata_dir(root) / "update.lock").unlink(missing_ok=True)
+
+
+def _write_receipt(request_path, transaction, message):
+    receipt = {"state": transaction["phase"], "message": message,
+               "old": transaction.get("old"), "target": transaction.get("target"),
+               "old_python": transaction.get("old_python"),
+               "target_python": transaction.get("target_python"),
+               "environment_id": transaction.get("environment_id"),
+               "database_schema_before": transaction.get("database", {}).get("schema_before"),
+               "database_schema_after": transaction.get("database", {}).get("schema_after"),
+               "database_migrated": bool(transaction.get("database_changed")),
+               "code_changed": bool(transaction.get("code_changed")),
+               "recovery": transaction.get("recovery"),
+               "materials": {"folder": str(Path(request_path).resolve().parent),
+                             "code_backup": transaction.get("code_backup"),
+                             "database_backup": transaction.get("database", {}).get("backup")}}
+    write_json(Path(request_path).resolve().parent / "receipt.json", receipt)
+
+
+def _process_alive(pid):
+    if not pid or os.name != "nt":
+        return False
+    k = ctypes.windll.kernel32
+    k.OpenProcess.restype = ctypes.c_void_p
+    handle = k.OpenProcess(0x100000, False, int(pid))
+    if not handle:
+        return False
+    try:
+        return k.WaitForSingleObject(ctypes.c_void_p(handle), 0) == 258
+    finally:
+        k.CloseHandle(ctypes.c_void_p(handle))
+
+
+def _remove_created_environment(root, transaction):
+    created = transaction.get("created_environment")
+    if not created:
+        return
+    created = Path(created).resolve()
+    base = (metadata_dir(root) / "environments").resolve()
+    pointer = environment_pointer(root)
+    current = pointer.read_text(encoding="utf-8").strip() if pointer.exists() else None
+    if (created.parent != base or current == str(_environment_python(created).resolve())
+            or not _environment_marker(created).is_file()):
+        return
+    shutil.rmtree(created)
+
+
+def _reconcile_interrupted_changes(root, request, transaction):
+    request_payload = json.loads(Path(request).read_text(encoding="utf-8"))
+    local = local_version(root)
+    if local["dirty"]:
+        raise UpdateError("更新中断后发现代码又被修改，已阻止自动恢复。")
+    if local["head"] == transaction["target"]:
+        transaction = _persist_transaction(request, code_changed=True)
+    elif local["head"] == transaction["old"]:
+        transaction = _persist_transaction(request, code_changed=False)
+    else:
+        raise UpdateError("更新中断后的代码版本无法识别，已阻止启动。")
+    database = transaction.get("database") or {"changed": False}
+    if database.get("changed") and Path(database.get("database", "")).is_file():
+        state_now = _database_state(database["database"], request_payload["runtime"])
+        current = state_now["sha256"]
+        logical = state_now["logical_sha256"]
+        if database.get("post_logical_sha256") and logical not in {
+                database["post_logical_sha256"], database.get("pre_logical_sha256")}:
+            raise UpdateError("数据库逻辑内容已发生未知写入，已阻止自动覆盖。")
+        has_logical = bool(database.get("pre_logical_sha256") or database.get("post_logical_sha256"))
+        if (not has_logical and any(Path(str(database["database"]) + suffix).exists() and
+                Path(str(database["database"]) + suffix).stat().st_size
+                for suffix in ("-wal", "-journal"))):
+            raise UpdateError("数据库存在未知附属日志，已阻止自动恢复。")
+        if logical == database.get("pre_logical_sha256") or (not has_logical and current == database.get("backup_sha256")):
+            transaction = _persist_transaction(request, database_changed=False)
+        elif logical == database.get("post_logical_sha256") or (not has_logical and current == database.get("post_migration_sha256")):
+            transaction = _persist_transaction(request, database_changed=True)
+        elif transaction.get("phase") == "database_migrating" and database.get("trial_boundary"):
+            columns = {name: fact["columns"]
+                       for name, fact in database["before_boundary"]["facts"].items()}
+            state = _database_state(database["database"], request_payload["runtime"], columns)
+            if _migration_boundary(state) == database["trial_boundary"]:
+                database["post_migration_sha256"] = state["sha256"]
+                database["post_logical_sha256"] = state["logical_sha256"]
+                transaction = _persist_transaction(request, database=database, database_changed=True)
+            elif current == database.get("pre_migration_sha256"):
+                transaction = _persist_transaction(request, database_changed=False)
+            else:
+                raise UpdateError("数据库迁移中断后的内容无法证明安全，已阻止启动。")
+        elif current != database.get("pre_migration_sha256"):
+            raise UpdateError("数据库在更新中断后发生未知写入，已阻止自动覆盖。")
+    return transaction
+
+
+def _target_combination_valid(root, request, transaction):
+    local = local_version(root)
+    if local["dirty"] or local["head"] != transaction["target"]:
+        raise UpdateError("新版启动回执存在，但磁盘代码不是对应正式版本。")
+    python = Path(transaction.get("target_python") or "").resolve()
+    if not python.is_file():
+        raise UpdateError("新版启动回执存在，但目标解释器已经缺失。")
+    installation = json.loads(Path(request).read_text(encoding="utf-8"))["plan"].get("installation") or {}
+    if installation.get("environment_changed"):
+        _verify_environment(python.parent.parent, root, installation)
+    database = transaction.get("database") or {}
+    if database.get("changed"):
+        state = _database_state(database["database"], json.loads(
+            Path(request).read_text(encoding="utf-8"))["runtime"])
+        if state["schema"] != database.get("schema_after"):
+            raise UpdateError("新版启动回执存在，但正式数据库版本不一致。")
+    return python
+
+
+def _rollback_transaction(request_path):
+    request_path = Path(request_path).resolve()
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    root = Path(request["root"]).resolve()
+    transaction = _reconcile_interrupted_changes(root, request_path, _load_transaction(request_path))
+    errors = []
+    if transaction.get("code_changed"):
+        try:
+            rollback(root, transaction["target"], transaction["old"], transaction.get("old_branch"))
+            transaction = _persist_transaction(request_path, code_changed=False, code_recovered=True)
+        except Exception as exc:
+            errors.append("代码恢复失败")
+    database = transaction.get("database") or {}
+    if transaction.get("database_changed"):
+        try:
+            restore_database(database, expected_current={database.get("post_migration_sha256")})
+            transaction = _persist_transaction(request_path, database_changed=False, database_recovered=True)
+        except Exception as exc:
+            errors.append(f"数据库恢复失败：{exc}")
+    if errors:
+        transaction = _persist_transaction(
+            request_path, "recovery_failed", recovery={"outcome": "blocked", "errors": errors}
+        )
+        _write_receipt(request_path, transaction, "；".join(errors) + "，已保留全部现场并阻止启动。")
+        raise UpdateError("；".join(errors) + "，已保留全部现场并阻止启动。")
+    restore_environment_pointer(root, transaction.get("old_pointer"))
+    _remove_created_environment(root, transaction)
+    transaction = _persist_transaction(
+        request_path, "rolled_back", pointer_recovered=True,
+        recovery={"outcome": "rolled_back", "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    )
+    _write_receipt(request_path, transaction, "未完成更新已安全回退，可继续使用旧版。")
+    _clear_active_transaction(root, request_path)
+    return {"action": "proceed", "transaction": transaction}
+
+
+def recover_transaction(request_path):
+    request_path = Path(request_path).resolve()
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    root = Path(request["root"]).resolve()
+    if request_path.parent.parent != metadata_dir(root).resolve():
+        raise UpdateError("更新恢复入口不属于当前安装，已阻止启动。")
+    transaction = _load_transaction(request_path)
+    if transaction["phase"] in TERMINAL_PHASES:
+        _clear_active_transaction(root, request_path)
+        return {"action": "proceed", "transaction": transaction}
+    ack = request_path.parent / "started.json"
+    alive = _process_alive(transaction.get("startup_pid"))
+    if ack.exists():
+        python = _target_combination_valid(root, request_path, transaction)
+        transaction = _persist_transaction(request_path, "committing", target_python=str(python))
+        write_environment_pointer(root, python)
+        transaction = _persist_transaction(
+            request_path, "completed", pointer_committed=True,
+            recovery={"outcome": "completed_forward", "time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        )
+        _write_receipt(request_path, transaction, "新版组合已确认并完成环境切换。")
+        _clear_active_transaction(root, request_path)
+        cleanup_committed_transactions(root, request_path.parent)
+        return {"action": "block" if alive else "proceed", "transaction": transaction}
+    if alive:
+        transaction = _persist_transaction(
+            request_path, "startup_unconfirmed", recovery={"outcome": "waiting_for_startup", "pid": transaction.get("startup_pid")}
+        )
+        _write_receipt(request_path, transaction, "新版进程仍在启动确认中；已阻止第二个实例混用环境。")
+        return {"action": "block", "transaction": transaction}
+    with application_mutex():
+        require_web_closed()
+        return _rollback_transaction(request_path)
+
+
+def apply_update(root, plan, backup, python, api=github_json, smoke=probe,
+                 runtime=None, transaction_dir=None, on_stage=None):
     """Called only after old process exits and the global application mutex is held."""
     validate_plan(root, plan, api)
+    contract = plan.get("installation") or {}
+    if contract.get("database_changed"):
+        try:
+            if runtime is None or not str(runtime).strip():
+                raise ValueError("missing runtime")
+            runtime = Path(runtime).resolve(strict=True)
+            if not runtime.is_dir():
+                raise ValueError("runtime is not a directory")
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            raise UpdateError("数据库迁移缺少有效运行目录，未开始更新。") from exc
     old, target = plan["local"]["head"], plan["target"]
     payloads = _preserved_payloads(root, plan["local"])
     backup = Path(backup)
+    if on_stage:
+        on_stage("code_backup_writing", code_backup=str(backup))
     backup.write_bytes(run_git(root, "archive", "--format=zip", old, binary=True))
     _append_preserved_backup(backup, payloads)
-    with tempfile.TemporaryDirectory(prefix="aplus-code-") as stage:
-        extract_archive(run_git(root, "archive", "--format=zip", target, binary=True), stage)
-        smoke(Path(stage), python)
-    # Revalidate after the slow probe, including fresh CI and any local edits.
-    validate_plan(root, plan, api)
-    _install_target(root, plan, payloads)
-    if run_git(root, "rev-parse", "HEAD") != target:
-        _restore_preserved(root, payloads)
-        raise UpdateError("更新结果未能确认，请人工检查；代码备份已保留。")
+    if on_stage:
+        on_stage("code_backup_ready", code_backup=str(backup), code_backup_sha256=_digest(backup))
+    transaction_dir = Path(transaction_dir or backup.parent)
+    environment_created = None
+    database_transaction = {"changed": False}
+    installed = False
+    target_python = Path(python)
     try:
-        smoke(Path(root), python)
-    except Exception:
-        # No reset/stash/clean: refuse if someone edited code meanwhile.
-        rollback(root, target, old, plan["local"].get("branch"), payloads)
-        raise UpdateError("更新后启动检查失败，已回到旧代码；数据未回退，请查看更新回执。")
-    _restore_preserved(root, payloads)
+        with tempfile.TemporaryDirectory(prefix="aplus-code-") as stage_name:
+            stage = Path(stage_name)
+            extract_archive(run_git(root, "archive", "--format=zip", target, binary=True), stage)
+            target_python, environment_created = prepare_target_environment(
+                root, stage, plan, python, smoke=smoke, on_stage=on_stage
+            )
+            if runtime is not None:
+                database_transaction = prepare_database_migration(
+                    stage, target_python, runtime, transaction_dir, contract, on_stage=on_stage
+                )
+        # Revalidate after the slow probes, including fresh CI and local edits.
+        validate_plan(root, plan, api)
+        if on_stage:
+            on_stage("switching_code", target_python=str(Path(target_python).resolve()),
+                     environment_id=contract.get("environment_id"),
+                     created_environment=str(environment_created) if environment_created else None,
+                     database=copy.deepcopy(database_transaction))
+        _install_target(root, plan, payloads)
+        installed = True
+        if on_stage:
+            on_stage("code_installed", code_changed=True)
+        if run_git(root, "rev-parse", "HEAD") != target:
+            raise UpdateError("更新结果未能确认，请人工检查；代码备份已保留。")
+        smoke(Path(root), target_python)
+        if database_transaction.get("changed"):
+            if on_stage:
+                on_stage("database_migrating", database=copy.deepcopy(database_transaction))
+            migrate_formal_database(root, target_python, runtime, database_transaction)
+            if on_stage:
+                on_stage("database_migrated", database=copy.deepcopy(database_transaction),
+                         database_changed=True)
+        _restore_preserved(root, payloads)
+        return {"python": str(Path(target_python).resolve()),
+                "environment_id": (plan.get("installation") or {}).get("environment_id"),
+                "environment_changed": bool((plan.get("installation") or {}).get("environment_changed")),
+                "environment_created": str(environment_created) if environment_created else None,
+                "database": database_transaction}
+    except Exception as exc:
+        if on_stage:
+            raise
+        rollback_error = None
+        if installed:
+            try:
+                rollback(root, target, old, plan["local"].get("branch"), payloads)
+            except Exception as rollback_exc:
+                rollback_error = rollback_exc
+        try:
+            restore_database(database_transaction)
+        except Exception as data_exc:
+            rollback_error = rollback_error or data_exc
+        if environment_created:
+            shutil.rmtree(environment_created, ignore_errors=True)
+        if not installed and isinstance(exc, UpdateError) and rollback_error is None:
+            raise
+        if rollback_error:
+            raise UpdateError("更新失败且自动回退未能完整确认；请保留代码和数据库备份并联系维护者。") from rollback_error
+        if isinstance(exc, ManualUpdateError):
+            raise
+        raise UpdateError("更新验收失败，已回到旧代码并恢复原数据库；旧环境仍可使用。") from exc
 
 
 def rollback(root, target, old, old_branch=None, payloads=None):
@@ -705,14 +1506,76 @@ def rollback(root, target, old, old_branch=None, payloads=None):
     payloads = payloads if payloads is not None else _preserved_payloads(root, local)
     _clean_preserved(root, target, payloads)
     try:
-        if old_branch and MANAGED_RELEASE_BRANCH.fullmatch(old_branch):
-            run_git(root, "switch", old_branch)
-            if run_git(root, "rev-parse", "HEAD") != old:
+        if old_branch and (old_branch == "main" or MANAGED_RELEASE_BRANCH.fullmatch(old_branch)):
+            branch_head = run_git(root, "rev-parse", f"refs/heads/{old_branch}")
+            if branch_head == target:
+                # A normal main checkout is fast-forwarded by the installer.  Move
+                # it back through a detached, clean checkout so no user payload is
+                # discarded and the old branch identity is restored as well.
+                run_git(root, "switch", "--detach", old)
+                run_git(root, "branch", "--force", old_branch, old)
+            elif branch_head != old:
                 raise UpdateError("旧发行分支位置已经变化，请用代码备份人工恢复。")
+            run_git(root, "switch", old_branch)
         else:
             run_git(root, "switch", "--detach", old)
     finally:
         _restore_preserved(root, payloads)
+
+
+def cleanup_committed_transactions(root, current_folder, keep_previous=2):
+    """Bound only completed recovery material; unresolved transactions are never deleted."""
+    base = metadata_dir(root).resolve()
+    current_folder = Path(current_folder).resolve()
+    active = None
+    try:
+        active = Path(active_transaction_path(root).read_text(encoding="utf-8").strip()).resolve().parent
+    except (OSError, ValueError):
+        pass
+    records = []
+    for path in base.iterdir():
+        transaction_path = path / TRANSACTION_FILE
+        if not path.is_dir() or path.name == "environments" or not transaction_path.is_file():
+            continue
+        try:
+            transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        records.append((path.resolve(), transaction))
+    completed = sorted((item for item in records if item[1].get("phase") == "completed"),
+                       key=lambda item: item[1].get("updated_at", ""), reverse=True)
+    keep = {current_folder}
+    previous = 0
+    for path, _transaction in completed:
+        if path == current_folder:
+            continue
+        if previous >= keep_previous:
+            break
+        keep.add(path)
+        previous += 1
+    if active:
+        keep.add(active)
+    keep.update(path for path, transaction in records if transaction.get("phase") not in TERMINAL_PHASES)
+    for path, transaction in records:
+        if transaction.get("phase") == "completed" and path not in keep:
+            shutil.rmtree(path)
+    references = set()
+    pointer = environment_pointer(root)
+    if pointer.exists():
+        references.add(str(Path(pointer.read_text(encoding="utf-8").strip()).resolve()))
+    for path, transaction in records:
+        if path not in keep:
+            continue
+        for key in ("old_python", "target_python"):
+            if transaction.get(key):
+                references.add(str(Path(transaction[key]).resolve()))
+    environments = base / "environments"
+    if environments.is_dir():
+        for folder in environments.iterdir():
+            if not folder.is_dir() or not _environment_marker(folder).is_file():
+                continue
+            if str(_environment_python(folder).resolve()) not in references:
+                shutil.rmtree(folder)
 
 
 def prepare_worker(root, plan, runtime, python=None, spawn=None, data_checksum=None):
@@ -743,10 +1606,32 @@ def prepare_worker(root, plan, runtime, python=None, spawn=None, data_checksum=N
             request['data_checksum'] = data_checksum
         request_path = folder / "request.json"
         write_json(request_path, request)
+        pointer = environment_pointer(root)
+        old_pointer = pointer.read_text(encoding="utf-8").strip() if pointer.exists() else None
+        _persist_transaction(
+            request_path, "prepared", protocol=INSTALLATION_PROTOCOL,
+            old=plan["local"]["head"], old_branch=plan["local"].get("branch"),
+            target=plan["target"], old_python=str(python), old_python_identity=_python_identity(python),
+            old_pointer=old_pointer, target_python=None,
+            environment_id=(plan.get("installation") or {}).get("environment_id"),
+            created_environment=None, code_changed=False, database_changed=False,
+            database={"changed": False}, startup_pid=None, formal_opened=False,
+            recovery={"outcome": "pending"}
+        )
+        active = active_transaction_path(root)
+        temporary = active.with_name(active.name + "." + uuid.uuid4().hex + ".tmp")
+        temporary.write_text(str(request_path.resolve()), encoding="utf-8")
+        os.replace(temporary, active)
         (spawn or subprocess.Popen)([str(python), str(helper), "--worker", str(request_path)], cwd=folder,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         return folder
     except Exception:
+        active = active_transaction_path(root)
+        try:
+            if Path(active.read_text(encoding="utf-8").strip()).resolve() == (folder / "request.json").resolve():
+                active.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
         lock.unlink(missing_ok=True)
         raise
 
@@ -780,18 +1665,30 @@ def verify_maintenance_data(request):
         raise UpdateError('运行数据在升级期间发生变化，请停止其他程序后核对；未回退或删除数据。')
 
 
+def supervise_delayed_start(request_path, launched, timeout=300):
+    """Bounded supervision after the visible startup deadline; never kill a writer."""
+    deadline = time.monotonic() + timeout
+    ack = Path(request_path).parent / "started.json"
+    while time.monotonic() < deadline and launched.poll() is None and not ack.exists():
+        time.sleep(.2)
+    if ack.exists() or launched.poll() is not None:
+        return recover_transaction(request_path)
+    return None
+
+
 def worker(request_path):
-    folder = Path(request_path).resolve().parent
-    request = json.loads(Path(request_path).read_text(encoding="utf-8"))
+    request_path = Path(request_path).resolve()
+    folder = request_path.parent
+    request = json.loads(request_path.read_text(encoding="utf-8"))
     root = Path(request["root"]).resolve()
     if folder.parent != metadata_dir(root).resolve():
         raise UpdateError("更新回执目录无效。")
-    receipt = folder / "receipt.json"
-    result = {"state": "failed", "message": "未开始更新", "old": request["plan"]["local"]["head"],
-              "old_branch": request["plan"]["local"].get("branch"),
-              "target": request["plan"]["target"]}
     exited = False
-    restarted = False
+    result = {"state": "failed", "message": "未开始更新"}
+
+    def stage(phase, **changes):
+        return _persist_transaction(request_path, phase, **changes)
+
     try:
         if os.name != "nt":
             raise UpdateError("自动重启仅支持已验收的Windows桌面安装。")
@@ -801,70 +1698,136 @@ def worker(request_path):
         if not parent:
             raise UpdateError("无法确认旧进程状态，未更新。")
         try:
+            stage("waiting_for_old_process")
             write_json(folder / "ready.json", {"ready": True})
             if k.WaitForSingleObject(ctypes.c_void_p(parent), 60000) != 0:
                 raise UpdateError("旧进程尚未退出，未更新任何代码。")
             exited = True
+            stage("old_process_exited")
         finally:
             k.CloseHandle(ctypes.c_void_p(parent))
-        if (folder / 'cancelled.json').exists():
-            raise UpdateError('用户界面已取消更新准备，未更新代码。')
+        if (folder / "cancelled.json").exists():
+            raise UpdateError("用户界面已取消更新准备，未更新代码。")
         with application_mutex():
+            stage("preflight")
             require_web_closed()
             verify_maintenance_data(request)
-            apply_update(root, request["plan"], folder / "old-code.zip", request["python"])
-            verify_maintenance_data(request)
-            if request.get('data_checksum'):
-                result['data_unchanged_before_restart'] = True
-        env = dict(os.environ, A_WORKBENCH_HOME=request["runtime"], APLUS_UPDATE_ACK=str(folder / "started.json"))
-        launched = subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
-        restarted = True
+            applied = apply_update(
+                root, request["plan"], folder / "old-code.zip", request["python"],
+                github_json, probe, request["runtime"], folder, stage
+            ) or {"python": request["python"], "database": {"changed": False}}
+            if not applied.get("database", {}).get("changed"):
+                verify_maintenance_data(request)
+            stage("ready_to_launch", target_python=applied.get("python") or request["python"],
+                  environment_id=applied.get("environment_id"),
+                  created_environment=applied.get("environment_created"),
+                  database=applied.get("database", {"changed": False}),
+                  database_changed=bool(applied.get("database", {}).get("changed")),
+                  code_changed=True)
+        transaction = _load_transaction(request_path)
+        target_python = transaction.get("target_python") or request["python"]
+        env = dict(os.environ, A_WORKBENCH_HOME=request["runtime"],
+                   APLUS_UPDATE_ACK=str(folder / "started.json"))
+        # From this point any failure is recoverable only through the persisted
+        # transaction. Mark formal data as potentially opened before Popen.
+        stage("launching", formal_opened=True)
+        try:
+            launched = subprocess.Popen(
+                [target_python, str(root / "launch_dashboard.py")], cwd=root, env=env,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+        except Exception as exc:
+            raise UpdateError("新版启动命令创建失败，正在恢复上一组版本。") from exc
+        stage("startup_wait", startup_pid=getattr(launched, "pid", None))
         deadline = time.monotonic() + 35
-        while time.monotonic() < deadline and launched.poll() is None and not (folder / "started.json").exists():
+        while (time.monotonic() < deadline and launched.poll() is None
+               and not (folder / "started.json").exists()):
             time.sleep(.2)
         if (folder / "started.json").exists():
+            outcome = recover_transaction(request_path)
+            transaction = outcome["transaction"]
             version = request["plan"].get("target_release", {}).get("version")
             label = f"v{version}" if version else "最新正式版"
-            result.update(state="completed", message=f"已更新到{label}并重新启动。\n行情和交易记录保持不变。")
-        elif launched.poll() is not None:
-            with application_mutex():
-                rollback(root, result["target"], result["old"], result.get("old_branch"))
-            env.pop("APLUS_UPDATE_ACK", None)
-            subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root, env=env,
-                             creationflags=subprocess.CREATE_NO_WINDOW)
-            raise UpdateError("新桌面启动失败，已恢复旧代码并尝试重启；请检查回执及分支。")
+            data_message = ("行情和交易记录已完成兼容迁移并保留。"
+                            if transaction.get("database", {}).get("changed")
+                            else "行情和交易记录保持不变。")
+            result = {"state": "completed", "message": f"已更新到{label}并重新启动。\n{data_message}"}
+            _write_receipt(request_path, transaction, result["message"])
+        elif launched.poll() is None:
+            transaction = stage(
+                "startup_unconfirmed",
+                recovery={"outcome": "waiting_for_startup", "pid": getattr(launched, "pid", None)}
+            )
+            result = {"state": "startup_unconfirmed",
+                      "message": "新版进程仍在启动确认中；下次启动会继续确认，期间不会混用旧环境。"}
+            _write_receipt(request_path, transaction, result["message"])
+            outcome = supervise_delayed_start(request_path, launched)
+            if outcome:
+                transaction = outcome["transaction"]
+                result = {"state": transaction["phase"], "message": "延迟启动确认已安全收尾。"}
         else:
-            result.update(state="unconfirmed", message="代码已更新，但桌面启动尚未确认；未强制关闭进程或回退数据。")
+            raise UpdateError("新版桌面在确认前退出，正在恢复上一组版本。")
     except Exception as exc:
-        result["message"] = str(exc) if isinstance(exc, UpdateError) else "更新中断，请查看回执；未删除本地数据。"
-        # Preflight/network rejection closes no data and leaves old code intact.
-        # Restore usability after the confirmed old GUI has exited, not while it runs.
-        if exited and not restarted:
-            try:
-                env = dict(os.environ, A_WORKBENCH_HOME=request["runtime"])
-                env.pop("APLUS_UPDATE_ACK", None)
-                remaining = local_version(root)
-                if remaining['head'] == result["old"] and not remaining['dirty']:
+        original = str(exc) if isinstance(exc, UpdateError) else "更新过程异常中断。"
+        try:
+            outcome = recover_transaction(request_path)
+            transaction = outcome["transaction"]
+            if transaction["phase"] == "rolled_back":
+                result = {"state": "rolled_back", "message": original + "\n已安全回退，可继续使用旧版。"}
+                _write_receipt(request_path, transaction, result["message"])
+                if exited:
+                    env = dict(os.environ, A_WORKBENCH_HOME=request["runtime"])
+                    env.pop("APLUS_UPDATE_ACK", None)
                     subprocess.Popen([request["python"], str(root / "launch_dashboard.py")], cwd=root,
                                      env=env, creationflags=subprocess.CREATE_NO_WINDOW)
-                else:
-                    result['message'] += '；代码状态未确认，请人工检查后启动。'
+            else:
+                result = {"state": transaction["phase"], "message": original}
+        except Exception as recovery_exc:
+            try:
+                transaction = _persist_transaction(
+                    request_path, "recovery_failed",
+                    recovery={"outcome": "blocked", "error": str(recovery_exc)}
+                )
+                _write_receipt(request_path, transaction,
+                               "自动恢复未能完整确认；已保留现场并阻止不安全启动。")
             except Exception:
-                result["message"] += "；请手动重新启动。"
-    finally:
-        write_json(receipt, result)
-        (metadata_dir(root) / "update.lock").unlink(missing_ok=True)
+                pass
+            result = {"state": "recovery_failed",
+                      "message": "自动恢复未能完整确认；已保留现场并阻止不安全启动。"}
     if os.name == "nt":
         if result["state"] == "completed":
             ctypes.windll.user32.MessageBoxW(0, result["message"], "Aplus更新完成", 0x40)
-        elif result["state"] != "unconfirmed":
+        elif result["state"] != "startup_unconfirmed":
             ctypes.windll.user32.MessageBoxW(
-                0, result["message"] + "\n详细回执已保留；若重试仍失败，请联系维护者。",
+                0, result["message"] + "\n详细回执已保留。",
                 "Aplus版本更新", 0x30)
+
+
+def recover_for_startup(request_path):
+    try:
+        outcome = recover_transaction(request_path)
+        return RECOVERY_BLOCKED if outcome["action"] == "block" else 0
+    except Exception as exc:
+        try:
+            transaction = _persist_transaction(
+                request_path, "recovery_failed",
+                recovery={"outcome": "blocked", "error": str(exc)}
+            )
+            _write_receipt(request_path, transaction,
+                           "未完成更新无法安全恢复；已阻止启动，请保留现场并联系维护者。")
+        except Exception:
+            pass
+        return RECOVERY_BLOCKED
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", required=True)
-    worker(parser.parse_args().worker)
+    parser.add_argument("--worker")
+    parser.add_argument("--recover")
+    arguments = parser.parse_args()
+    if bool(arguments.worker) == bool(arguments.recover):
+        parser.error("exactly one of --worker or --recover is required")
+    if arguments.worker:
+        worker(arguments.worker)
+    else:
+        raise SystemExit(recover_for_startup(arguments.recover))
