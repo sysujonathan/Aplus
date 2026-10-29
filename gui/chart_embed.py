@@ -26,15 +26,20 @@ def atomic_json(path, value):
     temporary = path.with_name(f'{path.name}.{uuid.uuid4().hex}.writing')
     try:
         temporary.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
-        for attempt in range(5):
+        # Windows surfaces both a reader holding the previous notification and a
+        # concurrent writer holding the file being replaced as PermissionError
+        # (WinError 5 or 32). A fixed 50 ms budget is not enough once several
+        # sessions write at once, so back off instead of losing the refresh.
+        delay = .005
+        for attempt in range(12):
             try:
                 os.replace(temporary, path)
                 break
             except PermissionError:
-                # Windows readers may briefly hold the previous notification.
-                if attempt == 4:
+                if attempt == 11:
                     raise
-                time.sleep(.01)
+                time.sleep(delay)
+                delay = min(delay * 2, .05)
     finally:
         temporary.unlink(missing_ok=True)
 

@@ -134,12 +134,61 @@ def test_shallow_candidate_history_connects_old_and_new_commits(repo, tmp_path):
     git(root,'merge-base','--is-ancestor',old,target)
 
 
+def bridge_parent():
+    """Pick a shallow parent whose children keep a real 8.3 alias.
+
+    Two requirements pull in opposite directions.  pip must install ONNX under
+    the environment path, so the parent has to be shallow; and the updater
+    resolves file aliases before that install, so the exercise needs two
+    spellings of one directory.  The checkout volume satisfies neither: on
+    GitHub Actions it handed the long path straight back, so both launches
+    shared one spelling.  The system drive is both shallower and alias-capable,
+    and TEMP stays as a fallback for machines where the drive root is not
+    writable.  A parent that cannot prove an alias is rejected rather than
+    silently weakening the exercise.
+    """
+    import tempfile
+    candidates = []
+    override = os.environ.get('APLUS_BRIDGE_PARENT')
+    if override:
+        candidates.append(Path(override))
+    if os.name == 'nt':
+        candidates.append(Path(os.environ.get('SYSTEMDRIVE', 'C:') + '\\') / 'aplus-bridge')
+    candidates.append(Path(tempfile.gettempdir()))
+    for parent in candidates:
+        probe = parent / 'Aplus update probe'
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            probe.mkdir(exist_ok=True)
+        except OSError:
+            continue
+        try:
+            if os.name != 'nt':
+                return parent
+            try:
+                aliased = str(windows_short_path(probe)) != str(probe)
+            except (OSError, AssertionError):
+                aliased = False
+            if aliased:
+                return parent
+        finally:
+            try:
+                probe.rmdir()
+            except OSError:
+                pass
+    pytest.skip('没有可写且能产生 8.3 别名的浅目录；无法验证别名解析（先设置 APLUS_BRIDGE_PARENT）')
+
+
 @pytest.fixture
 def short_bridge_root(request):
+    import tempfile
     # Windows without LongPathsEnabled cannot install ONNX under pytest's
     # deeply nested generated test name. Match the short daily-install layout.
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix='Aplus update ') as folder:
+    # The updater resolves aliases before pip installation, so a short 8.3
+    # alias alone does not shorten the real environment path: the parent must
+    # be shallow *and* alias-capable. bridge_parent() proves both, and the
+    # assertion below keeps the two-spelling exercise honest.
+    with tempfile.TemporaryDirectory(prefix='Aplus update ', dir=bridge_parent()) as folder:
         processes = []
         request.node.bridge_processes = processes
         try:
@@ -195,6 +244,8 @@ def assert_bridge_completed(folder):
     receipt = json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
     diagnostics = {path.name: path.read_text(encoding='utf-8', errors='replace')[-16000:]
                    for path in folder.glob('desktop-*.log')}
+    diagnostics.update({path.name: path.read_text(encoding='utf-8', errors='replace')[-16000:]
+                        for path in (folder.parent/'environments').glob('*-install.log')})
     if receipt['state'] != 'completed':
         # Pytest abbreviates dictionary reprs. Keep the actual stack available
         # in captured stdout even with the normal CI verbosity.
@@ -203,16 +254,28 @@ def assert_bridge_completed(folder):
 
 
 def assert_controlled_desktop(folder, children, launches, owned):
+    # Report pre-launch failures before checking for a child that cannot exist.
+    assert_bridge_completed(folder)
     assert len(children) == len(launches) == 1, launches
     child, launch = children[0], launches[0]
     assert child in owned and child.pid == launch['pid']
     assert launch['isolated_branch'] and launch['identity']['samefile']
     assert not launch['identity']['old_string_equal'], launch
     assert json.loads((folder/'started.json').read_text()) == {'started': True}
-    assert_bridge_completed(folder)
     assert child.wait(timeout=15) == 0
     print(json.dumps(dict(stage=launch['stage'], pid=child.pid, ack=True, completed=True,
                           exit_code=child.returncode)), flush=True)
+
+
+def test_prelaunch_failure_reports_install_log_before_missing_child(tmp_path, capsys):
+    folder = tmp_path/'attempt'; folder.mkdir()
+    (folder/'receipt.json').write_text(json.dumps({'state': 'rolled_back', 'message': 'install failed'}))
+    environments = tmp_path/'environments'; environments.mkdir()
+    (environments/'example-install.log').write_text('dependency path is too long')
+    with pytest.raises(AssertionError, match='rolled_back'):
+        assert_controlled_desktop(folder, [], [], [])
+    diagnostic = capsys.readouterr().out
+    assert 'install failed' in diagnostic and 'dependency path is too long' in diagnostic
 
 
 @pytest.mark.parametrize('kind', ['approved', 'changed', 'private-key', 'other-pem', 'user-cert', 'database'])
@@ -344,7 +407,16 @@ def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_b
     # distinct identity for the two-release simulation, even with identical bytes.
     git(root, 'add', '.'); git(root, 'commit', '--allow-empty', '-m', 'candidate bridge release')
     target = git(root, 'rev-parse', 'HEAD')
-    git(root, 'switch', '-c', 'main', base)
+    # A main push checkout is cloned with an existing local main branch; a
+    # PR/detached checkout need not have one. Exercise the collision on every
+    # runner so a green PR cannot hide the main-only setup failure again.
+    git(root, 'branch', '-f', 'main', source_head)
+    assert git(root, 'rev-parse', 'main') == source_head
+    # This reset belongs only to the disposable clone, never the source repo
+    # or the user's installation. Keep candidate intact for the real upgrade.
+    git(root, 'switch', '-C', 'main', base)
+    assert git(root, 'rev-parse', 'HEAD') == base
+    assert git(root, 'rev-parse', 'candidate') == target
     git(root, 'update-ref', 'refs/aplus-update/main', target)
     from workbench.store import Store
     runtime = tmp_path/'existing-runtime'
