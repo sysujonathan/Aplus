@@ -25,15 +25,22 @@ If fso.FileExists(activeTransaction) Then
     activeFile.Close
     recoveryWorker = fso.BuildPath(fso.GetParentFolderName(recoveryRequest), "worker.py")
     If Not fso.FileExists(recoveryPy) Or Not fso.FileExists(recoveryWorker) Then
-        MsgBox "检测到未完成的软件更新，但恢复入口不完整。为保护行情和交易记录，本次未启动，请联系维护者。", 48, "Aplus安全恢复"
+        MsgBox U("68c0 6d4b 5230 672a 5b8c 6210 7684 8f6f 4ef6 66f4 65b0 ff0c 4f46 6062 590d 5165 53e3 4e0d 5b8c 6574 3002 4e3a 4fdd 62a4 884c 60c5 548c 4ea4 6613 8bb0 5f55 ff0c 672c 6b21 672a 542f 52a8 ff0c 8bf7 8054 7cfb 7ef4 62a4 8005 3002"), 48, U("41 70 6c 75 73 5b89 5168 6062 590d")
         WScript.Quit 20
     End If
     recoveryCode = ws.Run("""" & recoveryPy & """ """ & recoveryWorker & """ --recover """ & recoveryRequest & """", 0, True)
     If recoveryCode <> 0 Then
-        MsgBox "软件更新仍在确认或需要人工处理。为避免新旧版本混用，本次未启动。", 48, "Aplus安全恢复"
+        MsgBox U("8f6f 4ef6 66f4 65b0 4ecd 5728 786e 8ba4 6216 9700 8981 4eba 5de5 5904 7406 3002 4e3a 907f 514d 65b0 65e7 7248 672c 6df7 7528 ff0c 672c 6b21 672a 542f 52a8 3002"), 48, U("41 70 6c 75 73 5b89 5168 6062 590d")
         WScript.Quit recoveryCode
     End If
 End If
+
+Function U(value)
+    U = ""
+    For Each code In Split(value, " ")
+        U = U & ChrW(CLng("&H" & code))
+    Next
+End Function
 py = ""
 If fso.FileExists(pointer) Then
     Set pointerFile = fso.OpenTextFile(pointer, 1, False)
