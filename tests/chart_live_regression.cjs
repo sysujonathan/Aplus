@@ -61,7 +61,7 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync(path.join(assets, 'chart-coordinates.js'), 'utf8'), context);
 context.chartCoordinates = context.window.AplusChartCoordinates;
-vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'switchProductionTimeframe']
+vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'periodLabel', 'switchProductionTimeframe']
   .map(functionSource).join('\n') + '\n' + arrowSource('aplusApplyLiveBars'), context);
 
 const apply = payload => context.window.aplusApplyLiveBars(payload);
@@ -84,8 +84,18 @@ function run() {
   assert.equal(Math.abs(bounds.min), 0, 'no reserved future minutes for an intraday axis');
   assert.equal(bounds.max, rows.length - 1);
 
-  // ---- first delivery switches the chart onto real intraday bars --------
+  // ---- first delivery caches minutes without switching away from daily --
   assert.equal(apply({series: {m5: rows}, live: {source: '腾讯 5 分钟'}}), true);
+  assert.equal(context.activeTimeframeUnit, 'daily');
+  assert.deepEqual(context.bars, daily);
+  assert.equal(toasts.length, 0);
+  // Selecting another stock starts another daily view; its first delivery
+  // must not introduce an automatic minute switch either.
+  delete context.chartBoot.series.m5;
+  assert.equal(apply({series: {m5: rows}}), true);
+  assert.equal(context.activeTimeframeUnit, 'daily');
+  assert.deepEqual(context.bars, daily);
+  assert.equal(vm.runInContext("switchProductionTimeframe('m5', false)", context), true);
   assert.equal(context.activeTimeframeUnit, 'm5');
   assert.equal(context.bars.length, rows.length);
   assert.equal(context.bars.at(-1).date, rows.at(-1).date);
@@ -93,7 +103,6 @@ function run() {
   assert.equal(context.chartBoot.series.m5.length, rows.length);
   assert.equal(context.chartBoot.seriesCloseDates.m5[rows.at(-1).date], rows.at(-1).date);
   assert.equal(context.chartBoot.live.source, '腾讯 5 分钟');
-  assert.ok(toasts.some(text => text.includes('5 分钟')));
 
   // ---- newest pinned: one more bar shifts everything left ---------------
   context.viewCount = 20;

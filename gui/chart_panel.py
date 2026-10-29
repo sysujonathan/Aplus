@@ -1,5 +1,6 @@
 """工程 A K 线与量能的石墨主题呈现；仅读取新工程快照。"""
 from __future__ import annotations
+import time
 import tkinter as tk
 from tkinter import ttk as native_ttk
 import ttkbootstrap as ttk
@@ -57,10 +58,24 @@ def _configure_chart_styles():
     style.configure("ChartHost.TFrame", background=APP_BG)
 
 
+def should_read_intraday(*, loaded, in_session):
+    """Whether this tick should ask the provider for minutes.
+
+    The first read of a symbol happens even with the market shut: opening the
+    watch list at noon or in the evening must still fill the five-minute, hourly
+    and half-day units instead of leaving three dead buttons.  Only the repeat
+    polling is limited to the session.
+    """
+    return bool(in_session or not loaded)
+
+
 class ChartPanel(native_ttk.Frame):
     """一个独立图格：自身标的、活动状态以及独立 TradingView 入口。"""
 
-    def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None):
+    #: 休市时只做一次首帧读取；失败后隔这么久再试，避免离线时反复打网络。
+    CLOSED_RETRY_SECONDS = 300
+    def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None,
+                 minute_fetch=None, hourly_fetch=None):
         _configure_chart_styles()
         super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
         self.store = store
@@ -77,6 +92,21 @@ class ChartPanel(native_ttk.Frame):
         self._embedded = None
         self._interactive = interactive
         self._manual_controller = None
+        # Live intraday reader. Only the active tile polls, so a four-tile page
+        # still costs one request per cycle instead of four.
+        self._intraday_on = False
+        self._intraday_poller = None
+        self._intraday_source = None
+        self._minute_fetch = minute_fetch
+        self._hourly_fetch = hourly_fetch
+        self._intraday_frame = None
+        self._hourly = None
+        self._intraday_after = None
+        self._intraday_due = 0.0
+        self._intraday_code = None
+        self._intraday_sent = None
+        self._intraday_loaded = False
+        self._intraday_calendar = None
         self.bind('<Destroy>', self._destroy_manual, add='+')
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -208,6 +238,110 @@ class ChartPanel(native_ttk.Frame):
         self.title_label.configure(bg=color)
         self._tv_btn.configure(bg=color)
         self._analysis_btn.configure(bg=color)
+        self._accept_intraday(bool(active))
+
+    # ---- live intraday on the active tile --------------------------------
+    def _accept_intraday(self, on):
+        """Poll live minutes only while this tile is the one being read.
+
+        A four-tile page would otherwise pay four provider requests per cycle
+        for charts nobody is looking at. Switching tiles invalidates the old
+        reader, so a late answer for the previous symbol is discarded instead
+        of being drawn on the new one.
+        """
+        if not on:
+            self._intraday_on = False
+            if self._intraday_poller is not None:
+                self._intraday_poller.invalidate()
+            return
+        if not self._interactive or not self.store:
+            return
+        self._intraday_on = True
+        if self._intraday_poller is None:
+            from workbench.live_minutes import HourlyHistory, IntradaySource, MinutePoller
+            self._intraday_source = self._minute_fetch or IntradaySource()
+            fetch = self._hourly_fetch or self._minute_fetch
+            self._hourly = HourlyHistory(fetch=fetch) if fetch is not None else HourlyHistory()
+            self._intraday_poller = MinutePoller(fetch=self._intraday_source)
+        if self._intraday_after is None:
+            self._intraday_after = self.after(600, self._intraday_tick)
+
+    def _intraday_calendar_state(self):
+        if self._intraday_calendar is None:
+            try:
+                import json
+                self._intraday_calendar = json.loads(
+                    (self.store.root / "trading_calendar.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError, AttributeError):
+                self._intraday_calendar = False
+        return self._intraday_calendar or None
+
+    def _intraday_tick(self):
+        self._intraday_after = None
+        if not self._intraday_on or not self.winfo_exists():
+            return
+        poller = self._intraday_poller
+        if self._code != self._intraday_code and poller is not None:
+            poller.invalidate()
+            self._intraday_code, self._intraday_sent = self._code, None
+            self._intraday_loaded = False
+            self._intraday_frame = None
+            self._intraday_due = 0.0
+        result = poller.take() if poller is not None else None
+        if result is not None and result[0] is not None:
+            self._publish_intraday(result[0])
+        from workbench.holding_quotes import china_now, session_status
+        if self._code and poller is not None:
+            in_session = session_status(
+                china_now(), self._intraday_calendar_state()) == "交易中"
+            # The first read for a symbol happens even with the market shut: a
+            # trader opening the watch list at noon or in the evening must still
+            # get the five-minute, hourly and half-day units instead of three
+            # dead buttons.  Only the repeat polling is limited to the session.
+            if should_read_intraday(loaded=self._intraday_loaded, in_session=in_session) \
+                    and time.monotonic() >= self._intraday_due and not poller.busy:
+                poller.start(self._code)
+                self._intraday_due = time.monotonic() + (
+                    poller.delay if in_session else self.CLOSED_RETRY_SECONDS)
+        if self._hourly is not None and self._code in self._hourly.take(successful_only=True):
+            # The hourly history arrived after the first frame was drawn.
+            self._intraday_sent = None
+            if self._intraday_frame is not None:
+                self._publish_intraday(self._intraday_frame)
+        self._intraday_after = self.after(500, self._intraday_tick)
+
+    def _publish_intraday(self, frame):
+        from workbench.live_minutes import INTERVAL, coarse_series, minute_rows
+        embedded = self._embedded
+        if embedded is None or embedded.closed():
+            return
+        try:
+            rows = minute_rows(frame)
+        except ValueError:
+            return
+        tail = rows[-1]
+        self._intraday_frame = frame
+        key = (tail['date'], len(rows), tail['close'], tail['volume'])
+        if key == self._intraday_sent:
+            return
+        if self._hourly is not None:
+            self._hourly.request(self._code)
+        series = {"m5": rows}
+        for unit, minutes in (("m60", 60), ("m240", 240)):
+            history = self._hourly.history(self._code) if self._hourly is not None else None
+            coarse = coarse_series(history, frame, minutes)
+            if coarse is None or not len(coarse):
+                continue
+            try:
+                series[unit] = minute_rows(coarse)
+            except ValueError:
+                continue
+        payload = {"series": series,
+                   "live": {"interval": INTERVAL, "source": "腾讯分钟行情",
+                            "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
+        if embedded.push_live(payload):
+            self._intraday_sent = key
+            self._intraday_loaded = True
 
     def set_drop_target(self, active):
         if active:

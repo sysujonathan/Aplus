@@ -82,6 +82,7 @@ class _PrototypeParser(HTMLParser):
         self.ids = set()
         self.remote_assets = []
         self.minute_buttons = []
+        self.timeframe_buttons = []
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
@@ -92,6 +93,8 @@ class _PrototypeParser(HTMLParser):
             self.remote_assets.append(url)
         if tag == 'button' and 'disabled' in values.get('class', '').split():
             self.minute_buttons.append(values.get('data-unavailable'))
+        if tag == 'button' and values.get('data-timeframe'):
+            self.timeframe_buttons.append(values['data-timeframe'])
 
 
 def test_prototype_is_offline_and_contains_reviewed_states():
@@ -104,7 +107,9 @@ def test_prototype_is_offline_and_contains_reviewed_states():
         'replayBar', 'replayStartModal', 'replayExitModal',
         'chartNavControls', 'snapshotModal', 'removeModal',
     } <= parser.ids
-    assert parser.minute_buttons == ['当前未接入分钟行情'] * 3
+    # Every intraday period is a real button; none of them is a dead label.
+    assert parser.minute_buttons == []
+    assert parser.timeframe_buttons == ['m5', 'm60', 'm240', 'daily', 'weekly', 'monthly']
 
 
 def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():

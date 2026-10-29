@@ -246,27 +246,37 @@ def workspace_boot(store, context):
     if timeframe == "daily":
         series["weekly"] = _bars(_resample(frame, "W-FRI"))
         series["monthly"] = _bars(_resample(frame, "ME"))
-    # Live intraday bars are transport, not Store history. They are offered as a
-    # separate unit so a failed refresh can never be mistaken for daily prices.
-    minute = context.get("minute_series")
-    if minute is not None:
-        series["m5"] = _bars(minute)
+    # Live intraday bars are transport, not Store history. They are offered as
+    # separate units so a failed refresh can never be mistaken for daily prices.
+    # Unit names stay in the ``m<n>`` shape the page already treats as intraday.
+    for unit, context_key in (("m5", "minute_series"), ("m60", "hour_series"),
+                              ("m240", "halfday_series")):
+        unit_frame = context.get(context_key)
+        if unit_frame is not None and len(unit_frame):
+            series[unit] = _bars(unit_frame)
     from .chart_evidence import strategy_evidence
     vectors = strategy_evidence(context)
     from workbench.chart_workspace import bar_close_time
+    intraday = ("m5", "m60", "m240")
     close_dates = {unit: {row['date']: str(bar_close_time(row['date'], unit).date()) for row in data}
-                   for unit, data in series.items() if unit != "m5"}
-    if "m5" in series:
-        # Tencent labels each bar with its closing minute, so the watermark is
-        # the bar's own timestamp; adding the legacy five minutes would misdate it.
-        close_dates["m5"] = {row['date']: row['date'] for row in series["m5"]}
-    start_timeframe = str(context.get('display_timeframe') or '')
+                   for unit, data in series.items() if unit not in intraday}
+    for unit in intraday:
+        if unit in series:
+            # Tencent labels each bar with its own closing minute, so the
+            # watermark is the bar's timestamp; adding the legacy five minutes
+            # would misdate it. This holds for the 60-minute and half-day units
+            # too, which the page builds from the same closing-labelled transport.
+            close_dates[unit] = {row['date']: row['date'] for row in series[unit]}
+    # Each candidate/watch/position selection starts in its base daily/weekly
+    # view, even if an older saved view for that symbol was a minute chart.
+    base_start = timeframe if context.get('context_kind') in ('candidate', 'watch', 'holding', 'closed') else ''
+    start_timeframe = str(context.get('display_timeframe') or base_start)
     if start_timeframe not in series:
         start_timeframe = ''
     live = None
     if "m5" in series:
         live = {"interval": int(context.get("minute_interval") or 8),
-                "source": str(context.get("minute_source") or "腾讯 5 分钟"),
+                "source": str(context.get("minute_source") or "腾讯分钟行情"),
                 "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}
     return {
         "production": True, "identity": key, "revision": int(document["revision"]),

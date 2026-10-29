@@ -235,30 +235,92 @@ def create_alert(*, name, code, source, adjustment, timeframe, target, condition
     return alert
 
 
-def aggregate_minutes(frame, minutes):
-    """Aggregate complete real A-share sessions without inventing missing bars."""
+def aggregate_minutes(frame, minutes, *, allow_open_tail=False, closing_labelled=False):
+    """Aggregate real five-minute sessions into 1-hour or half-day bars.
+
+    A bar is closed only when its whole slice of the session arrived, so a
+    missing minute can never be papered over.  ``allow_open_tail`` keeps the
+    trailing bar of the newest session while it is still forming: that is the
+    only bar a reader may see before its slice ends, and it is exactly what a
+    live chart draws.  Anything earlier must be complete.
+
+    ``closing_labelled`` says the frame's timestamp is the bar's own close, as
+    every live transport here is.  Imported CSV files are start-labelled, so
+    their slices are counted from the session open instead; a tail-only live
+    frame cannot be counted that way because it does not start at the open.
+
+    Live closing-labelled frames use one 4-hour display bar per half session.
+    Default CSV/alert callers retain one 4-hour bar per complete trading day.
+    """
     minutes = int(minutes)
     if minutes not in (60, 240):
         raise ValueError('分钟聚合仅支持 1 小时或 4 小时')
     value = frame.copy()
     stamp = pd.to_datetime(value.date)
     validate_session_sequence(stamp, 5)
-    pieces = []
     value['_stamp'] = stamp
-    for _, day in value.groupby(stamp.dt.strftime('%Y-%m-%d'), sort=False):
-        morning = day.loc[day._stamp.dt.hour.lt(12)]
-        afternoon = day.loc[day._stamp.dt.hour.ge(13)]
-        if len(morning) != 24 or len(afternoon) != 24:
+    value['_day'] = stamp.dt.strftime('%Y-%m-%d')
+    if not closing_labelled:
+        # Preserve the original CSV and persisted-alert aggregation contract.
+        pieces = []
+        for _, day in value.groupby('_day', sort=False):
+            morning = day.loc[day._stamp.dt.hour.lt(12)]
+            afternoon = day.loc[day._stamp.dt.hour.ge(13)]
+            if len(morning) != 24 or len(afternoon) != 24:
+                continue
+            groups = [day] if minutes == 240 else [morning.iloc[:12], morning.iloc[12:],
+                                                   afternoon.iloc[:12], afternoon.iloc[12:]]
+            for group in groups:
+                pieces.append(dict(date=str(group.date.iloc[-1]), open=float(group.open.iloc[0]),
+                    high=float(group.high.max()), low=float(group.low.min()), close=float(group.close.iloc[-1]),
+                    volume=float(group.volume.sum())))
+        if not pieces:
+            raise ValueError(f'没有完整的 {minutes//60} 小时交易时段；不会用缺失分钟线拼接')
+        return pd.DataFrame(pieces)
+    size = 12 if minutes == 60 else 24
+    # Closing minute of each slice inside one session. A bar that is still
+    # forming is placed where it will close rather than at whichever minute
+    # arrived last, which would read as an extra candle between two closed ones.
+    # The afternoon's two hours are 14:00 and 15:00, not a continuation of the
+    # morning count: lunch break means 11:30 + 60 minutes is not a real close.
+    grid = [10 * 60 + 30, 11 * 60 + 30, 14 * 60, 15 * 60] if minutes == 60 \
+        else [11 * 60 + 30, 15 * 60]
+    span = 60 if minutes == 60 else 120
+
+    def slice_of(minute):
+        """Which slice of the session a closing-labelled bar belongs to."""
+        morning = minute <= 11 * 60 + 30
+        base = 9 * 60 + 30 if morning else 13 * 60
+        if minutes == 240:
+            return 0 if morning else 1
+        step = max(0, minute - base - 1) // span
+        return (0 if morning else 2) + min(1, step)
+
+    value['_slice'] = [slice_of(int(t.hour) * 60 + int(t.minute)) for t in stamp]
+    buckets = list(value.groupby(['_day', '_slice'], sort=True))
+    newest = buckets[-1][0] if buckets else None
+    pieces = []
+    for (day_key, index), group in buckets:
+        if len(group) == size:
+            label = str(group.date.iloc[-1])
+        elif (allow_open_tail and (day_key, index) == newest and 0 < len(group) < size
+              and group._stamp.iloc[0].hour * 60 + group._stamp.iloc[0].minute
+                  == grid[index] - span + 5):
+            # Only the newest slice may be forming; a short earlier one is a
+            # hole in the data, not a bar that has not finished yet.
+            close = grid[index]
+            sample = str(group.date.iloc[-1])
+            # Keep the frame's own clock precision (with or without seconds).
+            label = f'{day_key} {close // 60:02d}:{close % 60:02d}{sample[16:]}'
+        else:
             continue
-        groups = [day] if minutes == 240 else [morning.iloc[:12], morning.iloc[12:],
-                                               afternoon.iloc[:12], afternoon.iloc[12:]]
-        for group in groups:
-            pieces.append(dict(date=str(group.date.iloc[-1]), open=float(group.open.iloc[0]),
-                high=float(group.high.max()), low=float(group.low.min()), close=float(group.close.iloc[-1]),
-                volume=float(group.volume.sum())))
+        pieces.append(dict(date=label, open=float(group.open.iloc[0]),
+            high=float(group.high.max()), low=float(group.low.min()), close=float(group.close.iloc[-1]),
+            volume=float(group.volume.sum())))
     if not pieces:
         raise ValueError(f'没有完整的 {minutes//60} 小时交易时段；不会用缺失分钟线拼接')
     return pd.DataFrame(pieces)
+
 
 
 def validate_session_sequence(dates, minutes=5):

@@ -47,7 +47,7 @@ context.window.pywebview = {api: {
   finish_close: async () => {closed = true;}, cancel_close: () => {cancelled = true;}
 }};
 context.snapDrawingPoint = point => ({ index:point.index, value:point.value });
-vm.runInContext(['savePrototypeState','calculateEma','switchProductionTimeframe','moveObjectFromOriginal'].map(functionSource).join('\n'), context);
+vm.runInContext(['savePrototypeState','calculateEma','periodLabel','switchProductionTimeframe','moveObjectFromOriginal'].map(functionSource).join('\n'), context);
 async function run() {
   await vm.runInContext('savePrototypeState()', context);
   const original = JSON.stringify(context.userObjects.map(o => ({a:o.a,b:o.b,points:o.points,created:o.createdAtDate})));
