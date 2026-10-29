@@ -139,7 +139,11 @@ def short_bridge_root(request):
     # Windows without LongPathsEnabled cannot install ONNX under pytest's
     # deeply nested generated test name. Match the short daily-install layout.
     import tempfile
-    with tempfile.TemporaryDirectory(prefix='Aplus update ') as folder:
+    # The updater resolves aliases before pip installation. A short 8.3 alias
+    # alone therefore does not shorten the real environment path. Keep the
+    # disposable directory beside the checkout (outside its tracked tree),
+    # instead of the much deeper per-user Windows TEMP directory.
+    with tempfile.TemporaryDirectory(prefix='Aplus update ', dir=ROOT.parent) as folder:
         processes = []
         request.node.bridge_processes = processes
         try:
@@ -195,6 +199,8 @@ def assert_bridge_completed(folder):
     receipt = json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
     diagnostics = {path.name: path.read_text(encoding='utf-8', errors='replace')[-16000:]
                    for path in folder.glob('desktop-*.log')}
+    diagnostics.update({path.name: path.read_text(encoding='utf-8', errors='replace')[-16000:]
+                        for path in (folder.parent/'environments').glob('*-install.log')})
     if receipt['state'] != 'completed':
         # Pytest abbreviates dictionary reprs. Keep the actual stack available
         # in captured stdout even with the normal CI verbosity.
@@ -203,16 +209,28 @@ def assert_bridge_completed(folder):
 
 
 def assert_controlled_desktop(folder, children, launches, owned):
+    # Report pre-launch failures before checking for a child that cannot exist.
+    assert_bridge_completed(folder)
     assert len(children) == len(launches) == 1, launches
     child, launch = children[0], launches[0]
     assert child in owned and child.pid == launch['pid']
     assert launch['isolated_branch'] and launch['identity']['samefile']
     assert not launch['identity']['old_string_equal'], launch
     assert json.loads((folder/'started.json').read_text()) == {'started': True}
-    assert_bridge_completed(folder)
     assert child.wait(timeout=15) == 0
     print(json.dumps(dict(stage=launch['stage'], pid=child.pid, ack=True, completed=True,
                           exit_code=child.returncode)), flush=True)
+
+
+def test_prelaunch_failure_reports_install_log_before_missing_child(tmp_path, capsys):
+    folder = tmp_path/'attempt'; folder.mkdir()
+    (folder/'receipt.json').write_text(json.dumps({'state': 'rolled_back', 'message': 'install failed'}))
+    environments = tmp_path/'environments'; environments.mkdir()
+    (environments/'example-install.log').write_text('dependency path is too long')
+    with pytest.raises(AssertionError, match='rolled_back'):
+        assert_controlled_desktop(folder, [], [], [])
+    diagnostic = capsys.readouterr().out
+    assert 'install failed' in diagnostic and 'dependency path is too long' in diagnostic
 
 
 @pytest.mark.parametrize('kind', ['approved', 'changed', 'private-key', 'other-pem', 'user-cert', 'database'])
@@ -344,7 +362,16 @@ def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_b
     # distinct identity for the two-release simulation, even with identical bytes.
     git(root, 'add', '.'); git(root, 'commit', '--allow-empty', '-m', 'candidate bridge release')
     target = git(root, 'rev-parse', 'HEAD')
-    git(root, 'switch', '-c', 'main', base)
+    # A main push checkout is cloned with an existing local main branch; a
+    # PR/detached checkout need not have one. Exercise the collision on every
+    # runner so a green PR cannot hide the main-only setup failure again.
+    git(root, 'branch', '-f', 'main', source_head)
+    assert git(root, 'rev-parse', 'main') == source_head
+    # This reset belongs only to the disposable clone, never the source repo
+    # or the user's installation. Keep candidate intact for the real upgrade.
+    git(root, 'switch', '-C', 'main', base)
+    assert git(root, 'rev-parse', 'HEAD') == base
+    assert git(root, 'rev-parse', 'candidate') == target
     git(root, 'update-ref', 'refs/aplus-update/main', target)
     from workbench.store import Store
     runtime = tmp_path/'existing-runtime'
