@@ -18,6 +18,100 @@ ROOT = Path(__file__).resolve().parents[1]
 CERT = 'tests/fixtures/tls/emsign-ecc-root-g3.pem'
 
 
+def windows_short_path(path):
+    import ctypes
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, len(buffer))
+    assert 0 < length < len(buffer), ctypes.WinError()
+    return Path(buffer.value)
+
+
+def launcher_identity(command, expected):
+    """Fail closed for desktop commands that cannot prove file identity."""
+    if len(command) < 2:
+        return None
+    actual, expected = Path(command[1]), Path(expected)
+    proof = dict(actual=str(actual), expected=str(expected),
+                 actual_resolved=str(actual.resolve()), expected_resolved=str(expected.resolve()),
+                 old_string_equal=str(actual) == str(expected))
+    try:
+        proof['samefile'] = actual.samefile(expected)
+    except OSError as error:
+        proof.update(samefile=False, identity_error=str(error))
+    if proof['samefile']:
+        return proof
+    if 'launch_dashboard.py' in {actual.name.casefold(), actual.resolve().name.casefold()}:
+        raise AssertionError('Uncontrolled desktop refused: ' + json.dumps(proof))
+    return None
+
+
+def controlled_launcher(root, script, stage, real_popen, owned, children, launches):
+    def popen(command, **kwargs):
+        identity = launcher_identity(command, root/'launch_dashboard.py')
+        if identity is None:
+            return real_popen(command, **kwargs)
+        import uuid
+        mutex = 'Local\\AplusBridge'+stage+'-'+uuid.uuid4().hex
+        isolated = [command[0], '-I', '-c', script, str(root), mutex]
+        folder = Path(kwargs['env']['APLUS_UPDATE_ACK']).parent
+        with (folder/'desktop-output.log').open('wb') as log:
+            child = real_popen(isolated, stdout=log, stderr=log, **kwargs)
+        owned.append(child)
+        children.append(child)
+        proof = dict(stage=stage, isolated_branch=True, pid=child.pid, mutex=mutex,
+                     requested_command=list(map(str, command)), isolated_command=list(map(str, isolated)),
+                     identity=identity)
+        launches.append(proof)
+        v.write_json(folder/'controlled-launch.json', proof)
+        print(json.dumps(proof), flush=True)
+        return child
+    return popen
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows real 8.3 file identities')
+@pytest.mark.parametrize('stage', ['Initial', 'Next'])
+@pytest.mark.parametrize('spelling', ['long', 'short-file', 'case'])
+def test_launcher_interception_uses_windows_file_identity(tmp_path, stage, spelling):
+    folder = tmp_path/'Aplus launcher identity'; folder.mkdir()
+    launcher = folder/'launch_dashboard.py'; launcher.write_text('# identity only')
+    short_root = windows_short_path(folder)
+    assert str(short_root) != str(folder), '8.3 alias required for the regression'
+    command_path = {'long': str(launcher.resolve()), 'short-file': str(windows_short_path(launcher)),
+                    'case': str(launcher.resolve()).swapcase()}[spelling]
+    command = [sys.executable, command_path]
+    expected = short_root/'launch_dashboard.py'
+    assert str(command[1]) != str(expected)  # The previous interception missed.
+    assert Path(command[1]).samefile(expected)
+    child = Mock(pid=1234); real_popen = Mock(return_value=child)
+    owned, children, launches = [], [], []
+    intercepted = controlled_launcher(short_root, '# isolated test desktop', stage,
+                                     real_popen, owned, children, launches)
+    assert intercepted(command, env={'APLUS_UPDATE_ACK': str(tmp_path/'started.json')}) is child
+    assert owned == children == [child] and len(launches) == 1
+    assert launches[0]['identity']['samefile'] is True
+    assert launches[0]['isolated_branch'] is True
+    assert real_popen.call_args.args[0][1:3] == ['-I', '-c']
+
+
+@pytest.mark.parametrize('stage', ['Initial', 'Next'])
+@pytest.mark.parametrize('kind', ['other-file', 'missing'])
+def test_launcher_interception_refuses_unknown_desktop(tmp_path, stage, kind):
+    root = tmp_path/'expected'; root.mkdir()
+    (root/'launch_dashboard.py').write_text('# expected')
+    other = tmp_path/'other'; other.mkdir()
+    actual = other/'launch_dashboard.py'
+    if kind == 'other-file':
+        actual.write_text('# not the test installation')
+    real_popen = Mock()
+    intercepted = controlled_launcher(root, '# controlled', stage, real_popen, [], [], [])
+    with pytest.raises(AssertionError, match='Uncontrolled desktop refused'):
+        intercepted([sys.executable, str(actual)])
+    real_popen.assert_not_called()
+    # Legitimate non-desktop commands keep their normal purpose.
+    intercepted([sys.executable, '-I', '-m', 'pip', 'check'])
+    real_popen.assert_called_once_with([sys.executable, '-I', '-m', 'pip', 'check'])
+
+
 def ensure_candidate_history(root, source_head, base):
     # Connecting both endpoints matters: fetching the old object alone cannot
     # prove ancestry when the candidate itself is a shallow boundary.
@@ -45,15 +139,19 @@ def short_bridge_root(request):
     # Windows without LongPathsEnabled cannot install ONNX under pytest's
     # deeply nested generated test name. Match the short daily-install layout.
     import tempfile
-    with tempfile.TemporaryDirectory(prefix='au-') as folder:
+    with tempfile.TemporaryDirectory(prefix='Aplus update ') as folder:
         processes = []
         request.node.bridge_processes = processes
         try:
-            yield Path(folder)
+            short = windows_short_path(folder) if os.name == 'nt' else Path(folder)
+            assert str(short) != str(Path(folder)), 'A real 8.3 alias must exercise both launches'
+            yield short
         finally:
             # Only processes created explicitly by this disposable test. A failed
             # startup assertion must not leave DLLs locked during fixture cleanup.
             stop_bridge_processes(processes)
+    assert not Path(folder).exists()
+    print('bridge temporary environment removed after all owned processes exited', flush=True)
 
 
 def stop_bridge_processes(processes):
@@ -102,6 +200,19 @@ def assert_bridge_completed(folder):
         # in captured stdout even with the normal CI verbosity.
         print(json.dumps({'receipt': receipt, 'desktop': diagnostics}, ensure_ascii=True, indent=2))
     assert receipt['state'] == 'completed', {'receipt': receipt, 'desktop': diagnostics}
+
+
+def assert_controlled_desktop(folder, children, launches, owned):
+    assert len(children) == len(launches) == 1, launches
+    child, launch = children[0], launches[0]
+    assert child in owned and child.pid == launch['pid']
+    assert launch['isolated_branch'] and launch['identity']['samefile']
+    assert not launch['identity']['old_string_equal'], launch
+    assert json.loads((folder/'started.json').read_text()) == {'started': True}
+    assert_bridge_completed(folder)
+    assert child.wait(timeout=15) == 0
+    print(json.dumps(dict(stage=launch['stage'], pid=child.pid, ack=True, completed=True,
+                          exit_code=child.returncode)), flush=True)
 
 
 @pytest.mark.parametrize('kind', ['approved', 'changed', 'private-key', 'other-pem', 'user-cert', 'database'])
@@ -283,23 +394,15 @@ main_window.AplusMainWindow=TestWindow
 progress('starting desktop')
 launch.main()
 '''
-    import uuid
     import threading
     from contextlib import nullcontext
     from tools import maintenance_update as maintenance
     real_popen = subprocess.Popen
     old = real_popen([sys.executable, '-I', '-c', 'input()'], stdin=subprocess.PIPE)
     owned_processes.append(old)
-    workers, children, data_checks = [], [], []
-    def initial_popen(command, **kwargs):
-        if len(command)>1 and str(command[1]) == str(root/'launch_dashboard.py'):
-            command = [command[0], '-I', '-c', script, str(root),
-                       'Local\\AplusBridgeInitial-'+uuid.uuid4().hex]
-            with Path(kwargs['env']['APLUS_UPDATE_ACK']).with_name('desktop-output.log').open('wb') as log:
-                child = real_popen(command, stdout=log, stderr=log, **kwargs)
-            owned_processes.append(child)
-            children.append(child); return child
-        return real_popen(command, **kwargs)
+    workers, children, data_checks, first_launches = [], [], [], []
+    initial_popen = controlled_launcher(root, script, 'Initial', real_popen,
+                                       owned_processes, children, first_launches)
     def prepared(r,p,h,**kwargs):
         folder = v.prepare_worker(r,p,h,spawn=Mock(),**kwargs)
         request = json.loads((folder/'request.json').read_text(encoding='utf-8'))
@@ -327,11 +430,9 @@ launch.main()
         old.communicate(b'\n',timeout=15)
         workers[0].join(timeout=2100)
         assert not workers[0].is_alive()
-        assert_bridge_completed(first)
-        assert (first/'started.json').is_file()
+        assert_controlled_desktop(first, children, first_launches, owned_processes)
         assert data_checks == [True, True]
         assert (first/'original-workbench.sqlite3').read_bytes() == before
-        for child in children: child.wait(timeout=15)
     python = Path(v.environment_pointer(root).read_text(encoding='utf-8'))
     assert python.is_file()
     assert (root/CERT).read_bytes() == (ROOT/CERT).read_bytes()
@@ -380,16 +481,9 @@ launch.main()
     old_process = subprocess.Popen([python, '-I', '-c', 'input()'], stdin=subprocess.PIPE)
     owned_processes.append(old_process)
     real_popen = subprocess.Popen
-    children = []
-    def popen(command, **kwargs):
-        if len(command)>1 and str(command[1]) == str(root/'launch_dashboard.py'):
-            command = [command[0], '-I', '-c', script, str(root),
-                       'Local\\AplusBridgeNext-'+uuid.uuid4().hex]
-            with Path(kwargs['env']['APLUS_UPDATE_ACK']).with_name('desktop-output.log').open('wb') as log:
-                child = real_popen(command, stdout=log, stderr=log, **kwargs)
-            owned_processes.append(child)
-            children.append(child); return child
-        return real_popen(command, **kwargs)
+    children, next_launches = [], []
+    popen = controlled_launcher(root, script, 'Next', real_popen,
+                               owned_processes, children, next_launches)
     monkeypatch.setattr(v.subprocess, 'Popen', popen)
     monkeypatch.setattr(v, 'github_json', api_for(next_target))
     monkeypatch.setattr(v, 'application_mutex', nullcontext)
@@ -419,8 +513,9 @@ launch.main()
     thread=threading.Thread(target=exit_old,daemon=True); thread.start()
     v.worker(request_path)
     thread.join(timeout=20)
-    assert_bridge_completed(receipt_folder)
-    for child in children: child.wait(timeout=15)
+    assert_controlled_desktop(receipt_folder, children, next_launches, owned_processes)
     assert git(root, 'rev-parse', 'HEAD') == next_target
     assert v._database_state(store.path)['facts'] == second_facts
+    assert Path(v.environment_pointer(root).read_text(encoding='utf-8')).samefile(python)
     assert not v.active_transaction_path(root).exists()
+    assert all(process.poll() is not None for process in owned_processes)
