@@ -156,8 +156,23 @@ def test_real_five_minute_import_counts_sessions_and_never_bridges_lunch():
     hourly = aggregate_minutes(frame, 60)
     assert hourly.date.tolist() == ['2026-10-12 10:25:00','2026-10-12 11:25:00',
                                     '2026-10-12 13:55:00','2026-10-12 14:55:00']
-    four_hour = aggregate_minutes(frame, 240)
-    assert len(four_hour) == 1 and four_hour.iloc[0].volume == 4800
+    # Half-day bars follow the exchange grid: one per half session, two a day.
+    half_day = aggregate_minutes(frame, 240)
+    assert half_day.date.tolist() == ['2026-10-12 11:25:00', '2026-10-12 14:55:00']
+    assert half_day.volume.tolist() == [2400, 2400]
+
+
+def test_aggregate_keeps_the_forming_bar_only_when_the_session_is_open():
+    times = pd.DatetimeIndex([*pd.date_range('2026-10-12 09:35', periods=24, freq='5min'),
+                              *pd.date_range('2026-10-12 13:05', periods=24, freq='5min')])
+    frame = pd.DataFrame({'date': times.strftime('%Y-%m-%d %H:%M:%S'),
+                          'open': 10., 'high': 10.2, 'low': 9.9, 'close': 10.1, 'volume': 100.})
+    # A closed view never draws a bar whose slice of the session is missing.
+    forming = frame.iloc[:14]                      # 09:35-10:40, second hour still open
+    assert aggregate_minutes(forming, 60).date.tolist() == ['2026-10-12 10:30:00']
+    live = aggregate_minutes(forming, 60, allow_open_tail=True, closing_labelled=True)
+    assert live.date.tolist() == ['2026-10-12 10:30:00', '2026-10-12 11:30:00']
+
 
 
 def test_minute_import_rejects_daily_data_and_duplicate_bars():

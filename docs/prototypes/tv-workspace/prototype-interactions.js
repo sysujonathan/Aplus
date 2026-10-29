@@ -1722,6 +1722,9 @@ function updateObjectTree() {
 }
 
 document.querySelectorAll('.timeframes .disabled').forEach(button => button.addEventListener('click', () => showToast(button.dataset.unavailable)));
+const INTRADAY_LABELS = {m5:'5分钟 · 盘中', m60:'1小时 · 盘中', m240:'4小时 · 盘中'};
+const periodLabel = unit => unit === 'weekly' ? '1周' : unit === 'monthly' ? '1月'
+  : INTRADAY_LABELS[unit] || '1天';
 function switchProductionTimeframe(timeframe, persist = true) {
   const target = chartBoot.series?.[timeframe];
   if (!target?.length || timeframe === activeTimeframeUnit) return false;
@@ -1745,7 +1748,9 @@ function switchProductionTimeframe(timeframe, persist = true) {
   document.querySelector('[aria-label="更多周期"]')?.classList?.toggle('active-box',
     !['daily','weekly','monthly'].includes(timeframe));
   const period = timeframe === 'weekly' ? '1周' : timeframe === 'monthly' ? '1月'
-    : timeframe === 'm5' ? '5分钟 · 盘中' : '1天';
+    : timeframe === 'm5' ? '5分钟 · 盘中'
+    : timeframe === 'm60' ? '1小时 · 盘中'
+    : timeframe === 'm240' ? '4小时 · 盘中' : '1天';
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
   updateReadout(bars[replayIndex]);
   document.querySelectorAll('.quote b').forEach(node=>{node.textContent=chartPrice(bars[replayIndex].close);});
@@ -1762,19 +1767,27 @@ window.aplusApplyLiveBars = payload => {
   chartBoot.series = chartBoot.series || {};
   chartBoot.seriesCloseDates = chartBoot.seriesCloseDates || {};
   const firstIntraday = !(chartBoot.series.m5?.length);
-  chartBoot.series.m5 = incoming;
-  chartBoot.seriesCloseDates.m5 = Object.fromEntries(incoming.map(row => [row.date, row.date]));
+  // One polled request can carry every intraday unit at once: the five-minute
+  // tail plus the hourly and half-day bars rebuilt from it. They are replaced
+  // together so the three never disagree about the same minute.
+  Object.entries(payload.series).forEach(([unit, rows]) => {
+    if (!Array.isArray(rows) || rows.length < 2) return;
+    chartBoot.seriesCloseDates[unit] = Object.fromEntries(rows.map(row => [row.date, row.date]));
+    chartBoot.series[unit] = rows;
+  });
   if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live};
-  if (activeTimeframeUnit !== 'm5') {
+  if (!/^m\d+$/.test(String(activeTimeframeUnit || ''))) {
     if (firstIntraday && !replayActive && switchProductionTimeframe('m5', false))
       showToast('已接入真实 5 分钟行情 · 最新一根 ' + incoming.at(-1).date.slice(5)
         + ' · 只读视图：日线画线不投影，成本／止损／止盈线保留');
     return true;
   }
   if (replayActive) return true; // never disturb a frozen replay frame
+  const current = chartBoot.series[activeTimeframeUnit];
+  if (!Array.isArray(current) || current.length < 2) return true;
   const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
   userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
-  bars.splice(0, bars.length, ...structuredClone(incoming));
+  bars.splice(0, bars.length, ...structuredClone(current));
   userObjects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit));
   replayIndex = bars.length - 1;
   if (anchorDate) {
@@ -2261,7 +2274,7 @@ function applyProductionContext() {
   const market = String(chartBoot.symbol || '').startsWith('sh.') ? '沪' : '深';
   document.title = `A++ 图表工作区 · ${chartBoot.name} ${display}`;
   document.querySelector('.symbol-pill b').textContent = display;
-  document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${chartBoot.timeframe === 'weekly' ? '1周' : chartBoot.timeframe === 'monthly' ? '1月' : '1天'} · ${market === '沪' ? 'SSE' : 'SZSE'}`;
+  document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${periodLabel(chartBoot.timeframe)} · ${market === '沪' ? 'SSE' : 'SZSE'}`;
   document.querySelector('.exchange-dot').textContent = market;
   ['open', 'high', 'low', 'close'].forEach(key => { document.querySelector(`#${key}Value`).textContent = chartPrice(latest[key]); });
   const change = bars.length > 1 ? Number(latest.close) - Number(bars.at(-2).close) : 0;

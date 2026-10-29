@@ -272,8 +272,8 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
     def __init__(self, parent, store, row, *, quote=None, data=None, interactive=True,
                  auto_quotes=False, minute_fetch=None, prime_minutes=True):
         from workbench.holding_chart import load_holding_chart
-        from workbench.live_minutes import MinutePoller, fetch_minute_bars
-        fetch = minute_fetch or fetch_minute_bars
+        from workbench.live_minutes import HourlyHistory, IntradaySource, MinutePoller
+        fetch = minute_fetch or IntradaySource()
         self._reference_cancel = threading.Event()
         self._reference_after = None
         self._reference_results = queue.Queue()
@@ -284,8 +284,13 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_sent = None
         self._live_error = ""
         self._last_live_at = ""
+        self._live_frame = None
         self._live_poller = MinutePoller(fetch=fetch)
         self._live_primed = False
+        # Eight months of provider-native 60-minute bars drive the hourly and
+        # half-day units' history; the live five-minute frame drives their tail.
+        self._hourly = HourlyHistory()
+        self._hour_after = None
         payload = data if data is not None else load_holding_chart(store, row, quote=quote)
         # One bounded read before the window opens: the trader asked for live
         # bars, so the first frame must not wait for a later push to arrive.
@@ -316,6 +321,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             self._show_live_status()
         if self.data.get("reference_needed"):
             self._start_reference()
+        self._start_hourly()
         self._start_live()
 
     # ---- live intraday reader -------------------------------------------
@@ -349,11 +355,36 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         context = super()._workspace_context()
         minute = self.data.get("minute_series")
         if minute is not None:
-            from workbench.live_minutes import INTERVAL
+            from workbench.live_minutes import INTERVAL, coarse_series
+            history = self._hourly.history(self.data['code'])
             context["minute_series"] = minute
+            for key, minutes in (("hour_series", 60), ("halfday_series", 240)):
+                coarse = coarse_series(history, minute, minutes)
+                if coarse is not None and len(coarse):
+                    context[key] = coarse
             context["display_timeframe"] = "m5"
             context["minute_interval"] = INTERVAL
         return context
+
+    # ---- provider-native hourly history ---------------------------------
+    def _start_hourly(self):
+        self._hourly.request(self.data["code"])
+        self._hour_after = self.top.after(120, self._poll_hourly)
+
+    def _poll_hourly(self):
+        self._hour_after = None
+        if not self.top.winfo_exists():
+            return
+        landed = self._hourly.take()
+        if not landed:
+            self._hour_after = self.top.after(120, self._poll_hourly)
+            return
+        # The hourly unit is usually still waiting for this history when the
+        # window opens; deliver it as soon as it lands instead of asking the
+        # trader to reopen the chart.
+        self._live_sent = None
+        if self._live_frame is not None:
+            self._publish_live(self._live_frame)
 
     def _auto_enabled(self):
         value = self._auto_quotes
@@ -393,7 +424,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_after = self.top.after(400, self._live_tick)
 
     def _publish_live(self, frame):
-        from workbench.live_minutes import minute_rows, INTERVAL
+        from workbench.live_minutes import coarse_series, minute_rows, INTERVAL
         try:
             rows = minute_rows(frame)
         except ValueError as exc:
@@ -401,10 +432,24 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             self._show_live_status()
             return
         self._live_error = ""
+        self._live_frame = frame
         key = _rows_key(rows)
         embedded = self._embedded
         if key != self._live_sent and embedded is not None and not embedded.closed():
-            payload = {"series": {"m5": rows},
+            series = {"m5": rows}
+            # The hourly and half-day units share the same transport: history
+            # from the provider's own 60-minute series, tail rebuilt from the
+            # five-minute frame that is already in hand. One polled request
+            # keeps all three units current.
+            for unit, minutes in (("m60", 60), ("m240", 240)):
+                coarse = coarse_series(self._hourly.history(self.data['code']), frame, minutes)
+                if coarse is None or not len(coarse):
+                    continue
+                try:
+                    series[unit] = minute_rows(coarse)
+                except ValueError:
+                    continue
+            payload = {"series": series,
                        "live": {"interval": INTERVAL, "source": "腾讯 5 分钟",
                                 "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
             if embedded.push_live(payload):
@@ -477,7 +522,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             self._reference_cancel.set()
             self._live_cancel.set()
             self._live_poller.invalidate()
-            for attribute in ("_reference_after", "_live_after"):
+            for attribute in ("_reference_after", "_live_after", "_hour_after"):
                 handle = getattr(self, attribute, None)
                 if handle:
                     try:

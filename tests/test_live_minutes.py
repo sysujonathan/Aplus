@@ -7,15 +7,16 @@ import pytest
 
 from gui.chart_bridge import workspace_boot
 from workbench.live_minutes import (CHINA, DEFAULT_BARS, INTERVAL, MAX_INTERVAL,
-    MinutePoller, MinuteSourceError, fetch_minute_bars, minute_rows, parse_minute_bars)
+    IntradaySource, MinutePoller, MinuteSourceError, aggregate_minute_bars, coarse_series,
+    fetch_minute_bars, merge_live_tail, minute_rows, parse_minute_bars)
 from workbench.store import Store
 
 NOW = datetime(2026, 10, 26, 14, 30, tzinfo=CHINA)
 CODE = "sz.002912"
 
 
-def payload(rows, *, status=0, symbol="sz002912"):
-    return json.dumps({"code": status, "msg": "", "data": {symbol: {"m5": rows}}})
+def payload(rows, *, status=0, symbol="sz002912", period="m5"):
+    return json.dumps({"code": status, "msg": "", "data": {symbol: {period: rows}}})
 
 
 def row(stamp="202610261425", open_="25.00", close="25.10", high="25.20", low="24.90", volume="100"):
@@ -221,7 +222,140 @@ def test_workspace_boot_without_intraday_bars_keeps_daily_only(tmp_path):
 
 def test_workspace_boot_ignores_an_unknown_start_unit(tmp_path):
     store = Store(tmp_path)
-    boot = workspace_boot(store, context(store, display_timeframe="m60",
+    boot = workspace_boot(store, context(store, display_timeframe="m90",
                                         minute_series=minute_frame()))
     assert boot["startTimeframe"] == ""
     assert "m5" in boot["series"]
+
+
+def test_workspace_boot_offers_hourly_and_half_day_units(tmp_path):
+    store = Store(tmp_path)
+    hourly = pd.DataFrame({
+        "date": ["2026-10-24 10:30", "2026-10-24 11:30"],
+        "open": [24.0, 24.5], "high": [25.0, 25.5], "low": [23.9, 24.4],
+        "close": [24.5, 25.2], "volume": [3e5, 4e5]})
+    halfday = pd.DataFrame({
+        "date": ["2026-10-24 11:30"], "open": [24.0], "high": [25.5],
+        "low": [23.9], "close": [25.2], "volume": [7e5]})
+    boot = workspace_boot(store, context(store, display_timeframe="m60",
+                                        minute_series=minute_frame(),
+                                        hour_series=hourly, halfday_series=halfday))
+    assert boot["startTimeframe"] == "m60"
+    assert [row["date"] for row in boot["series"]["m60"]] == ["2026-10-24 10:30", "2026-10-24 11:30"]
+    assert [row["date"] for row in boot["series"]["m240"]] == ["2026-10-24 11:30"]
+    # Closing-labelled transport: the watermark is the bar, not bar plus five.
+    assert boot["seriesCloseDates"]["m60"]["2026-10-24 11:30"] == "2026-10-24 11:30"
+    assert boot["axisDates"]["m60"] == [] and boot["axisDates"]["m240"] == []
+
+
+# ---- period grid and the forming bar -------------------------------------
+
+def test_parse_accepts_the_forming_bar_only_as_the_last_row():
+    # NOW is 14:30; Tencent already publishes the bar stamped 14:35.
+    frame = parse_minute_bars(payload([row("202610261425"), row("202610261435")]), CODE, NOW)
+    assert frame.iloc[-1]["date"] == "2026-10-26 14:35"
+    # Ten minutes ahead is a different session's bar, not a forming one.
+    with pytest.raises(MinuteSourceError):
+        parse_minute_bars(payload([row("202610261425"), row("202610261440")]), CODE, NOW)
+    # A row in front of the clock that is not the tail is never the forming bar.
+    with pytest.raises(MinuteSourceError):
+        parse_minute_bars(payload([row("202610261435"), row("202610261440")]), CODE, NOW)
+
+
+def test_parse_reads_one_minute_bars_on_their_own_grid():
+    rows = [row("202610261426"), row("202610261427")]
+    frame = parse_minute_bars(payload(rows, period="m1"), CODE, NOW, period="m1")
+    assert frame.date.tolist() == ["2026-10-26 14:26", "2026-10-26 14:27"]
+    # The same rows are not five-minute bars.
+    with pytest.raises(MinuteSourceError):
+        parse_minute_bars(payload(rows), CODE, NOW)
+
+
+@pytest.mark.parametrize("stamp", ["202610261200", "202610261235", "202610261505"])
+def test_parse_rejects_one_minute_rows_outside_the_session(stamp):
+    with pytest.raises(MinuteSourceError):
+        parse_minute_bars(payload([row("202610261431"), row(stamp)], period="m1"),
+                          CODE, NOW, period="m1")
+
+
+def test_one_minute_rows_replace_the_skeleton_tail():
+    one = parse_minute_bars(
+        payload([row("2026102614%02d" % m) for m in range(26, 31)], period="m1"),
+        CODE, NOW, period="m1")
+    skeleton = pd.DataFrame({
+        "date": ["2026-10-26 14:20", "2026-10-26 14:25", "2026-10-26 14:30"],
+        "open": [25., 25., 25.], "high": [25.5, 25.5, 25.5],
+        "low": [24.8, 24.8, 24.8], "close": [25., 25., 25.], "volume": [900., 900., 900.]})
+    merged = merge_live_tail(skeleton, one)
+    assert merged.date.tolist() == ["2026-10-26 14:20", "2026-10-26 14:25", "2026-10-26 14:30"]
+    assert merged.iloc[-1]["volume"] == pytest.approx(5 * 10000.)
+    assert merged.iloc[-1]["open"] == pytest.approx(25.)
+
+
+def test_one_minute_window_truncated_at_the_head_is_never_repaired():
+    # 14:09 arrives without 14:06-14:08, so that window cannot be reconstructed.
+    stamps = ["2026102614%02d" % m for m in (9, *range(10, 26))]
+    one = parse_minute_bars(payload([row(s) for s in stamps], period="m1"),
+                            CODE, NOW, period="m1")
+    derived = aggregate_minute_bars(one, 5)
+    assert derived.date.tolist() == ["2026-10-26 14:15", "2026-10-26 14:20",
+                                     "2026-10-26 14:25"]
+
+
+def test_source_reads_the_skeleton_once_and_then_only_the_tail():
+    calls = []
+    skeleton = pd.DataFrame({
+        "date": ["2026-10-26 14:20", "2026-10-26 14:25"],
+        "open": [25., 25.], "high": [25.5, 25.5], "low": [24.8, 24.8],
+        "close": [25., 25.], "volume": [900., 900.]})
+    tail = pd.DataFrame({
+        "date": ["2026-10-26 14:26", "2026-10-26 14:27", "2026-10-26 14:28",
+                 "2026-10-26 14:29", "2026-10-26 14:30"],
+        "open": [25.] * 5, "high": [25.2] * 5, "low": [24.9] * 5,
+        "close": [25.1] * 5, "volume": [100.] * 5})
+
+    def fetch(code, moment=None, *, period="m5", count=0):
+        calls.append(period)
+        return skeleton if period == "m5" else tail
+
+    source = IntradaySource(fetch=fetch, clock=lambda: NOW)
+    first = source(CODE, NOW)
+    second = source(CODE, NOW)
+    assert calls == ["m5", "m1", "m1"]
+    assert first.equals(second)
+    assert first.date.tolist() == ["2026-10-26 14:20", "2026-10-26 14:25", "2026-10-26 14:30"]
+
+
+def test_source_keeps_the_skeleton_when_the_tail_request_fails():
+    skeleton = pd.DataFrame({
+        "date": ["2026-10-26 14:20", "2026-10-26 14:25"],
+        "open": [25., 25.], "high": [25.5, 25.5], "low": [24.8, 24.8],
+        "close": [25., 25.], "volume": [900., 900.]})
+
+    def fetch(code, moment=None, *, period="m5", count=0):
+        if period == "m1":
+            raise MinuteSourceError("供应商拒绝")
+        return skeleton
+
+    source = IntradaySource(fetch=fetch, clock=lambda: NOW)
+    assert source(CODE, NOW).equals(skeleton)
+
+
+def test_coarse_series_keeps_history_and_replaces_only_the_live_tail():
+    history = pd.DataFrame({
+        "date": ["2026-10-23 14:00", "2026-10-23 15:00", "2026-10-26 10:30"],
+        "open": [24., 24.5, 25.], "high": [25., 25.5, 25.5],
+        "low": [23.9, 24.4, 24.8], "close": [24.5, 25.2, 25.], "volume": [3e5, 4e5, 9e5]})
+    live = pd.DataFrame({
+        "date": ["2026-10-26 10:35", "2026-10-26 10:40", "2026-10-26 10:45"],
+        "open": [25., 25.1, 25.2], "high": [25.3, 25.4, 25.5],
+        "low": [24.9, 25., 25.1], "close": [25.1, 25.2, 25.3], "volume": [100., 110., 120.]})
+    merged = coarse_series(history, live, 60)
+    # The provider's own 60-minute bars survive; the hour that is still forming
+    # is placed at 11:30 where it will close, not at 10:45 where it stops today.
+    assert merged.date.tolist() == ["2026-10-23 14:00", "2026-10-23 15:00",
+                                    "2026-10-26 10:30", "2026-10-26 11:30"]
+    assert merged.iloc[-1]["volume"] == pytest.approx(330.)
+    # A half-day bar waits for its own slice, so the forming one is the morning.
+    assert coarse_series(history.iloc[:1], live, 240).date.tolist() == [
+        "2026-10-23 14:00", "2026-10-26 11:30"]
