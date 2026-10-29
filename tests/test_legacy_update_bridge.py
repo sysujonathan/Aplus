@@ -134,16 +134,61 @@ def test_shallow_candidate_history_connects_old_and_new_commits(repo, tmp_path):
     git(root,'merge-base','--is-ancestor',old,target)
 
 
+def bridge_parent():
+    """Pick a shallow parent whose children keep a real 8.3 alias.
+
+    Two requirements pull in opposite directions.  pip must install ONNX under
+    the environment path, so the parent has to be shallow; and the updater
+    resolves file aliases before that install, so the exercise needs two
+    spellings of one directory.  The checkout volume satisfies neither: on
+    GitHub Actions it handed the long path straight back, so both launches
+    shared one spelling.  The system drive is both shallower and alias-capable,
+    and TEMP stays as a fallback for machines where the drive root is not
+    writable.  A parent that cannot prove an alias is rejected rather than
+    silently weakening the exercise.
+    """
+    import tempfile
+    candidates = []
+    override = os.environ.get('APLUS_BRIDGE_PARENT')
+    if override:
+        candidates.append(Path(override))
+    if os.name == 'nt':
+        candidates.append(Path(os.environ.get('SYSTEMDRIVE', 'C:') + '\\') / 'aplus-bridge')
+    candidates.append(Path(tempfile.gettempdir()))
+    for parent in candidates:
+        probe = parent / 'Aplus update probe'
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            probe.mkdir(exist_ok=True)
+        except OSError:
+            continue
+        try:
+            if os.name != 'nt':
+                return parent
+            try:
+                aliased = str(windows_short_path(probe)) != str(probe)
+            except (OSError, AssertionError):
+                aliased = False
+            if aliased:
+                return parent
+        finally:
+            try:
+                probe.rmdir()
+            except OSError:
+                pass
+    pytest.skip('没有可写且能产生 8.3 别名的浅目录；无法验证别名解析（先设置 APLUS_BRIDGE_PARENT）')
+
+
 @pytest.fixture
 def short_bridge_root(request):
+    import tempfile
     # Windows without LongPathsEnabled cannot install ONNX under pytest's
     # deeply nested generated test name. Match the short daily-install layout.
-    import tempfile
-    # The updater resolves aliases before pip installation. A short 8.3 alias
-    # alone therefore does not shorten the real environment path. Keep the
-    # disposable directory beside the checkout (outside its tracked tree),
-    # instead of the much deeper per-user Windows TEMP directory.
-    with tempfile.TemporaryDirectory(prefix='Aplus update ', dir=ROOT.parent) as folder:
+    # The updater resolves aliases before pip installation, so a short 8.3
+    # alias alone does not shorten the real environment path: the parent must
+    # be shallow *and* alias-capable. bridge_parent() proves both, and the
+    # assertion below keeps the two-spelling exercise honest.
+    with tempfile.TemporaryDirectory(prefix='Aplus update ', dir=bridge_parent()) as folder:
         processes = []
         request.node.bridge_processes = processes
         try:
