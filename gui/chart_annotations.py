@@ -48,10 +48,7 @@ class TrendSpec:
 def marker_specs(strategy_type, meta):
     """返回策略明确声明的散点语义；不再把所有信号都画成同一颗星。"""
     if strategy_type == "MTR_MASTER":
-        return [
-            MarkerSpec("is_sw_h_geometric", "high", 1.015, "v", 48, "#58A6FF", "波段高点"),
-            MarkerSpec("signal_mtr", "low", .98, "*", 95, TARGET, "MTR 信号"),
-        ]
+        return []  # mtr_chart owns selected nodes and historical signals.
     if strategy_type == "STRATEGY_3K":
         return [
             MarkerSpec("signal_3k", "low", .98, "^", 58, "#F59E0B", "3K 信号"),
@@ -67,14 +64,12 @@ def marker_specs(strategy_type, meta):
 
 
 def trend_specs(strategy_type):
-    if strategy_type == "MTR_MASTER":
-        return [TrendSpec("geometric_trendline", "#8B949E", "--", 1.0, "几何趋势线")]
     return []
 
 
 def owns_risk_lines(strategy_type):
-    """GAP 与 AWIL 的专属标注已经画风险线，通用层不重复叠线。"""
-    return strategy_type in GAP_STRATEGIES or strategy_type == "STRATEGY_AWIL"
+    """GAP、AWIL、MTR 的专属适配已画风险线，通用层不重复叠线。"""
+    return strategy_type in GAP_STRATEGIES or strategy_type in {"STRATEGY_AWIL", "MTR_MASTER"}
 
 
 def annotation_frame(frame):
