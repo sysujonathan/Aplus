@@ -41,12 +41,67 @@ def test_shallow_candidate_history_connects_old_and_new_commits(repo, tmp_path):
 
 
 @pytest.fixture
-def short_bridge_root():
+def short_bridge_root(request):
     # Windows without LongPathsEnabled cannot install ONNX under pytest's
     # deeply nested generated test name. Match the short daily-install layout.
     import tempfile
     with tempfile.TemporaryDirectory(prefix='au-') as folder:
-        yield Path(folder)
+        processes = []
+        request.node.bridge_processes = processes
+        try:
+            yield Path(folder)
+        finally:
+            # Only processes created explicitly by this disposable test. A failed
+            # startup assertion must not leave DLLs locked during fixture cleanup.
+            stop_bridge_processes(processes)
+
+
+def stop_bridge_processes(processes):
+    for process in reversed(processes):
+        if process.poll() is None:
+            if os.name == 'nt':
+                # venv python.exe can be a redirector with a child using the
+                # DLLs. End only this test-owned process tree, before the parent.
+                stopped = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                                         capture_output=True, timeout=15)
+                assert stopped.returncode == 0 or process.poll() is not None, stopped.stderr
+            else:
+                process.terminate()
+        process.wait(timeout=15)
+
+
+def test_bridge_failure_cleanup_releases_child_files(tmp_path):
+    import time
+    proof = tmp_path/'child.log'
+    child = subprocess.Popen([sys.executable, '-I', '-c',
+        "import sys,time; f=open(sys.argv[1],'w'); f.write('ready'); f.flush(); time.sleep(60)", str(proof)])
+    try:
+        deadline = time.monotonic()+15
+        while not proof.exists() and time.monotonic()<deadline:
+            time.sleep(.05)
+        assert proof.is_file()
+    finally:
+        stop_bridge_processes([child])
+    assert child.poll() is not None
+    proof.unlink()  # Fails on Windows if the interpreter child still holds it.
+
+
+def test_unconfirmed_bridge_reports_receipt_and_desktop_stack(tmp_path):
+    (tmp_path/'receipt.json').write_text(json.dumps({'state':'startup_unconfirmed'}))
+    (tmp_path/'desktop-stacks.log').write_text('blocked in native window')
+    with pytest.raises(AssertionError, match='blocked in native window'):
+        assert_bridge_completed(tmp_path)
+
+
+def assert_bridge_completed(folder):
+    receipt = json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
+    diagnostics = {path.name: path.read_text(encoding='utf-8', errors='replace')[-16000:]
+                   for path in folder.glob('desktop-*.log')}
+    if receipt['state'] != 'completed':
+        # Pytest abbreviates dictionary reprs. Keep the actual stack available
+        # in captured stdout even with the normal CI verbosity.
+        print(json.dumps({'receipt': receipt, 'desktop': diagnostics}, ensure_ascii=True, indent=2))
+    assert receipt['state'] == 'completed', {'receipt': receipt, 'desktop': diagnostics}
 
 
 @pytest.mark.parametrize('kind', ['approved', 'changed', 'private-key', 'other-pem', 'user-cert', 'database'])
@@ -152,11 +207,12 @@ def test_double_click_transition_launcher_routes_selected_install(tmp_path):
 
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows VBS and native desktop update workflow')
-def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_bridge_root):
+def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_bridge_root, request):
     """Real historical tree + candidate tree; CI authority is synthetic until merge.
 
     Creates the complete hashed venv once. Never references Aplus_daily/runtime.
     """
+    owned_processes = request.node.bridge_processes
     root = short_bridge_root/'daily'
     subprocess.run(['git', 'clone', '--shared', '--no-checkout', str(ROOT), str(root)],
                    capture_output=True, check=True, timeout=90)
@@ -189,20 +245,42 @@ def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_b
     # Actual target GUI/backend startup in an isolated named mutex. The real
     # user's desktop may be open; this test never touches its mutex or process.
     script = '''
-import sys,os
+import sys,os,faulthandler
 from pathlib import Path
+diagnostics=Path(os.environ['APLUS_UPDATE_ACK']).with_name('desktop-stacks.log')
+stack_log=diagnostics.open('w',encoding='utf-8')
+faulthandler.enable(stack_log)
+faulthandler.dump_traceback_later(20,repeat=True,file=stack_log)
+def progress(value):
+ print(value,flush=True)
+progress('importing launcher')
 sys.path.insert(0,sys.argv[1])
 import launch_dashboard as launch
+launch.LOG_PATH=str(diagnostics.with_name('desktop-errors.log'))
 original=launch.acquire_single_instance
 launch.acquire_single_instance=lambda: original(False,sys.argv[2])
+progress('importing window')
 from gui import main_window
 RealWindow=main_window.AplusMainWindow
 class TestWindow(RealWindow):
  def __init__(self,*a,**k):
+  progress('constructing window')
   k['enable_tray']=False
   super().__init__(*a,**k)
-  self.after(1800,lambda: os._exit(0))
+  progress('window constructed')
+  def exit_after_commit():
+   transaction=diagnostics.with_name('transaction.json')
+   phase=__import__('json').loads(transaction.read_text(encoding='utf-8'))['phase']
+   if phase=='completed':
+    progress('transaction committed; closing test desktop')
+    os._exit(0)
+   self.after(100,exit_after_commit)
+  # A fixed 1.8s lifetime can end the desktop during slow environment/pointer
+  # validation. Stay alive until the actual worker has committed, never create
+  # a fake startup ack. The fixture owns failure cleanup.
+  self.after(100,exit_after_commit)
 main_window.AplusMainWindow=TestWindow
+progress('starting desktop')
 launch.main()
 '''
     import uuid
@@ -211,12 +289,16 @@ launch.main()
     from tools import maintenance_update as maintenance
     real_popen = subprocess.Popen
     old = real_popen([sys.executable, '-I', '-c', 'input()'], stdin=subprocess.PIPE)
+    owned_processes.append(old)
     workers, children, data_checks = [], [], []
     def initial_popen(command, **kwargs):
         if len(command)>1 and str(command[1]) == str(root/'launch_dashboard.py'):
             command = [command[0], '-I', '-c', script, str(root),
                        'Local\\AplusBridgeInitial-'+uuid.uuid4().hex]
-            child = real_popen(command, **kwargs); children.append(child); return child
+            with Path(kwargs['env']['APLUS_UPDATE_ACK']).with_name('desktop-output.log').open('wb') as log:
+                child = real_popen(command, stdout=log, stderr=log, **kwargs)
+            owned_processes.append(child)
+            children.append(child); return child
         return real_popen(command, **kwargs)
     def prepared(r,p,h,**kwargs):
         folder = v.prepare_worker(r,p,h,spawn=Mock(),**kwargs)
@@ -245,7 +327,7 @@ launch.main()
         old.communicate(b'\n',timeout=15)
         workers[0].join(timeout=2100)
         assert not workers[0].is_alive()
-        assert json.loads((first/'receipt.json').read_text(encoding='utf-8'))['state'] == 'completed'
+        assert_bridge_completed(first)
         assert (first/'started.json').is_file()
         assert data_checks == [True, True]
         assert (first/'original-workbench.sqlite3').read_bytes() == before
@@ -296,13 +378,17 @@ launch.main()
     from contextlib import nullcontext
     import threading
     old_process = subprocess.Popen([python, '-I', '-c', 'input()'], stdin=subprocess.PIPE)
+    owned_processes.append(old_process)
     real_popen = subprocess.Popen
     children = []
     def popen(command, **kwargs):
         if len(command)>1 and str(command[1]) == str(root/'launch_dashboard.py'):
             command = [command[0], '-I', '-c', script, str(root),
                        'Local\\AplusBridgeNext-'+uuid.uuid4().hex]
-            child = real_popen(command, **kwargs); children.append(child); return child
+            with Path(kwargs['env']['APLUS_UPDATE_ACK']).with_name('desktop-output.log').open('wb') as log:
+                child = real_popen(command, stdout=log, stderr=log, **kwargs)
+            owned_processes.append(child)
+            children.append(child); return child
         return real_popen(command, **kwargs)
     monkeypatch.setattr(v.subprocess, 'Popen', popen)
     monkeypatch.setattr(v, 'github_json', api_for(next_target))
@@ -333,7 +419,7 @@ launch.main()
     thread=threading.Thread(target=exit_old,daemon=True); thread.start()
     v.worker(request_path)
     thread.join(timeout=20)
-    assert json.loads((receipt_folder/'receipt.json').read_text(encoding='utf-8'))['state'] == 'completed'
+    assert_bridge_completed(receipt_folder)
     for child in children: child.wait(timeout=15)
     assert git(root, 'rev-parse', 'HEAD') == next_target
     assert v._database_state(store.path)['facts'] == second_facts
