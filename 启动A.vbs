@@ -1,3 +1,4 @@
+' Keep this launcher ASCII-only: Windows Script Host uses the system code page.
 Set ws = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
