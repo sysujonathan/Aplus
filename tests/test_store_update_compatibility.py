@@ -1,5 +1,6 @@
 """Synthetic repositories and static source checks; never use a business DB."""
 import ast
+import json
 from pathlib import Path
 from unittest.mock import Mock
 from contextlib import nullcontext
@@ -7,7 +8,7 @@ from contextlib import nullcontext
 import pytest
 
 from workbench import version_update as v
-from tests.test_version_update import repo, git, api_for
+from tests.test_version_update import repo, git, api_for, installation_contract
 from tests.test_workbench import store
 
 
@@ -162,6 +163,34 @@ def test_layout_change_or_ci_failure_still_blocks_before_install(repo,source,con
     root,old,target=store_target(repo,source)
     plan=v.check_version(root,force=True,api=api_for(target,conclusion),fetch=Mock())
     assert not plan['can_update'] and git(root,'rev-parse','HEAD')==old
+
+
+def test_explicit_supported_schema_migration_is_planned_not_silently_executed(repo):
+    root, _, _ = repo
+    git(root, 'switch', 'main')
+    folder = root/'workbench'; folder.mkdir()
+    (folder/'store.py').write_text(BASE, encoding='utf-8')
+    lock = b'example-package==1.0\n'
+    (root/'requirements-lock.txt').write_bytes(lock)
+    (root/v.RELEASE_INSTALLATION).write_text(
+        json.dumps(installation_contract(lock)), encoding='utf-8')
+    git(root, 'add', '.'); git(root, 'commit', '-m', 'schema eight baseline')
+    old = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', '-c', 'schema-nine-release')
+    (folder/'store.py').write_text(BASE.replace('self.version = 8', 'self.version = 9'), encoding='utf-8')
+    (root/v.RELEASE_INSTALLATION).write_text(
+        json.dumps(installation_contract(
+            lock, schema=9, supported=(8,), migration='store-v9')),
+        encoding='utf-8')
+    git(root, 'add', '.'); git(root, 'commit', '-m', 'declared schema nine')
+    target = git(root, 'rev-parse', 'HEAD')
+    git(root, 'switch', 'main'); git(root, 'update-ref', 'refs/aplus-update/main', target)
+    plan = v.check_version(root, force=True, api=api_for(target), fetch=Mock())
+    assert git(root, 'rev-parse', 'HEAD') == old
+    assert plan['can_update']
+    assert plan['installation']['database_changed'] is True
+    assert plan['installation']['source_schema'] == 8
+    assert plan['installation']['target_schema'] == 9
 
 
 def test_compatible_plan_rechecks_source_after_a_new_main_commit(repo):

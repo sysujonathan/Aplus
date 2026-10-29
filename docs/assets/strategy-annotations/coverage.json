@@ -1,0 +1,761 @@
+{
+  "status": "concept-only-not-production",
+  "market": "synthetic-no-source-no-adjustment-no-dates",
+  "strategy_count": 6,
+  "official_count": 6,
+  "research_count": 0,
+  "palette": {
+    "bg": "#0B0B0B",
+    "panel": "#101216",
+    "grid": "#1F1F1F",
+    "structure": "#CBD5E1",
+    "entry": "#089981",
+    "stop": "#F23645",
+    "target": "#D6B86A",
+    "reference": "#9BA7B4",
+    "text": "#E6EDF3",
+    "label": "#171717",
+    "up": "#FFFFFF",
+    "down": "#2962FF",
+    "ema": "#FF9800"
+  },
+  "strategies": [
+    {
+      "id": "MTR_MASTER",
+      "slug": "01-mtr",
+      "name": "MTR",
+      "status": "在用正式池 · 日线",
+      "family": "mtr",
+      "note": "H0 / L1 / H1 / TL 为结构；S 与 TL 分开；H2 为空不画；Leg↑1 仅为阅读辅助。",
+      "missing": "无 MM；未补触发／成交；TP2 可用但本图只展开 TP1。"
+    },
+    {
+      "id": "STRATEGY_3K",
+      "slug": "02-3k",
+      "name": "3K",
+      "status": "在用正式池 · 日线",
+      "family": "3k",
+      "note": "3K 与 GT（缺口测试确认）分别标记；TP(MM) 是该策略测量缺口正式目标。",
+      "missing": "K1 / K2 来自 3K 的相对位置；Gap 几何须从同组原序列重建，不是现成日期列。"
+    },
+    {
+      "id": "STRATEGY_STRUCTURAL_GAP",
+      "slug": "03-gap-h1",
+      "name": "GAP H1",
+      "status": "在用正式池 · 日线",
+      "family": "gh1",
+      "note": "S 为反转确认；Gap / Floor / MM low 保留结构角色；TP(MM) 为正式目标。",
+      "missing": "H1 是策略名称语境；没有独立 H2 节点，不沿用旧通用绘图器的 H2 文案。"
+    },
+    {
+      "id": "STRATEGY_GAP_PINBAR",
+      "slug": "04-gap-pinbar",
+      "name": "GAP PINBAR",
+      "status": "在用正式池 · 日线",
+      "family": "gpb",
+      "note": "PB·S 表示 Pinbar 信号；本图只改角色表达，不把首次刺 EMA 的规则改为 H2。",
+      "missing": "没有 H1 / H2 序列输出；缺口及 MM 的日期不足时提示待核对，不估点。"
+    },
+    {
+      "id": "STRATEGY_GAP_H2",
+      "slug": "05-gap-h2",
+      "name": "GAP H2",
+      "status": "在用正式池 · 日线 · 次日计划 v2",
+      "family": "gh2",
+      "note": "S 为第二次回调准备；H1 为首腿后恢复；仅有已知触发事件时才出现 H2 / Trig。",
+      "missing": "正式 SL / TP(2R) 与 SL1参考 / MM参考分开；本图无触发及成交，全部为模板。"
+    },
+    {
+      "id": "STRATEGY_AWIL",
+      "slug": "06-ail",
+      "name": "AIL（AWIL）",
+      "status": "在用正式池 · 日线",
+      "family": "ail",
+      "note": "H2·S 是本策略的信号 K，不是 GAP H2 的后续挂单触发；SH 仅为波段高点参考价。",
+      "missing": "未输出 L1 / H1 / L2 的日期，故不补这些节点；无缺口与 MM，TP 为 2R。"
+    }
+  ],
+  "additional_contexts": [],
+  "qc": [
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "H0",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "L1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "H1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "TL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "TP1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": false,
+      "label": "Leg↑1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "Floor",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "K1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "K2",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "3K",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "GT·S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "TP(MM)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": false,
+      "label": "MM low",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "Floor",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "BO",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "MM low",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": false,
+      "label": "TP(MM)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "Floor",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "BO",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "MM low",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "PB·S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": false,
+      "label": "TP(MM)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "Floor",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "BO",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "MM low",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "H1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "TP(2R)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "SL1参考",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": false,
+      "label": "MM参考",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": false,
+      "label": "SH参考",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": false,
+      "label": "H2·S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": false,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": false,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": false,
+      "label": "TP(2R)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": true,
+      "label": "L1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": true,
+      "label": "H1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": true,
+      "label": "S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": true,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": true,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "01-mtr",
+      "compact": true,
+      "label": "TP1",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": true,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": true,
+      "label": "3K",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": true,
+      "label": "GT·S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": true,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": true,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "02-3k",
+      "compact": true,
+      "label": "TP(MM)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": true,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": true,
+      "label": "BO",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": true,
+      "label": "S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": true,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": true,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "03-gap-h1",
+      "compact": true,
+      "label": "TP(MM)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": true,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": true,
+      "label": "BO",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": true,
+      "label": "PB·S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": true,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": true,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "04-gap-pinbar",
+      "compact": true,
+      "label": "TP(MM)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": true,
+      "label": "Gap",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": true,
+      "label": "BO",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": true,
+      "label": "S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": true,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": true,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "05-gap-h2",
+      "compact": true,
+      "label": "TP(2R)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": true,
+      "label": "H2·S",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": true,
+      "label": "Entry",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": true,
+      "label": "SL",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    },
+    {
+      "chart": "06-ail",
+      "compact": true,
+      "label": "TP(2R)",
+      "outside": false,
+      "overlaps": false,
+      "candle_overlap": false
+    }
+  ]
+}

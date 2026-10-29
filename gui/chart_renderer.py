@@ -84,6 +84,10 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             adds.append(mpf.make_addplot(ema, color=options.get('ema_color', AVERAGE), width=1.35))
     signal_column = meta.get("signal_column")
     h2 = signal_column == 'signal_gap_h2' and payload.get('plan_kind') == 'gap-h2-next-session'
+    mtr = strategy_type == 'MTR_MASTER'
+    mtr_vectors = None
+    if mtr:
+        from .mtr_chart import mtr_evidence
     structure_unavailable = False
     if not h2 and strategy_type in GAP_STRATEGIES:
         structure = gap_annotation_frame(frame, payload, strategy_type)
@@ -103,6 +107,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         # Compatibility for old stock charts without security context; H2
         # plans already carry precision established by the same tick rules.
         decimals = payload.get('price_decimals', 2) if h2 else 2
+    if mtr:
+        mtr_vectors = mtr_evidence(frame, payload, decimals=decimals)
     for trend in trend_specs(strategy_type):
         if trend.column in plot and plot[trend.column].notna().any():
             adds.append(
@@ -140,7 +146,7 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                     markersize=max(6, marker.size ** .5),
                 )
             )
-    strategy_info = {} if h2 else signal_context(strategy, frame, payload)
+    strategy_info = {} if h2 or mtr else signal_context(strategy, frame, payload)
     owns_levels = not h2 and not structure_unavailable and owns_risk_lines(strategy_type)
     risk_levels = []
     lines, line_colors, styles = [], [], []
@@ -227,6 +233,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             width, height = max(100, size[0]), max(100, size[1])
             left, right = 8/width, 1-min(64, width*.3)/width
             bottom, top = min(48, height*.2)/height, 1-min(30, height*.15)/height
+            if mtr:
+                top = 1-min(100, height*.25)/height  # Keep the facts above candles and nodes.
             volume_height = (top-bottom)/8 if show_volume else 0
             for text in fig.texts:
                 text.set_position(((left+right)/2, 1-4/height))
@@ -240,12 +248,19 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
             axis.tick_params(colors=MUTED, labelsize=8)
             for spine in axis.spines.values():
                 spine.set_color(BORDER)
+        if mtr:
+            ax.set_xlim(-.5, len(plot)+12)  # Same observation space as the interactive chart.
+            if not size:
+                for axis in axes[:2]:
+                    position = axis.get_position()
+                    top = min(position.y1, 1-90/(fig.get_figheight()*fig.dpi))
+                    axis.set_position([position.x0, position.y0, position.width, top-position.y0])
         if h2:
             from .h2_chart import draw_h2
             draw_h2(ax, plot, payload)
         open_gap_count = 0
         annotate = getattr(strategy, "annotate_chart", None)
-        if not h2 and not structure_unavailable and callable(annotate):
+        if not h2 and not mtr and not structure_unavailable and callable(annotate):
             previous = {id(artist) for artist in [*ax.lines, *ax.collections, *ax.patches]}
             result = annotate(
                 ax,
@@ -263,17 +278,19 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
         facts = [] if h2 else info_panel_lines(
             payload, strategy_info, frame, open_gap_count=open_gap_count
         )
+        if mtr:
+            facts = mtr_vectors['facts']
         if structure_unavailable:
             facts.append('原信号结构待核对（保留归档计划价格）')
         if facts:
             ax.text(
                 .02,
-                .965,
+                1.02 if mtr else .965,
                 "\n".join(facts),
                 transform=ax.transAxes,
                 fontsize=8,
                 color=TEXT,
-                va="top",
+                va="bottom" if mtr else "top",
                 bbox=dict(
                     boxstyle="round,pad=.28",
                     facecolor=CONTROL_BG,
@@ -281,6 +298,9 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
                     edgecolor=BORDER,
                 ),
             )
+        if mtr:
+            from .mtr_chart import draw_mtr
+            draw_mtr(ax, visible, mtr_vectors, decimals)
         h2_labels = (("stop", "SL", STOP), ("sl1_plan_price", "SL1", ANNOTATION),
                      ("target", "2R", TARGET), ("mm_target", "MM", ANNOTATION)) if new_h2_pricing else (
                      ("stop", "SL1", STOP), ("mm_target", "MM / TP", TARGET))

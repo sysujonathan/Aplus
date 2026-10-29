@@ -1,7 +1,8 @@
 """Read-only vector adapter for the existing strategy annotation contract.
 
-Call each frozen strategy's own annotation method on its historical signal
-prefix. Serialize date/price anchors, never pixels or a shared generic marker.
+Use the MTR read-only node adapter, or the other frozen strategies' own
+annotation methods on their historical signal prefixes. Serialize date/price
+anchors; display offsets are independent, never rewritten data coordinates.
 """
 from __future__ import annotations
 
@@ -21,6 +22,16 @@ def strategy_evidence(context):
     strategy = context.get('strategy')
     kind = context.get('strategy_type') or ''
     payload = context.get('payload') or {}
+    if kind == 'MTR_MASTER':
+        from .mtr_chart import mtr_evidence
+        decimals = payload.get('price_decimals', 2)
+        if context.get('code') and not context['frame'].empty:
+            from decimal import Decimal
+            from workbench.prices import tick_size
+            tick = tick_size(context['code'], float(context['frame'].close.iloc[-1]),
+                             instrument_type=context.get('instrument_type'))
+            decimals = max(0, -Decimal(str(tick)).as_tuple().exponent)
+        return mtr_evidence(context['frame'], payload, decimals=decimals)
     if strategy is None or payload.get('plan_kind') == 'gap-h2-next-session':
         return {'items': [], 'facts': []}  # H2 uses its dedicated plan adapter.
     from matplotlib.figure import Figure
