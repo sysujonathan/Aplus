@@ -559,4 +559,274 @@ assert.equal(paths.at(-1).points[0][1],9,'the raw level is still valid on unadju
 context.activeTimeframeUnit='daily';paths=[];
 vm.runInContext('drawHoldingLevels(ctx,testView)',context);
 assert.equal(paths.length,0,'an unverified level never lands on an adjusted axis as a raw price');
+// Toolbar assignments must reach the real renderer, not just change a swatch.
+const quickSource=fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/drawing-quickbar.js'),'utf8');
+vm.runInContext(quickSource.split('/* UI adapter:')[0],context);
+const quick=context.window.AplusDrawingQuickbar;
+assert.ok(!quick.controls({type:'text'}).includes('width'),'existing text objects keep their minimal toolbar');
+for(const kind of ['fib','long','ray','trend','short','rectangle','up','down','arrow','path','channel']) {
+  const controls=quick.controls({type:kind,arrow_marker_version:1});
+  assert.ok(controls.includes('template')&&controls.includes('settings')&&controls.includes('lock')&&controls.includes('delete'));
+  if(['up','down','arrow','path'].includes(kind))assert.ok(!controls.includes('alert'));
+  if(['up','down','arrow','long','short'].includes(kind))assert.ok(!controls.includes('width'));
+}
+context.selectedId=null;context.chartBoot={production:false,priceStep:.01};context.replayActive=false;
+const makeQuickObject=type=>({id:'quick-'+type,type,a:{date:'2026-10-12',index:10,value:20},
+  b:{date:'2026-10-13',index:50,value:60},color:'#00bcd4',width:1,alpha:1});
+const quickFib={...makeQuickObject('fib'),fibTrendLine:true,fibTrendWidth:2,fibHorizontalWidth:4,
+  fibTrendDash:'dashed',fibLevels:[{value:0,enabled:true,color:'#fff000',alpha:.7},
+    {value:.5,enabled:true,color:'#001122',alpha:.3},{value:1,enabled:false,color:'#334455',alpha:1}]};
+const geometryBefore=JSON.stringify([quickFib.a,quickFib.b,quickFib.fibLevels.map(l=>[l.value,l.enabled])]);
+assert.equal(quick.value(quickFib,'lineColor'),null);assert.equal(quick.value(quickFib,'width'),null);
+quick.apply(quickFib,'lineColor','#f23645');quick.apply(quickFib,'width',3);
+assert.ok(quickFib.fibLevels.every(l=>l.color==='#f23645'));
+assert.equal(quickFib.fibTrendWidth,3);assert.equal(quickFib.fibHorizontalWidth,3);
+assert.equal(JSON.stringify([quickFib.a,quickFib.b,quickFib.fibLevels.map(l=>[l.value,l.enabled])]),geometryBefore);
+paths=[];context.drawUserObject(ctx,view,quickFib);
+assert.equal(paths.length,3);assert.ok(paths.every(p=>p.color==='#f23645'&&p.width===3));
+quick.apply(quickFib,'lineColor',.55,true);
+paths=[];context.drawUserObject(ctx,view,quickFib);
+assert.ok(paths.every(p=>p.alpha===.55),'Fib quick opacity reaches trend and every horizontal line');
+assert.ok(quickFib.fibLevels.every(l=>l.alpha===.55),'disabled Fib levels retain the chosen opacity too');
+const quickChannel={...makeQuickObject('channel'),c:{index:10,value:40},fill:false,
+  channelLevels:[-.25,0,.25,.5,.75,1,1.25].map((value,index)=>({value,enabled:[1,3,5].includes(index),
+    color:index===3?'#f23645':'#ffffff',width:index===3?4:1,dash:index===3?'dashed':'solid',alpha:.8}))};
+const channelGeometry=JSON.stringify([quickChannel.a,quickChannel.b,quickChannel.c]);
+quick.apply(quickChannel,'lineColor','#2962ff');quick.apply(quickChannel,'width',2);
+assert.ok(quickChannel.channelLevels.every(l=>l.color==='#2962ff'&&l.width===2));
+assert.equal(quickChannel.channelLevels[3].dash,'dashed','uniform width must preserve independent dashes');
+assert.equal(JSON.stringify([quickChannel.a,quickChannel.b,quickChannel.c]),channelGeometry);
+paths=[];context.drawUserObject(ctx,view,quickChannel);
+assert.equal(paths.length,3);assert.ok(paths.every(p=>p.color==='#2962ff'&&p.width===2));
+const coloredFills=[];ctx.fill=()=>coloredFills.push({color:ctx.fillStyle,alpha:ctx.globalAlpha});
+const quickEditedObjects=[];
+ctx.strokeRect=(...args)=>{rectangles.push(args);paths.push({color:ctx.strokeStyle,width:ctx.lineWidth,alpha:ctx.globalAlpha});};
+for(const type of ['ray','trend','rectangle','path','up','down','arrow']) {
+  const obj=makeQuickObject(type);if(type==='arrow')obj.arrow_marker_version=1;
+  if(type==='path')obj.points=[obj.a,{index:30,value:10},obj.b];
+  quick.apply(obj,type==='arrow'?'fillColor':'lineColor','#f23645');
+  quick.apply(obj,type==='arrow'?'fillColor':'lineColor',.65,true);
+  paths=[];coloredFills.length=0;context.drawUserObject(ctx,view,obj);
+  assert.ok([...paths,...coloredFills].some(p=>p.color==='#f23645'),type+' actually paints the chosen color');
+  if(['ray','trend','rectangle','path'].includes(type)) {
+    quick.apply(obj,'width',4);paths=[];context.drawUserObject(ctx,view,obj);
+    if(type==='rectangle')assert.equal(ctx.lineWidth,4);else assert.ok(paths.some(p=>p.width===4),type+' actual width');
+  }
+  quickEditedObjects.push(obj);
+}
+const regionFills=[];ctx.fillRect=()=>regionFills.push({color:ctx.fillStyle,alpha:ctx.globalAlpha});
+for(const type of ['long','short']) {
+  const obj={...makeQuickObject(type),position_version:1,b:{date:'2026-10-13',index:50,value:type==='long'?30:10},stop:type==='long'?15:25};
+  quick.apply(obj,'targetColor','#2962ff');quick.apply(obj,'stopColor','#ff9800');quick.apply(obj,'textColor','#ffffff');
+  quick.apply(obj,'targetColor',.35,true);quick.apply(obj,'stopColor',.65,true);
+  regionFills.length=0;context.drawUserObject(ctx,view,obj);
+  assert.ok(regionFills.some(p=>p.color==='#2962ff'&&p.alpha===.35));
+  assert.ok(regionFills.some(p=>p.color==='#ff9800'&&p.alpha===.65));
+  assert.equal(obj.textColor,'#ffffff');assert.equal(obj.stop,type==='long'?15:25);
+  quickEditedObjects.push(obj);
+}
+// Old global alpha is materialized only on an edit, preserving independent fills/text.
+const translucent={...structuredClone(quickChannel),id:'quick-translucent',alpha:.5,backgroundAlpha:.2,textAlpha:.6,fill:true};
+const untouched=JSON.stringify(translucent);quick.opacity(translucent,'lineColor');quick.value(translucent,'width');
+assert.equal(JSON.stringify(translucent),untouched,'reading a toolbar never migrates an old document');
+quick.apply(translucent,'lineColor',.9,true);assert.equal(translucent.alpha,1);
+assert.equal(translucent.backgroundAlpha,.1);assert.equal(translucent.textAlpha,.3);
+paths=[];context.drawUserObject(ctx,view,translucent);assert.ok(paths.every(p=>p.alpha===.9));
+const stateAfter=JSON.stringify(translucent);assert.equal(quick.apply(translucent,'width',NaN),false);
+assert.equal(JSON.stringify(translucent),stateAfter,'invalid width cannot damage saved state');
+const filledPath={...makeQuickObject('path'),alpha:.5,fill:true,backgroundAlpha:.2,
+  points:[{index:10,value:20},{index:30,value:40},{index:50,value:20}]};
+quick.apply(filledPath,'lineColor',.8,true);
+coloredFills.length=0;context.drawUserObject(ctx,view,filledPath);
+assert.ok(coloredFills.some(p=>p.alpha===.1),'editing a legacy filled path stroke must preserve its fill');
+// Position labels use drawPositionStats, not the global-alpha attached-text path.
+// Check the actual renderer before/after a first edit of either legacy region.
+for(const type of ['long','short'])for(const region of ['targetColor','stopColor'])
+for(const global of [0,.4,.8])for(const textAlpha of [undefined,.6]) {
+  const obj={...makeQuickObject(type),id:`legacy-${type}-${region}-${global}-${textAlpha??'default'}`,
+    position_version:1,alwaysShowStats:true,alpha:global,
+    b:{date:'2026-10-13',index:50,value:type==='long'?30:10},stop:type==='long'?15:25,
+    targetAlpha:.2,stopAlpha:.3,text:'not-an-attached-position-label'};
+  if(textAlpha!==undefined)obj.textAlpha=textAlpha;
+  let textPaints=[],fills=[];const stack=[];
+  const positionCtx=new Proxy({globalAlpha:1,
+    save(){stack.push(this.globalAlpha);},restore(){this.globalAlpha=stack.pop();},
+    measureText(text){return {width:String(text).length*6};},
+    fillText(text){textPaints.push([text,this.globalAlpha]);},
+    fillRect(){fills.push(this.globalAlpha);}
+  },{get:(target,key)=>key in target?target[key]:(()=>{})});
+  context.drawUserObject(positionCtx,view,obj);
+  const before=structuredClone(textPaints),geometry=JSON.stringify([obj.a,obj.b,obj.stop]);
+  assert.ok(before.some(([text,alpha])=>text.startsWith('目标:')&&alpha===(textAlpha??1)));
+  assert.ok(!before.some(([text])=>text===obj.text),'positions do not call drawAttachedText');
+  quick.apply(obj,region,.65,true);textPaints=[];fills=[];
+  context.drawUserObject(positionCtx,view,obj);
+  assert.deepEqual(textPaints,before,`${type} ${region}: preserve every rendered label opacity`);
+  assert.equal(fills[region==='targetColor'?0:1],.65);
+  assert.equal(fills[region==='targetColor'?1:0],(region==='targetColor'?.3:.2)*global);
+  assert.equal(JSON.stringify([obj.a,obj.b,obj.stop]),geometry);
+  quickEditedObjects.push(obj);
+}
+
+// Exercise the real quickbar click adapter and real color popup together. A
+// null mixed alpha must reach the UI without being replaced by a numeric value.
+const makePaletteNode=()=>({style:{},dataset:{},attributes:{},children:[],_value:'',get value(){return this._value;},set value(value){this._value=String(value);},
+  classList:{values:new Set(),toggle(key,on){on?this.values.add(key):this.values.delete(key);},contains(key){return this.values.has(key);},remove(key){this.values.delete(key);}},
+  setAttribute(key,value){this.attributes[key]=String(value);},removeAttribute(key){delete this.attributes[key];},
+  append(...nodes){this.children.push(...nodes);},remove(){},
+  dispatchEvent(){this.onchange?.();},getBoundingClientRect(){return {left:20,bottom:50};},offsetWidth:250,offsetHeight:250});
+let popupNodes,quickClick,paletteObject,paletteSaves=0;
+const paletteQuickBar={...makePaletteNode(),addEventListener(_event,handler){quickClick=handler;}};
+paletteContext.document={addEventListener(){},body:{append(){}},
+  querySelector:selector=>selector==='#selectedObject'?paletteQuickBar:null,
+  createElement(tag){
+    const node=makePaletteNode();if(tag!=='section')return node;
+    popupNodes=Object.fromEntries(['.chart-color-grid','.chart-custom-swatches','.custom-color-add',
+      'input[type="range"]','input[type="number"]'].map(key=>[key,makePaletteNode()]));
+    node.querySelector=key=>popupNodes[key];
+    node.querySelectorAll=()=>popupNodes['.chart-color-grid'].children;
+    return node;
+  }};
+Object.assign(paletteContext,{structuredClone,Event:class {},objectAtSelection:()=>paletteObject,
+  rememberObjects(){},savePrototypeState(){paletteSaves++;},renderWorkspace(){},
+  clamp:(value,min,max)=>Math.max(min,Math.min(max,value)),
+  channelLevels:context.channelLevels,ensureChannelLevels:context.ensureChannelLevels,
+  ensureFibSettings:context.ensureFibSettings,materializeFibUniformColor:context.materializeFibUniformColor,
+  assignFibUniformColor:context.assignFibUniformColor,assignFibUniformAlpha:context.assignFibUniformAlpha});
+Object.assign(paletteContext.window,{innerWidth:1000,innerHeight:700});
+vm.runInContext(quickSource,paletteContext);
+for(const original of [quickFib,quickChannel]) {
+  paletteObject=structuredClone(original);
+  const levels=paletteObject.type==='fib'?paletteObject.fibLevels:paletteObject.channelLevels;
+  levels[0].alpha=.12;
+  const before=JSON.stringify(paletteObject),savesBefore=paletteSaves;
+  const button=makePaletteNode();button.dataset.quickControl='lineColor';
+  const click=()=>quickClick({target:{closest:()=>button},stopPropagation(){}});
+  click();
+  const number=popupNodes['input[type="number"]'],range=popupNodes['input[type="range"]'];
+  assert.equal(number.value,'','mixed opacity must not pretend to be 100%');
+  assert.equal(number.placeholder,'混合');assert.ok(range.classList.contains('mixed'));
+  assert.equal(range.attributes['aria-valuetext'],'混合不透明度');
+  assert.equal(JSON.stringify(paletteObject),before,'opening the popup must not migrate or save');
+  assert.equal(paletteSaves,savesBefore);
+  const alphaBefore=levels.map(level=>level.alpha);
+  popupNodes['.chart-color-grid'].children.find(node=>node.dataset.swatch==='#f23645').onclick();
+  const currentLevels=paletteObject.type==='fib'?paletteObject.fibLevels:paletteObject.channelLevels;
+  assert.deepEqual(currentLevels.map(level=>level.alpha),alphaBefore,'color alone must retain mixed opacity');
+  number.value='100';number.oninput();
+  assert.equal(number.placeholder,'');assert.ok(!range.classList.contains('mixed'));
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),null,'input only previews');
+  number.onchange();
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),1);
+  click();assert.equal(Number(popupNodes['input[type="number"]'].value),100);
+  popupNodes['input[type="number"]'].value='0';popupNodes['input[type="number"]'].oninput();
+  popupNodes['input[type="number"]'].onchange();
+  click();assert.equal(Number(popupNodes['input[type="number"]'].value),0,'zero is not a mixed/default value');
+}
+
+// Use the actual shared history functions and undo/redo handlers, not a separate
+// palette history. Both typing digits and dragging are one committed gesture.
+const historyHandlers={},historyElements=new Map();
+paletteContext.document.querySelector=selector=>{
+  if(selector==='#selectedObject')return paletteQuickBar;
+  if(!historyElements.has(selector))historyElements.set(selector,{...makePaletteNode(),
+    addEventListener(_event,handler){historyHandlers[selector]=handler;}});
+  return historyElements.get(selector);
+};
+Object.assign(paletteContext,{objectSettingsSnapshot:null,objectSettingsHistory:null,
+  userObjects:[],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[],indicatorSettings:{},
+  chartCoordinates:{capture(){}},bars:context.bars,activeTimeframeUnit:'daily',
+  calculateEma(){},syncWorkspaceControls(){},updateObjectTree(){},showToast(){}});
+vm.runInContext(['rememberObjects','restoreIndicatorSettings','updateUndoButtons'].map(extract).join('\n'),paletteContext);
+const undoStart=source.indexOf("document.querySelector('#undoAction').addEventListener");
+vm.runInContext(source.slice(undoStart,source.indexOf('\nfunction applyProductionContext',undoStart)),paletteContext);
+const oldPreview=context.window.previewDrawingForRender;
+context.window.previewDrawingForRender=paletteContext.window.previewDrawingForRender;
+for(const [original,control] of [[quickFib,'lineColor'],[quickChannel,'lineColor'],
+  [{...makeQuickObject('long'),position_version:1,stop:15},'targetColor'],
+  [{...makeQuickObject('short'),position_version:1,stop:25},'stopColor']]) {
+  paletteContext.closeChartColorPicker();paletteObject=structuredClone(original);
+  if(paletteObject.type==='fib')paletteObject.fibLevels[0].alpha=.12;
+  if(paletteObject.type==='channel')paletteObject.channelLevels[0].alpha=.12;
+  const before=JSON.stringify(paletteObject),savesBefore=paletteSaves;
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const button=makePaletteNode();button.dataset.quickControl=control;
+  quickClick({target:{closest:()=>button},stopPropagation(){}});
+  const number=popupNodes['input[type="number"]'];
+  number.value='6';number.oninput();number.value='65';number.oninput();
+  assert.equal(JSON.stringify(paletteObject),before,'intermediate digits never enter canonical drawings');
+  assert.equal(paletteContext.undoStack.length,0);assert.equal(paletteSaves,savesBefore);
+  const preview=paletteContext.window.previewDrawingForRender(paletteObject);
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(preview,control),.65);
+  paths=[];regionFills.length=0;context.drawUserObject(ctx,view,paletteObject);
+  assert.ok((['long','short'].includes(paletteObject.type)?regionFills:paths).some(p=>p.alpha===.65),'actual renderer shows the draft');
+  number.onchange();number.onblur();number.onchange();
+  assert.equal(paletteContext.undoStack.length,1);assert.equal(paletteSaves,savesBefore+1,'change/blur cannot save twice');
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,control),.65);
+  historyHandlers['#undoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(JSON.stringify(paletteObject),before,'one undo restores the entire original mixed/legacy state');
+  historyHandlers['#redoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,control),.65,'one redo restores 65%, not 6%');
+}
+context.window.previewDrawingForRender=oldPreview;
+
+for(const finish of ['blur','Enter','flush','slider']) {
+  paletteContext.closeChartColorPicker();paletteObject=makeQuickObject('trend');
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const button=makePaletteNode();button.dataset.quickControl='lineColor';
+  quickClick({target:{closest:()=>button},stopPropagation(){}});
+  const control=popupNodes[finish==='slider'?'input[type="range"]':'input[type="number"]'],saved=paletteSaves;
+  control.value='6';control.oninput();control.value='65';control.oninput();
+  if(finish==='Enter')control.onkeydown({key:'Enter',preventDefault(){},stopPropagation(){}});
+  else if(finish==='flush')paletteContext.window.flushChartColorEditor();
+  else if(finish==='slider')control.onchange();else control.onblur();
+  paletteContext.window.flushChartColorEditor();
+  assert.equal(paletteContext.undoStack.length,1,finish+' commits one history step');
+  assert.equal(paletteSaves,saved+1,finish+' persists once');
+}
+for(const finalValue of ['100','','105']) {
+  paletteContext.closeChartColorPicker();paletteObject=makeQuickObject('trend');
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const before=JSON.stringify(paletteObject),saved=paletteSaves,button=makePaletteNode();button.dataset.quickControl='lineColor';
+  quickClick({target:{closest:()=>button},stopPropagation(){}});
+  const number=popupNodes['input[type="number"]'];number.value='6';number.oninput();
+  number.value=finalValue;number.oninput();number.onblur();
+  assert.equal(JSON.stringify(paletteObject),before,'returning to baseline or invalid input leaves the model intact');
+  assert.equal(paletteContext.undoStack.length,0);assert.equal(paletteSaves,saved);
+}
+paletteContext.closeChartColorPicker();paletteObject=makeQuickObject('trend');
+Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+const repeatedButton=makePaletteNode();repeatedButton.dataset.quickControl='lineColor';
+quickClick({target:{closest:()=>repeatedButton},stopPropagation(){}});
+const repeatedNumber=popupNodes['input[type="number"]'];
+for(const value of ['65','100']){repeatedNumber.value=value;repeatedNumber.oninput();repeatedNumber.onkeydown({key:'Enter',preventDefault(){},stopPropagation(){}});}
+assert.equal(paletteContext.undoStack.length,2,'two explicitly finished edits in one popup stay distinct');
+assert.equal(paletteContext.window.AplusDrawingQuickbar.opacity(paletteObject,'lineColor'),1);
+// The complete-settings palette uses the same edit boundary for an individual level.
+for(const original of [quickFib,quickChannel]) {
+  paletteContext.closeChartColorPicker();paletteObject=structuredClone(original);
+  Object.assign(paletteContext,{userObjects:[paletteObject],undoStack:[],redoStack:[],indicatorUndoStack:[],indicatorRedoStack:[]});
+  const before=JSON.stringify(paletteObject),saved=paletteSaves,input=makePaletteNode();input.type='color';
+  const index=paletteObject.type==='fib'?0:3,key=paletteObject.type==='fib'?'fibLevels':'channelLevels';
+  if(paletteObject.type==='fib')input.dataset.fibLevelColor=String(index);
+  else {input.dataset.channelField='color';input.closest=()=>({dataset:{channelIndex:String(index)}});}
+  paletteContext.window.openChartColorPicker(input,input,paletteObject);
+  const number=popupNodes['input[type="number"]'];number.value='6';number.oninput();number.value='65';number.oninput();
+  assert.equal(JSON.stringify(paletteObject),before);
+  assert.equal(paletteContext.window.previewDrawingForRender(paletteObject)[key][index].alpha,.65);
+  number.onchange();number.onblur();
+  assert.equal(paletteContext.undoStack.length,1);assert.equal(paletteSaves,saved+1);
+  historyHandlers['#undoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(JSON.stringify(paletteObject),before);
+  historyHandlers['#redoAction']();paletteObject=paletteContext.userObjects[0];
+  assert.equal(paletteObject[key][index].alpha,.65);
+}
+// Close/context-switch flushing must finish the palette before returning the save chain.
+let colorFlushes=0;const closeSaveContext=vm.createContext({window:{flushChartColorEditor(){colorFlushes++;}},
+  bridgeSaveFailed:false,bridgeSaveChain:Promise.resolve()});
+vm.runInContext(extract('savePrototypeState'),closeSaveContext);
+closeSaveContext.savePrototypeState(true);assert.equal(colorFlushes,1);
+// The snapshot consumed by Python below is the same edited object shape the page saves.
+if(process.env.APLUS_QUICKBAR_SNAPSHOT)fs.writeFileSync(process.env.APLUS_QUICKBAR_SNAPSHOT,
+  JSON.stringify([quickFib,quickChannel,translucent,...quickEditedObjects]));
 console.log(JSON.stringify({ok:true}));

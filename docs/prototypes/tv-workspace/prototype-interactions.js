@@ -151,6 +151,7 @@ function loadPrototypeState() {
 
 function savePrototypeState(flushOnly = false) {
   try {
+    if(flushOnly)window.flushChartColorEditor?.();
     if (flushOnly && typeof viewSaveTimer !== 'undefined' && viewSaveTimer !== null) {
       clearTimeout(viewSaveTimer); viewSaveTimer = null; flushOnly = false;
     }
@@ -390,6 +391,7 @@ function timeAxisTicks(view) {
 function renderWorkspace(mode = 'all') {
   const visibleObjects = userObjects.filter(drawingVisibleInWorkspace);
   document.querySelector('#selectedObject').classList.toggle('visible', visibleObjects.some(item => item.id === selectedId));
+  if(typeof syncDrawingQuickbar==='function')syncDrawingQuickbar(visibleObjects.find(item=>item.id===selectedId)||null);
   const rect = wrap.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
   const background = typeof baseCanvas === 'undefined' || !baseCanvas ? canvas : baseCanvas;
@@ -705,6 +707,7 @@ function drawReplayBoundary(ctx, view) {
 }
 
 function drawUserObject(ctx, view, object, draft = false) {
+  object=window.previewDrawingForRender?.(object)||object;
   if (!object || !object.a) return;
   const { left, width, right, top, height, bottom, y, xGlobal } = view;
   const plotRight = width - right;
@@ -719,7 +722,7 @@ function drawUserObject(ctx, view, object, draft = false) {
   ctx.fillStyle = object.color || '#2962ff';
   ctx.lineWidth = object.width || 2;
   ctx.setLineDash(dashPattern(object.dash));
-  ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1);
+  ctx.globalAlpha = (draft ? .65 : 1) * (object.strokeAlpha ?? object.alpha ?? 1);
 
   if (object.type === 'arrow' && object.arrow_marker_version) {
     const polygon = arrowMarkerPoints(ax, ay, bx, by);
@@ -766,7 +769,7 @@ function drawUserObject(ctx, view, object, draft = false) {
     const startX=object.extendLeft?left:Math.min(ax,bx);
     const endX=object.extendRight?plotRight:Math.max(ax,bx);
     if (object.fill !== false) { ctx.globalAlpha = (object.backgroundAlpha ?? .13)*(object.alpha ?? 1);ctx.fillStyle=object.backgroundColor||object.color; ctx.fillRect(startX, ay, endX - startX, by - ay); }
-    ctx.globalAlpha = (draft ? .65 : 1) * (object.alpha ?? 1); ctx.strokeRect(startX, ay, endX - startX, by - ay);
+    ctx.globalAlpha = (draft ? .65 : 1) * (object.strokeAlpha ?? object.alpha ?? 1); ctx.strokeRect(startX, ay, endX - startX, by - ay);
     if(object.showMiddle){ctx.save();ctx.strokeStyle=object.middleColor||object.color;ctx.lineWidth=object.middleWidth||1;
       ctx.globalAlpha=(object.middleAlpha??1)*(object.alpha??1);
       ctx.setLineDash(dashPattern(object.middleDash||'dashed'));ctx.beginPath();ctx.moveTo(startX,(ay+by)/2);ctx.lineTo(endX,(ay+by)/2);ctx.stroke();ctx.restore();}
@@ -845,7 +848,7 @@ function drawUserObject(ctx, view, object, draft = false) {
     ctx.fillStyle = object.targetColor || '#089981'; if(object.showTarget !== false)ctx.fillRect(x1, y(target), x2 - x1, y(entry) - y(target));
     ctx.globalAlpha = (object.stopAlpha ?? object.regionAlpha ?? .24)*(object.alpha ?? 1);
     ctx.fillStyle = object.stopColor || '#f23645'; if(object.showStop !== false)ctx.fillRect(x1, y(entry), x2 - x1, y(stop) - y(entry));
-    ctx.globalAlpha = object.alpha ?? 1; ctx.strokeStyle = object.color; ctx.setLineDash([]);
+    ctx.globalAlpha = object.strokeAlpha ?? object.alpha ?? 1; ctx.strokeStyle = object.color; ctx.setLineDash([]);
     [target, entry, stop].forEach(value => { ctx.beginPath(); ctx.moveTo(x1, y(value)); ctx.lineTo(x2, y(value)); ctx.stroke(); });
     registerRect(object.id, x1, Math.min(y(target), y(stop)), x2, Math.max(y(target), y(stop)));
     if(!draft && (selectedObjectNow || (object.alwaysShowStats ?? !object.position_version))){
@@ -938,15 +941,13 @@ function selectObject(id, x, y, refreshTree = true) {
   }
   const toolbar = document.querySelector('#selectedObject');
   toolbar.classList.add('visible');
+  if(typeof syncDrawingQuickbar==='function')syncDrawingQuickbar(object);
   if(!selectedToolbarMoved){
     const toolbarWidth=toolbar.offsetWidth||238,toolbarHeight=toolbar.offsetHeight||38;
     const preferredLeft=x+14+toolbarWidth<=wrap.clientWidth-4?x+14:x-toolbarWidth-14;
     toolbar.style.left=`${clamp(preferredLeft,4,Math.max(4,wrap.clientWidth-toolbarWidth-4))}px`;
     toolbar.style.top=`${clamp(y-toolbarHeight-14,4,Math.max(4,wrap.clientHeight-toolbarHeight-43))}px`;
   }
-  document.querySelector('#quickWidth').textContent = `${object.width || 2}px`;
-  document.querySelector('#quickWidth').hidden = ['up','down','text'].includes(object.type) || Boolean(object.arrow_marker_version);
-  document.querySelector('.color-swatch').style.background = object.color || '#2962ff';
   if(refreshTree)updateObjectTree();
   else document.querySelectorAll('[data-object-id]').forEach(row=>row.classList.toggle('selected',row.dataset.objectId===id));
   if (selectionChanged) renderWorkspace('overlay');
@@ -1649,23 +1650,14 @@ function closeObjectSettings(revert = false) {
   closeWorkspaceModal(); savePrototypeState(); updateObjectTree(); renderWorkspace('overlay');
 }
 
-document.querySelector('#quickSettings').addEventListener('click', openObjectSettings);
-document.querySelector('#quickDelete').addEventListener('click', () => {
+function deleteSelectedDrawing() {
   if (!selectedId) return;
   rememberObjects();
   userObjects = userObjects.filter(item => item.id !== selectedId);
   selectedId = null; selected = false;
   document.querySelector('#selectedObject').classList.remove('visible');
   savePrototypeState(); updateObjectTree(); renderWorkspace('overlay'); showToast('图形已删除');
-});
-document.querySelector('#quickColor').addEventListener('click', () => {
-  const object=objectAtSelection();if(!object)return;
-  if(!window.openChartColorPicker){openObjectSettings();return;}
-  const input=document.createElement('input');input.type='color';input.value=object.color||'#2962ff';input.dataset.setting='color';
-  input.onchange=()=>{commitObjectSetting(object,'color',input.value);document.querySelector('.color-swatch').style.background=input.value;};
-  window.openChartColorPicker(input,document.querySelector('#quickColor'),object);
-});
-document.querySelector('#quickWidth').addEventListener('click', () => window.openChartWidthPicker ? window.openChartWidthPicker() : openObjectSettings());
+}
 document.querySelectorAll('#objectTabs button').forEach(button => button.addEventListener('click', () => {
   lastObjectTab=button.dataset.tab;
   document.querySelectorAll('#objectTabs button').forEach(item => item.classList.toggle('active', item === button));
@@ -1836,15 +1828,18 @@ document.querySelectorAll('.close-modal').forEach(button => button.addEventListe
 document.querySelector('#closeObjectSettings').addEventListener('click', () => closeObjectSettings(false));
 document.querySelector('#cancelObjectSettings').addEventListener('click', () => closeObjectSettings(true));
 document.querySelector('#confirmObjectSettings').addEventListener('click', () => closeObjectSettings(false));
-document.querySelector('#objectTemplate').addEventListener('click', () => {
+function openDrawingTemplateMenu(anchor) {
   const object = objectAtSelection();
   if (!object) return;
   const menu = document.querySelector('#templateMenu');
   menu.classList.toggle('show');
+  menu.querySelector('#quickNamedTemplate').hidden=anchor.id!=='quickTemplate';
   menu.querySelector('[data-template-action="apply"]').disabled = !drawingTemplates[object.type];
-  const rect = document.querySelector('#objectTemplate').getBoundingClientRect();
-  menu.style.left = `${rect.left}px`;menu.style.top = `${Math.max(4,rect.top-menu.offsetHeight-5)}px`;
-});
+  const rect = anchor.getBoundingClientRect();
+  menu.style.left = `${clamp(rect.left,8,Math.max(8,innerWidth-menu.offsetWidth-8))}px`;
+  menu.style.top = `${clamp(rect.bottom+5,8,Math.max(8,innerHeight-menu.offsetHeight-8))}px`;
+}
+document.querySelector('#objectTemplate').addEventListener('click', event=>openDrawingTemplateMenu(event.currentTarget));
 document.querySelectorAll('[data-template-action]').forEach(button => button.addEventListener('click', () => {
   const object = objectAtSelection();if(!object)return;
   const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked','arrow_marker_version','path_version']);
@@ -1856,15 +1851,17 @@ document.querySelectorAll('[data-template-action]').forEach(button => button.add
     const versions={arrow_marker_version:object.arrow_marker_version,path_version:object.path_version};
     Object.assign(object,structuredClone(drawingTemplates[object.type]));
     for(const [key,value] of Object.entries(versions)){if(value===undefined)delete object[key];else object[key]=value;}
-    renderToolSpecificSettings(object);renderVisibilitySettings(object);
-    if(['long','short'].includes(object.type))renderPositionInputs(object);
-    if(['trend','ray','channel','rectangle','path','arrow'].includes(object.type))renderDrawingTextSettings(object);
+    if(document.querySelector('#objectModal').classList.contains('show')){
+      renderToolSpecificSettings(object);renderVisibilitySettings(object);
+      if(['long','short'].includes(object.type))renderPositionInputs(object);
+      if(['trend','ray','channel','rectangle','path','arrow','up','down'].includes(object.type))renderDrawingTextSettings(object);
+    }
     savePrototypeState();renderWorkspace('overlay');
   }
   document.querySelector('#templateMenu').classList.remove('show');
 }));
 document.addEventListener('click', event => {
-  if(!event.target.closest('#templateMenu,#objectTemplate'))document.querySelector('#templateMenu').classList.remove('show');
+  if(!event.target.closest('#templateMenu,#objectTemplate,#quickTemplate'))document.querySelector('#templateMenu').classList.remove('show');
 });
 document.querySelector('#modalBackdrop').addEventListener('click', event => {
   if (event.target.id !== 'modalBackdrop') return;
