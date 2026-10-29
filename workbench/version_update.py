@@ -36,6 +36,12 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 DATA_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROTECTED = {"runtime", "data", ".git", ".venv", "venv", ".workbuddy", "upgrade-backups"}
 MANUAL_FILES = {"setup.cmd"}
+# Public fixture reviewed with the release. This is an exact path AND byte
+# fingerprint exception, never a general certificate/private-key exemption.
+PUBLIC_TEST_CERTIFICATES = {
+    "tests/fixtures/tls/emsign-ecc-root-g3.pem":
+        "36e68e205b53c67c7a013894e0d5c8583063468118d1ce78ecbc2200d1dd185c",
+}
 DEPENDENCY_FILES = {"requirements.txt", "requirements-lock.txt"}
 RELEASE_INSTALLATION = "release_installation.json"
 INSTALLATION_PROTOCOL = 1
@@ -496,7 +502,8 @@ def installation_plan(root, current, target, changed, store_compatible=True):
             raise ManualUpdateError("新版数据结构变化但缺少自动迁移清单，正式数据未打开。", "data")
         return {"protocol": INSTALLATION_PROTOCOL, "environment_changed": False,
                 "database_changed": False}
-    environment_changed = (source_contract is None and dependency_changed) or (
+    environment_changed = (source_contract is None and (
+        dependency_changed or target_contract["requirements_hashes_sha256"] is not None)) or (
         source_contract is not None and any(source_contract[key] != target_contract[key]
             for key in ("python", "environment_id", "requirements_sha256", "requirements_hashes_sha256"))
     )
@@ -532,6 +539,14 @@ def installation_plan(root, current, target, changed, store_compatible=True):
     }
 
 
+def _approved_public_test_certificate(root, target, name):
+    expected = PUBLIC_TEST_CERTIFICATES.get(name)
+    if expected is None:
+        return False
+    blob = run_git(root, "show", f"{target}:{name}", binary=True)
+    return hashlib.sha256(blob).hexdigest() == expected
+
+
 def compatible_target(root, current, target, local=None, details=None):
     if not SHA.fullmatch(current) or not SHA.fullmatch(target):
         raise UpdateError("版本编号无效，未更新。")
@@ -564,7 +579,10 @@ def compatible_target(root, current, target, local=None, details=None):
         raise UpdateError("新版不再包含本机受保护启动文件，请维护者核对。")
     for name in files:
         p = PurePosixPath(name)
-        if p.parts[0].lower() in PROTECTED or name.lower().endswith((".db", ".sqlite3", ".key", ".pem")) or p.name.startswith(".env"):
+        if (p.parts[0].lower() in PROTECTED
+                or name.lower().endswith((".db", ".sqlite3", ".key"))
+                or (name.lower().endswith(".pem") and not _approved_public_test_certificate(root, target, name))
+                or p.name.startswith(".env")):
             raise UpdateError("新版包含受保护路径，停止自动更新。")
         dest = Path(root) / name
         for parent in (dest, *dest.parents):
@@ -813,11 +831,15 @@ def _environment_python(folder, windowless=False):
     return Path(folder) / ("Scripts" if os.name == "nt" else "bin") / name
 
 
-def _run_checked(command, *, cwd=None, env=None, timeout=900, message):
+def _run_checked(command, *, cwd=None, env=None, timeout=900, message, diagnostics=None):
     process = subprocess.run([str(item) for item in command], cwd=cwd, env=env, capture_output=True,
                              timeout=timeout,
                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     if process.returncode:
+        if diagnostics is not None:
+            output = (process.stdout + process.stderr).decode('utf-8', errors='replace')
+            output = re.sub(r'https?://\S+', '[package-source]', output)
+            _replace_file(diagnostics, output.encode('utf-8'))
         raise UpdateError(message)
 
 
@@ -904,6 +926,7 @@ def _build_environment(folder, current_python, stage, contract):
     hash_args = ["--require-hashes"] if hashed else []
     _run_checked([python, "-I", "-m", "pip", "install", "--disable-pip-version-check",
                   *hash_args, "--requirement", requirements], timeout=1800,
+                 diagnostics=Path(folder).parent / (Path(folder).name + '-install.log'),
                  message="新版依赖安装失败；旧环境和代码均未替换。")
 
 
