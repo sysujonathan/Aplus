@@ -531,12 +531,51 @@ def test_watch_chart_item_carries_latest_market_and_original_signal_dates():
 
 
 def test_windows_launchers_forward_persisted_runtime_home():
-    vbs = (ROOT / "启动A.vbs").read_text(encoding="utf-8")
-    cmd = (ROOT / "启动A.cmd").read_text(encoding="utf-8")
+    vbs = (ROOT / "启动A.vbs").read_text(encoding="ascii")
+    cmd = (ROOT / "启动A.cmd").read_text(encoding="ascii")
 
     for launcher in (vbs, cmd):
         assert "A_WORKBENCH_HOME" in launcher
         assert "HKCU\\Environment" in launcher
+
+
+def test_windows_launchers_are_ascii_on_every_system_code_page():
+    """No BOM or non-ASCII literal may make startup depend on the host ACP."""
+    for name in ("启动A.vbs", "启动A.cmd", "安全过渡更新.vbs"):
+        raw = (ROOT / name).read_bytes()
+        text = raw.decode("ascii")
+        for encoding in ('cp936', 'cp1252', 'utf-8'):
+            assert raw.decode(encoding) == text
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows Script Host compiler')
+def test_vbs_launcher_compiles_without_starting_aplus(tmp_path):
+    # VBScript compiles the entire script before executing this early exit.
+    # The real launcher body is parsed, but no app, recovery or database opens.
+    import subprocess
+    script = tmp_path / 'compile-launcher.vbs'
+    script.write_bytes(b'WScript.Quit 0\n' + (ROOT / '启动A.vbs').read_bytes())
+    result = subprocess.run(['cscript.exe', '//nologo', str(script)],
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows Script Host Unicode helper')
+def test_vbs_ascii_helper_preserves_chinese_recovery_title(tmp_path):
+    import re
+    import subprocess
+    text = (ROOT / '启动A.vbs').read_text(encoding='ascii')
+    helper = re.search(r'(?ms)^Function U\(value\).*?^End Function', text).group()
+    title = re.search(r', 48, U\("([0-9a-f ]+)"\)', text).group(1)
+    script = tmp_path / 'unicode-title.vbs'
+    script.write_text(helper + '\ntext = U("' + title + '")\n'
+                      'For i = 1 To Len(text)\n'
+                      'WScript.Echo Hex(AscW(Mid(text, i, 1)))\nNext\n', encoding='ascii')
+    result = subprocess.run(['cscript.exe', '//nologo', str(script)],
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert [int(code, 16) for code in result.stdout.decode('ascii').split()] == [
+        ord(char) for char in 'Aplus安全恢复']
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named mutex")
