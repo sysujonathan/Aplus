@@ -71,7 +71,8 @@ def installation_contract(lock, schema=8, supported=(1, 2, 3, 4, 5, 6, 7, 8),
     digest = hashlib.sha256(lock).hexdigest()
     return {
         'protocol': 1, 'python': f'{sys.version_info.major}.{sys.version_info.minor}',
-        'environment_id': f'py{sys.version_info.major}{sys.version_info.minor}-{digest[:12]}',
+        'environment_id': (f'py{sys.version_info.major}{sys.version_info.minor}-{digest[:12]}'
+                           + ('-' + hashlib.sha256(hashes).hexdigest()[:12] if hashes is not None else '')),
         'requirements_sha256': digest,
         'requirements_hashes_sha256': hashlib.sha256(hashes).hexdigest() if hashes is not None else None,
         'database': {'schema': schema, 'supported_from': list(supported), 'migration': migration},

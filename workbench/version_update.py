@@ -39,7 +39,7 @@ MANUAL_FILES = {"setup.cmd"}
 DEPENDENCY_FILES = {"requirements.txt", "requirements-lock.txt"}
 RELEASE_INSTALLATION = "release_installation.json"
 INSTALLATION_PROTOCOL = 1
-ENVIRONMENT_ID = re.compile(r"^py\d{3}-[0-9a-f]{12}$")
+ENVIRONMENT_ID = re.compile(r"^py\d{3}-[0-9a-f]{12}(?:-[0-9a-f]{12})?$")
 COUNTED_TABLES = ("accounts", "executions", "positions", "position_fills", "closed_trades",
                   "cash_flows", "datasets", "observations", "plans", "watchlist")
 PROTECTED_FACT_TABLES = ("accounts", "executions", "positions", "position_fills",
@@ -429,6 +429,11 @@ def _revision_bytes(root, revision, name):
         return None
 
 
+def _release_environment_id(python_version, requirements_hash, hashes_hash):
+    base = f"py{python_version.replace('.', '')}-{requirements_hash[:12]}"
+    return base + (f"-{hashes_hash[:12]}" if hashes_hash else "")
+
+
 def release_installation(root, revision, required=False):
     """Read the release transaction contract without importing target code."""
     raw = _revision_bytes(root, revision, RELEASE_INSTALLATION)
@@ -459,7 +464,7 @@ def release_installation(root, revision, required=False):
                     or not DATA_SHA256.fullmatch(hashes_hash)
                     or hashlib.sha256(hashes).hexdigest() != hashes_hash):
                 raise ValueError
-        expected_environment = f"py{python_version.replace('.', '')}-{requirements_hash[:12]}"
+        expected_environment = _release_environment_id(python_version, requirements_hash, hashes_hash)
         if value["environment_id"] != expected_environment or not ENVIRONMENT_ID.fullmatch(expected_environment):
             raise ValueError
         database = value["database"]
@@ -495,15 +500,15 @@ def installation_plan(root, current, target, changed, store_compatible=True):
         source_contract is not None and any(source_contract[key] != target_contract[key]
             for key in ("python", "environment_id", "requirements_sha256", "requirements_hashes_sha256"))
     )
-    if dependency_changed and target_contract["requirements_hashes_sha256"] is None:
-        raise ManualUpdateError(
-            "正式版依赖变化但缺少逐包哈希锁定清单，旧环境保持可用。", "dependencies"
-        )
     running_python = f"{sys.version_info.major}.{sys.version_info.minor}"
     if target_contract["python"] != running_python:
         raise ManualUpdateError(
             f"正式版需要 Python {target_contract['python']}；当前更新助手只使用已验收的 {running_python} 运行时。",
             "python",
+        )
+    if (dependency_changed or environment_changed) and target_contract["requirements_hashes_sha256"] is None:
+        raise ManualUpdateError(
+            "正式版环境变化但缺少逐包哈希锁定清单，旧环境保持可用。", "dependencies"
         )
     source_schema = (source_contract or {}).get("database", {}).get("schema")
     target_schema = target_contract["database"]["schema"]
@@ -853,6 +858,13 @@ def _verify_environment(folder, stage, contract):
         raise UpdateError("新版环境缺少完整的验收标记，未复用该环境。") from None
     if marker != _environment_contract(contract, python):
         raise UpdateError("新版环境身份与正式依赖清单不一致，未复用该环境。")
+    return _verify_python_environment(python, stage, contract)
+
+
+def _verify_python_environment(python, stage, contract):
+    python = Path(python).resolve()
+    if not python.is_file():
+        raise UpdateError("待复用环境缺少解释器，未开始更新。")
     script = (
         "import importlib.metadata as m,json,pathlib,sys;"
         "lock=pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines();"
@@ -898,6 +910,29 @@ def _build_environment(folder, current_python, stage, contract):
 def prepare_target_environment(root, stage, plan, current_python, smoke=probe, on_stage=None):
     contract = plan.get("installation") or {}
     if not contract.get("environment_changed"):
+        if contract.get("requirements_sha256"):
+            python = Path(current_python).resolve()
+            folder = python.parent.parent
+            if folder.parent == (metadata_dir(root) / "environments").resolve():
+                _verify_environment(folder, stage, contract)
+            else:
+                # Existing .venv/global interpreters have no managed marker.
+                # Record adoption outside that environment, only after all
+                # identity/dependency checks and the real startup probe pass.
+                key = hashlib.sha256(str(python).encode("utf-8")).hexdigest()
+                marker = metadata_dir(root) / "adopted-environments" / (key + ".json")
+                expected = _environment_contract(contract, python)
+                if marker.exists():
+                    try:
+                        if json.loads(marker.read_text(encoding="utf-8")) != expected:
+                            raise UpdateError("旧环境接纳记录与正式清单不一致，未复用。")
+                    except (OSError, ValueError) as exc:
+                        raise UpdateError("旧环境接纳记录无效，未复用。") from exc
+                _verify_python_environment(python, stage, contract)
+                smoke(Path(stage), python)
+                if not marker.exists():
+                    write_json(marker, expected)
+                return python, None
         smoke(Path(stage), current_python)
         return Path(current_python), None
     environment_id = contract.get("environment_id", "")
