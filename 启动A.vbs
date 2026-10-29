@@ -1,3 +1,6 @@
+' NOTE: wscript/cscript parse .vbs as ANSI (cp936 on this machine), never
+' as UTF-8.  Keep this file saved as ANSI/GBK; saving it as UTF-8 turns the
+' Chinese literals below into mojibake and breaks the launcher.
 Set ws = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
@@ -25,12 +28,12 @@ If fso.FileExists(activeTransaction) Then
     activeFile.Close
     recoveryWorker = fso.BuildPath(fso.GetParentFolderName(recoveryRequest), "worker.py")
     If Not fso.FileExists(recoveryPy) Or Not fso.FileExists(recoveryWorker) Then
-        MsgBox "æ£€æµ‹åˆ°æœªå®Œæˆçš„è½¯ä»¶æ›´æ–°ï¼Œä½†æ¢å¤å…¥å£ä¸å®Œæ•´ã€‚ä¸ºä¿æŠ¤è¡Œæƒ…å’Œäº¤æ˜“è®°å½•ï¼Œæœ¬æ¬¡æœªå¯åŠ¨ï¼Œè¯·è”ç³»ç»´æŠ¤è€…ã€‚", 48, "Apluså®‰å…¨æ¢å¤"
+        MsgBox "¼ì²âµ½Î´Íê³ÉµÄÈí¼ş¸üĞÂ£¬µ«»Ö¸´Èë¿Ú²»ÍêÕû¡£Îª±£»¤ĞĞÇéºÍ½»Ò×¼ÇÂ¼£¬±¾´ÎÎ´Æô¶¯£¬ÇëÁªÏµÎ¬»¤Õß¡£", 48, "Aplus°²È«»Ö¸´"
         WScript.Quit 20
     End If
     recoveryCode = ws.Run("""" & recoveryPy & """ """ & recoveryWorker & """ --recover """ & recoveryRequest & """", 0, True)
     If recoveryCode <> 0 Then
-        MsgBox "è½¯ä»¶æ›´æ–°ä»åœ¨ç¡®è®¤æˆ–éœ€è¦äººå·¥å¤„ç†ã€‚ä¸ºé¿å…æ–°æ—§ç‰ˆæœ¬æ··ç”¨ï¼Œæœ¬æ¬¡æœªå¯åŠ¨ã€‚", 48, "Apluså®‰å…¨æ¢å¤"
+        MsgBox "Èí¼ş¸üĞÂÈÔÔÚÈ·ÈÏ»òĞèÒªÈË¹¤´¦Àí¡£Îª±ÜÃâĞÂ¾É°æ±¾»ìÓÃ£¬±¾´ÎÎ´Æô¶¯¡£", 48, "Aplus°²È«»Ö¸´"
         WScript.Quit recoveryCode
     End If
 End If
