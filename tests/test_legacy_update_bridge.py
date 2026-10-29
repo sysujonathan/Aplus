@@ -18,6 +18,28 @@ ROOT = Path(__file__).resolve().parents[1]
 CERT = 'tests/fixtures/tls/emsign-ecc-root-g3.pem'
 
 
+def ensure_candidate_history(root, source_head, base):
+    # Connecting both endpoints matters: fetching the old object alone cannot
+    # prove ancestry when the candidate itself is a shallow boundary.
+    if git(root, 'rev-parse', '--is-shallow-repository') == 'true':
+        git(root, 'fetch', '--no-tags', '--unshallow', 'origin', source_head)
+    historical = subprocess.run(['git','-C',str(root),'cat-file','-e',base+'^{commit}'],
+                                capture_output=True,timeout=30)
+    if historical.returncode:
+        git(root,'fetch','--no-tags','origin',base)
+
+
+def test_shallow_candidate_history_connects_old_and_new_commits(repo, tmp_path):
+    source, old, target = repo
+    root = tmp_path/'shallow'
+    subprocess.run(['git','clone','--depth=1','--branch','server',source.as_uri(),str(root)],
+                   capture_output=True,check=True,timeout=60)
+    assert git(root,'rev-parse','--is-shallow-repository') == 'true'
+    ensure_candidate_history(root,target,old)
+    assert git(root,'rev-parse','--is-shallow-repository') == 'false'
+    git(root,'merge-base','--is-ancestor',old,target)
+
+
 @pytest.fixture
 def short_bridge_root():
     # Windows without LongPathsEnabled cannot install ONNX under pytest's
@@ -143,18 +165,17 @@ def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_b
     git(root, 'config', 'core.autocrlf', 'false')
     git(root, 'remote', 'set-url', 'origin', v.REMOTE)
     base = 'a192515369da647c586a2d7609071cda5bd00d75'
+    source_head = git(ROOT, 'rev-parse', 'HEAD')
     # Actions checkout may be shallow and have no origin/main tracking ref.
-    # Fetch only the known public historical commit if it is not available.
-    historical = subprocess.run(['git','-C',str(root),'cat-file','-e',base+'^{commit}'],
-                                capture_output=True,timeout=30)
-    if historical.returncode:
-        git(root,'fetch','--no-tags','origin',base)
-    git(root, 'switch', '-c', 'candidate', git(ROOT, 'rev-parse', 'HEAD'))
+    ensure_candidate_history(root,source_head,base)
+    git(root, 'switch', '-c', 'candidate', source_head)
     for name in ('workbench/version_update.py', 'release_installation.json', 'requirements-hashes.txt',
                  'tools/maintenance_update.py', 'tools/legacy_update_bootstrap.py', '安全过渡更新.vbs', '启动A.vbs'):
         (root/name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT/name, root/name)
-    git(root, 'add', '.'); git(root, 'commit', '-m', 'candidate bridge release')
+    # In CI these files are already committed. The candidate still needs a
+    # distinct identity for the two-release simulation, even with identical bytes.
+    git(root, 'add', '.'); git(root, 'commit', '--allow-empty', '-m', 'candidate bridge release')
     target = git(root, 'rev-parse', 'HEAD')
     git(root, 'switch', '-c', 'main', base)
     git(root, 'update-ref', 'refs/aplus-update/main', target)
