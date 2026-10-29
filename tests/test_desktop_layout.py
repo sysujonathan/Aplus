@@ -531,37 +531,33 @@ def test_watch_chart_item_carries_latest_market_and_original_signal_dates():
 
 
 def test_windows_launchers_forward_persisted_runtime_home():
-    # Launchers are ANSI/GBK on purpose: wscript parses .vbs with the system
-    # code page, not as UTF-8.  See the encoding guard below.
-    vbs = (ROOT / "启动A.vbs").read_text(encoding="cp936")
-    cmd = (ROOT / "启动A.cmd").read_text(encoding="cp936")
+    vbs = (ROOT / "启动A.vbs").read_text(encoding="ascii")
+    cmd = (ROOT / "启动A.cmd").read_text(encoding="ascii")
 
     for launcher in (vbs, cmd):
         assert "A_WORKBENCH_HOME" in launcher
         assert "HKCU\\Environment" in launcher
 
 
-def test_windows_launchers_are_never_saved_as_utf8():
-    """A UTF-8 launcher compiles to garbage on a Chinese Windows.
-
-    wscript/cscript read .vbs as ANSI (cp936 here).  Saved as UTF-8, every
-    Chinese literal becomes mojibake and the misaligned bytes swallow a quote,
-    which surfaces as 800A0401 "语句未结束" at the first MsgBox -- the window
-    never opens.  Pure ASCII is always safe; otherwise the bytes must not be
-    valid UTF-8.
-    """
+def test_windows_launchers_are_ascii_on_every_system_code_page():
+    """No BOM or non-ASCII literal may make startup depend on the host ACP."""
     for name in ("启动A.vbs", "启动A.cmd"):
         raw = (ROOT / name).read_bytes()
-        if all(byte < 0x80 for byte in raw):
-            continue
-        try:
-            raw.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
-        else:
-            raise AssertionError(f"{name} 必须保存为 ANSI/GBK，不能是 UTF-8")
-        text = raw.decode("cp936")
-        assert "\ufffd" not in text, f"{name} 含无法按 GBK 解码的字节"
+        text = raw.decode("ascii")
+        for encoding in ('cp936', 'cp1252', 'utf-8'):
+            assert raw.decode(encoding) == text
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows Script Host compiler')
+def test_vbs_launcher_compiles_without_starting_aplus(tmp_path):
+    # VBScript compiles the entire script before executing this early exit.
+    # The real launcher body is parsed, but no app, recovery or database opens.
+    import subprocess
+    script = tmp_path / 'compile-launcher.vbs'
+    script.write_bytes(b'WScript.Quit 0\n' + (ROOT / '启动A.vbs').read_bytes())
+    result = subprocess.run(['cscript.exe', '//nologo', str(script)],
+                            capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named mutex")

@@ -1,6 +1,4 @@
-' NOTE: wscript/cscript parse .vbs as ANSI (cp936 on this machine), never
-' as UTF-8.  Keep this file saved as ANSI/GBK; saving it as UTF-8 turns the
-' Chinese literals below into mojibake and breaks the launcher.
+' Keep this launcher ASCII-only: Windows Script Host uses the system code page.
 Set ws = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
@@ -28,12 +26,12 @@ If fso.FileExists(activeTransaction) Then
     activeFile.Close
     recoveryWorker = fso.BuildPath(fso.GetParentFolderName(recoveryRequest), "worker.py")
     If Not fso.FileExists(recoveryPy) Or Not fso.FileExists(recoveryWorker) Then
-        MsgBox "检测到未完成的软件更新，但恢复入口不完整。为保护行情和交易记录，本次未启动，请联系维护者。", 48, "Aplus安全恢复"
+        MsgBox "An unfinished Aplus update was found, but recovery files are missing. Aplus was not started. Your data is kept. Please contact your maintainer.", 48, "Aplus update recovery"
         WScript.Quit 20
     End If
     recoveryCode = ws.Run("""" & recoveryPy & """ """ & recoveryWorker & """ --recover """ & recoveryRequest & """", 0, True)
     If recoveryCode <> 0 Then
-        MsgBox "软件更新仍在确认或需要人工处理。为避免新旧版本混用，本次未启动。", 48, "Aplus安全恢复"
+        MsgBox "The Aplus update is still being checked or needs assistance. Aplus was not started. Please contact your maintainer.", 48, "Aplus update recovery"
         WScript.Quit recoveryCode
     End If
 End If

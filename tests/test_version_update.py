@@ -376,9 +376,7 @@ def test_migration_rejects_changed_protected_ledger_facts():
 def test_launchers_prefer_committed_environment_pointer_without_configuring_users():
     root = Path(__file__).resolve().parents[1]
     for name in ('启动A.vbs', '启动A.cmd'):
-        # The launchers are stored as ANSI/GBK: wscript parses .vbs with the
-        # system code page, so a UTF-8 copy would not even compile.
-        text = (root/name).read_text(encoding='cp936')
+        text = (root/name).read_text(encoding='ascii')
         assert '.git\\aplus-update\\current-python.txt' in text
         assert '.git\\aplus-update\\active-request.txt' in text
         assert '--recover' in text
