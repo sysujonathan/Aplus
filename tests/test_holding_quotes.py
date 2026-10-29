@@ -1109,7 +1109,7 @@ def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
-def test_holding_chart_opens_on_primed_intraday_bars(tmp_path, quote_window):
+def test_holding_chart_opens_daily_with_primed_minutes_available(tmp_path, quote_window):
     from gui.closed_trade_chart import HoldingTradeChartDialog
     store, aid, _pid = ledger(tmp_path)
     save_dataset(store, CODE, bars(), "baostock", "前复权")
@@ -1122,7 +1122,7 @@ def test_holding_chart_opens_on_primed_intraday_bars(tmp_path, quote_window):
                                     interactive=False, minute_fetch=lambda code, moment=None: minute)
     try:
         context = chart._workspace_context()
-        assert context["display_timeframe"] == "m5"
+        assert context["display_timeframe"] == "daily"
         assert len(context["minute_series"]) == 2
         assert context["frame"] is chart.data["frame"], "the daily series stays the base frame"
         assert "5 分钟" in chart.live_var.get() and "15:00" in chart.live_var.get()

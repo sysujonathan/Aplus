@@ -1758,7 +1758,6 @@ window.aplusApplyLiveBars = payload => {
   if (!Array.isArray(incoming) || incoming.length < 2) return false;
   chartBoot.series = chartBoot.series || {};
   chartBoot.seriesCloseDates = chartBoot.seriesCloseDates || {};
-  const firstIntraday = !(chartBoot.series.m5?.length);
   // One polled request can carry every intraday unit at once: the five-minute
   // tail plus the hourly and half-day bars rebuilt from it. They are replaced
   // together so the three never disagree about the same minute.
@@ -1769,9 +1768,7 @@ window.aplusApplyLiveBars = payload => {
   });
   if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live};
   if (!/^m\d+$/.test(String(activeTimeframeUnit || ''))) {
-    if (firstIntraday && !replayActive && switchProductionTimeframe('m5', false))
-      showToast('已接入真实 5 分钟行情 · 最新一根 ' + incoming.at(-1).date.slice(5)
-        + ' · 只读视图：日线画线不投影，成本／止损／止盈线保留');
+    // Prepare the minute choices without taking over the trader's daily view.
     return true;
   }
   if (replayActive) return true; // never disturb a frozen replay frame

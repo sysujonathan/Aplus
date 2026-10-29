@@ -220,6 +220,20 @@ def test_workspace_boot_without_intraday_bars_keeps_daily_only(tmp_path):
     assert boot["live"] is None
 
 
+@pytest.mark.parametrize('kind', ['candidate', 'watch', 'holding', 'closed'])
+def test_daily_entry_overrides_old_saved_minute_view(tmp_path, kind):
+    store = Store(tmp_path)
+    chart_context = context(store, context_kind=kind, minute_series=minute_frame())
+    boot = workspace_boot(store, chart_context)
+    value = store.chart_document(boot['identity'])
+    value['settings']['web_state'] = {'timeframe': 'm5'}
+    store.save_chart_document(boot['identity'], value, expected_revision=value['revision'])
+    reopened = workspace_boot(store, chart_context)
+    assert reopened['state']['timeframe'] == 'm5'  # persisted preference really exists
+    assert reopened['startTimeframe'] == 'daily'
+    assert 'm5' in reopened['series']
+
+
 def test_workspace_boot_ignores_an_unknown_start_unit(tmp_path):
     store = Store(tmp_path)
     boot = workspace_boot(store, context(store, display_timeframe="m90",

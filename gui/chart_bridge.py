@@ -267,7 +267,10 @@ def workspace_boot(store, context):
             # would misdate it. This holds for the 60-minute and half-day units
             # too, which the page builds from the same closing-labelled transport.
             close_dates[unit] = {row['date']: row['date'] for row in series[unit]}
-    start_timeframe = str(context.get('display_timeframe') or '')
+    # Each candidate/watch/position selection starts in its base daily/weekly
+    # view, even if an older saved view for that symbol was a minute chart.
+    base_start = timeframe if context.get('context_kind') in ('candidate', 'watch', 'holding', 'closed') else ''
+    start_timeframe = str(context.get('display_timeframe') or base_start)
     if start_timeframe not in series:
         start_timeframe = ''
     live = None

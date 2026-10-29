@@ -363,7 +363,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
                 coarse = coarse_series(history, minute, minutes)
                 if coarse is not None and len(coarse):
                     context[key] = coarse
-            context["display_timeframe"] = "m5"
+            context["display_timeframe"] = "daily"
             context["minute_interval"] = INTERVAL
         return context
 
