@@ -74,7 +74,8 @@ class ChartPanel(native_ttk.Frame):
 
     #: 休市时只做一次首帧读取；失败后隔这么久再试，避免离线时反复打网络。
     CLOSED_RETRY_SECONDS = 300
-    def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None):
+    def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None,
+                 minute_fetch=None, hourly_fetch=None):
         _configure_chart_styles()
         super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
         self.store = store
@@ -96,6 +97,9 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_on = False
         self._intraday_poller = None
         self._intraday_source = None
+        self._minute_fetch = minute_fetch
+        self._hourly_fetch = hourly_fetch
+        self._intraday_frame = None
         self._hourly = None
         self._intraday_after = None
         self._intraday_due = 0.0
@@ -255,8 +259,9 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_on = True
         if self._intraday_poller is None:
             from workbench.live_minutes import HourlyHistory, IntradaySource, MinutePoller
-            self._intraday_source = IntradaySource()
-            self._hourly = HourlyHistory()
+            self._intraday_source = self._minute_fetch or IntradaySource()
+            fetch = self._hourly_fetch or self._minute_fetch
+            self._hourly = HourlyHistory(fetch=fetch) if fetch is not None else HourlyHistory()
             self._intraday_poller = MinutePoller(fetch=self._intraday_source)
         if self._intraday_after is None:
             self._intraday_after = self.after(600, self._intraday_tick)
@@ -276,6 +281,12 @@ class ChartPanel(native_ttk.Frame):
         if not self._intraday_on or not self.winfo_exists():
             return
         poller = self._intraday_poller
+        if self._code != self._intraday_code and poller is not None:
+            poller.invalidate()
+            self._intraday_code, self._intraday_sent = self._code, None
+            self._intraday_loaded = False
+            self._intraday_frame = None
+            self._intraday_due = 0.0
         result = poller.take() if poller is not None else None
         if result is not None and result[0] is not None:
             self._publish_intraday(result[0])
@@ -283,11 +294,6 @@ class ChartPanel(native_ttk.Frame):
         if self._code and poller is not None:
             in_session = session_status(
                 china_now(), self._intraday_calendar_state()) == "交易中"
-            if self._code != self._intraday_code:
-                poller.invalidate()
-                self._intraday_code, self._intraday_sent = self._code, None
-                self._intraday_loaded = False
-                self._intraday_due = 0.0
             # The first read for a symbol happens even with the market shut: a
             # trader opening the watch list at noon or in the evening must still
             # get the five-minute, hourly and half-day units instead of three
@@ -297,9 +303,11 @@ class ChartPanel(native_ttk.Frame):
                 poller.start(self._code)
                 self._intraday_due = time.monotonic() + (
                     poller.delay if in_session else self.CLOSED_RETRY_SECONDS)
-        if self._hourly is not None and self._hourly.take():
+        if self._hourly is not None and self._code in self._hourly.take(successful_only=True):
             # The hourly history arrived after the first frame was drawn.
             self._intraday_sent = None
+            if self._intraday_frame is not None:
+                self._publish_intraday(self._intraday_frame)
         self._intraday_after = self.after(500, self._intraday_tick)
 
     def _publish_intraday(self, frame):
@@ -312,6 +320,7 @@ class ChartPanel(native_ttk.Frame):
         except ValueError:
             return
         tail = rows[-1]
+        self._intraday_frame = frame
         key = (tail['date'], len(rows), tail['close'], tail['volume'])
         if key == self._intraday_sent:
             return

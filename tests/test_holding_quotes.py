@@ -940,7 +940,7 @@ def test_holding_chart_publishes_verified_intraday_rows_once(tmp_path, quote_win
         chart._live_after = None
         chart._live_tick()
         assert pushes and pushes[-1]["series"]["m5"][-1]["date"] == "2026-09-30 15:00"
-        assert pushes[-1]["live"]["source"] == "腾讯 5 分钟"
+        assert pushes[-1]["live"]["source"] == "腾讯分钟行情"
         assert "5 分钟" in chart.live_var.get()
         chart._live_tick()                      # unchanged rows are not re-sent
         assert len(pushes) == 1
@@ -1053,10 +1053,12 @@ def test_holding_chart_reports_a_failed_first_read(tmp_path, quote_window):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Tk integration")
-def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote_window):
+def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote_window, monkeypatch):
     from types import SimpleNamespace
     from gui.closed_trade_chart import HoldingTradeChartDialog
     from workbench.live_minutes import MinuteSourceError
+    monkeypatch.setattr('workbench.live_minutes.OPENER.open',
+                        Mock(side_effect=AssertionError('injected chart must never use real network')))
     store, aid, _pid = ledger(tmp_path)
     save_dataset(store, CODE, bars(), "baostock", "前复权")
     calls = []
@@ -1065,7 +1067,11 @@ def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote
         "open": [10.8, 10.9], "high": [11.0, 11.05], "low": [10.75, 10.85],
         "close": [10.9, 11.0], "volume": [1e5, 1.1e5]})
 
-    def flaky(code, moment=None):
+    hourly_calls = []
+    def flaky(code, moment=None, *, period='m5', count=0):
+        if period == 'm60':
+            hourly_calls.append(code)
+            raise MinuteSourceError('小时接口立即失败')
         calls.append(code)
         if len(calls) == 1:
             return minute
@@ -1092,7 +1098,9 @@ def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote
             quote_window.update()
             threading.Event().wait(.01)
         chart._live_tick()
+        chart._poll_hourly()
         assert len(pushes) == 1, "a failed read must not replace the last verified frame"
+        assert hourly_calls == [CODE]
         assert "读取失败" in chart.live_var.get()
     finally:
         lifecycle["closed"] = True

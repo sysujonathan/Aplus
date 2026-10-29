@@ -206,11 +206,20 @@ def aggregate_minute_bars(frame, minutes):
     (newest_day, newest_slot) = groups[-1][0]
     rows = []
     for (day, slot), group in groups:
+        # m1 can omit the 13:00 print included by native m5: keep native OHLC.
+        if slot == AFTERNOON_OPEN + minutes:
+            continue
         # 09:35 carries the opening call auction on top of five minutes.
         expected = minutes + 1 if (slot == MORNING_OPEN + minutes and _has_auction(value, day)) \
             else minutes
         if len(group) < expected and (day, slot) != (newest_day, newest_slot):
             continue          # truncated head or a hole: never repaired
+        first = pd.Timestamp(group.date.iloc[0])
+        required_start = AUCTION if expected == minutes + 1 else slot - minutes + 1
+        stamps = pd.to_datetime(group.date)
+        if (first.hour * 60 + first.minute != required_start
+                or not stamps.diff().iloc[1:].eq(timedelta(minutes=1)).all()):
+            continue          # even a forming tail needs its real open
         # The slot is the bar's own close, not the minute that happened to arrive
         # last: a window that is still forming must be dated where it will end,
         # or it stops replacing the skeleton bar it belongs to and shows up as a
@@ -359,7 +368,7 @@ class HourlyHistory:
             frame = None
         self.results.put((code, frame))
 
-    def take(self):
+    def take(self, *, successful_only=False):
         """Codes whose read settled since the last drain, failed ones included."""
         landed = []
         while True:
@@ -368,12 +377,14 @@ class HourlyHistory:
             except queue.Empty:
                 return landed
             self.pending.discard(code)
-            landed.append(code)
             if frame is not None and len(frame):
+                landed.append(code)
                 self.frames[code] = frame
                 self._at[code] = self.clock()
                 self._failed_at.pop(code, None)
             else:
+                if not successful_only:
+                    landed.append(code)
                 # Keep whatever was cached: eight months of context is not worth
                 # losing to one failed read.  Back off briefly instead of
                 # hammering the provider on every poll.

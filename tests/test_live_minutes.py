@@ -358,7 +358,7 @@ def test_coarse_series_keeps_history_and_replaces_only_the_live_tail():
     assert merged.iloc[-1]["volume"] == pytest.approx(330.)
     # A lone hourly bar is not a half session: with only 14:00 in it the history
     # contributes nothing and the half-day unit shows just the live morning.
-    assert coarse_series(history.iloc[:1], live, 240).date.tolist() == ["2026-10-26 11:30"]
+    assert coarse_series(history.iloc[:1], live, 240) is None
 
 
 def test_halfday_unit_never_keeps_hourly_history():
@@ -374,8 +374,7 @@ def test_halfday_unit_never_keeps_hourly_history():
         "open": [25., 25.1, 25.2], "high": [25.3, 25.4, 25.5],
         "low": [24.9, 25., 25.1], "close": [25.1, 25.2, 25.3], "volume": [100., 110., 120.]})
     merged = coarse_series(history, live, 240)
-    assert merged.date.tolist() == ["2026-10-23 11:30", "2026-10-23 15:00",
-                                    "2026-10-26 11:30"]
+    assert merged.date.tolist() == ["2026-10-23 11:30", "2026-10-23 15:00"]
     assert "2026-10-23 10:30" not in merged.date.tolist()
     assert "2026-10-23 14:00" not in merged.date.tolist()
     assert merged.iloc[0]["volume"] == pytest.approx(3e5)   # 上午两根小时线相加
@@ -397,7 +396,8 @@ def test_halfday_history_drops_a_half_session_that_is_still_forming():
 def test_forming_one_minute_tail_is_dated_at_the_five_minute_close(last_minute):
     """14:31-14:34 belong to the 14:35 bar; dating them 14:31 would clone it."""
     frame = parse_minute_bars(
-        payload([row("202610261425"), row("202610261430"), row(f"20261026{last_minute}")],
+        payload([row("202610261425"), row("202610261430"),
+                 *[row(f"2026102614{m:02d}") for m in range(31, int(last_minute[-2:]) + 1)]],
                 period="m1"),
         CODE, NOW.replace(minute=35), period="m1")
     derived = aggregate_minute_bars(frame, 5)
@@ -483,7 +483,40 @@ def test_hourly_history_keeps_the_cache_and_backs_off_after_a_failure():
     assert book.request(CODE) is True
     while not book.take():
         pass
-    assert book.history(CODE).equals(cached)        # eight months kept
-    assert book.request(CODE) is False              # backing off, not hammering
+    assert book.history(CODE).equals(cached)
+    assert book.request(CODE) is False
     clock[0] += book.RETRY_SECONDS + 1
     assert book.request(CODE) is True
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_failed_hourly_settlement_is_not_a_frame_update(cached):
+    from workbench.live_minutes import HourlyHistory
+    book = HourlyHistory()
+    if cached:
+        book.results.put((CODE, minute_frame()))
+        assert book.take(successful_only=True) == [CODE]
+    book.pending.add(CODE)
+    book.results.put((CODE, None))
+    assert book.take(successful_only=True) == []
+    assert CODE not in book.pending
+    assert (book.history(CODE) is not None) == cached
+
+
+def test_afternoon_first_five_minutes_keep_native_ohlc():
+    skeleton = minute_frame().copy()
+    skeleton['date'] = ['2026-10-26 11:30', '2026-10-26 13:05', '2026-10-26 13:10']
+    tail = pd.DataFrame(dict(date=pd.date_range('2026-10-26 13:01', periods=10, freq='min')
+                            .strftime('%Y-%m-%d %H:%M'), open=30., high=31., low=29.,
+                            close=30.5, volume=100.))
+    merged = merge_live_tail(skeleton, tail)
+    assert merged.iloc[1].to_dict() == skeleton.iloc[1].to_dict()
+    assert merged.iloc[2]['open'] == 30.
+    assert merged.iloc[2]['volume'] == 500.
+
+
+def test_truncated_forming_minute_tail_keeps_the_native_bar():
+    skeleton = minute_frame().copy()
+    tail = skeleton.iloc[:2].copy()
+    tail['date'] = ['2026-10-26 14:29', '2026-10-26 14:30']
+    assert merge_live_tail(skeleton, tail).equals(skeleton)

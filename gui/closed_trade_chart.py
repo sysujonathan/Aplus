@@ -270,7 +270,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
     """
 
     def __init__(self, parent, store, row, *, quote=None, data=None, interactive=True,
-                 auto_quotes=False, minute_fetch=None, prime_minutes=True):
+                 auto_quotes=False, minute_fetch=None, prime_minutes=True, hourly_fetch=None):
         from workbench.holding_chart import load_holding_chart
         from workbench.live_minutes import HourlyHistory, IntradaySource, MinutePoller
         fetch = minute_fetch or IntradaySource()
@@ -289,7 +289,8 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_primed = False
         # Eight months of provider-native 60-minute bars drive the hourly and
         # half-day units' history; the live five-minute frame drives their tail.
-        self._hourly = HourlyHistory()
+        self._hourly = (HourlyHistory(fetch=hourly_fetch or minute_fetch)
+                        if hourly_fetch is not None or minute_fetch is not None else HourlyHistory())
         self._hour_after = None
         payload = data if data is not None else load_holding_chart(store, row, quote=quote)
         # One bounded read before the window opens: the trader asked for live
@@ -375,15 +376,13 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._hour_after = None
         if not self.top.winfo_exists():
             return
-        landed = self._hourly.take()
-        if not landed:
-            self._hour_after = self.top.after(120, self._poll_hourly)
-            return
+        landed = self._hourly.take(successful_only=True)
+        self._hour_after = self.top.after(500, self._poll_hourly)
         # The hourly unit is usually still waiting for this history when the
         # window opens; deliver it as soon as it lands instead of asking the
         # trader to reopen the chart.
-        self._live_sent = None
-        if self._live_frame is not None:
+        if self.data['code'] in landed and self._live_frame is not None:
+            self._live_sent = None
             self._publish_live(self._live_frame)
 
     def _auto_enabled(self):
@@ -419,6 +418,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             self._live_due = time.monotonic() + self._live_poller.delay
         moment, calendar = china_now(), self._live_calendar()
         if self._auto_enabled() and session_status(moment, calendar) == "交易中":
+            self._hourly.request(self.data['code'])
             if time.monotonic() >= self._live_due and not self._live_poller.busy:
                 self._live_poller.start(self.data["code"])
         self._live_after = self.top.after(400, self._live_tick)

@@ -249,9 +249,8 @@ def aggregate_minutes(frame, minutes, *, allow_open_tail=False, closing_labelled
     their slices are counted from the session open instead; a tail-only live
     frame cannot be counted that way because it does not start at the open.
 
-    The half-day unit uses the exchange session grid -- morning 09:30-11:30 and
-    afternoon 13:00-15:00 -- so a 4-hour bar is one per half session, two per
-    day, rather than a second copy of the daily bar.
+    Live closing-labelled frames use one 4-hour display bar per half session.
+    Default CSV/alert callers retain one 4-hour bar per complete trading day.
     """
     minutes = int(minutes)
     if minutes not in (60, 240):
@@ -261,6 +260,23 @@ def aggregate_minutes(frame, minutes, *, allow_open_tail=False, closing_labelled
     validate_session_sequence(stamp, 5)
     value['_stamp'] = stamp
     value['_day'] = stamp.dt.strftime('%Y-%m-%d')
+    if not closing_labelled:
+        # Preserve the original CSV and persisted-alert aggregation contract.
+        pieces = []
+        for _, day in value.groupby('_day', sort=False):
+            morning = day.loc[day._stamp.dt.hour.lt(12)]
+            afternoon = day.loc[day._stamp.dt.hour.ge(13)]
+            if len(morning) != 24 or len(afternoon) != 24:
+                continue
+            groups = [day] if minutes == 240 else [morning.iloc[:12], morning.iloc[12:],
+                                                   afternoon.iloc[:12], afternoon.iloc[12:]]
+            for group in groups:
+                pieces.append(dict(date=str(group.date.iloc[-1]), open=float(group.open.iloc[0]),
+                    high=float(group.high.max()), low=float(group.low.min()), close=float(group.close.iloc[-1]),
+                    volume=float(group.volume.sum())))
+        if not pieces:
+            raise ValueError(f'没有完整的 {minutes//60} 小时交易时段；不会用缺失分钟线拼接')
+        return pd.DataFrame(pieces)
     size = 12 if minutes == 60 else 24
     # Closing minute of each slice inside one session. A bar that is still
     # forming is placed where it will close rather than at whichever minute
@@ -280,26 +296,16 @@ def aggregate_minutes(frame, minutes, *, allow_open_tail=False, closing_labelled
         step = max(0, minute - base - 1) // span
         return (0 if morning else 2) + min(1, step)
 
-    if closing_labelled:
-        value['_slice'] = [slice_of(int(t.hour) * 60 + int(t.minute)) for t in stamp]
-        buckets = list(value.groupby(['_day', '_slice'], sort=True))
-    else:
-        buckets = []
-        for day_key, day in value.groupby('_day', sort=False):
-            morning = day.loc[day._stamp.dt.hour.lt(12)]
-            afternoon = day.loc[day._stamp.dt.hour.ge(13)]
-            groups = ([morning.iloc[:size], morning.iloc[size:],
-                       afternoon.iloc[:size], afternoon.iloc[size:]] if minutes == 60
-                      else [morning, afternoon])
-            for index, group in enumerate(groups):
-                if len(group):
-                    buckets.append(((day_key, index), group))
+    value['_slice'] = [slice_of(int(t.hour) * 60 + int(t.minute)) for t in stamp]
+    buckets = list(value.groupby(['_day', '_slice'], sort=True))
     newest = buckets[-1][0] if buckets else None
     pieces = []
     for (day_key, index), group in buckets:
         if len(group) == size:
             label = str(group.date.iloc[-1])
-        elif allow_open_tail and (day_key, index) == newest and 0 < len(group) < size:
+        elif (allow_open_tail and (day_key, index) == newest and 0 < len(group) < size
+              and group._stamp.iloc[0].hour * 60 + group._stamp.iloc[0].minute
+                  == grid[index] - span + 5):
             # Only the newest slice may be forming; a short earlier one is a
             # hole in the data, not a bar that has not finished yet.
             close = grid[index]
