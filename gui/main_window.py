@@ -91,7 +91,11 @@ class AplusMainWindow(ttk.Window):
         self._candidate_source = REALTIME_MARKET_SOURCE
         self._build_ui()
         self._load_strategies()
-        from .version_update import VersionController
+        import sys
+        if getattr(sys, 'frozen', False):
+            from .installed_update import InstalledVersionController as VersionController
+        else:
+            from .version_update import VersionController
         self.version_controller = VersionController(self, self.section_nav)
         self.toolbar._on_scan_started = self.version_controller.scan_hint
         if enable_tray:

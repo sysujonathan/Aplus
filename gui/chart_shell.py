@@ -87,8 +87,8 @@ def launch_chart_workspace(store, **context):
     session = store.root / "chart_sessions" / f"{uuid.uuid4().hex}.json"
     status = session.with_suffix(".status.json")
     _write_json(session, {"runtime_root": str(store.root), "boot": boot})
-    executable = Path(sys.executable)
-    command = [str(executable), "-m", "gui.chart_shell", str(session)]
+    from workbench.process_entry import chart_command
+    command = chart_command(session)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         process = subprocess.Popen(command, cwd=ROOT, creationflags=flags)

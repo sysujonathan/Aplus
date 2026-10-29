@@ -1,4 +1,8 @@
 .venv/
+.venv-build/
+.build-tools/
+build/
+dist/
 venv/
 __pycache__/
 *.pyc

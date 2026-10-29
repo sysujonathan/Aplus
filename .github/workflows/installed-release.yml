@@ -1,0 +1,87 @@
+name: Windows installed release
+on:
+  workflow_run:
+    workflows: [A acceptance]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: aplus-installed-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || 'main' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements-lock.txt
+            packaging/requirements-build.txt
+      - run: python -m pip install -r requirements-lock.txt -r packaging/requirements-build.txt
+      - name: Install verified compiler
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $compiler
+          $signature = Get-AuthenticodeSignature $compiler
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B.V.') { throw 'Compiler signature mismatch' }
+          $destination = Join-Path $env:RUNNER_TEMP 'Inno'
+          $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',('/DIR='+$destination))
+          $process = Start-Process $compiler -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
+          "APLUS_ISCC=$destination\ISCC.exe" >> $env:GITHUB_ENV
+      - name: Allocate release identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $head = git rev-parse HEAD
+          $main = gh api repos/$env:GITHUB_REPOSITORY/commits/main --jq .sha
+          if ($head -ne $main) { throw 'Main moved; a later accepted main will build instead' }
+          $date = [DateTime]::UtcNow.ToString('yyyy.MM.dd')
+          $floor = [long]([DateTime]::UtcNow.ToString('yyyyMMdd')+'0000')
+          $sequence = $floor+1
+          $releases = gh api repos/$env:GITHUB_REPOSITORY/releases?per_page=100 | ConvertFrom-Json
+          foreach ($release in $releases) {
+            if ($release.tag_name -match '^v(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$') {
+              $old = [long]('{0}{1:D2}{2:D2}{3:D4}' -f [int]$Matches[1],[int]$Matches[2],[int]$Matches[3],[int]$Matches[4])
+              if ($old -ge $sequence) { $sequence = $old+1 }
+            }
+          }
+          if ($sequence -ge $floor+10000) { throw 'Release sequence needs manual review' }
+          $version = "$date.$($sequence-$floor)"
+          "APLUS_VERSION=$version" >> $env:GITHUB_ENV
+          "APLUS_SEQUENCE=$sequence" >> $env:GITHUB_ENV
+      - name: Build exact accepted main installer
+        run: python tools/build_installer.py --official --version $env:APLUS_VERSION --sequence $env:APLUS_SEQUENCE --iscc "$env:APLUS_ISCC"
+      - name: Installed GUI and WebView smoke
+        shell: pwsh
+        env:
+          APLUS_INSTALL_SMOKE: '1'
+        run: |
+          $folder = Join-Path $env:RUNNER_TEMP ('AplusSmoke-'+[Guid]::NewGuid().ToString('N'))
+          $application = Resolve-Path 'dist/AplusApp/AplusApp.exe'
+          $process = Start-Process $application -ArgumentList @('--smoke-test',('"'+$folder+'"')) -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(120000)) { throw 'Installed smoke timeout; inspect runner diagnostics' }
+          if ($process.ExitCode -ne 0) { throw 'Installed smoke process failed' }
+          $result = Get-Content (Join-Path $folder 'result.json') -Raw | ConvertFrom-Json
+          if (-not $result.ok -or -not $result.webview_ready) { throw 'Installed chart not ready' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AplusSetup-${{ env.APLUS_VERSION }}-unsigned-pilot
+          path: dist/installers/*
+          retention-days: 30
+      # Unsigned pilot packages are artifacts only. Publishing a stable Release
+      # is a deliberate release step after publisher signing is configured;
+      # never expose an unsigned build as an automatic update by accident.

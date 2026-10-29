@@ -260,7 +260,8 @@ class EmbeddedChartHost:
             self.status.unlink(missing_ok=True)
             atomic_json(self.session, dict(runtime_root=str(self.store.root), boot=boot,
                 parent_hwnd=int(self.parent.winfo_id()), token=self.token))
-            self.process = subprocess.Popen([sys.executable, '-m', 'gui.chart_shell', str(self.session)],
+            from workbench.process_entry import chart_command
+            self.process = subprocess.Popen(chart_command(self.session),
                 cwd=Path(__file__).resolve().parents[1], creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self._started = time.monotonic()
             self._timer = self.parent.after(100, self._poll)
