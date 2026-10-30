@@ -22,7 +22,7 @@ for package in ('ttkbootstrap', 'webview', 'rapidocr_onnxruntime'):
 hidden = []
 for package in ('gui', 'workbench', 'core', 'config', 'webview', 'clr_loader'):
     hidden += collect_submodules(package, filter=lambda name: name != 'workbench.dashboard')
-hidden += ['tools.installer_smoke']
+hidden += ['tools.installer_smoke', 'tools.onboarding_probe']
 a = Analysis([str(root/'tools/installed_entry.py')], pathex=[str(root)],
     datas=datas, hiddenimports=hidden, excludes=['streamlit', 'IPython', 'pytest'],
     module_collection_mode={name: 'py' for name in ('gui','workbench','core','config')})

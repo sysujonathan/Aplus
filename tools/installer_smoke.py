@@ -19,9 +19,11 @@ def run(folder):
     from workbench.market import save_dataset
     from workbench.strategies import verify_frozen
     from workbench.service import Service
+    store=Store(folder/'runtime');service=Service(store)
+    from tools.onboarding_probe import run as onboarding
+    onboarding_result=onboarding(store.root,folder)
     from gui.main_window import AplusMainWindow
     from gui.chart_embed import EmbeddedChartHost
-    store=Store(folder/'runtime');service=Service(store)
     frame=pd.DataFrame(dict(date=pd.bdate_range('2026-01-05',periods=160).strftime('%Y-%m-%d'),
         open=10.,high=11.,low=9.,close=10.5,volume=1000))
     save_dataset(store,'sz.000001',frame,'test','qfq')
@@ -48,7 +50,8 @@ def run(folder):
             status=json.loads(host.status.read_text())
             if status.get('ready'):
                 (folder/'result.json').write_text(json.dumps(dict(ok=True,frozen=verify_frozen(),
-                    webview_ready=True,synthetic=True,window=app.title())))
+                    webview_ready=True,onboarding_success=onboarding_result['success'],
+                    synthetic=True,window=app.title())))
                 host.request_close()
                 closing[0]=True;app.after(100,finish);return
         if time.monotonic()>deadline:

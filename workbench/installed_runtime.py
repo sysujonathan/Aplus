@@ -12,8 +12,11 @@ from .installed_data import (state_home, bound_runtime, discover_hints, candidat
 
 
 def choose_data(install_root):
-    import ttkbootstrap as ttk
-    window = ttk.Window(themename='darkly')
+    # The welcome window has a short-lived Tcl interpreter. Do not initialize
+    # ttkbootstrap's process-wide Style singleton here: the desktop must own
+    # it, otherwise it retains this destroyed window after data binding.
+    from tkinter import ttk
+    window = tk.Tk()
     window.title('欢迎使用 Aplus')
     window.geometry('720x450')
     window.minsize(640, 400)
@@ -28,6 +31,7 @@ def choose_data(install_root):
     ttk.Label(body,textvariable=summary,wraplength=660).pack(anchor='w',pady=18)
     results, candidates, outcome = queue.Queue(), [], []
     working = [True]
+    bound = []
     def describe(_event=None):
         index = choice.current()
         if index >= 0:
@@ -56,6 +60,8 @@ def choose_data(install_root):
             except Exception as exc:
                 messagebox.showwarning('未找到可接续的数据',str(exc),parent=window)
     def start(existing):
+        if bound:
+            outcome.append(bound[0]); window.destroy(); return
         if working[0]: return
         index=choice.current()
         if existing and index<0:
@@ -76,9 +82,12 @@ def choose_data(install_root):
                 results.put(('error', str(exc)))
         threading.Thread(target=work,daemon=True).start()
     actions=ttk.Frame(body);actions.pack(fill='x',side='bottom')
-    ttk.Button(actions,text='选择其他位置',command=browse).pack(side='left')
-    ttk.Button(actions,text='首次使用',command=lambda:start(False),bootstyle='secondary').pack(side='left',padx=12)
-    ttk.Button(actions,text='保护并接续数据',command=lambda:start(True),bootstyle='success').pack(side='right',ipady=6)
+    browse_button=ttk.Button(actions,text='选择其他位置',command=browse)
+    browse_button.pack(side='left')
+    new_button=ttk.Button(actions,text='首次使用',command=lambda:start(False))
+    new_button.pack(side='left',padx=12)
+    open_button=ttk.Button(actions,text='保护并接续数据',command=lambda:start(True))
+    open_button.pack(side='right',ipady=6)
     def discover():
         try: results.put(('found',discover_hints()))
         except Exception: results.put(('found',[]))
@@ -86,7 +95,18 @@ def choose_data(install_root):
         try:
             kind,value=results.get_nowait(); working[0]=False
             if kind=='found': set_candidates(value)
-            elif kind=='bound': outcome.append(value);window.destroy();return
+            elif kind=='bound':
+                bound.append(value)
+                profile=json.loads((state_home()/'data.json').read_text(encoding='utf-8'))
+                status.set('数据已安全接续' if profile.get('existing') else '新数据位置已就绪')
+                summary.set(('原行情、关注和交易记录保留原位，数据库已备份并通过校验。\n'
+                             if profile.get('existing') else '已创建独立数据位置。\n')+
+                            '数据位置：'+str(value)+
+                            ('\n备份位置：'+profile['backup'] if profile.get('backup') else '')+
+                            '\n点击“打开 Aplus”进入主界面；关闭此窗口后也可从桌面快捷方式打开。')
+                browse_button.configure(state='disabled'); new_button.configure(state='disabled')
+                choice.configure(state='disabled'); open_button.configure(text='打开 Aplus')
+                window.geometry('720x520')
             else:
                 status.set('数据尚未接续，原件已保留。')
                 messagebox.showerror('暂不能接续',value,parent=window)
@@ -147,4 +167,10 @@ def launch():
                 if os.environ.get('APLUS_INSTALL_SMOKE')=='1' and os.environ.get('APLUS_INSTALL_TEST_EXIT'):
                     self.after(5000,self._exit_from_tray)
         main_window.AplusMainWindow=ConfirmedWindow
-    launch_dashboard.main()
+    try:
+        launch_dashboard.main()
+    except SystemExit as exc:
+        if exc.code not in (None, 0):
+            raise RuntimeError('数据位置已确认，但主界面未能打开。原数据及接续备份已保留。'
+                               '\n详细日志：'+str(launch_dashboard.LOG_PATH)) from exc
+        raise
