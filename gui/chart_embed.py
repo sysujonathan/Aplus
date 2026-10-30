@@ -81,6 +81,7 @@ class ChartSessionBridge:
         self.busy = False
         self.failed_token = None
         self.close_requested = False
+        self.close_token = None
         self._lock = threading.RLock()
         self._close_window = self._cancel_close = None
 
@@ -322,15 +323,16 @@ class EmbeddedChartHost:
                         self.on_layout(action['layout'])
             result = read_notification(self.status)
             if result is not None:
-                if result.get('error'):
+                owns_page = result.get('token') == self.token
+                if result.get('error') and (owns_page or result.get('scope') == 'process'):
                     raise RuntimeError(result['error'])
-                if result.get('ready') and result.get('token') == self.token:
+                if result.get('ready') and owns_page:
                     self._started = None
                     if result.get('token') == self.token and self._ready_token != self.token:
                         self._ready_token = self.token
                         if self.on_ready:
                             self.on_ready()
-                if result.get('closeCancelled'):
+                if result.get('closeCancelled') and owns_page:
                     self.closing = False
             if self.process.poll() is not None and not self.closing:
                 raise RuntimeError('交互图表进程已退出；已保存的分析对象仍在本机')
@@ -403,6 +405,7 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
                 if request.get('close'):
                     bridge.pending = None
                     bridge.close_requested = True
+                    bridge.close_token = request.get('token')
                     window.destroy()  # ChartCloseGuard waits for the last Store save
                 else:
                     bridge.pending = request

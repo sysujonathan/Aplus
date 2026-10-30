@@ -28,6 +28,8 @@ class ChartCloseGuard:
         self.window = window
         self.allow_close = False
         self.flushing = False
+        self.bridge = bridge
+        self.request_token = None
         self._lock = threading.Lock()
         bridge._close_window = self.finish
         bridge._cancel_close = self.failed
@@ -38,6 +40,9 @@ class ChartCloseGuard:
                 return True
             if not self.flushing:
                 self.flushing = True
+                self.request_token = (getattr(self.bridge, 'close_token', None)
+                                      if getattr(self.bridge, 'close_requested', False)
+                                      else getattr(self.bridge, 'active_token', None))
                 threading.Thread(target=self._flush, daemon=True).start()
         return False
 
@@ -162,8 +167,10 @@ def run_session(session_path):
     session = Path(session_path).resolve()
     status = session.with_suffix(".status.json")
     generated = None
+    token = None
     try:
         payload = json.loads(session.read_text(encoding="utf-8"))
+        token = payload.get('token', 0)
         if payload.get('parent_hwnd'):
             from .chart_embed import adopt_parent_dpi
             adopt_parent_dpi(payload['parent_hwnd'])
@@ -188,16 +195,18 @@ def run_session(session_path):
         bridge._copy_snapshot = lambda data: copy_chart_png(data, int(window.native.Handle.ToInt64()))
         if embedded:
             def cancelled():
+                request_token = close_guard.request_token
                 close_guard.failed()
                 if not close_guard.allow_close:
-                    bridge.close_requested = False
-                    _write_json(status, {'ready': True, 'closeCancelled': True})
+                    if request_token == bridge.close_token:
+                        bridge.close_requested = False
+                    _write_json(status, {'scope': 'page', 'token': request_token, 'closeCancelled': True})
             bridge._cancel_close = cancelled
         window.events.closing += close_guard.request
         def loaded():
             if embedded:
                 bridge.busy = False
-            _write_json(status, {'ready': True, 'token': getattr(bridge, 'active_token', 0)})
+            _write_json(status, {'scope': 'page', 'ready': True, 'token': getattr(bridge, 'active_token', 0)})
             if embedded and bridge.close_requested:
                 # A close requested during page replacement must flush the new
                 # page too; the old document was already acknowledged.
@@ -214,10 +223,10 @@ def run_session(session_path):
                 window.show()
                 run_embedded_transport(window, bridge, session, payload['parent_hwnd'], native)
             except Exception as exc:
-                _write_json(status, {'ready': False, 'error': str(exc)})
+                _write_json(status, {'scope': 'process', 'token': getattr(bridge, 'active_token', token), 'ready': False, 'error': str(exc)})
         webview.start(start_embedded if embedded else None, gui="edgechromium", debug=False, private_mode=True)
     except Exception as exc:
-        _write_json(status, {"ready": False, "error": str(exc)})
+        _write_json(status, {'scope': 'process', 'token': token, "ready": False, "error": str(exc)})
         raise
     finally:
         if generated is not None:
