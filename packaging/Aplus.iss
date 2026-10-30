@@ -30,6 +30,7 @@ Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
 DisableProgramGroupPage=yes
+DisableDirPage=no
 CloseApplications=no
 RestartApplications=no
 AppMutex=Local\AplusDesktopWorkbench,Local\AplusInstalledLauncher

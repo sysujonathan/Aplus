@@ -112,13 +112,14 @@ def verify_candidate(target,path,current):
     verify_package(target,path)
 
 
-def download(target, destination, *, opener=urlopen):
+def download(target, destination, *, opener=urlopen, progress=None):
     target=validate_manifest(target)
     package=target['package'];destination=Path(destination)
     if shutil.disk_usage(destination.parent).free < package['bytes']+64*1024*1024:
         raise ValueError('下载更新的磁盘空间不足，当前版本未改动。')
     temp=destination.with_name(destination.name+'.'+uuid.uuid4().hex+'.part');digest=hashlib.sha256();size=0
     try:
+        if progress:progress(0,package['bytes'])
         with opener(Request(package['url'],headers={'User-Agent':'Aplus-installed-update'}),timeout=30) as response:
             with temp.open('xb') as output:
                 while True:
@@ -127,6 +128,7 @@ def download(target, destination, *, opener=urlopen):
                     size+=len(chunk)
                     if size>package['bytes']:raise ValueError('更新包大小不符，已停止。')
                     digest.update(chunk);output.write(chunk)
+                    if progress:progress(size,package['bytes'])
         if size!=package['bytes'] or digest.hexdigest()!=package['sha256']:
             raise ValueError('更新包校验未通过，当前版本未改动。')
         os.replace(temp,destination)

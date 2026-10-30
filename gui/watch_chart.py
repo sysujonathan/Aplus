@@ -78,6 +78,7 @@ class WatchChartController:
         self.reader = LatestRefresh(lambda phase, check: load_chart(store, service, code, source, timeframe, phase, check))
         self.poll_id = None
         self.closed = False
+        self.shown = False
         self.reader.submit('local')
         self.poll_id = panel.after(30, self._poll)
 
@@ -118,7 +119,8 @@ class WatchChartController:
             panel._workspace_request = {'manual': True}
             panel._analysis_btn.configure(state=tk.NORMAL)
             if getattr(panel, '_interactive', False):
-                panel._show_interactive()
+                panel._show_interactive(refresh_history=self.shown)
+                self.shown = True
             else:
                 panel._fit_image()
         if data is None or data['refresh']:

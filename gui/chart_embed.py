@@ -244,6 +244,8 @@ class EmbeddedChartHost:
         self.actions = self.session.with_suffix('.actions.json')
         self.navigation = self.session.with_suffix('.navigation.json')
         self.live = self.session.with_suffix('.live.json')
+        self.history = self.session.with_suffix('.history.json')
+        self._history_identity = None
         self.focus = self.session.with_suffix('.focus.json')
         self._last_focus = None
         self._last_action = None
@@ -263,6 +265,7 @@ class EmbeddedChartHost:
             self._queued_context = context
             return
         boot = workspace_boot(self.store, context) if context else None
+        self._history_identity = boot['identity'] if boot else None
         if boot:
             boot['embedded'] = True
             boot['layoutSupported'] = self.on_layout is not None
@@ -303,6 +306,16 @@ class EmbeddedChartHost:
         if self.closed() or self.closing or not payload:
             return False
         atomic_json(self.live, dict(id=uuid.uuid4().hex, token=self.token, **payload))
+        return True
+
+    def push_history(self, context):
+        """Refresh this manual watch's daily history without replacing its page."""
+        if self.closed() or self.closing or context.get('context_kind') != 'watch' or context.get('strategy_type'):
+            return False
+        boot = workspace_boot(self.store, context)
+        if boot['identity'] != self._history_identity:
+            return False
+        atomic_json(self.history, dict(id=uuid.uuid4().hex, token=self.token, boot=boot))
         return True
 
     def _poll(self):
@@ -378,7 +391,7 @@ class EmbeddedChartHost:
             self._timer = None
         if self.closed():
             for path in (self.control, self.status, self.actions, self.navigation,
-                         self.live, self.focus, self.session):
+                         self.live, self.history, self.focus, self.session):
                 path.unlink(missing_ok=True)
 
 
@@ -393,6 +406,7 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
     last_mtime = None
     last_navigation = None
     last_live = None
+    last_history = None
     while native.fit():
         try:
             modified = control.stat().st_mtime_ns
@@ -427,6 +441,27 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
                     + json.dumps(request, ensure_ascii=False) + ")")
                 if accepted:
                     last_navigation = request['id']
+        history_path = session.with_suffix('.history.json')
+        if not bridge.busy and window.events.loaded.is_set():
+            request = read_notification(history_path)
+            if request is not None and request.get('id') != last_history and request.get('token') == bridge.active_token:
+                boot = request.get('boot') or {}
+                current = bridge.current
+                if (current is not None and boot.get('identity') == current.identity
+                        and boot.get('contextKind') == 'watch' and not boot.get('strategyType')):
+                    accepted = window.evaluate_js(
+                        "typeof window.aplusApplyHistory === 'function' && window.aplusApplyHistory("
+                        + json.dumps(boot, ensure_ascii=False) + ")")
+                    if accepted:
+                        # Keep drawing coordinates current without resetting the editor's
+                        # revision, save baseline, pending objects, or session token.
+                        with current._write_lock:
+                            for key in ('bars', 'latest'):
+                                current.boot[key] = boot[key]
+                            for key in ('series', 'seriesCloseDates', 'axisDates'):
+                                current.boot.setdefault(key, {}).update(boot[key])
+                            current.rows = boot['bars']
+                        last_history = request['id']
         live_path = session.with_suffix('.live.json')
         if not bridge.busy and window.events.loaded.is_set():
             request = read_notification(live_path)

@@ -106,6 +106,14 @@ def test_download_exact_bytes_and_hash(tmp_path):
     assert path.read_bytes()==b'installer bytes'
 
 
+def test_download_reports_actual_bytes_without_changing_hash_validation(tmp_path):
+    candidate=manifest();path=tmp_path/'setup.exe';seen=[]
+    update.download(candidate,path,opener=lambda *a,**k:io.BytesIO(b'installer bytes'),
+                    progress=lambda done,total:seen.append((done,total)))
+    assert seen==[(0,15),(15,15)]
+    update.verify_package(candidate,path)
+
+
 @pytest.mark.parametrize('raw',[b'bad bytes',b'installer bytes plus extra'])
 def test_failed_download_never_lands_executable(tmp_path,raw):
     path=tmp_path/'setup.exe'

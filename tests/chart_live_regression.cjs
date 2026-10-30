@@ -62,8 +62,8 @@ const context = vm.createContext({
 vm.runInContext(fs.readFileSync(path.join(assets, 'chart-coordinates.js'), 'utf8'), context);
 context.chartCoordinates = context.window.AplusChartCoordinates;
 vm.runInContext(fs.readFileSync(path.join(assets,'chart-indicators.js'),'utf8'), context);
-vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'periodLabel', 'refreshSeriesTitle', 'applyDailyReference', 'switchProductionTimeframe']
-  .map(functionSource).join('\n') + '\n' + arrowSource('aplusApplyLiveBars'), context);
+vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'periodLabel', 'refreshSeriesTitle', 'applyDailyReference', 'switchProductionTimeframe', 'repaintCurrentSeries']
+  .map(functionSource).join('\n') + '\n' + arrowSource('aplusApplyLiveBars') + '\n' + arrowSource('aplusApplyHistory'), context);
 
 const apply = payload => context.window.aplusApplyLiveBars(payload);
 
@@ -104,6 +104,31 @@ function run() {
   assert.equal(context.chartBoot.series.m5.length, rows.length);
   assert.equal(context.chartBoot.seriesCloseDates.m5[rows.at(-1).date], rows.at(-1).date);
   assert.equal(context.chartBoot.live.source, '腾讯 5 分钟');
+
+  // A delayed daily history fetch in the same watch must not reload/reset the
+  // page or discard minutes, even outside market hours when no new tick follows.
+  Object.assign(boot,{identity:'watch-test',contextKind:'watch',strategyType:'',source:'baostock',adjustment:'不复权'});
+  const updated = structuredClone(daily).concat({...daily.at(-1),date:'2026-10-26'});
+  const history = {identity:boot.identity,symbol:boot.symbol,source:boot.source,adjustment:boot.adjustment,
+    contextKind:'watch',strategyType:'',timeframe:'daily',
+    series:{daily:updated,weekly:updated,monthly:updated},seriesCloseDates:{},axisDates:{}};
+  context.viewCount=20;context.viewOffset=8;context.priceZoom=1.6;
+  const keptMinutes=JSON.stringify(context.bars),keptLive=JSON.stringify(boot.live);
+  assert.equal(context.window.aplusApplyHistory(history),true);
+  assert.equal(context.activeTimeframeUnit,'m5');
+  assert.equal(JSON.stringify(context.bars),keptMinutes);
+  assert.equal(JSON.stringify(boot.live),keptLive);
+  assert.equal(boot.series.m5.length,rows.length);
+  assert.equal(context.viewOffset,8);assert.equal(context.priceZoom,1.6);
+  assert.equal(vm.runInContext("switchProductionTimeframe('daily',false)",context),true);
+  assert.equal(context.bars.at(-1).date,'2026-10-26');
+  assert.equal(vm.runInContext("switchProductionTimeframe('m5',false)",context),true);
+  for(const patch of [{symbol:'other'},{identity:'old-token'},{source:'other'},{strategyType:'MTR'}])
+    assert.equal(context.window.aplusApplyHistory({...history,...patch}),false);
+  const invalid=structuredClone(history);invalid.series.daily[0].low=999;
+  assert.equal(context.window.aplusApplyHistory(invalid),false);
+  // Keep subsequent live-reference cases on their original fixture.
+  boot.series.daily=structuredClone(daily);boot.latest=daily.at(-1);
 
   // ---- newest pinned: one more bar shifts everything left ---------------
   context.viewCount = 20;

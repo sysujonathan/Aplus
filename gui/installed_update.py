@@ -23,6 +23,7 @@ class InstalledVersionController:
         self.downloaded=None
         self.button=ttk.Button(parent,text='检查更新',width=14,command=self.manual_check,bootstyle='secondary')
         self.button.pack(side='right',padx=(8,0),ipady=2)
+        self.download_bar=ttk.Progressbar(parent,length=90,maximum=100,mode='determinate',bootstyle='success')
         self.poll_id=window.after(200,self.poll)
         self.check_id=window.after(4000,self.scan_hint)
         self.last_check=0
@@ -54,6 +55,8 @@ class InstalledVersionController:
             service=self.window.service
             service.reserve_code_update();self.reserved=True
             self.busy=True;self.button.configure(text='下载更新…',bootstyle='warning')
+            self.download_bar.configure(value=0)
+            self.download_bar.pack(side='right',padx=(8,0))
             cached=self.downloaded
             def work():
                 try:
@@ -73,7 +76,13 @@ class InstalledVersionController:
                             if reusable:shutil.copy2(previous/'setup.exe',folder/'setup.exe')
                     else:
                         folder=state_home()/'updates'/uuid.uuid4().hex;folder.mkdir(parents=True)
-                    if not reusable:update.download(target,folder/'setup.exe')
+                    if not reusable:
+                        last=[0.0]
+                        def progress(done,total):
+                            stamp=time.monotonic()
+                            if done==0 or done==total or stamp-last[0]>=.3:
+                                self.results.put(('progress',(done,total),False));last[0]=stamp
+                        update.download(target,folder/'setup.exe',progress=progress)
                     update.verify_package(target,folder/'setup.exe')
                     self.results.put(('download',(folder,target),False))
                 except Exception as exc:self.results.put(('error',str(exc),False))
@@ -81,6 +90,7 @@ class InstalledVersionController:
         except Exception as exc:self.fail(str(exc))
 
     def fail(self,message,*,keep_available=False):
+        self.download_bar.pack_forget()
         self.busy=False;self.queued=False;self.waiting=None;self.window._update_pending=False
         if self.reserved:
             self.window.service.release_code_update();self.reserved=False
@@ -101,7 +111,13 @@ class InstalledVersionController:
                                       bootstyle='success' if available else 'secondary')
                 if manual:messagebox.showinfo('软件更新',result['message'],parent=self.window)
             elif kind=='error':self.fail(result)
+            elif kind=='progress':
+                done,total=result
+                percent=min(100,done*100//total)
+                self.download_bar.configure(value=percent)
+                self.button.configure(text=f'下载更新 {percent}%')
             elif kind=='download':
+                self.download_bar.pack_forget()
                 folder,target=result
                 self.downloaded=(folder,target)
                 if open_forms(self.window):

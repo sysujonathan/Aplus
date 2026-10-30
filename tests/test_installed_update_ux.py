@@ -16,7 +16,7 @@ def controller(tmp_path,monkeypatch):
     c=object.__new__(gui.InstalledVersionController)
     c.window=SimpleNamespace(service=Mock(),store=SimpleNamespace(root=tmp_path/'runtime'),
         after=Mock(),deiconify=Mock(),_closing=False,_update_pending=False)
-    c.button=Mock();c.results=queue.Queue();c.latest=dict(state='available',target=manifest())
+    c.button=Mock();c.download_bar=Mock();c.results=queue.Queue();c.latest=dict(state='available',target=manifest())
     c.busy=False;c.queued=False;c.reserved=False;c.waiting=None;c.downloaded=None;c.last_check=time.monotonic()
     c.idle=lambda:True
     class Thread:
@@ -29,7 +29,7 @@ def controller(tmp_path,monkeypatch):
     monkeypatch.setattr(gui.messagebox,'showinfo',Mock())
     monkeypatch.setattr(gui.subprocess,'Popen',Mock())
     monkeypatch.setenv('APLUS_INSTALL_ROOT',str(tmp_path/'program'))
-    def download(target,path):path.write_bytes(b'installer bytes')
+    def download(target,path,**kwargs):path.write_bytes(b'installer bytes')
     network=Mock(side_effect=download);monkeypatch.setattr(gui.update,'download',network)
     return c,network
 
@@ -72,3 +72,20 @@ def test_retry_keeps_cancelled_transaction_separate_without_redownload(controlle
     assert c.waiting and c.waiting[0]!=folder and network.call_count==0
     assert not (c.waiting[0]/'cancelled.json').exists()
     assert (folder/'cancelled.json').read_text()=='keep cancellation'
+
+
+def test_download_progress_is_painted_on_tk_poll_and_hidden_on_completion(controller,monkeypatch):
+    c,network=controller
+    def downloading(target,path,progress):
+        progress(0,100);progress(50,100);progress(100,100)
+        path.write_bytes(b'installer bytes')
+    network.side_effect=downloading
+    monkeypatch.setattr(gui,'open_forms',lambda w:True)
+    c.begin()
+    # Worker only queues values. Tk owns every widget mutation.
+    for percent in (0,100):  # Intermediate events are throttled on fast downloads.
+        c.poll()
+        assert c.button.configure.call_args.kwargs['text']==f'下载更新 {percent}%'
+    c.poll()
+    assert c.downloaded and c.download_bar.pack_forget.called
+    assert c.latest['state']=='available' and not c.busy

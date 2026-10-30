@@ -183,7 +183,7 @@ class ChartPanel(native_ttk.Frame):
             self._analysis_btn.pack_forget()
             self.readout_frame.grid_remove()
 
-    def _show_interactive(self):
+    def _show_interactive(self, *, refresh_history=False):
         if not self._interactive or not self.store:
             return
         from .chart_embed import EmbeddedChartHost
@@ -193,12 +193,19 @@ class ChartPanel(native_ttk.Frame):
             return
         try:
             context = self._workspace_context or self._rebuild_workspace_context()
+            if refresh_history and self._embedded is not None and self._embedded.push_history(context):
+                return
             if self._embedded is None:
                 self._embedded = EmbeddedChartHost(self.chart_frame, self.store, self._embedded_error,
                     on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate)
             self.readout_frame.grid()
             self.readout.set('正在切换图表…')
             self._embedded.show(context)
+            # A fresh page has a new token even when the code did not change.
+            # Re-send the already read minutes, including while the market is shut.
+            self._intraday_sent = None
+            if self._intraday_code == self._code and self._intraday_frame is not None:
+                self._publish_intraday(self._intraday_frame)
         except Exception as exc:
             self._embedded_error(str(exc))
 
