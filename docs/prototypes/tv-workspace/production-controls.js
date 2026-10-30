@@ -178,7 +178,7 @@ window.aplusSwitchContext = async () => {
   closingWorkspace = true;
   const cover = document.createElement('div');
   cover.className = 'context-switch-cover';
-  cover.textContent = '正在保存当前分析并切换标的…';
+  cover.textContent = '正在切换标的…';
   document.querySelector('.app-shell').append(cover);
   try {
     if (replayActive) stopReplayTimer();

@@ -381,8 +381,8 @@ class AplusMainWindow(ttk.Window):
             self._chart_exit_wait = False
         if any(not host.closed() for host in live):
             self._closing = False
-            messagebox.showwarning('图表仍在保存',
-                '图表尚未确认保存，主窗口已保留。请检查图表中的错误提示后再退出。', parent=self)
+            messagebox.showwarning('图表暂未关闭',
+                '图表关闭确认未完成，可能是通信中断或分析尚未保存。主窗口已保留，请查看图表提示后重试。', parent=self)
             self._resume_embedded_charts()
             return False
         for host in hosts:

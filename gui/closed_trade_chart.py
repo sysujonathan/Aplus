@@ -412,19 +412,30 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             frame, error = result
             if frame is not None:
                 self._publish_live(frame)
+                from workbench.live_minutes import expected_minute_close
+                expected = expected_minute_close(china_now())
+                self._live_boundary_pending = bool(expected and str(frame.date.iloc[-1]) < expected)
             else:
                 self._live_error = error or "分钟行情读取失败"
                 self._show_live_status()
             self._live_due = time.monotonic() + self._live_poller.delay
         moment, calendar = china_now(), self._live_calendar()
-        if self._auto_enabled() and session_status(moment, calendar) == "交易中":
+        from workbench.live_minutes import minute_refresh_phase
+        phase = minute_refresh_phase(moment, calendar)
+        previous_phase = getattr(self, '_live_phase', None)
+        self._live_phase = phase
+        if previous_phase is not None and phase != previous_phase:
+            self._live_boundary_pending = True
+            self._live_due = 0.0
+        if self._auto_enabled() and (session_status(moment, calendar) == "交易中"
+                                    or getattr(self, '_live_boundary_pending', False)):
             self._hourly.request(self.data['code'])
             if time.monotonic() >= self._live_due and not self._live_poller.busy:
                 self._live_poller.start(self.data["code"])
         self._live_after = self.top.after(400, self._live_tick)
 
     def _publish_live(self, frame):
-        from workbench.live_minutes import coarse_series, minute_rows, INTERVAL
+        from workbench.live_minutes import coarse_series, minute_rows, live_metadata
         try:
             rows = minute_rows(frame)
         except ValueError as exc:
@@ -433,7 +444,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             return
         self._live_error = ""
         self._live_frame = frame
-        key = _rows_key(rows)
+        key = (_rows_key(rows), str(frame.attrs.get('quote')))
         embedded = self._embedded
         if key != self._live_sent and embedded is not None and not embedded.closed():
             series = {"m5": rows}
@@ -449,9 +460,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
                     series[unit] = minute_rows(coarse)
                 except ValueError:
                     continue
-            payload = {"series": series,
-                       "live": {"interval": INTERVAL, "source": "腾讯分钟行情",
-                                "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
+            payload = {"series": series,"live": live_metadata(frame)}
             if embedded.push_live(payload):
                 self._live_sent = key
                 self._last_live_at = rows[-1]["date"]

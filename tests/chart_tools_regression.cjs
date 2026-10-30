@@ -38,6 +38,7 @@ const context=vm.createContext({structuredClone,console,window:{},ctx,testView:v
 });
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-indicators.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/chart-position.js'),'utf8'),context);
+vm.runInContext(extract('saveViewState'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../docs/prototypes/tv-workspace/drawing-settings.js'),'utf8'),context);
 for(const [object,expected] of [
   [{type:'trend'},{fontSize:14,vertical:'top',horizontal:'center'}],
