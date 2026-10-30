@@ -61,3 +61,14 @@ def test_corrupt_cached_package_is_downloaded_again(controller,monkeypatch,tmp_p
     c.downloaded=(folder,manifest());monkeypatch.setattr(gui,'open_forms',lambda w:True)
     c.begin();c.poll()
     assert network.call_count==1 and (folder/'setup.exe').read_bytes()==b'installer bytes'
+
+
+def test_retry_keeps_cancelled_transaction_separate_without_redownload(controller,monkeypatch,tmp_path):
+    c,network=controller;folder=tmp_path/'old-attempt';folder.mkdir()
+    (folder/'setup.exe').write_bytes(b'installer bytes')
+    (folder/'request.json').write_text('{}');(folder/'cancelled.json').write_text('keep cancellation')
+    c.downloaded=(folder,manifest());monkeypatch.setattr(gui,'open_forms',lambda w:False)
+    c.begin();c.poll()
+    assert c.waiting and c.waiting[0]!=folder and network.call_count==0
+    assert not (c.waiting[0]/'cancelled.json').exists()
+    assert (folder/'cancelled.json').read_text()=='keep cancellation'

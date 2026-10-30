@@ -53,6 +53,11 @@ def main():
     gui=folder/'installed-gui'
     assert execute([application,'--smoke-test',gui],env=env)==0
     assert json.loads((gui/'result.json').read_text())['ok']
+    from workbench.installed_cleanup import contents
+    inventory=json.loads((application.parent/'installed-files.json').read_text(encoding='utf-8'))
+    files,directories=contents(application.parent)
+    assert set(files)==set(inventory['files']) and directories==set(inventory['directories'])
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest()==inventory['files'][name] for name,path in files.items())
     assert execute([target/'unins000.exe',*common,'/LOG='+str(folder/'uninstall.log')],env=env)==0
     assert not (target/'current.txt').exists() and not (target/'previous.txt').exists()
     # Normal uninstall -> install into the very same default-shaped folder.

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -64,6 +65,12 @@ class InstalledVersionController:
                     if folder:
                         try:update.verify_package(target,folder/'setup.exe');reusable=True
                         except (OSError,ValueError):pass
+                        if (folder/'request.json').exists():
+                            # A cancelled/failed helper owns its old transaction.
+                            # Reuse only verified bytes in a fresh request folder.
+                            previous=folder
+                            folder=state_home()/'updates'/uuid.uuid4().hex;folder.mkdir(parents=True)
+                            if reusable:shutil.copy2(previous/'setup.exe',folder/'setup.exe')
                     else:
                         folder=state_home()/'updates'/uuid.uuid4().hex;folder.mkdir(parents=True)
                     if not reusable:update.download(target,folder/'setup.exe')

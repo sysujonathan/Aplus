@@ -49,3 +49,28 @@ def test_installed_startup_error_is_reported_after_binding(tmp_path,monkeypatch)
     monkeypatch.setattr(launch_dashboard,'main',fail)
     with pytest.raises(RuntimeError,match='主界面未能打开'):
         runtime.launch()
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Native Tk recovery confirmation')
+@pytest.mark.native_process
+@pytest.mark.parametrize('mode',['success','cancel','failure'])
+def test_recovery_confirmation_and_background_result(tmp_path,monkeypatch,mode):
+    from workbench import installed_runtime as runtime
+    from unittest.mock import Mock
+    monkeypatch.setattr(runtime.messagebox,'askyesno',lambda *a,**k:mode!='cancel')
+    error=Mock();monkeypatch.setattr(runtime.messagebox,'showerror',error)
+    def recover():
+        if mode=='cancel':pytest.fail('no recovery without consent')
+        if mode=='failure':raise ValueError('snapshot retained')
+        return tmp_path
+    monkeypatch.setattr(runtime,'recover_bound_runtime',recover)
+    assert runtime.recover_data()==(tmp_path if mode=='success' else None)
+    assert error.call_count==(1 if mode=='failure' else 0)
+    if mode=='success':
+        from workbench.store import Store
+        from workbench.service import Service
+        from gui.main_window import AplusMainWindow
+        store=Store(tmp_path/'synthetic');service=Service(store)
+        app=AplusMainWindow(service=service,store=store,enable_tray=False)
+        app.withdraw();app.update_idletasks();assert app.style.master.tk is app.tk
+        app.destroy();service.pool.shutdown(wait=True)

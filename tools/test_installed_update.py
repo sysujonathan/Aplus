@@ -80,6 +80,8 @@ def main():
             assert receipt['state']==('rolled_back' if args.fail_start else 'completed'),receipt
             if not args.fail_start:
                 assert json.loads((request_folder/'started.json').read_text())['started'] is True
+                assert not (request_folder/'setup.exe').exists()
+                assert json.loads((request_folder/'cleanup.json').read_text())['download_removed'] is True
             assert (root/'current.txt').read_text().strip()==('2026.10.30.1' if args.fail_start else target['version'])
             assert not (root/'update-pending.json').exists()
             if args.expected_launcher:

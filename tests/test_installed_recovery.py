@@ -154,6 +154,7 @@ def test_worker_crash_after_each_durable_boundary_is_recoverable(interrupted,mon
 @pytest.mark.parametrize('started,alive,expected',[(True,True,'completed'),(False,False,'rolled_back'),(False,True,None)])
 def test_native_delayed_ack_and_live_process(interrupted,started,alive,expected):
     root,folder,record=interrupted
+    (folder/'setup.exe').write_bytes(b'installer bytes')
     request=json.loads((folder/'request.json').read_text());target=request['target']
     record.update(phase='startup_wait',pid=os.getpid() if alive else 99999999)
     data.atomic_json(root/'update-pending.json',record);(root/'current.txt').write_text(target['version'])
@@ -164,6 +165,7 @@ def test_native_delayed_ack_and_live_process(interrupted,started,alive,expected)
     if expected:
         assert json.loads((folder/'receipt.json').read_text())['state']==expected
         assert not (root/'update-pending.json').exists()
+        assert (folder/'setup.exe').exists() is (expected!='completed')
     else:assert (root/'current.txt').read_text()==target['version']
 
 

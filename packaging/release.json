@@ -1,7 +1,7 @@
 {
   "protocol": 1,
   "channel": "stable",
-  "version": "2026.10.30.7",
-  "sequence": 202610300007,
+  "version": "2026.10.30.8",
+  "sequence": 202610300008,
   "database_schema": 8
 }
