@@ -80,7 +80,7 @@ class Launcher {
             if((pid!=0 && Alive(pid)) || Active(Path.Combine(root,"app",version,"AplusApp.exe")))
                 throw new Exception("新版仍在运行并等待启动确认，请稍后；原数据已保留。");
             string phase=Text(record,"phase");
-            if(pid==0 && phase!="installing" && phase!="installed" && phase!="launching" && phase!="startup_wait")
+            if(phase!="installing" && phase!="installed" && phase!="launching" && phase!="startup_wait")
                 throw new Exception("恢复信息不完整，请保留现场并联系维护者；原数据已保留。");
             string previous=Text(record,"previous");
             if(!Version(previous)) throw new Exception("旧版本指针无效，原数据已保留。");

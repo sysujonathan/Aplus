@@ -186,7 +186,7 @@ def _recover_pending(root, *, alive, active):
     if not re.fullmatch(r'\d{4}\.\d{1,2}\.\d{1,2}\.\d+',previous):
         raise ValueError('旧版本指针无效，原数据已保留。')
     if active(root/'app'/request['target']['version']/'AplusApp.exe'):return 2
-    if not pid and value.get('phase') not in ('installing','installed','launching','startup_wait'):
+    if value.get('phase') not in ('installing','installed','launching','startup_wait'):
         return 2  # Legacy/unknown records do not prove a safe recovery point.
     executable=root/'app'/previous/'AplusApp.exe'
     if not executable.is_file():raise ValueError('旧版本文件缺失。')

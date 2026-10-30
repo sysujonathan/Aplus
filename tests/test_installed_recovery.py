@@ -85,16 +85,17 @@ def test_native_launcher_starts_old_app_when_current_payload_missing(interrupted
 
 
 @pytest.mark.parametrize('engine',['python','native'])
-@pytest.mark.parametrize('kind',['unknown-phase','changed-old','installer-active'])
+@pytest.mark.parametrize('kind',['unknown-phase','unknown-with-dead-pid','changed-old','installer-active'])
 def test_uncertain_state_or_active_setup_preserves_everything(interrupted,engine,kind):
     root,folder,record=interrupted
     if kind=='unknown-phase':record.pop('phase')
+    if kind=='unknown-with-dead-pid':record.update(phase='future-stage',pid=99999999)
     if kind=='changed-old':(root/'app/2026.10.30.1/AplusApp.exe').write_bytes(b'broken exe')
     data.atomic_json(root/'update-pending.json',record)
     before=(root/'update-pending.json').read_bytes()
     def attempt():
         if engine=='python':
-            if kind=='unknown-phase':assert update.recover_pending(root,active=lambda p:False)==2
+            if kind in ('unknown-phase','unknown-with-dead-pid'):assert update.recover_pending(root,active=lambda p:False)==2
             else:
                 with pytest.raises(ValueError):update.recover_pending(root,active=lambda p:False)
         else:assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
