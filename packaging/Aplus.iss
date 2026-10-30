@@ -17,7 +17,7 @@ DefaultGroupName=Aplus
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0.19045
+MinVersion=10.0.19044
 OutputDir={#Output}
 OutputBaseFilename=AplusSetup-{#AppVersion}-x64
 SetupIconFile=..\icon_aplus.ico
@@ -34,6 +34,9 @@ SetupLogging=yes
 [Languages]
 Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+[Messages]
+chinesesimp.WindowsVersionNotSupported=Aplus 安装包需要 Windows 10 21H2（内部版本 19044）或更高版本的 x64 系统，包括 Windows 11。当前系统版本或架构不符合要求，尚未安装或修改已有数据。
+english.WindowsVersionNotSupported=Aplus requires x64 Windows 10 version 21H2 (build 19044) or later, including Windows 11. This system version or architecture is not supported. No existing data has been changed.
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: checkedonce
 [Files]
