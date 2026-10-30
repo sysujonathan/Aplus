@@ -28,7 +28,7 @@ WizardStyle=modern
 DisableProgramGroupPage=yes
 CloseApplications=no
 RestartApplications=no
-AppMutex=Local\AplusDesktopWorkbench
+AppMutex=Local\AplusDesktopWorkbench,Local\AplusInstalledLauncher
 SetupMutex=Local\AplusInstalledSetup
 SetupLogging=yes
 [Languages]
@@ -38,7 +38,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: checkedonce
 [Files]
 Source: "{#Payload}\AplusApp\*"; DestDir: "{app}\app\{#AppVersion}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#Payload}\Aplus.exe"; DestDir: "{app}"; Flags: onlyifdoesntexist
+Source: "{#Payload}\Aplus.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\aplus-install.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 [Icons]

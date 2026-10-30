@@ -138,10 +138,11 @@ def test_delayed_startup_recovery_never_kills_live_process(tmp_path,monkeypatch,
     (root/'app/2026.10.30.1/AplusApp.exe').write_bytes(b'old-code')
     (root/'current.txt').write_text('2026.10.30.2')
     data.atomic_json(folder/'request.json',dict(install_root=str(root),target=manifest(),runtime=str(tmp_path/'data')))
-    data.atomic_json(root/'update-pending.json',dict(folder=str(folder),previous='2026.10.30.1',pid=123))
+    data.atomic_json(root/'update-pending.json',dict(folder=str(folder),previous='2026.10.30.1',pid=123,
+        phase='startup_wait',previous_sha256=hashlib.sha256(b'old-code').hexdigest()))
     if started:data.atomic_json(folder/'started.json',dict(started=True,version=manifest()['version'],
         commit=manifest()['commit'],runtime=str(tmp_path/'data')))
-    code=update.recover_pending(root,alive=lambda pid:alive)
+    code=update.recover_pending(root,alive=lambda pid:alive,active=lambda path:False)
     if expected:
         assert code==0 and not (root/'update-pending.json').exists()
         assert json.loads((folder/'receipt.json').read_text())['state']==expected

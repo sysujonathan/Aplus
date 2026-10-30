@@ -141,7 +141,33 @@ def confirmed_start(folder, target, runtime):
             and Path(value.get('runtime','')).resolve()==Path(runtime).resolve())
 
 
-def recover_pending(root, *, alive=process_alive):
+def installed_process_active(executable):
+    # A worker can die after Popen but before recording its child PID. Check
+    # image identity as well, excluding this recovery helper itself.
+    script='''$ErrorActionPreference='Stop'
+$items=Get-CimInstance Win32_Process -Filter "Name='AplusApp.exe'"
+foreach($item in $items) {
+ if ($item.ProcessId -eq [int]$env:APLUS_RECOVERY_PID) { continue }
+ if (-not $item.ExecutablePath) { throw 'Cannot establish application process identity' }
+ if ([IO.Path]::GetFullPath($item.ExecutablePath) -eq $env:APLUS_RECOVERY_EXE) { exit 10 }
+}
+exit 0'''
+    env={key:value for key,value in os.environ.items() if key.casefold()!='psmodulepath'}
+    env.update(APLUS_RECOVERY_PID=str(os.getpid()),APLUS_RECOVERY_EXE=str(Path(executable).resolve()))
+    result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',script],
+        env=env,capture_output=True,timeout=15,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    if result.returncode not in (0,10):raise ValueError('无法确认新版进程状态，已保留恢复现场。')
+    return result.returncode==10
+
+
+def recover_pending(root, *, alive=process_alive, active=installed_process_active):
+    # Hold both gates through the decision/write, closing the race with a
+    # second updater or an independently continuing Inno Setup process.
+    with update_mutex(), update_mutex('Local\\AplusInstalledSetup'):
+        return _recover_pending(root,alive=alive,active=active)
+
+
+def _recover_pending(root, *, alive, active):
     """Finish a delayed real ACK, or restore code only after the new process exits."""
     root=Path(root).resolve();pending=root/'update-pending.json'
     if not pending.exists():return 0
@@ -155,20 +181,31 @@ def recover_pending(root, *, alive=process_alive):
         atomic_json(folder/'receipt.json',dict(state='completed',version=request['target']['version']))
         pending.unlink();return 0
     pid=value.get('pid')
-    if not pid or alive(pid):return 2
+    if pid and alive(pid):return 2
     previous=value['previous']
     if not re.fullmatch(r'\d{4}\.\d{1,2}\.\d{1,2}\.\d+',previous):
         raise ValueError('旧版本指针无效，原数据已保留。')
-    if not (root/'app'/previous/'AplusApp.exe').is_file():raise ValueError('旧版本文件缺失。')
+    if active(root/'app'/request['target']['version']/'AplusApp.exe'):return 2
+    if not pid and value.get('phase') not in ('installing','installed','launching','startup_wait'):
+        return 2  # Legacy/unknown records do not prove a safe recovery point.
+    executable=root/'app'/previous/'AplusApp.exe'
+    if not executable.is_file():raise ValueError('旧版本文件缺失。')
+    expected=value.get('previous_sha256')
+    if not expected or file_sha256(executable)!=expected:
+        raise ValueError('旧版本身份未能确认，已保留恢复现场。')
+    # Recovery only changes this installation's pointer, never its database.
+    # The two transaction gates + exact new-image check protect the operation
+    # without coupling it to another source/development desktop's global lock.
     temp=root/'current.txt.new';temp.write_text(previous,encoding='ascii');os.replace(temp,root/'current.txt')
     atomic_json(folder/'receipt.json',dict(state='rolled_back',previous=previous))
-    pending.unlink();return 0
+    pending.unlink()
+    return 0
 
 
 @contextmanager
-def update_mutex():
+def update_mutex(name='Local\\AplusInstalledUpdate'):
     kernel=ctypes.windll.kernel32;kernel.CreateMutexW.restype=ctypes.c_void_p
-    handle=kernel.CreateMutexW(None,False,'Local\\AplusInstalledUpdate')
+    handle=kernel.CreateMutexW(None,False,name)
     if not handle:raise ctypes.WinError()
     try:
         if kernel.GetLastError()==183:raise ValueError('已有更新正在进行。')
@@ -210,15 +247,22 @@ def worker(request_path):
                 if str(runtime)!=request['runtime']:raise ValueError('数据绑定已变化，未更新。')
                 bind_existing(runtime,install_root=root)
             receipt('installing',previous=previous,target=target['version'])
-            atomic_json(root/'update-pending.json',dict(previous=previous,folder=str(folder)))
+            pending=dict(previous=previous,folder=str(folder),phase='installing',
+                         previous_sha256=file_sha256(previous_exe))
+            atomic_json(root/'update-pending.json',pending)
             code=subprocess.run([str(setup),'/CURRENTUSER','/SILENT','/SUPPRESSMSGBOXES','/NORESTART',
                                  '/DIR='+str(root)],timeout=900).returncode
             if code!=0:raise ValueError('新版安装未完成，正在恢复旧版本。')
             if (root/'current.txt').read_text().strip()!=target['version']:
                 raise ValueError('安装版本与请求不一致。')
+            pending.update(phase='installed')
+            atomic_json(root/'update-pending.json',pending)
             env=dict(os.environ,APLUS_INSTALL_ROOT=str(root),APLUS_INSTALLED_ACK=str(folder/'started.json'))
+            pending.update(phase='launching')
+            atomic_json(root/'update-pending.json',pending)
             process=subprocess.Popen([str(root/'app'/target['version']/'AplusApp.exe')],env=env,cwd=root)
-            atomic_json(root/'update-pending.json',dict(previous=previous,folder=str(folder),pid=process.pid))
+            pending.update(phase='startup_wait',pid=process.pid)
+            atomic_json(root/'update-pending.json',pending)
             deadline=time.monotonic()+60
             while time.monotonic()<deadline and process.poll() is None:
                 if confirmed_start(folder,target,request['runtime']):

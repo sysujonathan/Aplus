@@ -20,6 +20,7 @@ sys.path.insert(0,str(ROOT))
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('old',type=Path);parser.add_argument('new',type=Path)
     parser.add_argument('--fail-start',action='store_true')
+    parser.add_argument('--expected-launcher',type=Path)
     args=parser.parse_args();old,new=args.old.resolve(),args.new.resolve()
     folder=ROOT/'.test-installer'/('update-'+uuid.uuid4().hex[:8]);folder.mkdir(parents=True)
     from workbench.store import Store
@@ -30,6 +31,15 @@ def main():
     root=folder/'installed-program'
     common=['/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS','/TASKS=']
     subprocess.run([str(old),*common,'/DIR='+str(root)],check=True,timeout=180)
+    old_launcher=(root/'Aplus.exe').read_bytes()
+    if args.expected_launcher:
+        # A live stable entry must prevent replacement, without forced exits
+        # or scheduling a replacement at Windows reboot.
+        with update.update_mutex('Local\\AplusInstalledLauncher'):
+            blocked=subprocess.run([str(new),*common,'/DIR='+str(root)],timeout=120)
+            assert blocked.returncode!=0
+        assert (root/'Aplus.exe').read_bytes()==old_launcher
+        assert (root/'current.txt').read_text().strip()=='2026.10.30.1'
     metadata=new.with_suffix('.json')
     if not metadata.exists():metadata=new.parent/'latest.json'
     target=json.loads(metadata.read_text())
@@ -72,6 +82,9 @@ def main():
                 assert json.loads((request_folder/'started.json').read_text())['started'] is True
             assert (root/'current.txt').read_text().strip()==('2026.10.30.1' if args.fail_start else target['version'])
             assert not (root/'update-pending.json').exists()
+            if args.expected_launcher:
+                assert (root/'Aplus.exe').read_bytes()==args.expected_launcher.read_bytes()
+                assert (root/'Aplus.exe').read_bytes()!=old_launcher
             for child in owned:child.wait(timeout=25)
             # Normal backend startup may write metadata. Business records and
             # the pre-start backup are the relevant invariants after restart.
@@ -79,7 +92,8 @@ def main():
             profiles=json.loads((home/'data.json').read_text())
             assert Path(profiles['backup']).read_bytes()==before
         subprocess.run([str(root/'unins000.exe'),*common],check=True,timeout=120)
-        result=dict(ok=True,real_installer=True,real_desktop_ack=not args.fail_start,rollback=args.fail_start,business_data_retained=True,
+        result=dict(ok=True,real_installer=True,real_desktop_ack=not args.fail_start,rollback=args.fail_start,
+                    launcher_replaced=bool(args.expected_launcher),busy_launcher_blocked=bool(args.expected_launcher),business_data_retained=True,
                     backup_unchanged=True,source_authority='synthetic CI and signing authority for unsigned test packages',folder=str(folder))
         (folder/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
     finally:

@@ -1,44 +1,119 @@
 using System;
 using System.IO;
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using System.Threading;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
+using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 
 class Launcher {
-    [STAThread] static int Main() {
-        try {
-            string root = AppDomain.CurrentDomain.BaseDirectory;
-            try {
-                using (Mutex updating = Mutex.OpenExisting(@"Local\AplusInstalledUpdate")) {
-                    throw new Exception("Aplus 正在更新，请稍候再打开。");
-                }
-            } catch (WaitHandleCannotBeOpenedException) { }
-            string version = File.ReadAllText(Path.Combine(root, "current.txt")).Trim();
-            if (!Regex.IsMatch(version, @"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$"))
-                throw new Exception("当前版本指针无效。");
-            string exe = Path.Combine(root, "app", version, "AplusApp.exe");
-            if (!File.Exists(exe)) throw new Exception("程序文件不完整，请重新运行安装包；原数据不受影响。");
-            if (File.Exists(Path.Combine(root,"update-pending.json"))) {
-                var recovery = new ProcessStartInfo(exe, "--recover-installed \""+root.TrimEnd('\\')+"\"");
-                recovery.UseShellExecute=false;
-                recovery.EnvironmentVariables["APLUS_INSTALL_ROOT"]=root;
-                using (var helper=Process.Start(recovery)) {
-                    if (!helper.WaitForExit(30000) || helper.ExitCode!=0)
-                        throw new Exception("Aplus 正在完成更新确认，请稍候。原数据已保留。");
-                }
-                version=File.ReadAllText(Path.Combine(root,"current.txt")).Trim();
-                if (!Regex.IsMatch(version,@"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$")) throw new Exception("版本指针无效。");
-                exe=Path.Combine(root,"app",version,"AplusApp.exe");
+    static JavaScriptSerializer Json = new JavaScriptSerializer();
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+    static extern bool MoveFileEx(string oldFile,string newFile,int flags);
+    static string Full(string path) { return Path.GetFullPath(path).TrimEnd('\\'); }
+    static bool Same(string a,string b) { return String.Equals(Full(a),Full(b),StringComparison.OrdinalIgnoreCase); }
+    static Dictionary<string,object> Read(string path) { return Json.Deserialize<Dictionary<string,object>>(File.ReadAllText(path)); }
+    static string Text(Dictionary<string,object> data,string key) {
+        return data.ContainsKey(key) ? Convert.ToString(data[key]) : "";
+    }
+    static bool Version(string value) { return Regex.IsMatch(value,@"^\d{4}\.\d{1,2}\.\d{1,2}\.\d+$"); }
+    static Mutex Gate(string name) {
+        bool created;
+        var gate=new Mutex(false,name,out created);
+        if (!created) { gate.Dispose(); throw new Exception("Aplus 安装或更新仍在进行，请稍后再打开。"); }
+        return gate;
+    }
+    static string Hash(string path) {
+        using(var stream=File.OpenRead(path)) using(var sha=SHA256.Create())
+            return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-","").ToLowerInvariant();
+    }
+    static void Atomic(string path,string content) {
+        string temp=path+".new";
+        File.WriteAllText(temp,content,new UTF8Encoding(false));
+        if (!MoveFileEx(temp,path,9)) throw new Exception("无法保存恢复结果；原数据与恢复记录已保留。");
+    }
+    static bool Active(string executable) {
+        foreach(var process in Process.GetProcessesByName("AplusApp")) using(process) {
+            if(process.Id==Process.GetCurrentProcess().Id) continue;
+            try { if(Same(process.MainModule.FileName,executable)) return true; }
+            catch(InvalidOperationException) { continue; } // Exited during enumeration.
+            catch { throw new Exception("无法确认新版进程身份，已保留恢复现场。"); }
+        }
+        return false;
+    }
+    static bool Alive(int pid) {
+        try { using(var p=Process.GetProcessById(pid)) return !p.HasExited; }
+        catch(ArgumentException) { return false; }
+    }
+    static void Recover(string root) {
+        string pending=Path.Combine(root,"update-pending.json");
+        if(!File.Exists(pending)) return;
+        using(Gate(@"Local\AplusInstalledUpdate")) using(Gate(@"Local\AplusInstalledSetup")) {
+            var record=Read(pending);
+            string folder=Text(record,"folder");
+            string home=Environment.GetEnvironmentVariable("APLUS_INSTALL_STATE");
+            if(String.IsNullOrEmpty(home)) home=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Aplus","installed");
+            if(!Same(Path.GetDirectoryName(Full(folder)),Path.Combine(home,"updates")))
+                throw new Exception("更新恢复位置无效，原数据已保留。");
+            var request=Read(Path.Combine(folder,"request.json"));
+            var target=(Dictionary<string,object>)request["target"];
+            string version=Text(target,"version");
+            if(!Same(Text(request,"install_root"),root) || !Version(version) || Convert.ToInt32(target["database_schema"])!=8)
+                throw new Exception("更新恢复身份不一致，原数据已保留。");
+            string ack=Path.Combine(folder,"started.json");
+            if(File.Exists(ack)) {
+                try {
+                    var started=Read(ack);
+                    if(started.ContainsKey("started") && started["started"] is bool && (bool)started["started"] &&
+                       Text(started,"version")==version && Text(started,"commit")==Text(target,"commit") &&
+                       Same(Text(started,"runtime"),Text(request,"runtime"))) {
+                        Atomic(Path.Combine(folder,"receipt.json"),Json.Serialize(new {state="completed",version=version}));
+                        File.Delete(pending);return;
+                    }
+                } catch(ArgumentException) { } // Malformed ACK is not success.
             }
-            var start = new ProcessStartInfo(exe);
-            start.UseShellExecute = false;
-            start.WorkingDirectory = Path.GetDirectoryName(exe);
-            start.EnvironmentVariables["APLUS_INSTALL_ROOT"] = root;
-            Process.Start(start);
-            return 0;
+            int pid=record.ContainsKey("pid") ? Convert.ToInt32(record["pid"]) : 0;
+            if((pid!=0 && Alive(pid)) || Active(Path.Combine(root,"app",version,"AplusApp.exe")))
+                throw new Exception("新版仍在运行并等待启动确认，请稍后；原数据已保留。");
+            string phase=Text(record,"phase");
+            if(pid==0 && phase!="installing" && phase!="installed" && phase!="launching" && phase!="startup_wait")
+                throw new Exception("恢复信息不完整，请保留现场并联系维护者；原数据已保留。");
+            string previous=Text(record,"previous");
+            if(!Version(previous)) throw new Exception("旧版本指针无效，原数据已保留。");
+            string oldExe=Path.Combine(root,"app",previous,"AplusApp.exe");
+            string expected=Text(record,"previous_sha256");
+            if(!File.Exists(oldExe) || expected.Length!=64 || Hash(oldExe)!=expected)
+                throw new Exception("旧版本身份未能确认，请保留恢复现场。");
+            Atomic(Path.Combine(root,"current.txt"),previous);
+            Atomic(Path.Combine(folder,"receipt.json"),Json.Serialize(new {state="rolled_back",previous=previous}));
+            File.Delete(pending);
+        }
+    }
+    [STAThread] static int Main(string[] args) {
+        try {
+            using(var launcher=new Mutex(false,@"Local\AplusInstalledLauncher")) {
+                string root=AppDomain.CurrentDomain.BaseDirectory;
+                // Recovery is independent of the current version's Python/EXE.
+                // A missing or broken current payload cannot hide the old copy.
+                Recover(root);
+                if(args.Length==1 && args[0]=="--recover-only") return 0;
+                using(var updating=Gate(@"Local\AplusInstalledUpdate")) { }
+                string version=File.ReadAllText(Path.Combine(root,"current.txt")).Trim();
+                if(!Version(version)) throw new Exception("当前版本指针无效。");
+                string exe=Path.Combine(root,"app",version,"AplusApp.exe");
+                if(!File.Exists(exe)) throw new Exception("程序文件不完整，请重新运行安装包；原数据不受影响。");
+                var start=new ProcessStartInfo(exe);
+                start.UseShellExecute=false;
+                start.WorkingDirectory=Path.GetDirectoryName(exe);
+                start.EnvironmentVariables["APLUS_INSTALL_ROOT"]=root;
+                Process.Start(start);return 0;
+            }
         } catch(Exception ex) {
-            MessageBox.Show(ex.Message, "Aplus 启动提示", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if(args.Length==0) MessageBox.Show(ex.Message,"Aplus 启动提示",MessageBoxButtons.OK,MessageBoxIcon.Error);
             return 1;
         }
     }

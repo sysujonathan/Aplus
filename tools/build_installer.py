@@ -62,7 +62,7 @@ def main(argv=None):
     run([app/'AplusApp.exe','--self-test',report],timeout=60)
     if not json.loads(report.read_text())['chart_assets']:raise SystemExit('Chart assets missing')
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-    run([compiler,'/nologo','/target:winexe','/reference:System.Windows.Forms.dll',
+    run([compiler,'/nologo','/target:winexe','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',
          '/win32icon:'+str(ROOT/'icon_aplus.ico'),'/out:'+str(payload/'Aplus.exe'),ROOT/'packaging/Launcher.cs'])
     sign(payload/'Aplus.exe')
     sign(app/'AplusApp.exe')
