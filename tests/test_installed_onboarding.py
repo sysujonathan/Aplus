@@ -44,7 +44,6 @@ def test_installed_startup_error_is_reported_after_binding(tmp_path,monkeypatch)
     monkeypatch.setattr(runtime,'bound_runtime',lambda:tmp_path)
     monkeypatch.setattr(launch_dashboard,'build_backend',lambda:(None,None))
     monkeypatch.setenv('A_WORKBENCH_HOME',str(tmp_path))
-    monkeypatch.setenv('APLUS_INSTALLED','1')
     def fail():
         raise SystemExit(1)
     monkeypatch.setattr(launch_dashboard,'main',fail)

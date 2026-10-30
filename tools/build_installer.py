@@ -92,6 +92,8 @@ def main(argv=None):
          '/win32icon:'+str(ROOT/'icon_aplus.ico'),'/out:'+str(payload/'Aplus.exe'),ROOT/'packaging/Launcher.cs',assembly])
     sign(payload/'Aplus.exe')
     sign(app/'AplusApp.exe')
+    from workbench.installed_cleanup import write_inventory
+    write_inventory(app)
     (payload/'aplus-install.json').write_text(json.dumps({'protocol':1,'app_id':'Aplus-installed-v1'}),encoding='utf-8')
     bootstrap=payload/'MicrosoftEdgeWebview2Setup.exe'
     if not bootstrap.exists():

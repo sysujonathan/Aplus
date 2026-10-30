@@ -38,15 +38,22 @@ def file_sha256(path):
     return digest.hexdigest()
 
 
+class RecoveryRequired(ValueError):
+    """Only an already bound library may opt in to SQLite crash recovery."""
+
+
+def unfinished_files(database):
+    return [p for suffix in ('-wal','-journal')
+            if (p:=database.with_name(database.name+suffix)).exists() and p.stat().st_size]
+
+
 def inspect_data(root):
     root = Path(root).expanduser().resolve()
     database = root/'workbench.sqlite3'
     if not database.is_file():
         raise ValueError('这里没有 Aplus 数据，请选择原数据或原程序文件夹。')
-    for suffix in ('-wal','-journal'):
-        sidecar=database.with_name(database.name+suffix)
-        if sidecar.exists() and sidecar.stat().st_size:
-            raise ValueError('原数据仍有未收尾事务，请先从旧版完整退出；尚未修改或关联数据。')
+    if unfinished_files(database):
+        raise RecoveryRequired('检测到上次未收尾事务。首次接续请先完整退出原程序；已接续数据可备份后恢复。')
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro', uri=True, timeout=2)) as db:
         db.execute('PRAGMA query_only=ON')
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -193,3 +200,50 @@ def bound_runtime(*, home=None):
     elif not runtime.is_dir() or any(runtime.iterdir()):
         raise ValueError('已关联数据的位置发生变化；为避免创建空库，请重新确认原数据。')
     return runtime
+
+
+def recover_bound_runtime(*, home=None):
+    """Explicit recovery: raw snapshot first, SQLite owns all journal handling.
+
+    Discovery/binding stays read-only. No sidecar is deleted by this code and
+    an arbitrary selected legacy folder cannot be repaired through this entry.
+    """
+    from .version_update import application_mutex, require_web_closed
+    home=Path(home or state_home()).resolve()
+    profile=json.loads((home/'data.json').read_text(encoding='utf-8'))
+    runtime=Path(profile['runtime']).resolve();database=runtime/'workbench.sqlite3'
+    with application_mutex():
+        require_web_closed()
+        if not database.is_file():raise ValueError('已关联数据库不存在，未创建替代空库。')
+        if not unfinished_files(database):return bound_runtime(home=home)
+        sources=[database]+[database.with_name(database.name+s) for s in ('-journal','-wal','-shm')
+                            if database.with_name(database.name+s).is_file()]
+        if shutil.disk_usage(home).free < sum(p.stat().st_size for p in sources)+64*1024*1024:
+            raise ValueError('恢复备份空间不足，未打开或修改原数据库。')
+        stamp=datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:8]
+        folder=home/'backups'/('recovery-'+stamp);folder.mkdir(parents=True)
+        hashes={p.name:file_sha256(p) for p in sources}
+        for path in sources:
+            shutil.copy2(path,folder/path.name)
+            if file_sha256(folder/path.name)!=hashes[path.name]:
+                raise ValueError('原始事务备份不一致，未执行恢复。')
+        if any(file_sha256(p)!=hashes[p.name] for p in sources):
+            raise ValueError('备份期间数据库仍在变化，未执行恢复。请先退出其他 Aplus。')
+        receipt=dict(runtime=str(runtime),files=hashes,state='snapshot_saved')
+        atomic_json(folder/'receipt.json',receipt)
+        try:
+            with closing(sqlite3.connect(database.as_uri()+'?mode=rw',uri=True,timeout=0,isolation_level=None)) as db:
+                db.execute('BEGIN EXCLUSIVE')
+                try:
+                    if db.execute('PRAGMA integrity_check').fetchall()!=[('ok',)]:
+                        raise ValueError('恢复后的数据完整性检查未通过')
+                finally:db.execute('ROLLBACK')
+                if (database.with_name(database.name+'-wal')).exists():
+                    if db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]:
+                        raise ValueError('数据库仍被其他连接使用')
+            inspect_data(runtime)
+        except Exception as exc:
+            atomic_json(folder/'receipt.json',dict(receipt,state='recovery_failed',detail=str(exc)))
+            raise ValueError('暂不能完成恢复，原始数据库及事务备份已保留：'+str(folder)+'\n'+str(exc)) from exc
+        atomic_json(folder/'receipt.json',dict(receipt,state='recovered'))
+        return runtime

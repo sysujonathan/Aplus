@@ -6,7 +6,7 @@ import re
 
 
 def version_parts(version):
-    if not isinstance(version,str) or not re.fullmatch(r'\d{4}\.\d{2}\.\d{2}\.\d{1,4}',version):
+    if not isinstance(version,str) or not re.fullmatch(r'[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{1,4}',version):
         raise ValueError('发布版本应为 YYYY.MM.DD.当日序号')
     parts=tuple(map(int,version.split('.')))
     date(*parts[:3])

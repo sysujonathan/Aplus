@@ -56,20 +56,17 @@ def interrupted(tmp_path,monkeypatch,binaries):
     return root,folder,record
 
 
-@pytest.mark.parametrize('engine',['python','native'])
 @pytest.mark.parametrize('phase,pointer',[
     ('installing','2026.10.30.1'),  # worker died before/while Setup ran
     ('installing','2026.10.30.2'),  # Setup switched pointer, worker died
     ('installed','2026.10.30.2'),   # Setup exited, Popen not yet called
     ('launching','damaged-pointer')]) # current EXE/pointer cannot provide recovery
-def test_no_pid_interruption_restores_verified_old_version(interrupted,engine,phase,pointer):
+def test_no_pid_interruption_restores_verified_old_version(interrupted,phase,pointer):
     root,folder,record=interrupted
     record['phase']=phase;data.atomic_json(root/'update-pending.json',record)
     (root/'current.txt').write_text(pointer)
-    if engine=='python':assert update.recover_pending(root,active=lambda path:False)==0
-    else:
-        result=subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30)
-        assert result.returncode==0
+    result=subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30)
+    assert result.returncode==0
     assert (root/'current.txt').read_text()=='2026.10.30.1'
     assert json.loads((folder/'receipt.json').read_text())['state']=='rolled_back'
     assert not (root/'update-pending.json').exists()
@@ -86,9 +83,8 @@ def test_native_launcher_starts_old_app_when_current_payload_missing(interrupted
     assert proof.read_text()=='old version started'
 
 
-@pytest.mark.parametrize('engine',['python','native'])
 @pytest.mark.parametrize('kind',['unknown-phase','unknown-with-dead-pid','changed-old','installer-active'])
-def test_uncertain_state_or_active_setup_preserves_everything(interrupted,engine,kind):
+def test_uncertain_state_or_active_setup_preserves_everything(interrupted,kind):
     root,folder,record=interrupted
     if kind=='unknown-phase':record.pop('phase')
     if kind=='unknown-with-dead-pid':record.update(phase='future-stage',pid=99999999)
@@ -96,11 +92,7 @@ def test_uncertain_state_or_active_setup_preserves_everything(interrupted,engine
     data.atomic_json(root/'update-pending.json',record)
     before=(root/'update-pending.json').read_bytes()
     def attempt():
-        if engine=='python':
-            if kind in ('unknown-phase','unknown-with-dead-pid'):assert update.recover_pending(root,active=lambda p:False)==2
-            else:
-                with pytest.raises(ValueError):update.recover_pending(root,active=lambda p:False)
-        else:assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
+        assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
     if kind=='installer-active':
         with update.update_mutex('Local\\AplusInstalledSetup'):attempt()
     else:attempt()
@@ -108,8 +100,7 @@ def test_uncertain_state_or_active_setup_preserves_everything(interrupted,engine
     assert (root/'current.txt').read_text()=='2026.10.30.1'
 
 
-@pytest.mark.parametrize('engine',['python','native'])
-def test_unrecorded_live_child_is_not_rolled_back(interrupted,binaries,engine):
+def test_unrecorded_live_child_is_not_rolled_back(interrupted,binaries):
     root,folder,record=interrupted
     new=root/'app/2026.10.30.2/AplusApp.exe';new.parent.mkdir();shutil.copy2(binaries[1],new)
     record['phase']='launching';data.atomic_json(root/'update-pending.json',record)
@@ -117,8 +108,7 @@ def test_unrecorded_live_child_is_not_rolled_back(interrupted,binaries,engine):
     env=dict(os.environ,APLUS_STUB_WAIT='1')
     child=subprocess.Popen([str(new)],stdin=subprocess.PIPE,env=env,creationflags=subprocess.CREATE_NO_WINDOW)
     try:
-        if engine=='python':assert update.recover_pending(root)==2
-        else:assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
+        assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
         assert child.poll() is None
         assert (root/'current.txt').read_text()=='2026.10.30.2'
         assert (root/'update-pending.json').exists()
@@ -145,7 +135,6 @@ def test_worker_crash_after_each_durable_boundary_is_recoverable(interrupted,mon
         scoped.setattr(update,'update_mutex',lambda *args:nullcontext())
         scoped.setattr(update,'application_mutex',nullcontext)
         scoped.setattr(update,'require_web_closed',lambda:None)
-        scoped.setattr(update,'require_signature',lambda path:None)
         scoped.setattr(update,'load_manifest',lambda:request['target'])
         scoped.setattr(update,'bound_runtime',lambda:Path(request['runtime']))
         scoped.setattr(update,'bind_existing',lambda *args,**kwargs:None)
@@ -156,6 +145,66 @@ def test_worker_crash_after_each_durable_boundary_is_recoverable(interrupted,mon
     durable=json.loads((root/'update-pending.json').read_text())
     assert durable['phase']==phase and durable['previous_sha256']==record['previous_sha256']
     assert ('pid' in durable)==(phase=='startup_wait')
-    assert update.recover_pending(root,alive=lambda pid:False,active=lambda path:False)==0
+    durable['pid']=99999999;data.atomic_json(root/'update-pending.json',durable)
+    assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode==0
     assert (root/'current.txt').read_text()=='2026.10.30.1'
     assert (root.parent/'retained-data/important.txt').read_bytes()==b'unchanged business fixture'
+
+
+@pytest.mark.parametrize('started,alive,expected',[(True,True,'completed'),(False,False,'rolled_back'),(False,True,None)])
+def test_native_delayed_ack_and_live_process(interrupted,started,alive,expected):
+    root,folder,record=interrupted
+    request=json.loads((folder/'request.json').read_text());target=request['target']
+    record.update(phase='startup_wait',pid=os.getpid() if alive else 99999999)
+    data.atomic_json(root/'update-pending.json',record);(root/'current.txt').write_text(target['version'])
+    if started:data.atomic_json(folder/'started.json',dict(started=True,version=target['version'],
+        commit=target['commit'],runtime=request['runtime']))
+    result=subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30)
+    assert (result.returncode==0)==bool(expected)
+    if expected:
+        assert json.loads((folder/'receipt.json').read_text())['state']==expected
+        assert not (root/'update-pending.json').exists()
+    else:assert (root/'current.txt').read_text()==target['version']
+
+
+@pytest.mark.parametrize('change',['protocol','channel','preview','commit','sequence','date','url','sha','bytes','previous'])
+def test_shipping_recovery_rejects_invalid_identity_even_with_ack(interrupted,change):
+    root,folder,record=interrupted
+    request=json.loads((folder/'request.json').read_text());target=request['target']
+    if change=='previous':record['previous']='../../outside'
+    elif change=='date':target['version']='2026.02.30.1'
+    elif change in ('url','sha','bytes'):
+        target['package'][{'url':'url','sha':'sha256','bytes':'bytes'}[change]]={'url':'https://other/setup.exe','sha':'x','bytes':0}[change]
+    else:target[change]={'protocol':2,'channel':'preview','preview':True,'commit':'x','sequence':1}[change]
+    data.atomic_json(folder/'request.json',request);data.atomic_json(root/'update-pending.json',record)
+    data.atomic_json(folder/'started.json',dict(started=True,version=target['version'],commit=target['commit'],runtime=request['runtime']))
+    before=(root/'update-pending.json').read_bytes()
+    assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
+    assert (root/'update-pending.json').read_bytes()==before
+    assert (root/'current.txt').read_text()=='2026.10.30.1'
+
+
+def test_launcher_inherits_proxy_keys_differing_only_in_case(interrupted):
+    root,folder,record=interrupted
+    (root/'update-pending.json').unlink()
+    proof=root/'started-proof.txt'
+    env=dict(os.environ,APLUS_RECOVERY_PROOF=str(proof),HTTPS_PROXY='http://127.0.0.1:9',https_proxy='http://127.0.0.1:10')
+    # A real native environment block contains both keys. Never read/print
+    # any credentials inherited from the user's real proxy configuration.
+    assert subprocess.run([str(root/'Aplus.exe')],env=env,timeout=15).returncode==0
+    deadline=time.monotonic()+5
+    while not proof.exists() and time.monotonic()<deadline:time.sleep(.05)
+    assert proof.read_text()=='old version started'
+
+
+@pytest.mark.parametrize('previous',['../../outside','2026.02.30.1','2026.10.30.01'])
+def test_worker_invalid_previous_never_launches_or_installs(interrupted,monkeypatch,previous):
+    root,folder,record=interrupted;(root/'current.txt').write_text(previous)
+    request=json.loads((folder/'request.json').read_text());request['parent_pid']=123
+    data.atomic_json(folder/'request.json',request)
+    kernel=SimpleNamespace(OpenProcess=Mock(return_value=1),WaitForSingleObject=Mock(return_value=0),CloseHandle=Mock())
+    monkeypatch.setattr(update.ctypes,'windll',SimpleNamespace(kernel32=kernel))
+    monkeypatch.setattr(update,'update_mutex',lambda *a:nullcontext())
+    install=Mock();monkeypatch.setattr(update.subprocess,'run',install);monkeypatch.setattr(update.subprocess,'Popen',install)
+    with pytest.raises(ValueError):update.worker(folder/'request.json')
+    install.assert_not_called()

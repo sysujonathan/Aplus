@@ -19,6 +19,7 @@ class InstalledVersionController:
     def __init__(self,window,parent):
         self.window=window;self.results=queue.Queue();self.latest=None
         self.busy=False;self.queued=False;self.reserved=False;self.waiting=None
+        self.downloaded=None
         self.button=ttk.Button(parent,text='检查更新',width=14,command=self.manual_check,bootstyle='secondary')
         self.button.pack(side='right',padx=(8,0),ipady=2)
         self.poll_id=window.after(200,self.poll)
@@ -52,24 +53,33 @@ class InstalledVersionController:
             service=self.window.service
             service.reserve_code_update();self.reserved=True
             self.busy=True;self.button.configure(text='下载更新…',bootstyle='warning')
+            cached=self.downloaded
             def work():
                 try:
                     target=update.load_manifest()
                     if target['sequence']<=update.current_release()['sequence']:
                         raise ValueError('当前已是最新版本。')
-                    folder=state_home()/'updates'/uuid.uuid4().hex;folder.mkdir(parents=True)
-                    update.download(target,folder/'setup.exe')
+                    folder=cached[0] if cached and cached[1]==target else None
+                    reusable=False
+                    if folder:
+                        try:update.verify_package(target,folder/'setup.exe');reusable=True
+                        except (OSError,ValueError):pass
+                    else:
+                        folder=state_home()/'updates'/uuid.uuid4().hex;folder.mkdir(parents=True)
+                    if not reusable:update.download(target,folder/'setup.exe')
                     update.verify_package(target,folder/'setup.exe')
                     self.results.put(('download',(folder,target),False))
                 except Exception as exc:self.results.put(('error',str(exc),False))
             threading.Thread(target=work,daemon=True).start()
         except Exception as exc:self.fail(str(exc))
 
-    def fail(self,message):
-        self.busy=False;self.waiting=None;self.window._update_pending=False
+    def fail(self,message,*,keep_available=False):
+        self.busy=False;self.queued=False;self.waiting=None;self.window._update_pending=False
         if self.reserved:
             self.window.service.release_code_update();self.reserved=False
-        self.button.configure(text='一键更新',bootstyle='success')
+        available=keep_available and self.downloaded is not None
+        self.latest=dict(state='available',target=self.downloaded[1]) if available else None
+        self.button.configure(text='一键更新' if available else '检查更新',bootstyle='success' if available else 'secondary')
         self.window.deiconify()
         messagebox.showinfo('当前版本继续使用',message,parent=self.window)
 
@@ -86,6 +96,7 @@ class InstalledVersionController:
             elif kind=='error':self.fail(result)
             elif kind=='download':
                 folder,target=result
+                self.downloaded=(folder,target)
                 if open_forms(self.window):
                     raise ValueError('更新包已下载。请先保存并关闭编辑窗口，再点击更新。')
                 flush=getattr(self.window,'_flush_embedded_charts',lambda:True)
@@ -99,7 +110,7 @@ class InstalledVersionController:
                 self.waiting=(folder,time.monotonic()+15)
                 self.button.configure(text='准备重启…')
         except queue.Empty:pass
-        except Exception as exc:self.fail(str(exc))
+        except Exception as exc:self.fail(str(exc),keep_available=(kind=='download' and self.downloaded is not None))
         if self.waiting:
             folder,deadline=self.waiting
             if (folder/'ready.json').exists():

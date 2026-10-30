@@ -53,6 +53,10 @@ Name: "{autodesktop}\Aplus"; Filename: "{app}\Aplus.exe"; WorkingDir: "{app}"; T
 Name: "{group}\Aplus"; Filename: "{app}\Aplus.exe"; WorkingDir: "{app}"
 [Run]
 Filename: "{app}\Aplus.exe"; Description: "打开 Aplus，接续已有数据或开始使用"; Flags: nowait postinstall skipifsilent
+[UninstallDelete]
+Type: files; Name: "{app}\current.txt"
+Type: files; Name: "{app}\previous.txt"
+Type: files; Name: "{app}\current.txt.new"
 [Code]
 function MoveFileEx(ExistingFile, NewFile: String; Flags: Cardinal): Boolean;
   external 'MoveFileExW@kernel32.dll stdcall';
@@ -70,10 +74,30 @@ begin
     if (Version <> '') and (Version <> '0.0.0.0') then Result := True;
 end;
 
+function SafeTree(Path: String; Depth: Integer): Boolean;
+var FindRec: TFindRec;
+begin
+  Result := Depth < 32;
+  if not Result or not DirExists(Path) then Exit;
+  if FindFirst(AddBackslash(Path)+'*',FindRec) then begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then begin
+          if CompareText(FindRec.Name,'workbench.sqlite3') = 0 then Result := False;
+          if (FindRec.Attributes and $10) <> 0 then begin
+            if (FindRec.Attributes and $400) <> 0 then Result := False
+            else if Result then Result := SafeTree(AddBackslash(Path)+FindRec.Name,Depth+1);
+          end;
+          if not Result then Break;
+        end;
+      until not FindNext(FindRec);
+    finally FindClose(FindRec); end;
+  end;
+end;
+
 function SafeTarget(Path: String): Boolean;
 begin
-  Result := not FileExists(AddBackslash(Path)+'workbench.sqlite3') and
-            not FileExists(AddBackslash(Path)+'runtime\workbench.sqlite3');
+  Result := SafeTree(Path,0);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

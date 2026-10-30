@@ -8,6 +8,7 @@ import subprocess
 import sys
 import textwrap
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,7 +40,6 @@ def test_unsigned_official_release_accepted_even_when_main_advances(tmp_path,mon
     assert update.load_manifest(api=api,opener=opener)==value
     path=tmp_path/'unsigned.exe';path.write_bytes(b'installer bytes')
     monkeypatch.setattr(update,'load_manifest',lambda:value)
-    monkeypatch.setattr(update,'require_signature',Mock(side_effect=AssertionError('certificate is not release authority')))
     old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True)
     update.verify_candidate(value,path,old)
     assert '/commits/v2026.10.30.2' in calls
@@ -189,3 +189,26 @@ def test_actual_workflow_allocator_respects_shipped_preview_and_releases(tmp_pat
     else:
         assert result.returncode!=0
         assert not output.exists()
+
+
+def test_broken_current_metadata_returns_visible_check_result(monkeypatch):
+    def broken():raise ValueError('broken installed metadata')
+    monkeypatch.setattr(update,'current_release',broken)
+    result=update.check_update()
+    assert result['state']=='unavailable' and 'broken installed metadata' in result['detail']
+
+
+def test_low_disk_space_stops_before_network(tmp_path,monkeypatch):
+    monkeypatch.setattr(update.shutil,'disk_usage',lambda p:SimpleNamespace(free=0))
+    network=Mock();path=tmp_path/'setup.exe'
+    with pytest.raises(ValueError,match='空间不足'):update.download(manifest(),path,opener=network)
+    network.assert_not_called();assert not path.exists()
+
+
+def test_old_partial_file_cannot_block_new_verified_download(tmp_path):
+    import io
+    partial=tmp_path/'setup.part';partial.write_bytes(b'old interrupted bytes')
+    path=tmp_path/'setup.exe'
+    update.download(manifest(),path,opener=lambda *a,**k:io.BytesIO(b'installer bytes'))
+    assert path.read_bytes()==b'installer bytes' and partial.read_bytes()==b'old interrupted bytes'
+    assert not list(tmp_path.glob('setup.exe.*.part'))

@@ -7,6 +7,7 @@ import traceback
 
 
 def main():
+    sys.dont_write_bytecode=True  # Installed payloads stay immutable between releases.
     from workbench.installed_imports import install
     install()
     if len(sys.argv) == 3 and sys.argv[1] == '--provider-worker':
@@ -44,9 +45,6 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == '--installed-update':
         from workbench.installed_update import worker
         return worker(Path(sys.argv[2]))
-    if len(sys.argv) > 2 and sys.argv[1] == '--recover-installed':
-        from workbench.installed_update import recover_pending
-        raise SystemExit(recover_pending(Path(sys.argv[2])))
     if len(sys.argv) > 2 and sys.argv[1] == '--smoke-test':
         from tools.installer_smoke import run
         return run(sys.argv[2])

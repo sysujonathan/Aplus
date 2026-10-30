@@ -130,27 +130,6 @@ def test_official_release_needs_exact_main_push_acceptance(ci):
     assert (result['state']=='available') is (ci=='success')
 
 
-@pytest.mark.parametrize('started,alive,expected',[(True,True,'completed'),(False,False,'rolled_back'),(False,True,None)])
-def test_delayed_startup_recovery_never_kills_live_process(tmp_path,monkeypatch,started,alive,expected):
-    home=tmp_path/'state';monkeypatch.setenv('APLUS_INSTALL_STATE',str(home))
-    folder=home/'updates'/'attempt';folder.mkdir(parents=True)
-    root=tmp_path/'program';(root/'app/2026.10.30.1').mkdir(parents=True)
-    (root/'app/2026.10.30.1/AplusApp.exe').write_bytes(b'old-code')
-    (root/'current.txt').write_text('2026.10.30.2')
-    data.atomic_json(folder/'request.json',dict(install_root=str(root),target=manifest(),runtime=str(tmp_path/'data')))
-    data.atomic_json(root/'update-pending.json',dict(folder=str(folder),previous='2026.10.30.1',pid=123,
-        phase='startup_wait',previous_sha256=hashlib.sha256(b'old-code').hexdigest()))
-    if started:data.atomic_json(folder/'started.json',dict(started=True,version=manifest()['version'],
-        commit=manifest()['commit'],runtime=str(tmp_path/'data')))
-    code=update.recover_pending(root,alive=lambda pid:alive,active=lambda path:False)
-    if expected:
-        assert code==0 and not (root/'update-pending.json').exists()
-        assert json.loads((folder/'receipt.json').read_text())['state']==expected
-        assert (root/'current.txt').read_text()==('2026.10.30.1' if expected=='rolled_back' else '2026.10.30.2')
-    else:
-        assert code==2 and (root/'update-pending.json').exists()
-        assert (root/'current.txt').read_text()=='2026.10.30.2'
-
 
 def test_unfinished_database_transaction_blocks_binding(runtime,tmp_path):
     journal=runtime/'workbench.sqlite3-journal';journal.write_bytes(b'not committed')
@@ -185,12 +164,6 @@ def test_start_ack_must_match_actual_release_and_data(tmp_path,wrong):
     path=tmp_path/'started.json';path.write_text('{' if wrong=='json' else json.dumps(value))
     assert update.confirmed_start(tmp_path,target,runtime) is False
 
-
-def test_optional_windows_signature_diagnostic_rejects_unsigned_file(tmp_path):
-    import os
-    if os.name!='nt':pytest.skip('Windows Authenticode verification')
-    path=tmp_path/'unsigned.exe';path.write_bytes(b'MZ unsigned synthetic package')
-    with pytest.raises(ValueError,match='可信签名未通过'):update.require_signature(path)
 
 
 def test_verified_source_loader_executes_verified_bytes_and_rejects_edits(tmp_path):

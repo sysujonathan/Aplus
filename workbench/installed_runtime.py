@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from .installed_data import (state_home, bound_runtime, discover_hints, candidate_data,
-                             bind_existing, bind_new)
+                             bind_existing, bind_new, RecoveryRequired, recover_bound_runtime)
 
 
 def choose_data(install_root):
@@ -122,12 +122,39 @@ def choose_data(install_root):
     return outcome[0] if outcome else None
 
 
+def recover_data():
+    window=tk.Tk();window.withdraw()
+    if not messagebox.askyesno('恢复上次未完成的写入',
+        '检测到上次异常退出留下的事务。\n是否先备份原数据库与事务文件，再由 SQLite 恢复？\n'
+        '请先退出其他 Aplus；不会创建空库，事务文件由 SQLite 自行恢复处理。',parent=window):
+        window.destroy();return None
+    window.title('正在保护并恢复 Aplus 数据');window.geometry('520x140')
+    tk.Label(window,text='正在备份原始文件并恢复上次写入，请稍候…',wraplength=480).pack(padx=20,pady=35)
+    window.protocol('WM_DELETE_WINDOW',lambda:None);window.deiconify()
+    results=queue.Queue();outcome=[]
+    def work():
+        try:results.put((True,recover_bound_runtime()))
+        except Exception as exc:results.put((False,str(exc)))
+    def poll():
+        try:
+            ok,value=results.get_nowait()
+            if ok:outcome.append(value)
+            else:messagebox.showerror('数据恢复尚未完成',value,parent=window)
+            window.destroy()
+        except queue.Empty:window.after(100,poll)
+    threading.Thread(target=work,daemon=True).start();window.after(100,poll);window.mainloop()
+    return outcome[0] if outcome else None
+
+
 def launch():
     from .strategies import verify_frozen
     verify_frozen()
     install_root=Path(os.environ.get('APLUS_INSTALL_ROOT') or Path(__import__('sys').executable).parent.parent.parent)
     try:
         runtime=bound_runtime()
+    except RecoveryRequired:
+        runtime=recover_data()
+        if runtime is None:return
     except Exception as exc:
         root=tk.Tk();root.withdraw()
         retry=messagebox.askyesno('请确认原数据位置',str(exc)+'\n\n是否重新选择原数据位置？',parent=root)
@@ -138,7 +165,6 @@ def launch():
         runtime=choose_data(install_root)
     if runtime is None: return
     os.environ['A_WORKBENCH_HOME']=str(runtime)
-    os.environ['APLUS_INSTALLED']='1'
     import launch_dashboard
     # Installed users must never get a debug shell after backend failure.
     original=launch_dashboard.build_backend
