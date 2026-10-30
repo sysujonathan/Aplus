@@ -131,7 +131,7 @@ def test_status_producers_distinguish_page_receipts_and_process_failure(tmp_path
         def wait(self,_timeout):return True
     session=tmp_path/'session.json'
     embed.atomic_json(session,dict(runtime_root=str(tmp_path/'isolated-runtime'),boot=None,parent_hwnd=1,token=7))
-    window=SimpleNamespace(events=SimpleNamespace(closing=Hook(),loaded=Hook()),
+    window=SimpleNamespace(events=SimpleNamespace(closing=Hook(),loaded=Hook(),closed=SimpleNamespace(is_set=lambda:True)),
         native=SimpleNamespace(Handle=SimpleNamespace(ToInt64=lambda:1)),show=Mock(),destroy=Mock())
     def create(*args,**kwargs):window.bridge=kwargs['js_api'];return window
     def start(callback,**kwargs):
@@ -150,9 +150,12 @@ def test_status_producers_distinguish_page_receipts_and_process_failure(tmp_path
     monkeypatch.setitem(sys.modules,'webview',SimpleNamespace(create_window=create,start=start))
     monkeypatch.setattr(embed,'adopt_parent_dpi',lambda _:None)
     monkeypatch.setattr(embed,'NativeChild',Mock(side_effect=RuntimeError('transport failed')))
+    recovery=Mock(wraps=embed.run_embedded_close_recovery)
+    monkeypatch.setattr(embed,'run_embedded_close_recovery',recovery)
     if event=='startup-fatal':
         with pytest.raises(RuntimeError,match='startup failed'):shell.run_session(session)
     else:shell.run_session(session)
+    assert recovery.call_count==(1 if event=='transport-fatal' else 0)
     status=embed.read_notification(session.with_suffix('.status.json'))
     if event=='cancelled':
         assert status==dict(scope='page',token=8,closeCancelled=True)

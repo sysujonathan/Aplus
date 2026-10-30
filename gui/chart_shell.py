@@ -179,7 +179,7 @@ def run_session(session_path):
         store = Store(payload["runtime_root"])
         embedded = bool(payload.get('parent_hwnd'))
         if embedded:
-            from .chart_embed import ChartSessionBridge, run_embedded_transport
+            from .chart_embed import ChartSessionBridge, run_embedded_transport, run_embedded_close_recovery
             bridge = ChartSessionBridge(store, payload['boot'], lambda boot: _materialize_page(session, boot))
             bridge.active_token = payload.get('token', 0)
         else:
@@ -223,7 +223,10 @@ def run_session(session_path):
                 window.show()
                 run_embedded_transport(window, bridge, session, payload['parent_hwnd'], native)
             except Exception as exc:
-                _write_json(status, {'scope': 'process', 'token': getattr(bridge, 'active_token', token), 'ready': False, 'error': str(exc)})
+                try:
+                    _write_json(status, {'scope': 'process', 'token': getattr(bridge, 'active_token', token), 'ready': False, 'error': str(exc)})
+                finally:
+                    run_embedded_close_recovery(window, bridge, session)
         webview.start(start_embedded if embedded else None, gui="edgechromium", debug=False, private_mode=True)
     except Exception as exc:
         _write_json(status, {'scope': 'process', 'token': token, "ready": False, "error": str(exc)})

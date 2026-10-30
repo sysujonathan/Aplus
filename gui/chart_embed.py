@@ -362,12 +362,11 @@ class EmbeddedChartHost:
 
     def request_close(self):
         self._queued_context = None
-        if self.closing:
-            return
+        if not self.closing:
+            self.token += 1
         self.closing = True
         if self.process is not None and self.process.poll() is None:
-            self.token += 1
-            atomic_json(self.control, dict(token=self.token, close=True))
+            atomic_json(self.control, dict(token=self.token, close=True, id=uuid.uuid4().hex))
 
     def closed(self):
         return self.process is None or self.process.poll() is not None
@@ -439,4 +438,26 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
                         + json.dumps(request, ensure_ascii=False) + ")")
                     if accepted:
                         last_live = request['id']
+        time.sleep(.1)
+
+
+def run_embedded_close_recovery(window, bridge, session):
+    """Keep ordinary save/close available after the chart transport has failed.
+
+    This deliberately does not resume market updates or switch pages. Destroy
+    still passes through ChartCloseGuard and the page's save acknowledgement;
+    no worker is terminated and no unsaved document is silently discarded.
+    """
+    control = session.with_suffix('.control.json')
+    last_close = None
+    while not window.events.closed.is_set():
+        request = read_notification(control)
+        if request and request.get('close'):
+            identity = (request.get('token'), request.get('id'))
+            if identity != last_close:
+                last_close = identity
+                bridge.pending = None
+                bridge.close_requested = True
+                bridge.close_token = request.get('token')
+                window.destroy()
         time.sleep(.1)
