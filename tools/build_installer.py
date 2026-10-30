@@ -61,6 +61,10 @@ def main(argv=None):
     report=ROOT/'build'/'self-test.json'
     run([app/'AplusApp.exe','--self-test',report],timeout=60)
     if not json.loads(report.read_text())['chart_assets']:raise SystemExit('Chart assets missing')
+    # A working desktop alone cannot prove that its real windowed EXE can
+    # launch a provider child and exchange pipe messages. Probe offline before
+    # wrapping any installer; never contact a supplier during this build gate.
+    run([sys.executable,ROOT/'tools/test_installed_providers.py',app/'AplusApp.exe'],timeout=120)
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     run([compiler,'/nologo','/target:winexe','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',
          '/win32icon:'+str(ROOT/'icon_aplus.ico'),'/out:'+str(payload/'Aplus.exe'),ROOT/'packaging/Launcher.cs'])

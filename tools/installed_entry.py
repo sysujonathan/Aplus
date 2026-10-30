@@ -9,6 +9,12 @@ import traceback
 def main():
     from workbench.installed_imports import install
     install()
+    if len(sys.argv) == 3 and sys.argv[1] == '--provider-worker':
+        from workbench.process_entry import provider_command, restore_worker_stdio
+        provider_command(sys.argv[2])  # Validate before restoring private IPC.
+        restore_worker_stdio()
+        from workbench.provider_worker import main as provider
+        return provider(sys.argv[2])
     if len(sys.argv) > 1 and sys.argv[1] == '--chart':
         from gui.chart_shell import main as chart
         return chart(sys.argv[2:])
@@ -44,6 +50,8 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == '--smoke-test':
         from tools.installer_smoke import run
         return run(sys.argv[2])
+    if len(sys.argv) > 1:
+        raise ValueError('不支持的 Aplus 启动参数，未打开重复桌面')
     from workbench.installed_runtime import launch
     launch()
 

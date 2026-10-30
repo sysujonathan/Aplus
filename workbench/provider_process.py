@@ -3,13 +3,13 @@ import json
 import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
 
 import pandas as pd
 from .provider_guard import ProviderError, ConnectionLease, baostock_connection_active
+from .process_entry import provider_command
 
 
 class BaoStock:
@@ -47,7 +47,7 @@ class BaoStock:
             raise ProviderError('baostock','connect','检测到本机已有 BaoStock 连接（可能来自 BPA）；未并发登录，请等另一工具结束','LOCAL_BUSY')
         self.messages = queue.Queue()
         self.process = subprocess.Popen(
-            [sys.executable, '-u', '-m', 'workbench.provider_worker',self.vendor],
+            provider_command(self.vendor),
             cwd=Path(__file__).resolve().parents[1], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, encoding='utf-8',
