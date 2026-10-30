@@ -281,6 +281,9 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_cancel = threading.Event()
         self._live_after = None
         self._live_due = 0.0
+        self._live_boundary_attempts = 0
+        self._live_boundary_pending = False
+        self._live_phase = None
         self._live_sent = None
         self._live_error = ""
         self._last_live_at = ""
@@ -407,24 +410,54 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_after = None
         if self._live_cancel.is_set() or not self.top.winfo_exists():
             return
+        from workbench.live_minutes import minute_refresh_phase, expected_minute_close
+        moment, calendar = china_now(), self._live_calendar()
+        in_session = session_status(moment, calendar) == "交易中"
+        phase = minute_refresh_phase(moment, calendar)
+        previous_phase = getattr(self, '_live_phase', None)
+        phase_changed = phase != previous_phase
+        expected = expected_minute_close(moment)
+        target = phase if in_session else expected or phase
+        target_changed = target != getattr(self, '_live_boundary_target', None)
+        if phase_changed:
+            self._live_phase = phase
+            if target_changed:
+                self._live_boundary_target = target
+                self._live_boundary_attempts = 0
+            tail = getattr(self, '_last_live_at', '')
+            self._live_boundary_pending = (previous_phase is not None and target_changed) or bool(expected and tail < expected)
+            if target_changed:
+                self._live_due = 0.0
         result = self._live_poller.take()
         if result is not None:
             frame, error = result
             if frame is not None:
                 self._publish_live(frame)
+                expected = expected_minute_close(moment)
+                # A forming bar read before this boundary cannot certify its close.
+                old_phase_result = phase_changed and target_changed and previous_phase is not None and getattr(self, '_live_request_phase', None) != phase
+                self._live_boundary_pending = old_phase_result or bool(expected and str(frame.date.iloc[-1]) < expected)
             else:
                 self._live_error = error or "分钟行情读取失败"
                 self._show_live_status()
-            self._live_due = time.monotonic() + self._live_poller.delay
-        moment, calendar = china_now(), self._live_calendar()
-        if self._auto_enabled() and session_status(moment, calendar) == "交易中":
-            self._hourly.request(self.data['code'])
+            self._live_due = time.monotonic() + (self._live_poller.delay if in_session else max(60, self._live_poller.delay))
+        if phase_changed and target_changed and previous_phase is not None:
+            self._live_due = 0.0
+        boundary_allowed = (getattr(self, '_live_boundary_pending', False)
+                            and getattr(self, '_live_boundary_attempts', 0) < 3)
+        if self._auto_enabled() and (in_session or boundary_allowed):
             if time.monotonic() >= self._live_due and not self._live_poller.busy:
-                self._live_poller.start(self.data["code"])
+                if self._live_poller.start(self.data["code"]):
+                    self._live_request_phase = phase
+                    if not in_session:
+                        self._live_boundary_attempts += 1
+                        self._live_due = time.monotonic() + max(60, self._live_poller.delay)
+                    self._hourly.request(self.data['code'])
+        self._show_live_status()
         self._live_after = self.top.after(400, self._live_tick)
 
     def _publish_live(self, frame):
-        from workbench.live_minutes import coarse_series, minute_rows, INTERVAL
+        from workbench.live_minutes import coarse_series, minute_rows, live_metadata
         try:
             rows = minute_rows(frame)
         except ValueError as exc:
@@ -433,7 +466,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             return
         self._live_error = ""
         self._live_frame = frame
-        key = _rows_key(rows)
+        key = (_rows_key(rows), str(frame.attrs.get('quote')))
         embedded = self._embedded
         if key != self._live_sent and embedded is not None and not embedded.closed():
             series = {"m5": rows}
@@ -449,9 +482,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
                     series[unit] = minute_rows(coarse)
                 except ValueError:
                     continue
-            payload = {"series": series,
-                       "live": {"interval": INTERVAL, "source": "腾讯分钟行情",
-                                "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
+            payload = {"series": series,"live": live_metadata(frame)}
             if embedded.push_live(payload):
                 self._live_sent = key
                 self._last_live_at = rows[-1]["date"]
@@ -463,6 +494,8 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             # chart actually shows instead of promising a preserved screen.
             kept = "保留上一次成功数据" if self._last_live_at else "本次按日线显示"
             self.live_var.set(f"5 分钟读取失败，{kept}：" + self._live_error[:80])
+            if getattr(self, '_live_boundary_pending', False) and getattr(self, '_live_boundary_attempts', 0) >= 3:
+                self.live_var.set(self.live_var.get() + '；本时段补读已达3次上限，自动请求已停止')
             self.live_label.configure(foreground="#f23645")
             return
         moment, calendar = china_now(), self._live_calendar()
@@ -476,7 +509,16 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             text += " · 自动行情未开启，仅此一次读取"
             self.live_label.configure(foreground=MUTED)
         else:
-            text += f" · 自动暂停：{state}"
+            if getattr(self, '_live_boundary_pending', False):
+                attempts = getattr(self, '_live_boundary_attempts', 0)
+                if self._auto_enabled() and attempts < 3:
+                    text += f" · 待刷新：本时段最多补读3次，间隔至少60秒（已请求{attempts}次）"
+                elif self._auto_enabled():
+                    text += ' · 待刷新：已达3次补读上限，自动请求已停止'
+                else:
+                    text += ' · 待刷新：自动行情未开启'
+            else:
+                text += f" · 本时段数据已就绪，自动暂停：{state}"
             self.live_label.configure(foreground=MUTED)
         self.live_var.set(text)
 

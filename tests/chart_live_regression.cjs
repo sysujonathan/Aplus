@@ -61,7 +61,8 @@ const context = vm.createContext({
 });
 vm.runInContext(fs.readFileSync(path.join(assets, 'chart-coordinates.js'), 'utf8'), context);
 context.chartCoordinates = context.window.AplusChartCoordinates;
-vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'periodLabel', 'switchProductionTimeframe']
+vm.runInContext(fs.readFileSync(path.join(assets,'chart-indicators.js'),'utf8'), context);
+vm.runInContext(['clamp', 'visibleWindow', 'panLimits', 'periodLabel', 'refreshSeriesTitle', 'applyDailyReference', 'switchProductionTimeframe']
   .map(functionSource).join('\n') + '\n' + arrowSource('aplusApplyLiveBars'), context);
 
 const apply = payload => context.window.aplusApplyLiveBars(payload);
@@ -159,7 +160,36 @@ function run() {
     assert.equal(apply(payload), false);
   }
 
-  console.log(JSON.stringify({ok: true, renders: renders.length, toasts, bars: context.bars.length}));
+  // Daily/weekly/monthly reference bars use the same quote, only with verified
+  // calendar continuity and matching previous-close price basis. No Store save.
+  boot.source='TickFlow';boot.adjustment='前复权';boot.priceStep=.01;
+  boot.axisDates={daily:daily.map(row=>row.date).concat('2026-10-26','2026-10-27')};
+  const originalDaily=JSON.stringify(daily);
+  const quote={code:boot.symbol,date:'2026-10-26',quote_time:'2026-10-26T11:30:00+08:00',
+    previous_close:27.5,open:27.7,high:28.5,low:26.5,price:28,volume:100000};
+  assert.equal(apply({series:{m5:rows},live:{source:'腾讯分钟行情',adjustment:'不复权',asof:rows.at(-1).date,quote}}),true);
+  assert.equal(JSON.stringify(daily),originalDaily,'reference must not mutate original history');
+  for(const unit of ['daily','weekly','monthly']){
+    vm.runInContext(`switchProductionTimeframe('${unit}',false)`,context);
+    assert.equal(context.bars.at(-1).close,quote.price);
+    assert.match(element('.instrument-title b').textContent,/TickFlow历史＋腾讯实时参考/);
+    quote.price+=.01;quote.quote_time='2026-10-26T11:30:01+08:00';
+    apply({series:{m5:rows},live:{quote}});
+    assert.equal(context.bars.at(-1).close,quote.price,'active base period must repaint dynamically');
+  }
+  const unchanged=JSON.stringify(boot.series.daily);
+  for(const bad of [{...quote,code:'sz.000001'},{...quote,previous_close:999},
+                     {...quote,date:'2026-10-27'},{...quote,low:999}]){
+    apply({series:{m5:rows},live:{quote:bad}});
+    assert.equal(JSON.stringify(boot.series.daily),unchanged);
+  }
+  context.replayActive=true;
+  apply({series:{m5:rows},live:{quote:{...quote,price:28.4}}});
+  assert.equal(JSON.stringify(boot.series.daily),unchanged,'replay daily history stays frozen');
+  context.replayActive=false;
+  vm.runInContext("switchProductionTimeframe('m5',false)",context);
+  assert.match(element('.instrument-title b').textContent,/腾讯分钟行情 \/ 不复权/);
+  console.log(JSON.stringify({ok: true, renders: renders.length, toasts, bars: context.bars.length,allPeriodsLive:true}));
 }
 
 try {

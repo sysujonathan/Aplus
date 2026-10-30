@@ -44,6 +44,20 @@ def atomic_json(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def read_notification(path):
+    """A transient Windows sharing conflict must not end the IPC reader.
+
+    These files are replaceable notifications, not saved analysis. Keep the
+    last acknowledged page and retry on the next tick if a writer, antivirus,
+    or replacement briefly makes a notification unavailable.
+    """
+    try:
+        value = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def adopt_parent_dpi(parent):
     """Match DPI before WinForms creates any HWND; avoid cross-process reset."""
     user = ctypes.WinDLL('user32', use_last_error=True)
@@ -67,6 +81,7 @@ class ChartSessionBridge:
         self.busy = False
         self.failed_token = None
         self.close_requested = False
+        self.close_token = None
         self._lock = threading.RLock()
         self._close_window = self._cancel_close = None
 
@@ -254,6 +269,7 @@ class EmbeddedChartHost:
         self.token += 1
         request = dict(token=self.token, boot=boot)
         atomic_json(self.control, request)
+        self._started = time.monotonic()
         if self.closed():
             self.closing = False
             self.error = None
@@ -294,29 +310,30 @@ class EmbeddedChartHost:
         if not self.parent.winfo_exists():
             return
         try:
-            if self.focus.exists():
-                focus = json.loads(self.focus.read_text(encoding='utf-8'))
+            focus = read_notification(self.focus)
+            if focus is not None:
                 if focus.get('id') != self._last_focus:
                     self._last_focus = focus.get('id')
                     if focus.get('token') == self.token and self.on_active and not self.closing:
                         self.on_active()
-            if self.actions.exists():
-                action = json.loads(self.actions.read_text(encoding='utf-8'))
+            action = read_notification(self.actions)
+            if action is not None:
                 if action.get('id') != self._last_action:
                     self._last_action = action.get('id')
                     if self.on_layout and action.get('layout') in (1, 4, 6, 9) and not self.closing:
                         self.on_layout(action['layout'])
-            if self.status.exists():
-                result = json.loads(self.status.read_text(encoding='utf-8'))
-                if result.get('error'):
+            result = read_notification(self.status)
+            if result is not None:
+                owns_page = result.get('token') == self.token
+                if result.get('error') and (owns_page or result.get('scope') == 'process'):
                     raise RuntimeError(result['error'])
-                if result.get('ready'):
+                if result.get('ready') and owns_page:
                     self._started = None
                     if result.get('token') == self.token and self._ready_token != self.token:
                         self._ready_token = self.token
                         if self.on_ready:
                             self.on_ready()
-                if result.get('closeCancelled'):
+                if result.get('closeCancelled') and owns_page:
                     self.closing = False
             if self.process.poll() is not None and not self.closing:
                 raise RuntimeError('交互图表进程已退出；已保存的分析对象仍在本机')
@@ -346,12 +363,11 @@ class EmbeddedChartHost:
 
     def request_close(self):
         self._queued_context = None
-        if self.closing:
-            return
+        if not self.closing:
+            self.token += 1
         self.closing = True
         if self.process is not None and self.process.poll() is None:
-            self.token += 1
-            atomic_json(self.control, dict(token=self.token, close=True))
+            atomic_json(self.control, dict(token=self.token, close=True, id=uuid.uuid4().hex))
 
     def closed(self):
         return self.process is None or self.process.poll() is not None
@@ -378,14 +394,18 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
     last_navigation = None
     last_live = None
     while native.fit():
-        if control.exists():
+        try:
             modified = control.stat().st_mtime_ns
-            if modified != last_mtime:
-                request = json.loads(control.read_text(encoding='utf-8'))
+        except (FileNotFoundError, PermissionError):
+            modified = None
+        if modified is not None and modified != last_mtime:
+            request = read_notification(control)
+            if request is not None:
                 last_mtime = modified
                 if request.get('close'):
                     bridge.pending = None
                     bridge.close_requested = True
+                    bridge.close_token = request.get('token')
                     window.destroy()  # ChartCloseGuard waits for the last Store save
                 else:
                     bridge.pending = request
@@ -399,23 +419,46 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
             if not installed:
                 bridge.busy = False
         navigation = session.with_suffix('.navigation.json')
-        if navigation.exists() and not bridge.busy and window.events.loaded.is_set():
-            request = json.loads(navigation.read_text(encoding='utf-8'))
-            if request.get('id') != last_navigation and request.get('token') == bridge.active_token:
+        if not bridge.busy and window.events.loaded.is_set():
+            request = read_notification(navigation)
+            if request is not None and request.get('id') != last_navigation and request.get('token') == bridge.active_token:
                 accepted = window.evaluate_js(
                     "typeof window.aplusNavigateChart === 'function' && window.aplusNavigateChart("
                     + json.dumps(request, ensure_ascii=False) + ")")
                 if accepted:
                     last_navigation = request['id']
         live_path = session.with_suffix('.live.json')
-        if live_path.exists() and not bridge.busy and window.events.loaded.is_set():
-            request = json.loads(live_path.read_text(encoding='utf-8'))
-            if request.get('id') != last_live:
-                last_live = request['id']
+        if not bridge.busy and window.events.loaded.is_set():
+            request = read_notification(live_path)
+            if request is not None and request.get('id') != last_live:
                 if request.get('token') == bridge.active_token:
                     # A page that cannot accept intraday rows keeps its current
                     # frame; the next tick retries after the page reloads.
-                    window.evaluate_js(
+                    accepted = window.evaluate_js(
                         "typeof window.aplusApplyLiveBars === 'function' && window.aplusApplyLiveBars("
                         + json.dumps(request, ensure_ascii=False) + ")")
+                    if accepted:
+                        last_live = request['id']
+        time.sleep(.1)
+
+
+def run_embedded_close_recovery(window, bridge, session):
+    """Keep ordinary save/close available after the chart transport has failed.
+
+    This deliberately does not resume market updates or switch pages. Destroy
+    still passes through ChartCloseGuard and the page's save acknowledgement;
+    no worker is terminated and no unsaved document is silently discarded.
+    """
+    control = session.with_suffix('.control.json')
+    last_close = None
+    while not window.events.closed.is_set():
+        request = read_notification(control)
+        if request and request.get('close'):
+            identity = (request.get('token'), request.get('id'))
+            if identity != last_close:
+                last_close = identity
+                bridge.pending = None
+                bridge.close_requested = True
+                bridge.close_token = request.get('token')
+                window.destroy()
         time.sleep(.1)
