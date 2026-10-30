@@ -197,7 +197,7 @@ class ChartPanel(native_ttk.Frame):
                 self._embedded = EmbeddedChartHost(self.chart_frame, self.store, self._embedded_error,
                     on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate)
             self.readout_frame.grid()
-            self.readout.set('正在加载交互主图；当前分析会先保存到本机')
+            self.readout.set('正在切换图表…')
             self._embedded.show(context)
         except Exception as exc:
             self._embedded_error(str(exc))
@@ -292,17 +292,27 @@ class ChartPanel(native_ttk.Frame):
             self._publish_intraday(result[0])
         from workbench.holding_quotes import china_now, session_status
         if self._code and poller is not None:
-            in_session = session_status(
-                china_now(), self._intraday_calendar_state()) == "交易中"
+            from workbench.live_minutes import minute_refresh_phase
+            moment = china_now()
+            calendar = self._intraday_calendar_state()
+            phase = minute_refresh_phase(moment, calendar)
+            previous_phase = getattr(self, '_intraday_phase', None)
+            self._intraday_phase = phase
+            if previous_phase is not None and phase != previous_phase:
+                self._intraday_loaded = False
+                self._intraday_due = 0.0  # Read the last AM/PM bar before pausing.
+            in_session = session_status(moment, calendar) == "交易中"
             # The first read for a symbol happens even with the market shut: a
             # trader opening the watch list at noon or in the evening must still
             # get the five-minute, hourly and half-day units instead of three
             # dead buttons.  Only the repeat polling is limited to the session.
             if should_read_intraday(loaded=self._intraday_loaded, in_session=in_session) \
-                    and time.monotonic() >= self._intraday_due and not poller.busy:
-                poller.start(self._code)
-                self._intraday_due = time.monotonic() + (
-                    poller.delay if in_session else self.CLOSED_RETRY_SECONDS)
+                    and time.monotonic() >= self._intraday_due:
+                # start() rejects an in-flight read of this generation, but a
+                # slow response for the previous symbol must not block this one.
+                if poller.start(self._code):
+                    self._intraday_due = time.monotonic() + (
+                        poller.delay if in_session else self.CLOSED_RETRY_SECONDS)
         if self._hourly is not None and self._code in self._hourly.take(successful_only=True):
             # The hourly history arrived after the first frame was drawn.
             self._intraday_sent = None
@@ -311,7 +321,8 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_after = self.after(500, self._intraday_tick)
 
     def _publish_intraday(self, frame):
-        from workbench.live_minutes import INTERVAL, coarse_series, minute_rows
+        from workbench.live_minutes import coarse_series, minute_rows, live_metadata, expected_minute_close
+        from workbench.holding_quotes import china_now
         embedded = self._embedded
         if embedded is None or embedded.closed():
             return
@@ -321,7 +332,9 @@ class ChartPanel(native_ttk.Frame):
             return
         tail = rows[-1]
         self._intraday_frame = frame
-        key = (tail['date'], len(rows), tail['close'], tail['volume'])
+        metadata = live_metadata(frame)
+        key = (tail['date'], len(rows), tail['open'], tail['high'], tail['low'], tail['close'], tail['volume'],
+               str(metadata.get('quote')))
         if key == self._intraday_sent:
             return
         if self._hourly is not None:
@@ -336,12 +349,11 @@ class ChartPanel(native_ttk.Frame):
                 series[unit] = minute_rows(coarse)
             except ValueError:
                 continue
-        payload = {"series": series,
-                   "live": {"interval": INTERVAL, "source": "腾讯分钟行情",
-                            "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}}
+        payload = {"series": series,"live": metadata}
         if embedded.push_live(payload):
             self._intraday_sent = key
-            self._intraday_loaded = True
+            expected = expected_minute_close(china_now())
+            self._intraday_loaded = not expected or tail['date'] >= expected
 
     def set_drop_target(self, active):
         if active:

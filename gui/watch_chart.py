@@ -108,7 +108,7 @@ class WatchChartController:
             record = data['record']
             panel._image = data['image']
             period = '周K' if self.timeframe == 'weekly' else '日K'
-            panel._title_var.set(f'{self.item.code} {self.item.name} · 手动关注 · {period}'
+            panel._title_var.set(f'{self.item.code} {self.item.name} · 手动关注 · 历史{period}'
                                  f" · {record['source']} / {record['adjustment']} · 截至 {record['end']}")
             panel._workspace_context = dict(frame=data['frame'], record=record, code=self.item.code,
                                            name=self.item.name, timeframe='daily', payload={},

@@ -19,7 +19,7 @@ import urllib.request
 import pandas as pd
 
 from .market import code_of
-from .tencent_quotes import volume_scale
+from .tencent_quotes import volume_scale, parse_tencent_quotes
 
 CHINA = timezone(timedelta(hours=8))
 PERIODS = {'m1': 1, 'm5': 5, 'm15': 15, 'm30': 30, 'm60': 60}
@@ -132,7 +132,15 @@ def parse_minute_bars(text, code, moment, *, period='m5', count=DEFAULT_BARS):
         previous = stamp
         rows.append(dict(date=stamp.strftime('%Y-%m-%d %H:%M'), open=opened, high=high,
                          low=low, close=closed, volume=volume * volume_scale(code)))
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    quotes = block.get('qt')
+    fields = quotes.get(code.replace('.', '')) if isinstance(quotes, dict) else None
+    if isinstance(fields, list):
+        text = 'v_'+code.replace('.', '')+'="'+'~'.join(map(str, fields))+'";'
+        quote = parse_tencent_quotes(text, [code], moment).get(code)
+        if quote:
+            frame.attrs['quote'] = dict(quote, code=code)
+    return frame
 
 
 def fetch_minute_bars(code, moment=None, *, period='m5', count=DEFAULT_BARS, timeout=TIMEOUT,
@@ -411,12 +419,12 @@ class IntradaySource:
         self._skeleton = {}
         self._at = {}
 
-    def skeleton(self, code, moment=None):
+    def skeleton(self, code, moment=None, *, force=False):
         moment = moment or self.clock()
         code = code_of(code)
         held, at = self._skeleton.get(code), self._at.get(code)
         fresh = held is not None and (moment - at).total_seconds() <= self.SKELETON_SECONDS
-        if fresh:
+        if fresh and not force:
             return held
         try:
             held = self.fetch(code, moment, period='m5', count=MAX_BARS)
@@ -445,12 +453,58 @@ class IntradaySource:
                 merged = None
         if merged is None or len(merged) < 2:
             raise MinuteSourceError('分钟行情为空')
+        # A stale m1 response must not pin the page to a cached m5 skeleton.
+        # One fresh native read is allowed; never loop against a stale provider.
+        expected = expected_minute_close(moment)
+        if expected and str(merged.date.iloc[-1]) < expected and self._at.get(code) != moment:
+            skeleton = self.skeleton(code, moment, force=True)
+            refreshed = merge_live_tail(skeleton, tail)
+            if refreshed is not None and len(refreshed) >= 2:
+                merged = refreshed
+        quotes = [f.attrs.get('quote') for f in (skeleton, tail) if f is not None and f.attrs.get('quote')]
+        if quotes:
+            merged.attrs['quote'] = max(quotes, key=lambda q:q['quote_time'])
         return merged
 
     def forget(self, code):
         code = code_of(code)
         self._skeleton.pop(code, None)
         self._at.pop(code, None)
+
+
+def expected_minute_close(moment):
+    from .exchange_calendar import is_trading_day
+    trading = is_trading_day(moment.date())
+    if trading is None:
+        return None
+    clock = moment.hour*60+moment.minute
+    if not trading or clock < MORNING_OPEN+5:
+        for offset in range(1 if trading else 0,33):
+            day = moment.date()-timedelta(days=offset)
+            if is_trading_day(day) is True:
+                return f'{day} 15:00'
+        return None
+    minute = min(clock, MORNING_CLOSE) if clock < AFTERNOON_OPEN+5 else min(clock, AFTERNOON_CLOSE)
+    minute = minute//5*5
+    return f'{moment.date()} {minute//60:02d}:{minute%60:02d}'
+
+
+def minute_refresh_phase(moment, calendar=None):
+    from .exchange_calendar import is_trading_day
+    clock = moment.hour*60+moment.minute+moment.second/60
+    phase = ('pre' if clock<MORNING_OPEN else 'am' if clock<=MORNING_CLOSE else
+             'noon' if clock<AFTERNOON_OPEN else 'pm' if clock<=AFTERNOON_CLOSE else 'after')
+    if is_trading_day(moment.date(), calendar) is not True:
+        phase = 'closed'
+    return (str(moment.date()),phase)
+
+
+def live_metadata(frame):
+    expected = expected_minute_close(datetime.now(CHINA))
+    return dict(source='腾讯分钟行情',adjustment='不复权',asof=str(frame.date.iloc[-1]),
+                quote=frame.attrs.get('quote'),interval=INTERVAL,
+                stale=bool(expected and str(frame.date.iloc[-1])<expected),
+                note='实时参考，不写入正式行情、不参与策略和账本。')
 
 
 

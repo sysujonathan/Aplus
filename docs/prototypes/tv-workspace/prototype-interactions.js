@@ -107,7 +107,18 @@ function flushWorkspaceRender(mode = null) {
 
 function scheduleViewStateSave() {
   clearTimeout(viewSaveTimer);
-  viewSaveTimer = setTimeout(() => { viewSaveTimer = null; savePrototypeState(); }, 180);
+  viewSaveTimer = setTimeout(() => { viewSaveTimer = null; saveViewState(); }, 180);
+}
+
+function saveViewState() {
+  // Zoom/pan are browsing preferences, not edits to the saved analysis.
+  // Remember them in the browser when possible; never queue a Store write or
+  // turn a failed preference write into an unsaved-drawing switch barrier.
+  const view = replayActive && typeof preReplayView !== 'undefined' && preReplayView ? preReplayView :
+    {count:viewCount,offset:viewOffset,priceZoom,priceCenterOffset};
+  try { localStorage.setItem(tvStateKey+'-view', JSON.stringify({
+    revision:bridgeRevision, view:{count:view.count,offset:view.offset,
+      priceZoom:view.priceZoom,priceCenterOffset:view.priceCenterOffset}})); } catch (_) {}
 }
 
 function sizeCanvas(target, width, height, ratio) {
@@ -145,7 +156,14 @@ if (initialPrototypeState.view) {
 }
 
 function loadPrototypeState() {
-  if (chartBoot.production && chartBoot.state) return structuredClone(chartBoot.state);
+  if (chartBoot.production && chartBoot.state) {
+    const state = structuredClone(chartBoot.state);
+    try {
+      const preference = JSON.parse(localStorage.getItem(tvStateKey+'-view') || 'null');
+      if (preference && preference.revision === Number(chartBoot.revision || 0)) state.view = preference.view;
+    } catch (_) {}
+    return state;
+  }
   try { return JSON.parse(localStorage.getItem(tvStateKey) || '{}'); } catch (_) { return {}; }
 }
 
@@ -153,7 +171,7 @@ function savePrototypeState(flushOnly = false) {
   try {
     if(flushOnly)window.flushChartColorEditor?.();
     if (flushOnly && typeof viewSaveTimer !== 'undefined' && viewSaveTimer !== null) {
-      clearTimeout(viewSaveTimer); viewSaveTimer = null; flushOnly = false;
+      clearTimeout(viewSaveTimer); viewSaveTimer = null; saveViewState();
     }
     if(flushOnly){
       window.flushChartInlineEditor?.(true,true);
@@ -1104,7 +1122,7 @@ function zoomAround(factor, ratio, deferred = false) {
   const limits=panLimits();
   viewOffset = clamp(Math.round(maxEnd-nextCount-begin),limits.min,limits.max);
   if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
-  else { renderWorkspace(); savePrototypeState(); }
+  else { renderWorkspace(); saveViewState(); }
 }
 
 function zoomPriceAround(factor, ratio, deferred = false) {
@@ -1120,7 +1138,7 @@ function zoomPriceAround(factor, ratio, deferred = false) {
   priceZoom = nextZoom;
   priceCenterOffset += nextCenter - currentCenter;
   if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
-  else { renderWorkspace(); savePrototypeState(); }
+  else { renderWorkspace(); saveViewState(); }
 }
 
 function panViewFromGesture(state, dx, dy) {
@@ -1134,7 +1152,7 @@ function panChart(barDelta, deferred = false) {
   const limits=panLimits();
   viewOffset = clamp(viewOffset + Math.round(barDelta), limits.min, limits.max);
   if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
-  else { renderWorkspace(); savePrototypeState(); }
+  else { renderWorkspace(); saveViewState(); }
 }
 
 function resetChartView() {
@@ -1142,7 +1160,7 @@ function resetChartView() {
   viewOffset = 0;
   priceZoom = 1;
   priceCenterOffset = 0;
-  renderWorkspace(); savePrototypeState();
+  renderWorkspace(); saveViewState();
   showToast(`已重置：${viewCount}根K线，右侧保留${RIGHT_MARGIN_BARS}根K线宽度`);
 }
 
@@ -1194,7 +1212,7 @@ function applyZoomSelection(start, end, zoomOut) {
   const targetSpan=(view.high-view.low)*(zoomOut?1/heightFraction:heightFraction);
   priceCenterOffset=desiredCenter-(priceHigh+priceLow)/2;
   priceZoom=clamp(rawSpan/targetSpan,.45,7);
-  exitDrawingMode(); hideZoomSelection(); renderWorkspace(); savePrototypeState();
+  exitDrawingMode(); hideZoomSelection(); renderWorkspace(); saveViewState();
   showToast(zoomOut ? '已按框选区域缩小' : '已放大到框选区域');
 }
 
@@ -1318,7 +1336,7 @@ canvas.addEventListener('pointerup', event => {
     redoStack = [];indicatorRedoStack=[]; updateUndoButtons(); flushWorkspaceRender('overlay'); savePrototypeState(); updateObjectTree();
     showToast(gesture.mode === 'object-handle' ? '结构端点已调整并保存' : '图形位置已移动并保存');
   } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && !gesture.moved) selectObject(gesture.objectId, point.x, point.y);
-  if (gesture.moved && ['price-scale', 'time-scale', 'pan'].includes(gesture.mode)) savePrototypeState();
+  if (gesture.moved && ['price-scale', 'time-scale', 'pan'].includes(gesture.mode)) saveViewState();
   gesture = null;
 });
 
@@ -1372,9 +1390,9 @@ canvas.addEventListener('dblclick', event => {
   const view = canvas._view;
   if (finishPath(point)) return;
   if (point.x > view.width - view.right) {
-    priceZoom = 1; priceCenterOffset = 0; renderWorkspace();savePrototypeState();showToast('价格轴已恢复自动刻度'); return;
+    priceZoom = 1; priceCenterOffset = 0; renderWorkspace();saveViewState();showToast('价格轴已恢复自动刻度'); return;
   }
-  if(point.y>view.height-view.bottom){viewCount=Math.min(DEFAULT_VISIBLE_BARS,replayIndex+1);viewOffset=0;renderWorkspace();savePrototypeState();return;}
+  if(point.y>view.height-view.bottom){viewCount=Math.min(DEFAULT_VISIBLE_BARS,replayIndex+1);viewOffset=0;renderWorkspace();saveViewState();return;}
   const id = hitObject(point.x, point.y);
   if (id === 'strategy-evidence') { showToast('策略证据为只读'); return; }
   if (id) { selectObject(id, point.x, point.y); openObjectSettings(); }
@@ -1717,8 +1735,54 @@ document.querySelectorAll('.timeframes .disabled').forEach(button => button.addE
 // Self-contained on purpose: the Node regression extracts single functions into
 // an empty context, so this must not read any module-level constant.
 function periodLabel(unit) {
-  const labels = {m5: '5分钟 · 盘中', m60: '1小时 · 盘中', m240: '4小时 · 盘中'};
+  const labels = {m5: '5分钟', m60: '1小时', m240: '4小时'};
   return unit === 'weekly' ? '1周' : unit === 'monthly' ? '1月' : labels[unit] || '1天';
+}
+function refreshSeriesTitle(unit = activeTimeframeUnit) {
+  const rows = chartBoot.series?.[unit] || bars;
+  const minute = /^m\d+$/.test(unit);
+  const reference = !minute && chartBoot.dailyReference;
+  const source = minute ? chartBoot.live?.source || '分钟来源待确认' : reference ?
+    `${chartBoot.source}历史＋腾讯实时参考` : chartBoot.source || '来源待确认';
+  const adjustment = minute ? chartBoot.live?.adjustment || '不复权' : chartBoot.adjustment || '口径待确认';
+  const asof = reference ? chartBoot.dailyReference.quote_time : minute ? chartBoot.live?.asof || rows.at(-1)?.date :
+    chartBoot.latest?.date || rows.at(-1)?.date;
+  const lag = minute && chartBoot.live?.stale ? ' · 数据待刷新' : '';
+  const blocked = !minute && chartBoot.dailyReferenceStatus?.includes('未核对') ? ' · 实时口径待核对' : '';
+  const label = minute ? '分钟数据末柱标签' : reference ? '报价时间' : '历史截至';
+  const quoteTime = minute && chartBoot.live?.quote?.quote_time ? ` · 报价 ${chartBoot.live.quote.quote_time}` : '';
+  const title = document.querySelector('.instrument-title b');
+  title.textContent =
+    `${chartBoot.name} · ${periodLabel(unit)} · ${source} / ${adjustment} · ${label} ${asof || '未知'}${quoteTime}${lag}${blocked}`;
+  title.title = title.textContent;
+}
+
+function applyDailyReference(quote) {
+  if (!quote || replayActive || quote.code !== chartBoot.symbol) return false;
+  const base = chartBoot.baseDailySeries || chartBoot.series?.daily;
+  if (!base?.length || quote.date < base.at(-1).date) return false;
+  if (chartBoot.dailyReference && quote.quote_time < chartBoot.dailyReference.quote_time) return false;
+  const previous = base.findLast(row => row.date < quote.date);
+  const axis = chartBoot.axisDates?.daily || [];
+  const previousIndex = axis.indexOf(previous?.date), currentIndex = axis.indexOf(quote.date);
+  const values = [quote.open,quote.high,quote.low,quote.price,quote.previous_close,quote.volume];
+  if (!previous || previousIndex < 0 || currentIndex !== previousIndex+1 ||
+      !values.every(Number.isFinite) || Math.min(...values.slice(0,5))<=0 || quote.volume<0 ||
+      quote.high<Math.max(quote.open,quote.price,quote.low) || quote.low>Math.min(quote.open,quote.price,quote.high) ||
+      !['不复权','raw','none','前复权','qfq','后复权','hfq'].includes(chartBoot.adjustment) ||
+      Math.abs(previous.close-quote.previous_close)>(Number(chartBoot.priceStep)||.0001)/2) {
+    chartBoot.dailyReferenceStatus='日周月历史口径或连续性未核对，保留历史图';return false;
+  }
+  chartBoot.baseDailySeries ||= structuredClone(base);
+  const daily = base.filter(row => row.date < quote.date).concat({date:quote.date,open:quote.open,
+    high:quote.high,low:quote.low,close:quote.price,volume:quote.volume,forming:true});
+  for (const unit of ['daily','weekly','monthly']) {
+    chartBoot.series[unit] = AplusChartIndicators.aggregate(daily,unit);
+    chartBoot.seriesCloseDates[unit] ||= {};
+    for (const row of chartBoot.series[unit]) chartBoot.seriesCloseDates[unit][row.date] ||= row.date;
+  }
+  chartBoot.dailyReference = {...quote};chartBoot.dailyReferenceStatus='实时参考，不写正式行情';
+  return true;
 }
 function switchProductionTimeframe(timeframe, persist = true) {
   const target = chartBoot.series?.[timeframe];
@@ -1744,6 +1808,7 @@ function switchProductionTimeframe(timeframe, persist = true) {
     !['daily','weekly','monthly'].includes(timeframe));
   const period = periodLabel(timeframe);
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
+  if (typeof refreshSeriesTitle === 'function') refreshSeriesTitle(timeframe);
   updateReadout(bars[replayIndex]);
   document.querySelectorAll('.quote b').forEach(node=>{node.textContent=chartPrice(bars[replayIndex].close);});
   renderWorkspace(); if (persist) savePrototypeState(); return true;
@@ -1767,13 +1832,15 @@ window.aplusApplyLiveBars = payload => {
     chartBoot.series[unit] = rows;
   });
   if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live};
-  if (!/^m\d+$/.test(String(activeTimeframeUnit || ''))) {
+  const dailyChanged = typeof applyDailyReference === 'function' && applyDailyReference(payload.live?.quote);
+  if (typeof refreshSeriesTitle === 'function') refreshSeriesTitle();
+  if (!/^m\d+$/.test(String(activeTimeframeUnit || '')) && !dailyChanged) {
     // Prepare the minute choices without taking over the trader's daily view.
     return true;
   }
   if (replayActive) return true; // never disturb a frozen replay frame
   const current = chartBoot.series[activeTimeframeUnit];
-  if (!Array.isArray(current) || current.length < 2) return true;
+  if (!Array.isArray(current) || current.length < 1) return true;
   const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
   userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
   bars.splice(0, bars.length, ...structuredClone(current));
@@ -2269,6 +2336,7 @@ function applyProductionContext() {
   document.title = `A++ 图表工作区 · ${chartBoot.name} ${display}`;
   document.querySelector('.symbol-pill b').textContent = display;
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${periodLabel(chartBoot.timeframe)} · ${market === '沪' ? 'SSE' : 'SZSE'}`;
+  refreshSeriesTitle(chartBoot.timeframe);
   document.querySelector('.exchange-dot').textContent = market;
   ['open', 'high', 'low', 'close'].forEach(key => { document.querySelector(`#${key}Value`).textContent = chartPrice(latest[key]); });
   const change = bars.length > 1 ? Number(latest.close) - Number(bars.at(-2).close) : 0;
