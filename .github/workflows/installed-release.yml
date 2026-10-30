@@ -49,9 +49,11 @@ jobs:
           $head = git rev-parse HEAD
           $main = gh api repos/$env:GITHUB_REPOSITORY/commits/main --jq .sha
           if ($head -ne $main) { throw 'Main moved; a later accepted main will build instead' }
-          $date = [DateTime]::UtcNow.ToString('yyyy.MM.dd')
-          $floor = [long]([DateTime]::UtcNow.ToString('yyyyMMdd')+'0000')
-          $sequence = $floor+1
+          $releaseTime = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'China Standard Time')
+          $date = $releaseTime.ToString('yyyy.MM.dd')
+          $floor = [long]($releaseTime.ToString('yyyyMMdd')+'0000')
+          $baseline = Get-Content packaging/release.json -Raw | ConvertFrom-Json
+          $sequence = [Math]::Max($floor+1, [long]$baseline.sequence+1)
           $releases = gh api repos/$env:GITHUB_REPOSITORY/releases?per_page=100 | ConvertFrom-Json
           foreach ($release in $releases) {
             if ($release.tag_name -match '^v(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$') {
@@ -82,6 +84,5 @@ jobs:
           name: AplusSetup-${{ env.APLUS_VERSION }}-unsigned-pilot
           path: dist/installers/*
           retention-days: 30
-      # Unsigned pilot packages are artifacts only. Publishing a stable Release
-      # is a deliberate release step after publisher signing is configured;
-      # never expose an unsigned build as an automatic update by accident.
+      # Building is not publishing. A maintainer explicitly publishes verified
+      # exact-main assets with tools/publish_installer.py; signing is optional.

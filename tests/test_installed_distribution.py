@@ -81,7 +81,7 @@ def manifest():
     raw=b'installer bytes'
     return dict(protocol=1,channel='stable',version='2026.10.30.2',sequence=202610300002,
         commit='a'*40,database_schema=8,preview=False,
-        package=dict(url=update.PACKAGE_BASE+'v2026.10.30.2/AplusSetup.exe',
+        package=dict(url=update.PACKAGE_BASE+'v2026.10.30.2/AplusSetup-2026.10.30.2-x64.exe',
                      bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest()))
 
 
@@ -118,10 +118,10 @@ def test_failed_download_never_lands_executable(tmp_path,raw):
 def test_official_release_needs_exact_main_push_acceptance(ci):
     value=manifest();base=update.PACKAGE_BASE+'v2026.10.30.2/'
     def api(path):
-        if path=='/releases/latest':return dict(assets=[dict(name='latest.json',size=500,
+        if path=='/releases/latest':return dict(draft=False,prerelease=False,tag_name='v2026.10.30.2',assets=[dict(name='latest.json',size=500,
             browser_download_url=base+'latest.json'),dict(name='AplusSetup.exe',
             size=value['package']['bytes'],browser_download_url=value['package']['url'])])
-        if path=='/commits/main':return dict(sha=value['commit'])
+        if path in ('/commits/main','/commits/v2026.10.30.2'):return dict(sha=value['commit'])
         return dict(workflow_runs=[dict(head_sha=value['commit'],head_branch='main',event='push',
             name='A acceptance',path='.github/workflows/checks.yml',id=1,
             status='in_progress' if ci=='in_progress' else 'completed',conclusion=ci)])
@@ -186,7 +186,7 @@ def test_start_ack_must_match_actual_release_and_data(tmp_path,wrong):
     assert update.confirmed_start(tmp_path,target,runtime) is False
 
 
-def test_unsigned_installer_is_rejected_before_execution(tmp_path):
+def test_optional_windows_signature_diagnostic_rejects_unsigned_file(tmp_path):
     import os
     if os.name!='nt':pytest.skip('Windows Authenticode verification')
     path=tmp_path/'unsigned.exe';path.write_bytes(b'MZ unsigned synthetic package')

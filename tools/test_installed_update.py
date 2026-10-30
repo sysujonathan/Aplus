@@ -68,7 +68,7 @@ def main():
             def work():
                 try:update.worker(request)
                 except Exception as exc:errors.append(repr(exc))
-            with patch.object(update,'load_manifest',lambda:target),patch.object(update,'require_signature',lambda _path:None),patch.object(update.subprocess,'Popen',controlled_popen):
+            with patch.object(update,'load_manifest',lambda:target),patch.object(update.subprocess,'Popen',controlled_popen):
                 thread=threading.Thread(target=work);thread.start()
                 deadline=time.monotonic()+15
                 while not (request_folder/'ready.json').exists() and time.monotonic()<deadline:time.sleep(.05)
@@ -94,7 +94,7 @@ def main():
         subprocess.run([str(root/'unins000.exe'),*common],check=True,timeout=120)
         result=dict(ok=True,real_installer=True,real_desktop_ack=not args.fail_start,rollback=args.fail_start,
                     launcher_replaced=bool(args.expected_launcher),busy_launcher_blocked=bool(args.expected_launcher),business_data_retained=True,
-                    backup_unchanged=True,source_authority='synthetic CI and signing authority for unsigned test packages',folder=str(folder))
+                    backup_unchanged=True,source_authority='synthetic official-release authority; real byte/order checks, no signature bypass',folder=str(folder))
         (folder/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
     finally:
         for child in owned:

@@ -17,6 +17,25 @@ def run(command,**kwargs):
     subprocess.run(list(map(str,command)),check=True,cwd=ROOT,**kwargs)
 
 
+def write_version_resources(release,folder):
+    from workbench.release_identity import version_parts
+    parts=version_parts(release['version']);version=release['version']
+    info=folder/'AplusApp.version.txt'
+    info.write_text(f'''VSVersionInfo(
+ffi=FixedFileInfo(filevers={parts!r}, prodvers={parts!r}, mask=0x3f, flags=0, OS=0x40004, fileType=1),
+kids=[StringFileInfo([StringTable('040904B0',[
+StringStruct('CompanyName','Aplus Project'),StringStruct('FileDescription','Aplus'),
+StringStruct('FileVersion',{version!r}),StringStruct('ProductVersion',{version!r}),
+StringStruct('ProductName','Aplus'),StringStruct('OriginalFilename','AplusApp.exe')])]),
+VarFileInfo([VarStruct('Translation',[1033,1200])])])''',encoding='utf-8')
+    assembly=folder/'LauncherVersion.cs'
+    assembly.write_text('using System.Reflection;\n'+
+        '\n'.join('[assembly: '+name+'("'+value+'")]' for name,value in (
+            ('AssemblyVersion',version),('AssemblyFileVersion',version),
+            ('AssemblyInformationalVersion',version),('AssemblyProduct','Aplus'))),encoding='utf-8')
+    return info,assembly
+
+
 def main(argv=None):
     parser=argparse.ArgumentParser()
     parser.add_argument('--iscc',required=True,type=Path)
@@ -30,8 +49,9 @@ def main(argv=None):
     release=json.loads((ROOT/'packaging/release.json').read_text(encoding='utf-8'))
     if args.version:release['version']=args.version
     if args.sequence:release['sequence']=args.sequence
-    if not re.fullmatch(r'\d{4}\.\d{1,2}\.\d{1,2}\.\d+',release['version']) or release['sequence']<1:
-        raise SystemExit('Invalid release identity')
+    from workbench.release_identity import release_sequence,validate_identity
+    if release_sequence(release['version'])!=release['sequence']:
+        raise SystemExit('Release version and sequence disagree')
     if args.official and args.skip_freeze:
         raise SystemExit('Official builds must freshly freeze their exact source')
     if bool(args.signtool)!=bool(args.certificate_thumbprint):
@@ -48,10 +68,12 @@ def main(argv=None):
         if dirty or github_json('/commits/main')['sha']!=commit or not acceptance(commit):
             raise SystemExit('Official packaging requires a clean exact main with successful push acceptance')
     release.update(commit=commit,preview=not args.official)
+    validate_identity(release)
     metadata=ROOT/'build'/'metadata'/'installed-release.json'
     metadata.parent.mkdir(parents=True,exist_ok=True)
     metadata.write_text(json.dumps(release,indent=2),encoding='utf-8')
-    env=dict(os.environ,APLUS_BUILD_METADATA=str(metadata))
+    version_file,assembly=write_version_resources(release,metadata.parent)
+    env=dict(os.environ,APLUS_BUILD_METADATA=str(metadata),APLUS_BUILD_VERSION_FILE=str(version_file))
     if not args.skip_freeze:
         run([sys.executable,'-m','PyInstaller','--noconfirm','--clean',ROOT/'packaging/Aplus.spec'],env=env)
     payload=ROOT/'dist';app=payload/'AplusApp'
@@ -67,7 +89,7 @@ def main(argv=None):
     run([sys.executable,ROOT/'tools/test_installed_providers.py',app/'AplusApp.exe'],timeout=120)
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     run([compiler,'/nologo','/target:winexe','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',
-         '/win32icon:'+str(ROOT/'icon_aplus.ico'),'/out:'+str(payload/'Aplus.exe'),ROOT/'packaging/Launcher.cs'])
+         '/win32icon:'+str(ROOT/'icon_aplus.ico'),'/out:'+str(payload/'Aplus.exe'),ROOT/'packaging/Launcher.cs',assembly])
     sign(payload/'Aplus.exe')
     sign(app/'AplusApp.exe')
     (payload/'aplus-install.json').write_text(json.dumps({'protocol':1,'app_id':'Aplus-installed-v1'}),encoding='utf-8')

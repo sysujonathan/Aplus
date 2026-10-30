@@ -59,7 +59,7 @@ class InstalledVersionController:
                         raise ValueError('当前已是最新版本。')
                     folder=state_home()/'updates'/uuid.uuid4().hex;folder.mkdir(parents=True)
                     update.download(target,folder/'setup.exe')
-                    update.require_signature(folder/'setup.exe')
+                    update.verify_package(target,folder/'setup.exe')
                     self.results.put(('download',(folder,target),False))
                 except Exception as exc:self.results.put(('error',str(exc),False))
             threading.Thread(target=work,daemon=True).start()

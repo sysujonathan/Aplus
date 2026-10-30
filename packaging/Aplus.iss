@@ -11,6 +11,10 @@
 AppId={{7B56A3BD-706C-4F60-AC18-0453099FA226}
 AppName=Aplus
 AppVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=Aplus Project
 DefaultDirName={localappdata}\Programs\Aplus
 DefaultGroupName=Aplus

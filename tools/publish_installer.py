@@ -1,7 +1,7 @@
-"""Explicit stable publication, only signed artifacts from exact accepted main.
+"""Explicit stable publication from exact accepted main and verified bytes.
 
-No release is published by building a local preview. Run after code signing has
-been configured; gh uses the release maintainer's existing authorization.
+No release is published by building a local preview. Windows signing is optional;
+gh uses the release maintainer's authorization.
 """
 import argparse
 import hashlib
@@ -18,7 +18,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('setup',type=Path)
     parser.add_argument('--manifest',required=True,type=Path)
-    parser.add_argument('--signtool',required=True,type=Path)
+    parser.add_argument('--signtool',type=Path,help='Optional additional Windows signature verification')
     args=parser.parse_args()
     from workbench.installed_update import validate_manifest
     from workbench.version_update import github_json, acceptance
@@ -29,8 +29,9 @@ def main():
     if args.setup.name!=package['url'].rsplit('/',1)[-1]:
         raise SystemExit('Installer name does not match release')
     if args.setup.stat().st_size!=package['bytes'] or hashlib.sha256(args.setup.read_bytes()).hexdigest()!=package['sha256']:
-        raise SystemExit('Installer bytes do not match the signed release manifest')
-    subprocess.run([str(args.signtool),'verify','/pa','/all',str(args.setup.resolve())],check=True)
+        raise SystemExit('Installer bytes do not match the official release manifest')
+    if args.signtool:
+        subprocess.run([str(args.signtool),'verify','/pa','/all',str(args.setup.resolve())],check=True)
     tag='v'+value['version']
     # gh refuses duplicate tags/releases. Never rewrite a published package.
     subprocess.run(['gh','release','create',tag,str(args.setup.resolve()),str(args.manifest.resolve()),

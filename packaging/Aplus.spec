@@ -28,5 +28,6 @@ a = Analysis([str(root/'tools/installed_entry.py')], pathex=[str(root)],
     module_collection_mode={name: 'py' for name in ('gui','workbench','core','config')})
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='AplusApp',
-    console=False, icon=str(root/'icon_aplus.ico'), upx=False)
+    console=False, icon=str(root/'icon_aplus.ico'), upx=False,
+    version=os.environ['APLUS_BUILD_VERSION_FILE'])
 coll = COLLECT(exe, a.binaries, a.datas, name='AplusApp', upx=False)

@@ -43,6 +43,8 @@ def interrupted(tmp_path,monkeypatch,binaries):
     monkeypatch.setenv('APLUS_INSTALL_STATE',str(home))
     root=tmp_path/'installed';old=root/'app/2026.10.30.1/AplusApp.exe'
     old.parent.mkdir(parents=True);shutil.copy2(binaries[1],old)
+    data.atomic_json(old.parent/'_internal'/'installed-release.json',dict(
+        version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True))
     shutil.copy2(binaries[0],root/'Aplus.exe')
     request=dict(install_root=str(root),target=manifest(),runtime=str(tmp_path/'retained-data'))
     data.atomic_json(folder/'request.json',request)

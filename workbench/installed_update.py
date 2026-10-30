@@ -15,14 +15,14 @@ import uuid
 
 from .installed_data import state_home, atomic_json, bound_runtime, bind_existing, file_sha256
 from .version_update import github_json, acceptance, application_mutex, require_web_closed
+from .release_identity import read_identity, validate_identity, version_label
 
 REPO='sysujonathan/Aplus'
 PACKAGE_BASE='https://github.com/'+REPO+'/releases/download/'
 
 
 def current_release():
-    root=Path(__file__).resolve().parents[1]
-    return json.loads((root/'installed-release.json').read_text(encoding='utf-8'))
+    return read_identity()
 
 
 def validate_manifest(value):
@@ -30,6 +30,7 @@ def validate_manifest(value):
         raise ValueError('更新信息格式不受支持。')
     if value.get('preview') is not False:
         raise ValueError('预览安装包不能作为自动更新的正式发布。')
+    validate_identity(value)
     if not re.fullmatch(r'\d{4}\.\d{1,2}\.\d{1,2}\.\d+',value.get('version','')):
         raise ValueError('更新版本无效。')
     if type(value.get('sequence')) is not int or value['sequence']<1:
@@ -38,7 +39,8 @@ def validate_manifest(value):
         raise ValueError('无法确认正式版提交。')
     package=value.get('package',{})
     url=package.get('url','')
-    if not url.startswith(PACKAGE_BASE) or urlparse(url).query or urlparse(url).fragment:
+    expected=PACKAGE_BASE+'v'+value['version']+'/AplusSetup-'+value['version']+'-x64.exe'
+    if url!=expected:
         raise ValueError('更新包不是官方发布地址。')
     if not re.fullmatch('[0-9a-f]{64}',package.get('sha256','')):
         raise ValueError('更新包校验信息缺失。')
@@ -51,7 +53,7 @@ def validate_manifest(value):
 
 def load_manifest(api=github_json, opener=urlopen):
     release=api('/releases/latest')
-    if release.get('draft') or release.get('prerelease'):
+    if release.get('draft') is not False or release.get('prerelease') is not False:
         raise ValueError('正式发布尚未准备好。')
     assets=release.get('assets',[])
     metadata=next((a for a in assets if a.get('name')=='latest.json'),None)
@@ -62,6 +64,11 @@ def load_manifest(api=github_json, opener=urlopen):
         raise ValueError('正式发布来源无效。')
     with opener(Request(url,headers={'User-Agent':'Aplus-installed-update'}),timeout=15) as response:
         value=validate_manifest(json.loads(response.read(32769)))
+    tag='v'+value['version']
+    if release.get('tag_name')!=tag or url!=PACKAGE_BASE+tag+'/latest.json':
+        raise ValueError('正式发布标签与更新清单不一致。')
+    if api('/commits/'+tag)['sha']!=value['commit']:
+        raise ValueError('正式发布标签与提交不一致。')
     package=next((a for a in assets if a.get('browser_download_url')==value['package']['url']),None)
     if not package or package.get('size')!=value['package']['bytes']:
         raise ValueError('新版程序包尚未完整发布。')
@@ -78,13 +85,31 @@ def load_manifest(api=github_json, opener=urlopen):
 
 def check_update(current=None, *, api=github_json, opener=urlopen):
     current=current or current_release()
+    prefix=('当前版本：'+version_label(current)+'。\n') if current.get('version') else ''
     try:
         target=load_manifest(api,opener)
         if target['sequence']<=current['sequence']:
-            return dict(state='current',message='当前已是最新版本。')
-        return dict(state='available',target=target,message='发现新版，更新后自动重启。')
+            return dict(state='current',message=prefix+'当前已是最新版本。')
+        return dict(state='available',target=target,message=prefix+'发现新版 '+version_label(target)+'，更新后自动重启。')
     except Exception as exc:
-        return dict(state='unavailable',message='暂时无法检查更新，当前版本可继续使用。',detail=str(exc))
+        return dict(state='unavailable',message=prefix+'暂时无法检查更新，当前版本可继续使用。',detail=str(exc))
+
+
+def verify_package(target,path):
+    """Trust official GitHub/main acceptance, not Windows certificate possession."""
+    validate_manifest(target)
+    path=Path(path)
+    if path.stat().st_size!=target['package']['bytes'] or file_sha256(path)!=target['package']['sha256']:
+        raise ValueError('安装包大小或 SHA256 不一致，未安装。')
+
+
+def verify_candidate(target,path,current):
+    validate_identity(current)
+    if load_manifest()!=target:
+        raise ValueError('正式发布已变化，请重新检查。')
+    if target['sequence']<=current['sequence']:
+        raise ValueError('更新版本没有前进，拒绝降级或重复安装。')
+    verify_package(target,path)
 
 
 def download(target, destination, *, opener=urlopen):
@@ -236,11 +261,8 @@ def worker(request_path):
         process=None
         try:
             if (folder/'cancelled.json').exists():raise ValueError('本次更新已取消。')
-            confirmed=load_manifest()
-            if confirmed!=target:raise ValueError('正式发布已变化，请重新检查。')
-            if file_sha256(setup)!=target['package']['sha256']:
-                raise ValueError('下载包发生变化，未安装。')
-            require_signature(setup)
+            current=read_identity(root/'app'/previous/'_internal')
+            verify_candidate(target,setup,current)
             with application_mutex():
                 require_web_closed()
                 runtime=bound_runtime()
