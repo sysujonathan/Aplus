@@ -4,9 +4,11 @@ import json
 import sys
 
 
-def main():
+def main(vendor=None):
     from .market import DirectBaoStock
-    vendor = sys.argv[1] if len(sys.argv)>1 else 'baostock'
+    vendor = vendor or (sys.argv[1] if len(sys.argv)>1 else 'baostock')
+    if vendor not in ('baostock','tickflow','tencent'):
+        raise ValueError('Unknown provider vendor')
     if vendor == 'tickflow':
         from .tickflow import TickFlowHTTP
         provider = TickFlowHTTP()

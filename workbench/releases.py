@@ -58,6 +58,11 @@ def read_catalog(root):
 
 def identity(root, local=None, *, target=None, git_reader=None):
     """Unknown old builds stay unknown; matching remote content belongs to exact SHA."""
+    if not target and (Path(root)/'installed-release.json').is_file():
+        from .release_identity import read_identity
+        value=read_identity(root)
+        return dict(version=value['version'],date=value['version'][:10].replace('.','-'),
+                    notes=[],channel='preview' if value['preview'] else 'stable',head=value['commit'])
     catalog = read_catalog(root)
     sha = target or (local or {}).get("head", "")
     exact = next((r for r in (catalog or {}).get("history", [])
@@ -66,16 +71,15 @@ def identity(root, local=None, *, target=None, git_reader=None):
     if target and git_reader and COMMIT.fullmatch(target):
         try:
             remote = parse_catalog(git_reader(target, "release_catalog.json"))
-            build = remote["build"]
-            row = next(r for r in remote["history"] if r["pr"] == build["pr"])
-            return dict(version=build["version"], date=build["date"], notes=row["notes"],
+            row = next(r for r in remote["history"] if r.get('commit')==target and r['status']=='released')
+            return dict(version=row["version"], date=row["date"], notes=row["notes"],
                         channel="main", head=sha)
         except (OSError, ValueError, TypeError, AttributeError, StopIteration):
             pass
     if exact:
         return dict(version=exact["version"], date=exact["date"], notes=exact["notes"],
                     channel="main", head=sha)
-    if not target and catalog:
+    if not target and catalog and not sha:
         build = catalog["build"]
         row = next(r for r in catalog["history"] if r["pr"] == build["pr"])
         return dict(version=build["version"], date=build["date"], notes=row["notes"],
@@ -86,6 +90,8 @@ def identity(root, local=None, *, target=None, git_reader=None):
 
 def version_label(release):
     if not release or not release.get("version"):
+        if release and COMMIT.fullmatch(release.get('head','')):
+            return '源码版 · '+release['head'][:7]
         return "未编号版本（旧安装）"
     suffix = " · 预览版" if release.get("channel") == "preview" else ""
     return "v" + release["version"] + suffix
