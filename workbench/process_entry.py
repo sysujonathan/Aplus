@@ -39,3 +39,10 @@ def chart_command(session):
     if getattr(sys, 'frozen', False):
         return [sys.executable, '--chart', str(session)]
     return [sys.executable, '-m', 'gui.chart_shell', str(session)]
+
+
+def growth_command(session):
+    """Open the same growth workspace in source and installed desktops."""
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, '--growth', str(session)]
+    return [sys.executable, '-m', 'gui.growth_shell', str(session)]

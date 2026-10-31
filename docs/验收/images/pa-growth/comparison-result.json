@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "synthetic": true,
+  "real_tk": true,
+  "real_chart_webview": true,
+  "real_growth_webview": true,
+  "checks": [
+    "canonical_drawing_view_and_period_loaded_in_real_chart",
+    "growth_navigation_returns_same_chart_process_and_context",
+    "actual_comparison_opens_beside_original_chart",
+    "comparison_close_preserves_saved_drawings_view_and_period",
+    "same_embedded_process_token_identity_without_reload",
+    "no_live_price_fetch",
+    "ordinary_close_guard_acknowledged_all_children"
+  ],
+  "failures": [],
+  "phase": "complete",
+  "chart_pid": 20080,
+  "chart_token": 1,
+  "chart_identity": "6c94b2bd4ef34dec7634c431081b78895b29b8b8053b82f20422ff1b498d272e",
+  "growth_pid": 13632,
+  "comparison_pid": 25320
+}

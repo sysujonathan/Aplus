@@ -60,7 +60,7 @@ def inspect_data(root):
         if not {'meta','datasets','observations','plans','jobs'} <= tables:
             raise ValueError('这份数据库不是可直接接续的 Aplus 数据；原件未修改。')
         row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if not row or row[0] not in {str(v) for v in range(1,9)}:
+        if not row or row[0] not in {str(v) for v in range(1,10)}:
             raise ValueError('该数据版本尚不支持接续；请保留原件交维护者迁移。')
         counts = {name: db.execute('SELECT COUNT(*) FROM '+name).fetchone()[0]
                   if name in tables else 0 for name in ('watchlist','accounts','positions','position_fills','closed_trades')}

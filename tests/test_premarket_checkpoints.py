@@ -59,7 +59,7 @@ def test_three_sources_and_receipts_serialize_short_connections_only(store, fram
     assert len(store.rows('SELECT id FROM datasets')) == 24
     assert len(store.rows("SELECT key FROM meta WHERE key LIKE 'unit:%'")) == 24
     assert len(store.rows("SELECT key FROM meta WHERE key LIKE 'receipt:%'")) == 24
-    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == '8'
+    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value'] == '9'
 
 
 def test_file_lock_precedes_db_writer_so_other_source_cannot_invert_locks(store):

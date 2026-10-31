@@ -32,7 +32,7 @@ class Launcher {
     static bool Manifest(Dictionary<string,object> target) {
         string version=Text(target,"version");
         if(!Version(version) || !Number(target,"protocol",1,1) || Text(target,"channel")!="stable" ||
-           !Number(target,"database_schema",8,8) || !target.ContainsKey("preview") ||
+           !Number(target,"database_schema",9,9) || !target.ContainsKey("preview") ||
            !(target["preview"] is bool) || (bool)target["preview"] ||
            !Regex.IsMatch(Text(target,"commit"),@"^[0-9a-f]{40}\z")) return false;
         var p=version.Split('.');long sequence=Int64.Parse(p[0]+p[1]+p[2])*10000+Int64.Parse(p[3]);

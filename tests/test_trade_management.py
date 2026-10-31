@@ -37,7 +37,7 @@ def test_v4_upgrade_preserves_plans_and_adds_manual_ledger(tmp_path):
     plan_id = make_plan(store)
     store.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
     reopened = Store(tmp_path)
-    assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "8"
+    assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "9"
     assert reopened.rows("SELECT id FROM plans")[0]["id"] == plan_id
     assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='accounts'")
     assert reopened.rows("SELECT name FROM sqlite_master WHERE type='table' AND name='executions'")

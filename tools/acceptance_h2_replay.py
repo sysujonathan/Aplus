@@ -33,8 +33,8 @@ def main():
     with sqlite3.connect((source / 'workbench.sqlite3').as_uri() + '?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
         version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if not version or version[0] not in ('4', '5', '6', '7', '8'):
-            raise ValueError('源目录必须是新 Aplus 的兼容数据仓（版本 4～8）')
+        if not version or version[0] not in ('4', '5', '6', '7', '8', '9'):
+            raise ValueError('源目录必须是新 Aplus 的兼容数据仓（版本 4～9）')
         snapshots = []
         for code in args.codes:
             row = db.execute("SELECT * FROM datasets WHERE code=? AND timeframe='daily' AND source='baostock' "

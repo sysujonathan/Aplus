@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "real_webview": true,
+  "real_store": true,
+  "synthetic": true,
+  "checks": [
+    "paste_event_original_image",
+    "failure_keeps_draft",
+    "durable_save_ack",
+    "batch_drop_independent_cases",
+    "duplicate_warning_no_merge",
+    "three_keyword_partial_search",
+    "no_result_feedback",
+    "original_exact_bytes_zoom_back",
+    "append_only_research_note",
+    "minimal_judgment_then_evidence_no_score",
+    "trial_original_respects_judgment_boundary",
+    "knowledge_case_link_and_evidence_growth",
+    "fresh_store_reads_persisted_records",
+    "selected_original_only_and_cached_fullscreen",
+    "recent_case_outside_first_page"
+  ]
+}

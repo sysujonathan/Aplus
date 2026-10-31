@@ -109,7 +109,7 @@ def test_reference_write_never_changes_any_business_table(tmp_path):
     before={t:store.rows('SELECT * FROM '+t) for t in tables}
     store.save_account_reconciliation(aid,ref)
     assert before=={t:store.rows('SELECT * FROM '+t) for t in tables}
-    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='8'
+    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='9'
 
 
 def test_unpriced_backdated_stock_is_pending_not_silently_latest(tmp_path):

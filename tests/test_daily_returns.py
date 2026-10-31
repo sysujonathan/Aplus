@@ -96,7 +96,7 @@ def test_broker_priority_account_isolation_reopen_and_atomic_validation(tmp_path
         store.save_daily_returns(account, [rows[0], {"date": "wrong", "pnl": 1}])
     assert store.list_daily_returns(account) == rows
     assert store.rows("SELECT * FROM accounts") == before
-    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "8"
+    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "9"
 
 
 def test_calendar_parser_preserves_zero_holiday_and_rejects_overlapping_conflicts():

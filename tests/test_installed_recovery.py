@@ -44,7 +44,7 @@ def interrupted(tmp_path,monkeypatch,binaries):
     root=tmp_path/'installed';old=root/'app/2026.10.30.1/AplusApp.exe'
     old.parent.mkdir(parents=True);shutil.copy2(binaries[1],old)
     data.atomic_json(old.parent/'_internal'/'installed-release.json',dict(
-        version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True))
+        version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True,database_schema=9))
     shutil.copy2(binaries[0],root/'Aplus.exe')
     request=dict(install_root=str(root),target=manifest(),runtime=str(tmp_path/'retained-data'))
     data.atomic_json(folder/'request.json',request)
@@ -184,6 +184,19 @@ def test_shipping_recovery_rejects_invalid_identity_even_with_ack(interrupted,ch
     assert subprocess.run([str(root/'Aplus.exe'),'--recover-only'],timeout=30).returncode!=0
     assert (root/'update-pending.json').read_bytes()==before
     assert (root/'current.txt').read_text()=='2026.10.30.1'
+
+
+@pytest.mark.parametrize('schema', [8, 10, True, '9'])
+def test_native_recovery_refuses_cross_schema_or_untyped_manifest(interrupted, schema):
+    root, folder, record = interrupted
+    request = json.loads((folder/'request.json').read_text())
+    request['target']['database_schema'] = schema
+    data.atomic_json(folder/'request.json', request)
+    before = (root/'update-pending.json').read_bytes()
+    assert subprocess.run([str(root/'Aplus.exe'), '--recover-only'], timeout=10).returncode != 0
+    assert (root/'update-pending.json').read_bytes() == before
+    assert (root/'current.txt').read_text() == '2026.10.30.1'
+    assert (root.parent/'retained-data/important.txt').read_bytes() == b'unchanged business fixture'
 
 
 def test_launcher_inherits_proxy_keys_differing_only_in_case(interrupted):

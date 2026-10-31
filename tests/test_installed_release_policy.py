@@ -40,7 +40,7 @@ def test_unsigned_official_release_accepted_even_when_main_advances(tmp_path,mon
     assert update.load_manifest(api=api,opener=opener)==value
     path=tmp_path/'unsigned.exe';path.write_bytes(b'installer bytes')
     monkeypatch.setattr(update,'load_manifest',lambda:value)
-    old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True)
+    old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True,database_schema=9)
     update.verify_candidate(value,path,old)
     assert '/commits/v2026.10.30.2' in calls
 
@@ -73,7 +73,7 @@ def test_release_binding_is_checked(case):
 @pytest.mark.parametrize('change',['byte','truncate','extra','downgrade','changed_release'])
 def test_helper_rechecks_bytes_order_and_current_official_release(tmp_path,monkeypatch,change):
     value=manifest();path=tmp_path/'setup.exe';path.write_bytes(b'installer bytes')
-    old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True)
+    old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True,database_schema=9)
     official_value=copy.deepcopy(value)
     if change=='byte':path.write_bytes(b'Installer bytes')
     elif change=='truncate':path.write_bytes(b'installer')
@@ -108,7 +108,7 @@ def test_new_source_commit_does_not_inherit_old_catalog_build_label():
 
 def test_manual_check_messages_include_real_running_and_target_versions():
     value=manifest();_,_,api,opener,_=official(value)
-    old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True)
+    old=dict(version='2026.10.30.1',sequence=202610300001,commit='b'*40,preview=True,database_schema=9)
     text=update.check_update(old,api=api,opener=opener)['message']
     assert 'v2026.10.30.1' in text and 'v2026.10.30.2' in text
 

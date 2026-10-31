@@ -89,6 +89,7 @@ class AplusMainWindow(ttk.Window):
         self._closing = False
         self._chart_mode = "candidates"
         self._candidate_source = REALTIME_MARKET_SOURCE
+        self._case_comparisons = []
         self._build_ui()
         self._load_strategies()
         import sys
@@ -100,6 +101,8 @@ class AplusMainWindow(ttk.Window):
         self.toolbar._on_scan_started = self.version_controller.scan_hint
         if enable_tray:
             self._setup_tray()
+        else:
+            self.protocol('WM_DELETE_WINDOW', self._exit_from_tray)
         from .chart_alerts import ChartAlertMonitor
         self.chart_alert_monitor = ChartAlertMonitor(self, self.store)
         self.chart_alert_monitor.start()
@@ -122,6 +125,7 @@ class AplusMainWindow(ttk.Window):
             ("afterhours", "盘后回测"),
             ("strategy", "策略迭代"),
             ("other", "交易管理"),
+            ("growth", "PA 成长空间"),
         )
         for key, label in section_names:
             button = ttk.Button(
@@ -132,6 +136,9 @@ class AplusMainWindow(ttk.Window):
             )
             button.pack(side=tk.LEFT, padx=(0, 5), ipady=2)
             self._section_buttons[key] = button
+
+        ttk.Button(self.section_nav, text='历史案例对照', bootstyle='secondary',
+                   command=self._open_case_comparison).pack(side=tk.LEFT, padx=(12, 0), ipady=2)
 
         self.page_host = ttk.Frame(self)
         self.page_host.grid(row=1, column=0, sticky=tk.NSEW)
@@ -247,6 +254,9 @@ class AplusMainWindow(ttk.Window):
             elif key == 'other':
                 from .trade_management import TradeManagementFrame
                 page = TradeManagementFrame(self.page_host, self.store)
+            elif key == 'growth':
+                from .growth_space import GrowthSpacePage
+                page = GrowthSpacePage(self.page_host, self.store)
             else:
                 raise ValueError('未知业务页面')
             page.grid(row=0, column=0, sticky=tk.NSEW)
@@ -274,13 +284,34 @@ class AplusMainWindow(ttk.Window):
             self.strategy_iteration.refresh()
         if key == 'afterhours':
             self.afterhours.refresh()
+        # Native WebView children must be hidden with their parent page, so a
+        # chart cannot cover the PA page or steal its clipboard input.
+        for name, page in self._pages.items():
+            if name != key:
+                page.grid_remove()
+        self._pages[key].grid(row=0, column=0, sticky=tk.NSEW)
         self._pages[key].tkraise()
+        if key == 'growth':
+            self.after_idle(self._pages[key].start)
         for name, button in self._section_buttons.items():
             button.configure(
                 bootstyle="primary" if name == key else "secondary"
             )
         if key == "other":
             self.trade_management.reload()
+
+    def _open_case_comparison(self):
+        item = self.chart.current_item()
+        if item is None:
+            messagebox.showinfo('历史案例对照', '先选择要对照的行情标的。', parent=self)
+            return
+        from .growth_space import open_chart_cases
+        try:
+            host = open_chart_cases(self, self.store, item)
+            self._case_comparisons = [value for value in self._case_comparisons if not value.closed()]
+            self._case_comparisons.append(host)
+        except Exception as exc:
+            messagebox.showerror('案例暂时无法打开', str(exc), parent=self)
 
     def _setup_tray(self):
         """关闭窗口时驻留系统托盘；托盘回调不直接跨线程操作 Tk。"""
@@ -310,7 +341,7 @@ class AplusMainWindow(ttk.Window):
             self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
             self.after(200, self._poll_tray_actions)
         except Exception as exc:
-            self.protocol("WM_DELETE_WINDOW", self.destroy)
+            self.protocol("WM_DELETE_WINDOW", self._exit_from_tray)
             self._status_text.set(f"系统托盘启动失败：{exc}")
 
     def _hide_to_tray(self):
@@ -372,6 +403,10 @@ class AplusMainWindow(ttk.Window):
         import time
         chart = getattr(self, 'chart', None)
         hosts = chart.embedded_hosts() if chart else []
+        page = getattr(self, '_pages', {}).get('growth')
+        if page is not None and page.host is not None:
+            hosts.append(page.host)
+        hosts.extend(getattr(self, '_case_comparisons', []))
         live = [host for host in hosts if not host.closed()]
         self._chart_exit_wait = True
         try:
@@ -380,11 +415,16 @@ class AplusMainWindow(ttk.Window):
             deadline = time.monotonic() + 15
             while any(not host.closed() for host in live) and time.monotonic() < deadline:
                 self.update()
+                if any(not host.closed() and not host.closing for host in live):
+                    break
                 time.sleep(.03)
         finally:
             self._chart_exit_wait = False
         if any(not host.closed() for host in live):
             self._closing = False
+            if any(not host.closed() and not host.closing for host in live):
+                self._resume_embedded_charts()
+                return False
             messagebox.showwarning('图表暂未关闭',
                 '图表关闭确认未完成，可能是通信中断或分析尚未保存。主窗口已保留，请查看图表提示后重试。', parent=self)
             self._resume_embedded_charts()
