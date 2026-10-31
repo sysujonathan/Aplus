@@ -80,14 +80,14 @@ def test_chart_process_command_uses_frozen_dispatch(monkeypatch):
 def manifest():
     raw=b'installer bytes'
     return dict(protocol=1,channel='stable',version='2026.10.30.2',sequence=202610300002,
-        commit='a'*40,database_schema=8,preview=False,
+        commit='a'*40,database_schema=9,preview=False,
         package=dict(url=update.PACKAGE_BASE+'v2026.10.30.2/AplusSetup-2026.10.30.2-x64.exe',
                      bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest()))
 
 
 @pytest.mark.parametrize('field,value',[
     ('protocol',2),('channel','preview'),('sequence',True),('commit','abcd'),
-    ('version','../../bad'),('database_schema',9),('preview',True)])
+    ('version','../../bad'),('database_schema',10),('preview',True)])
 def test_invalid_release_is_rejected(field,value):
     candidate=manifest();candidate[field]=value
     with pytest.raises(ValueError):update.validate_manifest(candidate)
@@ -149,7 +149,7 @@ def test_official_release_needs_exact_main_push_acceptance(ci):
             name='A acceptance',path='.github/workflows/checks.yml',id=1,
             status='in_progress' if ci=='in_progress' else 'completed',conclusion=ci)])
     opener=lambda *a,**k:io.BytesIO(json.dumps(value).encode())
-    result=update.check_update(dict(sequence=1),api=api,opener=opener)
+    result=update.check_update(dict(sequence=1,database_schema=9),api=api,opener=opener)
     assert (result['state']=='available') is (ci=='success')
 
 
@@ -174,7 +174,7 @@ def test_early_schema_binding_backs_up_before_existing_store_migration(tmp_path,
     profile=json.loads((home/'data.json').read_text())
     assert database.read_bytes()==before==Path(profile['backup']).read_bytes()
     store=Store(root)
-    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='8'
+    assert store.rows("SELECT value FROM meta WHERE key='schema_version'")[0]['value']=='9'
     assert store.rows("SELECT notes FROM plans WHERE id='p'")[0]['notes']=='retain historical plan'
     assert Path(profile['backup']).read_bytes()==before
 

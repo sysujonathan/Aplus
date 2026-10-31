@@ -58,6 +58,7 @@ class Store:
         self.root = resolve_runtime_root(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "workbench.sqlite3"
+        self._pa_migration_backup()
         with self.connect() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -99,7 +100,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id,seq);
             """)
             version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-            if version not in {'1', '2', '3', '4', '5', '6', '7', '8'}:
+            if version not in {'1', '2', '3', '4', '5', '6', '7', '8', '9'}:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             db.execute("CREATE TABLE IF NOT EXISTS sync_coverage(code TEXT PRIMARY KEY, "
                        "dataset_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL)")
@@ -162,7 +163,116 @@ class Store:
                        "ON closed_trades(account_id,close_date)")
             db.execute("CREATE INDEX IF NOT EXISTS cash_flows_account_date "
                        "ON cash_flows(account_id,flow_date)")
-            db.execute("UPDATE meta SET value='8' WHERE key='schema_version'")
+            # v9 only adds private PA research records. Existing trading tables
+            # and chart documents are neither rewritten nor backfilled.
+            db.execute("CREATE TABLE IF NOT EXISTS pa_cases("
+                       "id TEXT PRIMARY KEY, owner TEXT NOT NULL, "
+                       "status TEXT NOT NULL CHECK(status='private_draft'), "
+                       "title TEXT NOT NULL DEFAULT '', memory TEXT NOT NULL DEFAULT '', "
+                       "keywords TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '[]', "
+                       "topic_ids TEXT NOT NULL DEFAULT '[]', "
+                       "symbol TEXT NOT NULL DEFAULT '', timeframe TEXT NOT NULL DEFAULT '', "
+                       "market TEXT NOT NULL DEFAULT '', data_kind TEXT NOT NULL "
+                       "CHECK(data_kind IN ('imported','test')), "
+                       "created TEXT NOT NULL, updated TEXT NOT NULL, viewed TEXT NOT NULL DEFAULT '')")
+            db.execute("CREATE TABLE IF NOT EXISTS pa_assets("
+                       "id TEXT PRIMARY KEY, owner TEXT NOT NULL, sha256 TEXT NOT NULL, "
+                       "path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mime TEXT NOT NULL, "
+                       "width INTEGER NOT NULL, height INTEGER NOT NULL, bytes INTEGER NOT NULL, created TEXT NOT NULL)")
+            db.execute("CREATE INDEX IF NOT EXISTS pa_assets_owner_sha ON pa_assets(owner,sha256)")
+            db.execute("CREATE TABLE IF NOT EXISTS pa_case_images("
+                       "case_id TEXT NOT NULL, asset_id TEXT NOT NULL, ordinal INTEGER NOT NULL, "
+                       "PRIMARY KEY(case_id,asset_id))")
+            db.execute("CREATE TABLE IF NOT EXISTS pa_notes("
+                       "id TEXT PRIMARY KEY, case_id TEXT NOT NULL, owner TEXT NOT NULL, "
+                       "author TEXT NOT NULL, text TEXT NOT NULL, created TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS pa_trials("
+                       "id TEXT PRIMARY KEY, case_id TEXT NOT NULL, owner TEXT NOT NULL, "
+                       "judgment TEXT NOT NULL, depth TEXT NOT NULL, details TEXT NOT NULL, created TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS pa_topic_notes("
+                       "id TEXT PRIMARY KEY, owner TEXT NOT NULL, topic_id TEXT NOT NULL, "
+                       "text TEXT NOT NULL, created TEXT NOT NULL)")
+            db.execute("CREATE INDEX IF NOT EXISTS pa_cases_owner_updated ON pa_cases(owner,updated)")
+            db.execute("UPDATE meta SET value='9' WHERE key='schema_version'")
+
+    def _pa_migration_backup(self):
+        """Take a consistent recovery copy before any pre-v9 database writes.
+
+        A new empty data home needs no backup. Future versions are refused
+        before initialization can change even their ordinary tables.
+        """
+        if not self.path.exists():
+            return
+        with contextlib.closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as source:
+            has_meta = source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
+            row = source.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() if has_meta else None
+            version = str(row[0]) if row else '1'
+            if version not in {'1', '2', '3', '4', '5', '6', '7', '8', '9'}:
+                raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
+            if version == '9':
+                return
+            folder = (self.root / 'backups').resolve()
+            if not folder.is_relative_to(self.root):
+                raise ValueError('升级备份必须保存在本机运行目录内')
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / ('pre-pa-v' + version + '-' + uuid.uuid4().hex + '.sqlite3')
+            temporary = folder / ('.pa-' + uuid.uuid4().hex + '.tmp')
+            try:
+                with contextlib.closing(sqlite3.connect(temporary)) as recovery:
+                    source.backup(recovery)
+                with temporary.open('r+b') as handle:
+                    os.fsync(handle.fileno())
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def pa_save_case(self, images, metadata=None, *, case_id=None, allow_duplicate=False):
+        from .pa_growth import save_case
+        return save_case(self, images, metadata, case_id=case_id, allow_duplicate=allow_duplicate)
+
+    def pa_find_duplicates(self, data):
+        from .pa_growth import find_duplicates
+        return find_duplicates(self, data)
+
+    def pa_search(self, query='', filters=None, limit=100, offset=0):
+        from .pa_growth import search
+        return search(self, query, filters, limit, offset)
+
+    def pa_case(self, case_id, touch=True):
+        from .pa_growth import read_case
+        return read_case(self, case_id, touch=touch)
+
+    def pa_image(self, asset_id):
+        from .pa_growth import read_image
+        return read_image(self, asset_id)
+
+    def pa_update_case(self, case_id, metadata):
+        from .pa_growth import update_case
+        return update_case(self, case_id, metadata)
+
+    def pa_add_note(self, case_id, text):
+        from .pa_growth import add_note
+        return add_note(self, case_id, text)
+
+    def pa_add_trial(self, case_id, judgment, depth='quick', details=None):
+        from .pa_growth import add_trial
+        return add_trial(self, case_id, judgment, depth, details)
+
+    def pa_topic_note(self, topic_id, text):
+        from .pa_growth import topic_note
+        return topic_note(self, topic_id, text)
+
+    def pa_growth(self):
+        from .pa_growth import growth
+        return growth(self)
+
+    def pa_backup(self, path):
+        from .pa_growth import backup
+        return backup(self, path)
+
+    def pa_restore(self, path):
+        from .pa_growth import restore
+        return restore(self, path)
 
     @contextlib.contextmanager
     def connect(self):

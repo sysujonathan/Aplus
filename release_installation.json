@@ -5,8 +5,8 @@
   "requirements_sha256": "5bf2f2557202a04e354c20b3adbf5009437f69af9b4506227600d399f44048c6",
   "requirements_hashes_sha256": "10b0040d07553a6f128070e32842178ee5855836c00c8a021694fb0f5ff73b3f",
   "database": {
-    "schema": 8,
-    "supported_from": [1, 2, 3, 4, 5, 6, 7, 8],
-    "migration": "store-v8"
+    "schema": 9,
+    "supported_from": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    "migration": "store-v9"
   }
 }

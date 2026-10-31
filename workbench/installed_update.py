@@ -18,6 +18,7 @@ from .release_identity import read_identity, validate_identity, version_label, v
 
 REPO='sysujonathan/Aplus'
 PACKAGE_BASE='https://github.com/'+REPO+'/releases/download/'
+DATABASE_SCHEMA=9
 
 
 def current_release():
@@ -45,9 +46,18 @@ def validate_manifest(value):
         raise ValueError('更新包校验信息缺失。')
     if type(package.get('bytes')) is not int or not 0<package['bytes']<=2_000_000_000:
         raise ValueError('更新包大小无效。')
-    if type(value.get('database_schema')) is not int or value['database_schema']!=8:
+    # Release tooling must still inspect the previous schema-eight release.
+    # Admission to a real update stays separate and same-schema below.
+    if type(value.get('database_schema')) is not int or value['database_schema'] not in (8, DATABASE_SCHEMA):
         raise ValueError('此更新需要单独的数据兼容升级，当前版本继续可用。')
     return value
+
+
+def require_same_schema(target, current):
+    """An installer rollback cannot roll a migrated database back safely."""
+    schema=current.get('database_schema')
+    if type(schema) is not int or target['database_schema']!=schema:
+        raise ValueError('此更新需要单独的数据兼容升级，当前版本继续可用。')
 
 
 def load_manifest(api=github_json, opener=urlopen):
@@ -88,6 +98,7 @@ def check_update(current=None, *, api=github_json, opener=urlopen):
         current=current or current_release()
         prefix=('当前版本：'+version_label(current)+'。\n') if current.get('version') else ''
         target=load_manifest(api,opener)
+        require_same_schema(target,current)
         if target['sequence']<=current['sequence']:
             return dict(state='current',message=prefix+'当前已是最新版本。')
         return dict(state='available',target=target,message=prefix+'发现新版 '+version_label(target)+'，更新后自动重启。')
@@ -105,6 +116,7 @@ def verify_package(target,path):
 
 def verify_candidate(target,path,current):
     validate_identity(current)
+    require_same_schema(target,current)
     if load_manifest()!=target:
         raise ValueError('正式发布已变化，请重新检查。')
     if target['sequence']<=current['sequence']:

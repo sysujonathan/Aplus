@@ -19,6 +19,9 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == '--chart':
         from gui.chart_shell import main as chart
         return chart(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == '--growth':
+        from gui.growth_shell import main as growth
+        return growth(sys.argv[2:])
     if len(sys.argv) > 2 and sys.argv[1] == '--self-test':
         from workbench.strategies import verify_frozen, catalog
         from gui.chart_shell import ASSETS, webview_available
@@ -37,10 +40,12 @@ def main():
                       actual_strategy_files=[str(path) for path in paths],
                       actual_strategy_loaders=loaders,
                       chart_assets=(ASSETS/'index.html').exists(), webview=webview_available(),
+                      growth_assets=all((ROOT/'gui'/'pa_growth'/name).is_file()
+                                        for name in ('index.html','growth.css','growth.js')),
                       executable=sys.executable)
         Path(sys.argv[2]).write_text(json.dumps(report), encoding='utf-8')
-        if not report['chart_assets'] or not report['webview']:
-            raise RuntimeError('安装包图表组件不完整')
+        if not report['chart_assets'] or not report['webview'] or not report['growth_assets']:
+            raise RuntimeError('安装包图表或成长空间组件不完整')
         return
     if len(sys.argv) > 2 and sys.argv[1] == '--installed-update':
         from workbench.installed_update import worker

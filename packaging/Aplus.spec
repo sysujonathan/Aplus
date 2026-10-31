@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 root = Path(SPECPATH).parent
 datas = []
 datas.append((os.environ['APLUS_BUILD_METADATA'], '.'))
-for name in ('docs', 'workbench/evidence'):
+for name in ('docs', 'workbench/evidence', 'gui/pa_growth'):
     datas.append((str(root/name), name))
 for name in ('frozen_manifest.json', 'release_catalog.json', 'release_installation.json',
              'launch_dashboard.py', 'app.py', 'icon_aplus.ico'):
