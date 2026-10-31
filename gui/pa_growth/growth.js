@@ -28,10 +28,10 @@
   const S = {
     ready:false, page:'home', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
     query:'', filters:{symbol:'',timeframe:'',market:'',data_kind:''}, filterOpen:false,
-    searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, case:null, imageIndex:0,
+    searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, hasMore:false, case:null, imageIndex:0,
     studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
     captureCaseId:null, captureMetadata:{}, captureGroup:false, captureError:'', duplicateAllowed:false,
-    saving:0, staging:0, draftText:{}, original:null, topicId:null, topicParent:null, topicCases:[],
+    saving:0, staging:0, draftText:{}, original:null, topicId:null, topicParent:null, topicCases:[], topicSeq:0, topicLoading:false,
     trialCase:null, trialDepth:'quick', judgment:'', trialThought:'', marks:[], marking:false,
     trialRecord:null, trialReview:{}, context:null, dirtyMetadata:false, bootFailed:false,
   };
@@ -91,11 +91,13 @@
       const data = await api('bootstrap');
       S.boot = data;
       S.cases = data.cases || [];
+      S.hasMore = data.has_more === true;
       S.topics = data.topics || [];
       S.stats = data.stats || {};
       S.trials = data.trials || [];
       S.records = data.records || [];
       S.context = data.context || null;
+      if (S.context?.code || S.context?.symbol) S.page = 'library';
       S.ready = true;
       S.bootFailed = false;
       render();
@@ -112,7 +114,7 @@
     S.topics = data.topics || S.topics;
     S.trials = data.trials || [];
     S.records = data.records || [];
-    if (S.page === 'home') S.cases = data.cases || [];
+    if (S.page === 'home') { S.cases = data.cases || []; S.hasMore = data.has_more === true; }
     return data;
   }
   function navigation() {
@@ -142,7 +144,11 @@
   }
   function library() {
     const count = S.cases.length;
-    return `<section class="page">${contextBanner()}<div class="library-header between"><div><span class="eyebrow">CASE STUDIES</span><h1>案例研究</h1></div><div class="button-group"><button class="btn" data-action="paste">${icon('paste')} 粘贴</button><button class="btn primary" data-action="import">${icon('plus')} 收录截图</button></div></div>${searchBox(S.query)}<div class="between results-head"><span>${S.searchBusy ? '正在找图…' : `${count} 个案例${S.query ? ` · “${esc(S.query)}”` : ''}`}</span><button class="btn ghost small" data-action="toggle-filters" aria-expanded="${S.filterOpen}">${icon('filter')} 筛选${Object.values(S.filters).some(Boolean) ? ' · 已启用' : ''}</button></div>${S.filterOpen ? `<div class="filter-bar"><label>品种<input class="field" data-filter="symbol" value="${esc(S.filters.symbol)}" placeholder="名称或代码"></label><label>周期<input class="field" data-filter="timeframe" value="${esc(S.filters.timeframe)}" placeholder="如 日线、5m"></label><label>市场<input class="field" data-filter="market" value="${esc(S.filters.market)}" placeholder="如 A股、加密"></label><label>来源<select class="field" data-filter="data_kind"><option value="">全部</option><option value="imported" ${S.filters.data_kind === 'imported' ? 'selected' : ''}>个人导入</option><option value="test" ${S.filters.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label><button class="btn ghost small" data-action="clear-filters">清除</button></div>` : ''}<div id="search-results">${S.searchError ? `<div class="save-error">${esc(S.searchError)}<br><button class="link-button" data-action="search-now">重新搜索</button></div>` : count ? grid(S.cases) : `<div class="empty"><strong>${S.query || Object.values(S.filters).some(Boolean) ? '没有找到对应案例' : '还没有案例'}</strong><p>${S.query || Object.values(S.filters).some(Boolean) ? '试试更短的关键词，或清除筛选。' : '粘贴或导入一张截图。'}</p>${S.query || Object.values(S.filters).some(Boolean) ? '<button class="btn" data-action="reset-search">查看全部案例</button>' : '<button class="btn primary" data-action="import">收录截图</button>'}</div>`}</div></section>`;
+    const results = S.searchError && !count
+      ? `<div class="save-error">${esc(S.searchError)}<br><button class="link-button" data-action="search-now">重新搜索</button></div>`
+      : count ? grid(S.cases) : `<div class="empty"><strong>${S.query || Object.values(S.filters).some(Boolean) ? '没有找到对应案例' : '还没有案例'}</strong><p>${S.query || Object.values(S.filters).some(Boolean) ? '试试更短的关键词，或清除筛选。' : '粘贴或导入一张截图。'}</p>${S.query || Object.values(S.filters).some(Boolean) ? '<button class="btn" data-action="reset-search">查看全部案例</button>' : '<button class="btn primary" data-action="import">收录截图</button>'}</div>`;
+    const more = S.hasMore ? `${S.searchError && count ? `<div class="save-error" style="margin-top:18px">${esc(S.searchError)}</div>` : ''}<div style="display:flex;justify-content:center;margin-top:22px"><button class="btn" data-action="load-more" ${S.searchBusy ? 'disabled' : ''}>${S.searchBusy ? '正在加载…' : S.searchError ? '重试加载更多' : '加载更多案例'}</button></div>` : '';
+    return `<section class="page">${contextBanner()}<div class="library-header between"><div><span class="eyebrow">CASE STUDIES</span><h1>案例研究</h1></div><div class="button-group"><button class="btn" data-action="paste">${icon('paste')} 粘贴</button><button class="btn primary" data-action="import">${icon('plus')} 收录截图</button></div></div>${searchBox(S.query)}<div class="between results-head"><span>${S.searchBusy ? '正在找图…' : `${S.hasMore ? '已显示 ' : ''}${count} 个案例${S.query ? ` · “${esc(S.query)}”` : ''}`}</span><button class="btn ghost small" data-action="toggle-filters" aria-expanded="${S.filterOpen}">${icon('filter')} 筛选${Object.values(S.filters).some(Boolean) ? ' · 已启用' : ''}</button></div>${S.filterOpen ? `<div class="filter-bar"><label>品种<input class="field" data-filter="symbol" value="${esc(S.filters.symbol)}" placeholder="名称或代码"></label><label>周期<input class="field" data-filter="timeframe" value="${esc(S.filters.timeframe)}" placeholder="如 日线、5m"></label><label>市场<input class="field" data-filter="market" value="${esc(S.filters.market)}" placeholder="如 A股、加密"></label><label>来源<select class="field" data-filter="data_kind"><option value="">全部</option><option value="imported" ${S.filters.data_kind === 'imported' ? 'selected' : ''}>个人导入</option><option value="test" ${S.filters.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label><button class="btn ghost small" data-action="clear-filters">清除</button></div>` : ''}<div id="search-results">${results}${more}</div></section>`;
   }
   function study() {
     const c = S.case;
@@ -180,7 +186,7 @@
       const angle = -Math.PI / 2 + index * (Math.PI * 2 / Math.max(1,nodes.length));
       return {node,x:420 + Math.cos(angle) * 242,y:360 + Math.sin(angle) * 215};
     });
-    return `<section class="universe-page"><div class="universe-top"><span class="eyebrow">KNOWLEDGE UNIVERSE</span><h1>知识宇宙</h1><div class="universe-breadcrumbs"><button data-action="universe-root">价格行为</button>${parent ? `<span>›</span><span>${esc(parent.name)}</span>` : ''}</div></div><div class="universe-stage"><svg viewBox="0 0 840 720" role="group" aria-label="知识主题关系图"><circle class="halo" cx="420" cy="360" r="275"/><circle class="halo" cx="420" cy="360" r="160"/>${positions.map(({x,y}) => `<line class="relationship" x1="420" y1="360" x2="${x}" y2="${y}"/>`).join('')}<g class="${parent ? 'topic-node' : 'universe-center'}" ${parent ? 'data-action="universe-root"' : ''}><circle class="node-circle" cx="420" cy="360" r="52"/><circle class="node-core" cx="420" cy="344" r="5"/><text x="420" y="372">${esc(center.name)}</text></g>${positions.map(({node,x,y}) => `<g class="topic-node ${S.topicId === node.id ? 'selected' : ''}" data-action="select-topic" data-id="${esc(node.id)}" tabindex="0" role="button" aria-label="${esc(node.name)}"><circle class="halo" cx="${x}" cy="${y}" r="58"/><circle class="node-circle" cx="${x}" cy="${y}" r="42"/><circle class="node-core" cx="${x}" cy="${y - 8}" r="4"/><text x="${x}" y="${y + 12}">${esc(node.name)}</text><text class="node-count" x="${x}" y="${y + 68}">${Number(node.case_count || 0)} 个关联案例</text></g>`).join('')}</svg></div><aside class="universe-inspector"><span class="eyebrow">${parent ? '知识主题' : '主题探索'}</span><h2>${esc(selected?.name || parent?.name || '价格行为')}</h2><div class="topic-description">${esc(selected?.description || parent?.description || '从背景、结构与计划逐层探索。')}</div>${selected && S.topics.some(topic => topic.parent_id === selected.id) ? `<div class="form-actions"><button class="btn primary small" data-action="universe-enter" data-id="${esc(selected.id)}">进入主题 ${icon('arrow')}</button></div>` : ''}<div class="topic-case-list">${S.topicCases.length ? S.topicCases.slice(0,7).map(c => `<button class="topic-case" data-action="study-open" data-id="${esc(c.id)}"><img src="${esc(thumbOf(c))}" alt=""><span>${esc(caseTitle(c))}</span></button>`).join('') : '<div class="universe-empty">尚无关联案例。<br>可在案例资料中关联主题。</div>'}</div>${selected ? `<div class="topic-note-entry"><div class="rule"></div><label class="field-label" for="topic-note">个人研究</label><textarea id="topic-note" class="field" data-draft="topic-note:${esc(S.topicId)}" placeholder="留下新的认识">${esc(S.draftText['topic-note:' + S.topicId] || '')}</textarea><div class="form-actions"><button class="btn small" data-action="save-topic-note">保存记录</button></div></div>` : ''}</aside></section>`;
+    return `<section class="universe-page"><div class="universe-top"><span class="eyebrow">KNOWLEDGE UNIVERSE</span><h1>知识宇宙</h1><div class="universe-breadcrumbs"><button data-action="universe-root">价格行为</button>${parent ? `<span>›</span><span>${esc(parent.name)}</span>` : ''}</div></div><div class="universe-stage"><svg viewBox="0 0 840 720" role="group" aria-label="知识主题关系图"><circle class="halo" cx="420" cy="360" r="275"/><circle class="halo" cx="420" cy="360" r="160"/>${positions.map(({x,y}) => `<line class="relationship" x1="420" y1="360" x2="${x}" y2="${y}"/>`).join('')}<g class="${parent ? 'topic-node' : 'universe-center'}" ${parent ? 'data-action="universe-root"' : ''}><circle class="node-circle" cx="420" cy="360" r="52"/><circle class="node-core" cx="420" cy="344" r="5"/><text x="420" y="372">${esc(center.name)}</text></g>${positions.map(({node,x,y}) => `<g class="topic-node ${S.topicId === node.id ? 'selected' : ''}" data-action="select-topic" data-id="${esc(node.id)}" tabindex="0" role="button" aria-label="${esc(node.name)}"><circle class="halo" cx="${x}" cy="${y}" r="58"/><circle class="node-circle" cx="${x}" cy="${y}" r="42"/><circle class="node-core" cx="${x}" cy="${y - 8}" r="4"/><text x="${x}" y="${y + 12}">${esc(node.name)}</text><text class="node-count" x="${x}" y="${y + 68}">${Number(node.case_count || 0)} 个关联案例</text></g>`).join('')}</svg></div><aside class="universe-inspector"><span class="eyebrow">${parent ? '知识主题' : '主题探索'}</span><h2>${esc(selected?.name || parent?.name || '价格行为')}</h2><div class="topic-description">${esc(selected?.description || parent?.description || '从背景、结构与计划逐层探索。')}</div>${selected && S.topics.some(topic => topic.parent_id === selected.id) ? `<div class="form-actions"><button class="btn primary small" data-action="universe-enter" data-id="${esc(selected.id)}">进入主题 ${icon('arrow')}</button></div>` : ''}<div class="topic-case-list">${S.topicLoading ? '<div class="universe-empty">正在查找关联案例…</div>' : S.topicCases.length ? S.topicCases.slice(0,7).map(c => `<button class="topic-case" data-action="study-open" data-id="${esc(c.id)}"><img src="${esc(thumbOf(c))}" alt=""><span>${esc(caseTitle(c))}</span></button>`).join('') : '<div class="universe-empty">尚无关联案例。<br>可在案例资料中关联主题。</div>'}</div>${selected ? `<div class="topic-note-entry"><div class="rule"></div><label class="field-label" for="topic-note">个人研究</label><textarea id="topic-note" class="field" data-draft="topic-note:${esc(S.topicId)}" placeholder="留下新的认识">${esc(S.draftText['topic-note:' + S.topicId] || '')}</textarea><div class="form-actions"><button class="btn small" data-action="save-topic-note">保存记录</button></div></div>` : ''}</aside></section>`;
   }
   function growth() {
     const stats = S.stats;
@@ -205,31 +211,45 @@
       render();
     } else render();
   }
-  async function search(preserveFocus = true) {
+  async function search(preserveFocus = true, append = false) {
+    if (append && (S.searchBusy || !S.hasMore)) return;
     const seq = ++S.searchSeq;
-    const start = $('#search-input')?.selectionStart;
+    const query = S.query;
+    const filters = {...S.filters};
+    const offset = append ? S.cases.length : 0;
+    if (!append) { S.cases = []; S.hasMore = false; }
     S.searchBusy = true; S.searchError = '';
+    const resultsLabel = $('.results-head > span');
+    if (resultsLabel) resultsLabel.textContent = append ? '正在加载…' : '正在找图…';
+    const moreButton = $('[data-action="load-more"]');
+    if (moreButton) { moreButton.disabled = true; moreButton.textContent = '正在加载…'; }
     try {
-      const result = await api('search_cases',S.query,S.filters);
-      if (seq !== S.searchSeq || S.page !== 'library') return;
-      S.cases = result.cases || [];
+      const result = await api('search_cases',query,filters,offset);
+      if (seq !== S.searchSeq || S.page !== 'library' || query !== S.query || JSON.stringify(filters) !== JSON.stringify(S.filters)) return;
+      S.cases = append ? [...S.cases,...(result.cases || [])] : result.cases || [];
+      S.hasMore = result.has_more === true;
     } catch (error) {
       if (seq !== S.searchSeq) return;
-      S.cases = []; S.searchError = error.message;
+      if (!append) { S.cases = []; S.hasMore = false; }
+      S.searchError = error.message;
     } finally {
       if (seq === S.searchSeq) {
         S.searchBusy = false;
         if (S.page === 'library') {
           const active = document.activeElement;
           const focused = preserveFocus && active?.id === 'search-input';
+          const start = focused ? active.selectionStart : null;
+          const end = focused ? active.selectionEnd : null;
           const filter = preserveFocus && active?.dataset?.filter;
           const filterSelection = filter ? active.selectionStart : null;
+          const moreFocused = preserveFocus && active?.dataset?.action === 'load-more';
           render();
-          if (focused) { $('#search-input')?.focus(); try { $('#search-input')?.setSelectionRange(start,start); } catch (_) { /* search fields may not expose a selection */ } }
+          if (focused) { $('#search-input')?.focus({preventScroll:true}); try { $('#search-input')?.setSelectionRange(start,end); } catch (_) { /* search fields may not expose a selection */ } }
           if (filter) {
-            const field = $(`[data-filter="${filter}"]`); field?.focus();
+            const field = $(`[data-filter="${filter}"]`); field?.focus({preventScroll:true});
             try { field?.setSelectionRange(filterSelection,filterSelection); } catch (_) { /* select fields have no text selection */ }
           }
+          if (moreFocused && S.hasMore) $('[data-action="load-more"]')?.focus({preventScroll:true});
         }
       }
     }
@@ -518,11 +538,33 @@
   }
   async function selectTopic(id,enter = false) {
     if (id === 'root') return;
+    const previous = $('#topic-note');
+    if (previous?.dataset?.draft?.startsWith('topic-note:')) S.draftText[previous.dataset.draft] = previous.value;
+    const seq = ++S.topicSeq;
     S.topicId = id;
     if (enter) S.topicParent = id;
-    const result = await api('search_cases','',{topic_id:id});
-    S.topicCases = result.cases || [];
+    S.topicCases = []; S.topicLoading = true;
     render();
+    try {
+      const result = await api('search_cases','',{topic_id:id});
+      if (seq !== S.topicSeq || S.topicId !== id || S.page !== 'universe') return;
+      const field = $('#topic-note');
+      const key = 'topic-note:' + id;
+      const currentField = field?.dataset?.draft === key;
+      const focused = currentField && document.activeElement === field;
+      const start = focused ? field.selectionStart : null;
+      const end = focused ? field.selectionEnd : null;
+      if (currentField) S.draftText[key] = field.value;
+      S.topicCases = result.cases || []; S.topicLoading = false;
+      render();
+      if (focused) {
+        const updated = $('#topic-note'); updated?.focus({preventScroll:true});
+        updated?.setSelectionRange(start,end);
+      }
+    } catch (error) {
+      if (seq !== S.topicSeq || S.topicId !== id || S.page !== 'universe') return;
+      S.topicLoading = false; render(); toast(error.message,true);
+    }
   }
   async function openTopic(id) {
     S.page = 'universe'; S.topicId = id;
@@ -530,14 +572,16 @@
     await selectTopic(id,false);
   }
   async function saveTopicNote() {
-    const text = $('#topic-note')?.value.trim();
-    if (!text || !S.topicId) { toast('先写下个人研究。'); return; }
+    const field = $('#topic-note');
+    const topicId = S.topicId;
+    const text = field?.value.trim();
+    if (!text || !topicId || field.dataset.draft !== 'topic-note:' + topicId) { toast('先写下个人研究。'); return; }
     if (S.saving) return;
     S.saving++;
     let committed = false;
     const button = $('[data-action="save-topic-note"]'); button.disabled = true; button.textContent = '正在保存…';
     try {
-      await api('add_topic_note',S.topicId,text); committed = true; S.draftText['topic-note:' + S.topicId] = '';
+      await api('add_topic_note',topicId,text); committed = true; S.draftText['topic-note:' + topicId] = '';
       render(); toast('主题研究已保存');
       await refreshData();
     } catch (error) { toast(committed ? `主题研究已保存，列表暂时无法刷新。${error.message}` : error.message,true); button.disabled = false; button.textContent = '保存记录'; }
@@ -565,6 +609,7 @@
       case 'navigate': return navigate(element.dataset.page);
       case 'retry-boot': return boot();
       case 'search-now': S.query = ($('#home-search') || $('#search-input'))?.value.trim() || ''; if (S.page !== 'library') { S.page = 'library'; render(); } return search();
+      case 'load-more': return search(true,true);
       case 'toggle-filters': S.filterOpen = !S.filterOpen; render(); break;
       case 'clear-filters': S.filters = {symbol:'',timeframe:'',market:'',data_kind:''}; render(); return search(false);
       case 'reset-search': S.query = ''; S.filters = {symbol:'',timeframe:'',market:'',data_kind:''}; render(); return search(false);
@@ -606,7 +651,7 @@
       case 'trial-image': S.imageIndex = Number(element.dataset.index); render(); break;
       case 'select-topic': return selectTopic(element.dataset.id,false);
       case 'universe-enter': return selectTopic(element.dataset.id,true);
-      case 'universe-root': S.topicParent = null; S.topicId = null; S.topicCases = []; render(); break;
+      case 'universe-root': S.topicSeq++; S.topicParent = null; S.topicId = null; S.topicCases = []; S.topicLoading = false; render(); break;
       case 'open-topic': return openTopic(element.dataset.id);
       case 'save-topic-note': return saveTopicNote();
       case 'backup': return backupDialog();

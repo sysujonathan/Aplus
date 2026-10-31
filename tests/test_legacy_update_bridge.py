@@ -382,9 +382,10 @@ def test_double_click_transition_launcher_routes_selected_install(tmp_path):
 
 @pytest.mark.skipif(os.name != 'nt', reason='Windows VBS and native desktop update workflow')
 def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_bridge_root, request):
-    """Real historical tree + candidate tree; CI authority is synthetic until merge.
+    """a192 -> declared schema-eight release -> committed schema-nine candidate.
 
-    Creates the complete hashed venv once. Never references Aplus_daily/runtime.
+    Both hops use real startup acknowledgements. Only CI authority is synthetic;
+    the unknown-source direct migration stays blocked. No user library is used.
     """
     owned_processes = request.node.bridge_processes
     root = short_bridge_root/'daily'
@@ -395,18 +396,13 @@ def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_b
     git(root, 'config', 'core.autocrlf', 'false')
     git(root, 'remote', 'set-url', 'origin', v.REMOTE)
     base = 'a192515369da647c586a2d7609071cda5bd00d75'
+    schema_eight = 'ec85b8cee32692c18d25f8a309675763140f5169'
     source_head = git(ROOT, 'rev-parse', 'HEAD')
     # Actions checkout may be shallow and have no origin/main tracking ref.
     ensure_candidate_history(root,source_head,base)
-    git(root, 'switch', '-c', 'candidate', source_head)
-    for name in ('workbench/version_update.py', 'release_installation.json', 'requirements-hashes.txt',
-                 'tools/maintenance_update.py', 'tools/legacy_update_bootstrap.py', '安全过渡更新.vbs', '启动A.vbs'):
-        (root/name).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT/name, root/name)
-    # In CI these files are already committed. The candidate still needs a
-    # distinct identity for the two-release simulation, even with identical bytes.
-    git(root, 'add', '.'); git(root, 'commit', '--allow-empty', '-m', 'candidate bridge release')
+    git(root, 'switch', '-c', 'candidate', schema_eight)
     target = git(root, 'rev-parse', 'HEAD')
+    assert v.release_installation(root, target)['database']['schema'] == 8
     # A main push checkout is cloned with an existing local main branch; a
     # PR/detached checkout need not have one. Exercise the collision on every
     # runner so a green PR cannot hide the main-only setup failure again.
@@ -417,11 +413,31 @@ def test_real_a192_transition_and_followup_update(tmp_path, monkeypatch, short_b
     git(root, 'switch', '-C', 'main', base)
     assert git(root, 'rev-parse', 'HEAD') == base
     assert git(root, 'rev-parse', 'candidate') == target
-    git(root, 'update-ref', 'refs/aplus-update/main', target)
-    from workbench.store import Store
     runtime = tmp_path/'existing-runtime'
-    store = Store(runtime)
+    # Construct the real old schema through the historical implementation.
+    # Importing the current Store here would migrate the fixture before either
+    # upgrade worker had a chance to exercise its database protection.
+    create_legacy = '''
+import sys
+sys.path.insert(0,sys.argv[1])
+from workbench.store import Store
+store=Store(sys.argv[2])
+store.execute("INSERT INTO plans VALUES('bridge-plan','synthetic-observation','ETHUSD','MTR','daily','2026-01-01','DRAFT',10,9,12,1,'synthetic retained plan','2026-01-01')")
+'''
+    subprocess.run([sys.executable, '-I', '-c', create_legacy, str(root), str(runtime)],
+                   capture_output=True, check=True, timeout=30)
+    from types import SimpleNamespace
+    store = SimpleNamespace(root=runtime, path=runtime/'workbench.sqlite3')
     before = store.path.read_bytes()
+    original_state = v._database_state(store.path)
+    assert original_state['schema'] == 8 and original_state['facts']['plans']['count'] == 1
+    # a192 has no source schema manifest. A direct structure-changing upgrade
+    # must remain manual until the compatible first hop declares that schema.
+    git(root, 'update-ref', 'refs/aplus-update/main', source_head)
+    direct = v.check_version(root, force=True, api=api_for(source_head), fetch=Mock())
+    assert not direct['can_update'] and direct['manual_kind'] == 'data'
+    assert store.path.read_bytes() == before and git(root, 'rev-parse', 'HEAD') == base
+    git(root, 'update-ref', 'refs/aplus-update/main', target)
     plan = v.check_version(root, force=True, api=api_for(target), fetch=Mock())
     assert plan['can_update'], plan
     assert plan['installation']['environment_changed']
@@ -535,7 +551,7 @@ launch.main()
     # Undo only this test-created payload via exact target bytes; no reset.
     (root/'launch_dashboard.py').write_bytes(v.run_git(root, 'show', target+':launch_dashboard.py', binary=True))
     proof.unlink()
-    git(root, 'switch', '-c', 'next-release')
+    git(root, 'switch', '-c', 'next-release', source_head)
     (root/'bridge-followup.txt').write_text('ordinary release\n')
     git(root, 'add', '.'); git(root, 'commit', '-m', 'next ordinary update')
     next_target = git(root, 'rev-parse', 'HEAD')
@@ -543,11 +559,13 @@ launch.main()
     followup = v.check_version(root, force=True, api=api_for(next_target), fetch=Mock())
     assert followup['can_update'], followup
     assert not followup['installation']['environment_changed']
+    assert followup['installation']['database_changed']
+    assert followup['installation']['source_schema'] == 8
+    assert followup['installation']['target_schema'] == 9
     # Invoke the button controller, then its actual prepared worker transaction.
     # Only the shell and official CI authority are synthetic; code replacement,
     # dependency checks, startup ack and pointer commit use production functions.
     from gui import version_update as ui
-    from types import SimpleNamespace
     from contextlib import nullcontext
     import threading
     old_process = subprocess.Popen([python, '-I', '-c', 'input()'], stdin=subprocess.PIPE)
@@ -588,6 +606,12 @@ launch.main()
     assert_controlled_desktop(receipt_folder, children, next_launches, owned_processes)
     assert git(root, 'rev-parse', 'HEAD') == next_target
     assert v._database_state(store.path)['facts'] == second_facts
+    assert v._database_state(store.path)['schema'] == 9
+    transaction = json.loads((receipt_folder/'transaction.json').read_text(encoding='utf-8'))
+    migration = transaction['database']
+    assert migration['changed'] and migration['schema_before'] == 8 and migration['schema_after'] == 9
+    backup = v._database_state(migration['backup'])
+    assert backup['schema'] == 8 and backup['facts'] == second_facts
     assert Path(v.environment_pointer(root).read_text(encoding='utf-8')).samefile(python)
     assert not v.active_transaction_path(root).exists()
     assert all(process.poll() is not None for process in owned_processes)

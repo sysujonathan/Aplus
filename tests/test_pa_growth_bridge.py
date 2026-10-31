@@ -94,3 +94,22 @@ def test_second_batch_write_failure_rolls_back_all_cases_and_keeps_pending(tmp_p
     assert reopened.pa_growth()['stats']['images'] == 0
     assert reopened.rows('SELECT COUNT(*) AS n FROM observations')[0]['n'] == 0
     assert reopened.rows('SELECT COUNT(*) AS n FROM plans')[0]['n'] == 0
+
+
+def test_older_untitled_cases_and_topic_descendants_are_reachable_after_first_page(tmp_path):
+    store = Store(tmp_path)
+    image = png('navy')
+    with store.atomic_write():
+        for _ in range(105):
+            store.pa_save_case([dict(name='untitled.png', data=image)],
+                               dict(topic_ids=['cont-h2'], data_kind='test'), allow_duplicate=True)
+    bridge = GrowthBridge(Store(tmp_path))
+    first = bridge.search_cases()
+    assert first['ok'] and len(first['cases']) == 100 and first['has_more']
+    second = bridge.search_cases('', {}, first['next_offset'])
+    assert second['ok'] and len(second['cases']) == 5 and not second['has_more']
+    assert not {c['id'] for c in first['cases']}.intersection(c['id'] for c in second['cases'])
+    family = bridge.search_cases('', {'topic_id': 'continuation'}, 100)
+    assert len(family['cases']) == 5 and not family['has_more']
+    assert not bridge.search_cases('', {}, -1)['ok']
+    assert not bridge.search_cases('', {}, True)['ok']

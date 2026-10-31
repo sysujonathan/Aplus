@@ -25,7 +25,7 @@ def run(folder, reopen=False):
         raise ValueError('Only isolated acceptance homes are allowed')
     samples(folder / 'samples')
     store = Store(folder / 'runtime')
-    bridge = GrowthBridge(store, dict(symbol='TEST.ETHUSD', name='测试样本 · 非真实行情', timeframe='daily'))
+    bridge = GrowthBridge(store)
     window = webview.create_window('PA 真实闭环验收 · 隔离测试', (ASSETS / 'index.html').as_uri(),
                                   js_api=bridge, hidden=True, width=1440, height=950)
     bridge._window = window
@@ -155,7 +155,7 @@ def run(folder, reopen=False):
             click('[data-action=universe-enter]')
             wait("Boolean(document.querySelector('[data-action=select-topic][data-id=cont-h2]'))")
             click('[data-action=select-topic][data-id=cont-h2]')
-            wait("Boolean(document.querySelector('#topic-note'))")
+            wait("document.querySelector('#topic-note')?.dataset.draft === 'topic-note:cont-h2'")
             field('#topic-note', '测试认识：先确认背景，再看信号K线')
             click('[data-action=save-topic-note]')
             wait("!window.aplusGrowthBusy() && document.querySelector('#topic-note').value==='' ")

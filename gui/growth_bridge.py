@@ -128,6 +128,8 @@ class GrowthBridge:
         self._store = store
         self._context = dict(context or {})
         self._pending = {}
+        self._thumbnails = {}
+        self._thumbnail_size = 0
         self._lock = threading.RLock()
         self._window = None
 
@@ -139,7 +141,14 @@ class GrowthBridge:
             asset_id = row.get('thumbnail_id') or row.get('cover_id') or (images[0]['id'] if images else None)
             if asset_id:
                 try:
-                    row['thumbnail'] = image_url(self._store.pa_image(asset_id), thumbnail=True)
+                    if asset_id not in self._thumbnails:
+                        url = image_url(self._store.pa_image(asset_id), thumbnail=True)
+                        while self._thumbnails and self._thumbnail_size + len(url) > 32 * 1024 * 1024:
+                            oldest = next(iter(self._thumbnails))
+                            self._thumbnail_size -= len(self._thumbnails.pop(oldest))
+                        self._thumbnails[asset_id] = url
+                        self._thumbnail_size += len(url)
+                    row['thumbnail'] = self._thumbnails[asset_id]
                     row['thumbnail_url'] = row['thumbnail']
                 except (OSError, ValueError):
                     row['image_error'] = '原图暂时无法读取，请检查备份'
@@ -181,25 +190,33 @@ class GrowthBridge:
     def bootstrap(self):
         growth = self._growth()
         growth['recent_case_id'] = (growth.get('recent') or [{}])[0].get('id')
-        return dict(cases=self._summaries(self._store.pa_search()), topics=self._topics(),
+        cases = self._store.pa_search(limit=101)
+        return dict(cases=self._summaries(cases[:100]), has_more=len(cases) > 100,
+                    next_offset=min(100, len(cases)), topics=self._topics(),
                     context=self._context, **growth)
 
     @guarded
-    def search_cases(self, query='', filters=None):
+    def search_cases(self, query='', filters=None, offset=0):
+        if type(offset) is not int or offset < 0:
+            raise ValueError('结果分页无效')
         if filters and filters.get('topic_id'):
             family = self._topic_family(filters['topic_id'])
             if len(family) > 1:
                 other = dict(filters)
                 other.pop('topic_id')
-                cases, offset = [], 0
-                while len(cases) < 100:
-                    page = self._store.pa_search(query, other, limit=1000, offset=offset)
+                cases, scanned = [], 0
+                while len(cases) < offset + 101:
+                    page = self._store.pa_search(query, other, limit=1000, offset=scanned)
                     cases.extend(row for row in page if family.intersection(row.get('topic_ids', [])))
                     if len(page) < 1000:
                         break
-                    offset += 1000
-                return {'cases': self._summaries(cases[:100])}
-        return {'cases': self._summaries(self._store.pa_search(query, filters))}
+                    scanned += 1000
+                page = cases[offset:offset + 101]
+                return {'cases': self._summaries(page[:100]), 'has_more': len(page) > 100,
+                        'next_offset': offset + min(100, len(page))}
+        page = self._store.pa_search(query, filters, limit=101, offset=offset)
+        return {'cases': self._summaries(page[:100]), 'has_more': len(page) > 100,
+                'next_offset': offset + min(100, len(page))}
 
     @guarded
     def get_case(self, case_id):
