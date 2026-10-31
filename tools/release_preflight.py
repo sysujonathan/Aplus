@@ -44,7 +44,7 @@ def preflight(event_name,event,ref,repository,head,*,api=release_api,opener=urlo
         if exc.code!=404:raise
         latest=None
     else:
-        latest=load_manifest(api,opener)
+        latest=load_manifest(api,opener,select_payload=False)
     return dict(build=not latest or latest['commit']!=head,commit=head)
 
 

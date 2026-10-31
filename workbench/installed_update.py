@@ -50,17 +50,25 @@ def validate_manifest(value):
     # Admission to a real update stays separate and same-schema below.
     if type(value.get('database_schema')) is not int or value['database_schema'] not in (8, DATABASE_SCHEMA):
         raise ValueError('此更新需要单独的数据兼容升级，当前版本继续可用。')
+    from .installed_bundle import canonical_manifest, bridge_plan, BRIDGE_COMPONENT
+    bundle=canonical_manifest(value)
+    if bundle is not value:validate_manifest(bundle)
+    if bundle.get('component')==BRIDGE_COMPONENT or 'upgrade' in bundle:bridge_plan(bundle)
     return value
 
 
 def require_same_schema(target, current):
-    """An installer rollback cannot roll a migrated database back safely."""
+    """Only an explicitly verified 8-to-9 bundle may cross data versions."""
     schema=current.get('database_schema')
+    from .installed_bundle import canonical_manifest
+    validate_manifest(target)
+    if type(schema) is int and schema==8 and target['database_schema']==9 and canonical_manifest(target) is not target:
+        return
     if type(schema) is not int or target['database_schema']!=schema:
         raise ValueError('此更新需要单独的数据兼容升级，当前版本继续可用。')
 
 
-def load_manifest(api=github_json, opener=urlopen):
+def load_manifest(api=github_json, opener=urlopen, *, select_payload=True):
     release=api('/releases/latest')
     if release.get('draft') is not False or release.get('prerelease') is not False:
         raise ValueError('正式发布尚未准备好。')
@@ -89,6 +97,9 @@ def load_manifest(api=github_json, opener=urlopen):
             raise ValueError('更新提交不属于官方主线。')
     if not acceptance(target,api):
         raise ValueError('正式版本验收尚未完成，请稍后检查。')
+    if select_payload and value.get('component')=='schema_bridge':
+        from .installed_bundle import primary_target
+        return validate_manifest(primary_target(value))
     return value
 
 
@@ -154,9 +165,28 @@ def confirmed_start(folder, target, runtime):
     if not path.exists():return False
     try:value=json.loads(path.read_text(encoding='utf-8'))
     except (OSError,ValueError):return False
+    if target.get('bridge_manifest') and value.get('database_schema')!=target['database_schema']:return False
     return (value.get('started') is True and value.get('version')==target['version']
             and value.get('commit')==target['commit']
             and Path(value.get('runtime','')).resolve()==Path(runtime).resolve())
+
+
+def finish_recovered_start(path,release,runtime):
+    path=Path(path);folder=path.parent;root=Path(os.environ['APLUS_INSTALL_ROOT']).resolve()
+    pending=root/'update-pending.json'
+    if not pending.exists():return
+    record=json.loads(pending.read_text(encoding='utf-8'))
+    request=json.loads((folder/'request.json').read_text(encoding='utf-8'))
+    target=validate_manifest(request['target'])
+    if (Path(record.get('folder','')).resolve()!=folder.resolve()
+            or Path(request['install_root']).resolve()!=root
+            or not record.get('migration') or not confirmed_start(folder,target,runtime)
+            or any(release.get(k)!=target.get(k) for k in ('version','commit','database_schema'))):
+        raise ValueError('恢复启动确认不一致，已保留记录。')
+    atomic_json(folder/'receipt.json',dict(state='completed',version=release['version'],recovered=True))
+    pending.unlink(missing_ok=True)
+    from .installed_cleanup import finish_update
+    finish_update(root,runtime,folder,target)
 
 
 @contextmanager
@@ -191,25 +221,60 @@ def worker(request_path):
         previous=(root/'current.txt').read_text().strip()
         version_parts(previous)  # Reject traversal before building any executable path.
         previous_exe=root/'app'/previous/'AplusApp.exe'
-        process=None
+        process=None;migration=None;handoff=request.get('bundle_handoff') is True;fallback_verified=not handoff
         try:
             if (folder/'cancelled.json').exists():raise ValueError('本次更新已取消。')
             current=read_identity(root/'app'/previous/'_internal')
-            verify_candidate(target,setup,current)
+            from .installed_bundle import installed_identity, canonical_manifest, verify_payload
+            from .installed_data import inspect_data
+            if current.get('component')=='schema_bridge':
+                current=installed_identity(root,previous,inspect_data(request['runtime'])['schema'])
+            if handoff:
+                installed=previous
+                fallback=(root/'previous.txt').read_text().strip();version_parts(fallback)
+                old=read_identity(root/'app'/fallback/'_internal')
+                if (old.get('version')!=fallback or old.get('database_schema')!=8
+                        or old['sequence']>=target['sequence'] or old.get('component')=='schema_bridge'):
+                    raise ValueError('旧版恢复入口未能确认，原数据未修改。')
+                previous=fallback;previous_exe=root/'app'/previous/'AplusApp.exe'
+                fallback_verified=True
+                bundle=canonical_manifest(target)
+                if (bundle is target or current.get('component')!='schema_bridge'
+                        or any(current.get(k)!=target.get(k) for k in ('version','sequence','commit','preview'))
+                        or load_manifest()!=target):
+                    raise ValueError('兼容升级接力身份不一致，原数据未修改。')
+                verify_payload(root/'app'/installed,target)
+            else:
+                verify_candidate(target,setup,current)
             with application_mutex():
                 require_web_closed()
                 runtime=bound_runtime()
                 if str(runtime)!=request['runtime']:raise ValueError('数据绑定已变化，未更新。')
                 bind_existing(runtime,install_root=root)
+                if current['database_schema']==8 and inspect_data(runtime)['schema']!=8:
+                    raise ValueError('程序与数据版本不一致，已保留原件。')
             receipt('installing',previous=previous,target=target['version'])
             pending=dict(previous=previous,folder=str(folder),phase='installing',
                          previous_sha256=file_sha256(previous_exe))
             atomic_json(root/'update-pending.json',pending)
-            code=subprocess.run([str(setup),'/CURRENTUSER','/SILENT','/SUPPRESSMSGBOXES','/NORESTART',
-                                 '/DIR='+str(root)],timeout=900).returncode
-            if code!=0:raise ValueError('新版安装未完成，正在恢复旧版本。')
+            if not handoff:
+                code=subprocess.run([str(setup),'/CURRENTUSER','/SILENT','/SUPPRESSMSGBOXES','/NORESTART',
+                                     '/DIR='+str(root)],timeout=900).returncode
+                if code!=0:raise ValueError('新版安装未完成，正在恢复旧版本。')
             if (root/'current.txt').read_text().strip()!=target['version']:
                 raise ValueError('安装版本与请求不一致。')
+            if canonical_manifest(target) is not target:
+                verify_payload(root/'app'/target['version'],target)
+            if current['database_schema']==8 and target['database_schema']==9:
+                require_same_schema(target,current)
+                from . import installed_migration
+                with application_mutex():
+                    require_web_closed()
+                    migration=installed_migration.prepare(runtime,folder)
+                    pending.update(phase='migrating',migration=migration)
+                    atomic_json(root/'update-pending.json',pending)
+                    receipt('migrating',message='副本已验证，正在安全接续数据。')
+                    installed_migration.commit(migration,runtime,folder)
             pending.update(phase='installed')
             atomic_json(root/'update-pending.json',pending)
             env=dict(os.environ,APLUS_INSTALL_ROOT=str(root),APLUS_INSTALLED_ACK=str(folder/'started.json'))
@@ -234,6 +299,15 @@ def worker(request_path):
             if process is not None and process.poll() is None:
                 receipt('startup_unconfirmed',message=str(exc),pid=process.pid)
                 return  # Never switch code underneath a potentially live new app.
+            if not fallback_verified:
+                receipt('blocked',message=str(exc));return
+            if migration is not None:
+                from .installed_migration import restore_if_unchanged
+                with application_mutex():
+                    require_web_closed()
+                    if not restore_if_unchanged(migration,request['runtime'],folder):
+                        receipt('startup_unconfirmed',message='新版数据已有写入，保留新版以便继续启动，不回退数据。')
+                        return
             temp=root/'current.txt.new';temp.write_text(previous,encoding='ascii');os.replace(temp,root/'current.txt')
             receipt('rolled_back',message=str(exc),previous=previous)
             (root/'update-pending.json').unlink(missing_ok=True)

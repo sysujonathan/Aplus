@@ -7,6 +7,9 @@
 #ifndef Output
   #error Output must be supplied by the build script
 #endif
+#ifndef AppFolder
+  #define AppFolder "AplusApp"
+#endif
 [Setup]
 AppId={{7B56A3BD-706C-4F60-AC18-0453099FA226}
 AppName=Aplus
@@ -45,7 +48,7 @@ english.WindowsVersionNotSupported=Aplus requires x64 Windows 10 version 21H2 (b
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: checkedonce
 [Files]
-Source: "{#Payload}\AplusApp\*"; DestDir: "{app}\app\{#AppVersion}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#Payload}\{#AppFolder}\*"; DestDir: "{app}\app\{#AppVersion}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Payload}\Aplus.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\aplus-install.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall

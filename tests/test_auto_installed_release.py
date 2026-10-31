@@ -169,8 +169,13 @@ def release_world(tmp_path,monkeypatch):
     def run(command,**kwargs):
         state.calls.append(command)
         if command[:2]==['gh','api']:
-            if '/commits/' in command[2]:
-                data=dict(sha=HEAD) if state.release and not state.release['draft'] else None
+            if '/git/ref/tags/' in command[2]:
+                data=dict(ref='refs/tags/v'+value['version'],object=dict(type='commit',sha=HEAD)) if state.release and not state.release['draft'] else None
+            elif '/commits/' in command[2]:
+                if not state.release or state.release['draft']:
+                    return subprocess.CompletedProcess(command,1,stdout='',
+                        stderr='gh: No commit found for SHA: v'+value['version']+' (HTTP 422)')
+                data=dict(sha=HEAD)
             else:data=state.release
             if data is None:return subprocess.CompletedProcess(command,1,stdout='',stderr='gh: Not Found (HTTP 404)')
             return subprocess.CompletedProcess(command,0,stdout=json.dumps(data),stderr='')
@@ -267,6 +272,8 @@ def test_foreign_existing_tag_cannot_be_reused(release_world,monkeypatch):
     _,_,_,state,_=release_world
     original=publisher.subprocess.run
     def run(command,**kwargs):
+        if command[:2]==['gh','api'] and '/git/ref/tags/' in command[2]:
+            return subprocess.CompletedProcess(command,0,stdout=json.dumps(dict(object=dict(type='commit',sha='d'*40))))
         if command[:2]==['gh','api'] and '/commits/' in command[2]:
             return subprocess.CompletedProcess(command,0,stdout=json.dumps(dict(sha='d'*40)))
         return original(command,**kwargs)
@@ -292,3 +299,66 @@ def test_publication_confirmation_failure_can_retry_without_republishing(release
     visible[0]=True;publisher.main()
     assert json.loads((setup.parent/'published.json').read_text())['online_verified']
     assert sum(call[:3]==['gh','release','edit'] for call in state.calls)==1
+
+
+def test_new_tag_uses_exact_reference_lookup_without_resolving_missing_commit(release_world):
+    value,_,_,state,_=release_world
+    publisher.main()
+    paths=[call[2] for call in state.calls if call[:2]==['gh','api']]
+    assert 'repos/'+gate.REPO+'/git/ref/tags/v'+value['version'] in paths
+    assert not any('/commits/' in path for path in paths)
+    assert state.release['draft'] is False
+
+
+@pytest.mark.parametrize('kind',['commit','tag'])
+@pytest.mark.parametrize('target',[HEAD,'d'*40])
+def test_existing_tag_resolves_commit_even_for_annotated_tag_objects(release_world,monkeypatch,kind,target):
+    _,_,_,state,_=release_world;original=publisher.subprocess.run;lookups=[]
+    def run(command,**kwargs):
+        if command[:2]==['gh','api']:
+            lookups.append(command[2])
+            if '/git/ref/tags/' in command[2]:
+                return subprocess.CompletedProcess(command,0,stdout=json.dumps(dict(
+                    object=dict(type=kind,sha=target if kind=='commit' else 'e'*40))))
+            if '/commits/' in command[2]:
+                return subprocess.CompletedProcess(command,0,stdout=json.dumps(dict(sha=target)))
+        return original(command,**kwargs)
+    monkeypatch.setattr(publisher.subprocess,'run',run)
+    if target==HEAD:
+        publisher.main()
+        assert state.release['draft'] is False
+    else:
+        with pytest.raises(ValueError,match='different commit'):publisher.main()
+        assert state.release is None
+    assert any('/commits/' in path for path in lookups)
+
+
+@pytest.mark.parametrize('stage,status',[
+    ('reference',403),('reference',422),('reference',429),('reference',500),
+    ('commit',403),('commit',404),('commit',422),('commit',500)])
+def test_tag_lookup_other_errors_fail_closed_before_release_writes(release_world,monkeypatch,stage,status):
+    _,_,_,state,_=release_world;original=publisher.subprocess.run
+    def run(command,**kwargs):
+        if command[:2]==['gh','api']:
+            if '/git/ref/tags/' in command[2]:
+                if stage=='reference':
+                    return subprocess.CompletedProcess(command,1,stdout='',stderr=f'gh: lookup failed (HTTP {status})')
+                return subprocess.CompletedProcess(command,0,stdout=json.dumps(dict(object=dict(type='tag',sha='e'*40))))
+            if '/commits/' in command[2]:
+                return subprocess.CompletedProcess(command,1,stdout='',stderr=f'gh: lookup failed (HTTP {status})')
+        return original(command,**kwargs)
+    monkeypatch.setattr(publisher.subprocess,'run',run)
+    with pytest.raises(RuntimeError,match='lookup failed'):publisher.main()
+    assert state.release is None and not any(call[:2]==['gh','release'] for call in state.calls)
+
+
+def test_gh_json_decodes_real_utf8_output_independent_of_windows_codepage(monkeypatch):
+    value=dict(sha=HEAD,message='主线验收与策略更新 ✓')
+    raw=json.dumps(value,ensure_ascii=False).encode('utf-8')
+    original=subprocess.run
+    monkeypatch.setattr(subprocess,'_text_encoding',lambda:'cp936')
+    def run(command,**kwargs):
+        return original([sys.executable,'-c',
+            'import sys; sys.stdout.buffer.write(bytes.fromhex('+repr(raw.hex())+'))'],**kwargs)
+    monkeypatch.setattr(publisher.subprocess,'run',run)
+    assert publisher.gh_json('/commits/v2026.10.31.2')==value
