@@ -106,6 +106,29 @@ def test_download_exact_bytes_and_hash(tmp_path):
     assert path.read_bytes()==b'installer bytes'
 
 
+def test_download_reports_actual_bytes_without_changing_hash_validation(tmp_path):
+    candidate=manifest();path=tmp_path/'setup.exe';seen=[]
+    update.download(candidate,path,opener=lambda *a,**k:io.BytesIO(b'installer bytes'),
+                    progress=lambda done,total:seen.append((done,total)))
+    assert seen==[(0,15),(15,15)]
+    update.verify_package(candidate,path)
+
+
+def test_slow_stream_reports_partial_megabyte_and_still_checks_all_bytes(tmp_path):
+    import hashlib
+    raw=b'x'*(1024*1024+17);reads=[];seen=[]
+    class Stream(io.BytesIO):
+        def read(self,count=-1):
+            reads.append(count)
+            return super().read(count)
+    candidate=manifest();candidate['package'].update(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+    path=tmp_path/'setup.exe'
+    update.download(candidate,path,opener=lambda *a,**k:Stream(raw),progress=lambda done,total:seen.append(done))
+    assert 0<seen[1]<1024*1024 and max(reads)<=128*1024
+    assert seen[-1]==len(raw) and path.read_bytes()==raw
+    update.verify_package(candidate,path)
+
+
 @pytest.mark.parametrize('raw',[b'bad bytes',b'installer bytes plus extra'])
 def test_failed_download_never_lands_executable(tmp_path,raw):
     path=tmp_path/'setup.exe'

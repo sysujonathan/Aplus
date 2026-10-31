@@ -183,7 +183,7 @@ class ChartPanel(native_ttk.Frame):
             self._analysis_btn.pack_forget()
             self.readout_frame.grid_remove()
 
-    def _show_interactive(self):
+    def _show_interactive(self, *, refresh_history=False):
         if not self._interactive or not self.store:
             return
         from .chart_embed import EmbeddedChartHost
@@ -191,16 +191,40 @@ class ChartPanel(native_ttk.Frame):
             self.readout_frame.grid()
             self.readout.set('交互主图不可用，当前为兼容预览；请核对 WebView2 环境')
             return
+        if refresh_history and self._embedded is not None and not self._embedded.closed():
+            try:
+                context = self._workspace_context or self._rebuild_workspace_context()
+                if not self._embedded.push_history(context):
+                    raise ValueError('当前图表会话尚不能接收日K刷新')
+                if self._embedded.ready():
+                    self.readout_frame.grid_remove()
+            except Exception as exc:
+                self._history_refresh_result(False, str(exc))
+            return  # A read-only refresh failure must not close a usable editor.
         try:
             context = self._workspace_context or self._rebuild_workspace_context()
             if self._embedded is None:
                 self._embedded = EmbeddedChartHost(self.chart_frame, self.store, self._embedded_error,
-                    on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate)
+                    on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate,
+                    on_history_result=self._history_refresh_result)
             self.readout_frame.grid()
             self.readout.set('正在切换图表…')
             self._embedded.show(context)
+            # A fresh page has a new token even when the code did not change.
+            # Re-send the already read minutes, including while the market is shut.
+            self._intraday_sent = None
+            if self._intraday_code == self._code and self._intraday_frame is not None:
+                self._publish_intraday(self._intraday_frame)
         except Exception as exc:
             self._embedded_error(str(exc))
+
+    def _history_refresh_result(self, accepted, detail=''):
+        if accepted:
+            if self._embedded is not None and self._embedded.ready():
+                self.readout_frame.grid_remove()
+        else:
+            self.readout_frame.grid()
+            self.readout.set('日K刷新暂未显示，当前图表已保留；可稍后点“更新K线”重试。' + str(detail))
 
     def _embedded_error(self, error):
         self.readout_frame.grid()

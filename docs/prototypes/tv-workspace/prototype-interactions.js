@@ -1818,6 +1818,63 @@ function switchProductionTimeframe(timeframe, persist = true) {
    Only the tail series is replaced: the viewport anchors to the bar the trader
    was already reading, so a new bar slides the chart left instead of jumping
    back to the right edge or redrawing the whole page. */
+function repaintCurrentSeries() {
+  if (replayActive) return true; // never disturb a frozen replay frame
+  const current = chartBoot.series[activeTimeframeUnit];
+  if (!Array.isArray(current) || current.length < 1) return true;
+  const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
+  userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
+  bars.splice(0, bars.length, ...structuredClone(current));
+  userObjects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit));
+  replayIndex = bars.length - 1;
+  if (anchorDate) {
+    const at = bars.findIndex(row => row.date === anchorDate);
+    if (at >= 0) {
+      const limits = panLimits();
+      viewOffset = clamp(bars.length - viewCount - at, limits.min, limits.max);
+    }
+  } else {
+    viewOffset = 0;
+  }
+  calculateEma();
+  updateReadout(bars[replayIndex]);
+  document.querySelectorAll('.quote b').forEach(node => {node.textContent = chartPrice(bars[replayIndex].close);});
+  renderWorkspace('all');
+  return true;
+}
+
+window.aplusApplyHistory = incoming => {
+  if (!incoming || incoming.identity !== chartBoot.identity || incoming.symbol !== chartBoot.symbol ||
+      incoming.source !== chartBoot.source || incoming.adjustment !== chartBoot.adjustment ||
+      incoming.contextKind !== 'watch' || chartBoot.contextKind !== 'watch' ||
+      incoming.strategyType || chartBoot.strategyType || incoming.timeframe !== 'daily') return false;
+  const units = ['daily', 'weekly', 'monthly'];
+  for (const unit of units) {
+    const rows = incoming.series?.[unit];
+    if (!Array.isArray(rows) || !rows.length || rows.some((row, index) =>
+        !/^\d{4}-\d{2}-\d{2}$/.test(row.date) || (index && rows[index-1].date >= row.date) ||
+        !['open','high','low','close','volume'].every(key => Number.isFinite(row[key])) ||
+        Math.min(row.open,row.high,row.low,row.close) <= 0 || row.volume < 0 ||
+        row.high < Math.max(row.open,row.close,row.low) || row.low > Math.min(row.open,row.close,row.high))) return false;
+  }
+  // History and minutes are independent transports: a late daily reply must
+  // never replace minute choices, the selected unit, viewport or editor state.
+  chartBoot.axisDates ||= {};
+  chartBoot.seriesCloseDates ||= {};
+  for (const unit of units) {
+    chartBoot.series[unit] = structuredClone(incoming.series[unit]);
+    chartBoot.seriesCloseDates[unit] = incoming.seriesCloseDates?.[unit] || {};
+    chartBoot.axisDates[unit] = incoming.axisDates?.[unit] || [];
+  }
+  chartCoordinates.configure(chartBoot.axisDates);
+  chartBoot.latest = incoming.series.daily.at(-1);
+  delete chartBoot.baseDailySeries;
+  delete chartBoot.dailyReference;
+  if (typeof applyDailyReference === 'function') applyDailyReference(chartBoot.live?.quote);
+  refreshSeriesTitle();
+  return /^m\d+$/.test(activeTimeframeUnit) ? true : repaintCurrentSeries();
+};
+
 window.aplusApplyLiveBars = payload => {
   const incoming = payload?.series?.m5;
   if (!Array.isArray(incoming) || incoming.length < 2) return false;
@@ -1838,34 +1895,13 @@ window.aplusApplyLiveBars = payload => {
     // Prepare the minute choices without taking over the trader's daily view.
     return true;
   }
-  if (replayActive) return true; // never disturb a frozen replay frame
-  const current = chartBoot.series[activeTimeframeUnit];
-  if (!Array.isArray(current) || current.length < 1) return true;
-  const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
-  userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
-  bars.splice(0, bars.length, ...structuredClone(current));
-  userObjects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit));
-  replayIndex = bars.length - 1;
-  if (anchorDate) {
-    const at = bars.findIndex(row => row.date === anchorDate);
-    if (at >= 0) {
-      const limits = panLimits();
-      viewOffset = clamp(bars.length - viewCount - at, limits.min, limits.max);
-    }
-  } else {
-    viewOffset = 0; // pinned to the newest bar: append one, everything shifts left
-  }
-  calculateEma();
-  updateReadout(bars[replayIndex]);
-  document.querySelectorAll('.quote b').forEach(node => {node.textContent = chartPrice(bars[replayIndex].close);});
-  renderWorkspace('all');
-  return true;
+  return repaintCurrentSeries();
 };
 
 document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
   if(button.dataset.timeframe === activeTimeframeUnit)return;
   if(switchProductionTimeframe(button.dataset.timeframe))showToast(`已切换到${button.textContent}线真实聚合行情`);
-  else showToast('当前入口没有该周期的真实底层行情');
+  else showToast(/^m\d+$/.test(button.dataset.timeframe) ? '该周期的分钟行情尚未取得，请稍候重试' : '该周期暂无可显示的K线');
 }));
 document.querySelector('#openAlert').addEventListener('click', () => openWorkspaceModal('alertModal'));
 document.querySelector('#openObject').addEventListener('click', openObjectSettings);

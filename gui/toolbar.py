@@ -1285,6 +1285,12 @@ class ToolBar(ttk.Frame):
         if status in ("queued", "running"):
             prog, total = j["progress"] or 0, j["total"] or 0
             msg = (j["message"] or "").strip()[:180]
+            if self._job_kind == '一键盘前':
+                from .task_progress import premarket_progress
+                # Old receipts may lack detailed counts; keep their real message.
+                detailed = any('progress' in item for item in self._premarket_progress.values())
+                if detailed or all(item.get('phase') == '等待' for item in self._premarket_progress.values()):
+                    msg = premarket_progress(self._premarket_progress, prog, total, msg)
             if self._job_read_error:
                 msg += ' · 进度暂未读出，正在重试（以上为上次进度）'
             elif time.monotonic()-self._job_snapshot[2] > 3:
@@ -1297,7 +1303,9 @@ class ToolBar(ttk.Frame):
             self._refresh_timing_status(running_elapsed=elapsed_seconds)
             elapsed = (f" · 已用时 {format_elapsed(elapsed_seconds)}"
                        if elapsed_seconds is not None else "")
-            if total:
+            if self._job_kind == '一键盘前':
+                self.set_status(f'⏳ 一键盘前 · {msg or "正在准备，随后自动扫描"}{elapsed}')
+            elif total:
                 self.set_status(f"⏳ {self._job_kind} {prog}/{total}（{prog * 100 // total}%）：{msg}{elapsed}")
             else:
                 fallback = '排队中…' if status == 'queued' else '运行中，准备核验…'

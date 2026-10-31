@@ -121,3 +121,24 @@ def test_job_view_reads_only_existing_database_and_preserves_bytes(store):
     with pytest.raises(sqlite3.OperationalError):
         load_job(store.root/'missing','job',lambda:None)
     assert not (store.root/'missing').exists()
+
+
+def test_premarket_progress_names_source_stage_and_stock_count_not_zero_percent():
+    bar = toolbar()
+    item = dict(phase='更新',progress=690,total=3199)
+    reply(bar,running(progress=0,total=1,result=json.dumps({'sources':{'tickflow':item}})))
+    text = bar.set_status.call_args[0][0]
+    assert 'TickFlow正在更新行情：已处理690只，共3199只；随后自动扫描' in text
+    assert '0/1' not in text and '0%' not in text
+    item.update(phase='扫描',progress=20)
+    reply(bar,running(result=json.dumps({'sources':{'tickflow':item}})))
+    assert '正在策略扫描：已处理20只，共3199只' in bar.set_status.call_args[0][0]
+
+
+def test_multiple_source_progress_does_not_claim_failed_source_completed():
+    from gui.task_progress import premarket_progress
+    text = premarket_progress({'baostock':{'phase':'失败','message':'限制访问'},
+                              'tickflow':{'phase':'扫描','progress':50,'total':100}},1,2)
+    assert '本次共2个数据源，已结束1个' in text
+    assert 'BaoStock：失败，限制访问' in text
+    assert 'TickFlow正在策略扫描' in text
