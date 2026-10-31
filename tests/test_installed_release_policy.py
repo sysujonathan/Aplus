@@ -178,7 +178,7 @@ def test_actual_workflow_allocator_respects_shipped_preview_and_releases(tmp_pat
     script.write_text("$ErrorActionPreference='Stop'\nfunction git { 'accepted-head' }\n"+
         "function gh { if ($args -contains '--jq') { '"+('accepted-head' if main_ok else 'different-main')+
         "' } else { '"+history+"' } }\n"+block,encoding='utf-8-sig')
-    env=dict(os.environ,GITHUB_ENV=str(output),GITHUB_REPOSITORY='sysujonathan/Aplus')
+    env=dict(os.environ,GITHUB_ENV=str(output),GITHUB_OUTPUT=str(tmp_path/'outputs.txt'),GITHUB_REPOSITORY='sysujonathan/Aplus')
     result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-File',str(script)],
                           cwd=tmp_path,env=env,capture_output=True,timeout=30)
     if expected:

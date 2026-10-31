@@ -13,14 +13,20 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)
+    if: github.repository == 'sysujonathan/Aplus' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: windows-latest
     timeout-minutes: 45
+    outputs:
+      ready: ${{ steps.gate.outputs.build }}
+      commit: ${{ steps.gate.outputs.commit }}
+      version: ${{ steps.identity.outputs.version }}
+      artifact: ${{ steps.installer.outputs.artifact-id }}
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || 'main' }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -28,8 +34,15 @@ jobs:
           cache-dependency-path: |
             requirements-lock.txt
             packaging/requirements-build.txt
-      - run: python -m pip install -r requirements-lock.txt -r packaging/requirements-build.txt
+      - name: Admit exact accepted main
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release_preflight.py --output "$env:GITHUB_OUTPUT"
+      - if: steps.gate.outputs.build == 'true'
+        run: python -m pip install -r requirements-lock.txt -r packaging/requirements-build.txt
       - name: Install verified compiler
+        if: steps.gate.outputs.build == 'true'
         shell: pwsh
         run: |
           $compiler = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
@@ -42,6 +55,8 @@ jobs:
           if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
           "APLUS_ISCC=$destination\ISCC.exe" >> $env:GITHUB_ENV
       - name: Allocate release identity
+        id: identity
+        if: steps.gate.outputs.build == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,9 +81,12 @@ jobs:
           $version = "$date.$($sequence-$floor)"
           "APLUS_VERSION=$version" >> $env:GITHUB_ENV
           "APLUS_SEQUENCE=$sequence" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build exact accepted main installer
+        if: steps.gate.outputs.build == 'true'
         run: python tools/build_installer.py --official --version $env:APLUS_VERSION --sequence $env:APLUS_SEQUENCE --iscc "$env:APLUS_ISCC"
       - name: Installed GUI and WebView smoke
+        if: steps.gate.outputs.build == 'true'
         shell: pwsh
         env:
           APLUS_INSTALL_SMOKE: '1'
@@ -81,9 +99,46 @@ jobs:
           $result = Get-Content (Join-Path $folder 'result.json') -Raw | ConvertFrom-Json
           if (-not $result.ok -or -not $result.webview_ready) { throw 'Installed chart not ready' }
       - uses: actions/upload-artifact@v4
+        id: installer
+        if: steps.gate.outputs.build == 'true'
         with:
-          name: AplusSetup-${{ env.APLUS_VERSION }}-unsigned-pilot
+          name: AplusSetup-${{ env.APLUS_VERSION }}-verified
           path: dist/installers/*
           retention-days: 30
-      # Building is not publishing. A maintainer explicitly publishes verified
-      # exact-main assets with tools/publish_installer.py; signing is optional.
+          if-no-files-found: error
+  publish:
+    needs: build
+    if: needs.build.outputs.ready == 'true' && github.repository == 'sysujonathan/Aplus' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact }}
+          path: release-package
+          merge-multiple: true
+      - name: Publish verified stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APLUS_VERSION: ${{ needs.build.outputs.version }}
+          APLUS_COMMIT: ${{ needs.build.outputs.commit }}
+        run: >-
+          python tools/publish_installer.py
+          "release-package/AplusSetup-${APLUS_VERSION}-x64.exe"
+          --manifest release-package/latest.json --expected-commit "$APLUS_COMMIT"
+          --resume --verify-online --receipt release-package/published.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aplus-published-${{ needs.build.outputs.version }}
+          path: release-package/published.json
+          if-no-files-found: error
