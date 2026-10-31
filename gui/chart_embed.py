@@ -9,6 +9,7 @@ from copy import deepcopy
 import ctypes
 from ctypes import wintypes
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -230,11 +231,13 @@ class NativeChild:
 
 class EmbeddedChartHost:
     """Tk-side controller. Starting WebView never blocks Tk's first paint."""
-    def __init__(self, parent, store, on_error=None, on_layout=None, on_ready=None, on_active=None):
+    def __init__(self, parent, store, on_error=None, on_layout=None, on_ready=None, on_active=None,
+                 on_history_result=None):
         self.parent, self.store, self.on_error = parent, store, on_error
         self.on_layout = on_layout
         self.on_ready = on_ready
         self.on_active = on_active
+        self.on_history_result = on_history_result
         self._ready_token = None
         self.process = None
         self.token = 0
@@ -245,6 +248,8 @@ class EmbeddedChartHost:
         self.navigation = self.session.with_suffix('.navigation.json')
         self.live = self.session.with_suffix('.live.json')
         self.history = self.session.with_suffix('.history.json')
+        self.history_status = self.session.with_suffix('.history-status.json')
+        self._history_request_id = self._last_history_status = None
         self._history_identity = None
         self.focus = self.session.with_suffix('.focus.json')
         self._last_focus = None
@@ -315,14 +320,31 @@ class EmbeddedChartHost:
         boot = workspace_boot(self.store, context)
         if boot['identity'] != self._history_identity:
             return False
-        atomic_json(self.history, dict(id=uuid.uuid4().hex, token=self.token, boot=boot))
+        # Market data only: saved drawings/settings/baselines never travel here.
+        boot = {key: boot[key] for key in ('identity', 'symbol', 'source', 'adjustment',
+                'contextKind', 'strategyType', 'timeframe', 'series', 'seriesCloseDates', 'axisDates')}
+        request = dict(id=uuid.uuid4().hex, token=self.token, boot=boot)
+        atomic_json(self.history, request)
+        self._history_request_id = request['id']
         return True
+
+    def ready(self):
+        """A queued write is not an acknowledgement that this page is visible."""
+        return (getattr(self, '_ready_token', None) == self.token
+                and not self.closed() and not self.closing and not getattr(self, 'error', None))
 
     def _poll(self):
         self._timer = None
         if not self.parent.winfo_exists():
             return
         try:
+            history = read_notification(self.history_status)
+            if (history and history.get('token') == self.token
+                    and history.get('id') == self._history_request_id
+                    and history.get('id') != self._last_history_status):
+                self._last_history_status = history['id']
+                if self.on_history_result:
+                    self.on_history_result(history.get('accepted') is True, history.get('message', ''))
             focus = read_notification(self.focus)
             if focus is not None:
                 if focus.get('id') != self._last_focus:
@@ -391,7 +413,7 @@ class EmbeddedChartHost:
             self._timer = None
         if self.closed():
             for path in (self.control, self.status, self.actions, self.navigation,
-                         self.live, self.history, self.focus, self.session):
+                         self.live, self.history, self.history_status, self.focus, self.session):
                 path.unlink(missing_ok=True)
 
 
@@ -445,23 +467,35 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
         if not bridge.busy and window.events.loaded.is_set():
             request = read_notification(history_path)
             if request is not None and request.get('id') != last_history and request.get('token') == bridge.active_token:
-                boot = request.get('boot') or {}
-                current = bridge.current
-                if (current is not None and boot.get('identity') == current.identity
-                        and boot.get('contextKind') == 'watch' and not boot.get('strategyType')):
-                    accepted = window.evaluate_js(
-                        "typeof window.aplusApplyHistory === 'function' && window.aplusApplyHistory("
-                        + json.dumps(boot, ensure_ascii=False) + ")")
+                last_history = request.get('id')  # Reject/error is terminal for this notification too.
+                accepted = False
+                message = '日K刷新未通过当前图表校验'
+                try:
+                    boot = request.get('boot')
+                    current = bridge.current
+                    if (isinstance(boot, dict) and current is not None and boot.get('identity') == current.identity
+                            and boot.get('contextKind') == 'watch' and not boot.get('strategyType')):
+                        accepted = bool(window.evaluate_js(
+                            "typeof window.aplusApplyHistory === 'function' && window.aplusApplyHistory("
+                            + json.dumps(boot, ensure_ascii=False) + ")"))
                     if accepted:
                         # Keep drawing coordinates current without resetting the editor's
                         # revision, save baseline, pending objects, or session token.
                         with current._write_lock:
-                            for key in ('bars', 'latest'):
-                                current.boot[key] = boot[key]
+                            rows = boot['series']['daily']
+                            current.boot.update(bars=rows, latest=rows[-1])
                             for key in ('series', 'seriesCloseDates', 'axisDates'):
                                 current.boot.setdefault(key, {}).update(boot[key])
-                            current.rows = boot['bars']
-                        last_history = request['id']
+                            current.rows = rows
+                except Exception as exc:
+                    accepted = False
+                    message = str(exc)
+                try:
+                    atomic_json(session.with_suffix('.history-status.json'),
+                        dict(id=last_history, token=bridge.active_token, accepted=accepted,
+                             message='' if accepted else message))
+                except OSError:
+                    logging.getLogger(__name__).warning('日K刷新回执暂不可写；当前图表保留')
         live_path = session.with_suffix('.live.json')
         if not bridge.busy and window.events.loaded.is_set():
             request = read_notification(live_path)

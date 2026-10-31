@@ -1867,8 +1867,7 @@ window.aplusApplyHistory = incoming => {
     chartBoot.axisDates[unit] = incoming.axisDates?.[unit] || [];
   }
   chartCoordinates.configure(chartBoot.axisDates);
-  chartBoot.bars = structuredClone(incoming.series.daily);
-  chartBoot.latest = chartBoot.bars.at(-1);
+  chartBoot.latest = incoming.series.daily.at(-1);
   delete chartBoot.baseDailySeries;
   delete chartBoot.dailyReference;
   if (typeof applyDailyReference === 'function') applyDailyReference(chartBoot.live?.quote);

@@ -123,7 +123,7 @@ def download(target, destination, *, opener=urlopen, progress=None):
         with opener(Request(package['url'],headers={'User-Agent':'Aplus-installed-update'}),timeout=30) as response:
             with temp.open('xb') as output:
                 while True:
-                    chunk=response.read(1024*1024)
+                    chunk=response.read(128*1024)
                     if not chunk:break
                     size+=len(chunk)
                     if size>package['bytes']:raise ValueError('更新包大小不符，已停止。')

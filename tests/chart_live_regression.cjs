@@ -127,6 +127,26 @@ function run() {
     assert.equal(context.window.aplusApplyHistory({...history,...patch}),false);
   const invalid=structuredClone(history);invalid.series.daily[0].low=999;
   assert.equal(context.window.aplusApplyHistory(invalid),false);
+
+  // Daily is the canonical base. A weekly/monthly reader keeps the same
+  // left-hand date when an older prefix arrives; bars stays on the chosen unit.
+  const fullDaily=Array.from({length:181},(_,index)=>({...daily[0],date:
+    new Date(Date.UTC(2026,0,1+index)).toISOString().slice(0,10)}));
+  const aggregate=rows=>({daily:rows,weekly:context.AplusChartIndicators.aggregate(rows,'weekly'),
+    monthly:context.AplusChartIndicators.aggregate(rows,'monthly')});
+  for(const unit of ['weekly','monthly']) {
+    Object.assign(boot.series,aggregate(fullDaily.slice(31,-1)));
+    vm.runInContext(`switchProductionTimeframe('${unit}',false)`,context);
+    context.viewCount=2;context.viewOffset=1;context.priceZoom=1.7;
+    const anchor=context.bars[beginIndex()].date;
+    assert.equal(context.window.aplusApplyHistory({...history,series:aggregate(fullDaily)}),true);
+    assert.equal(context.activeTimeframeUnit,unit);
+    assert.equal(context.bars[beginIndex()].date,anchor);
+    assert.equal(context.priceZoom,1.7);
+    assert.equal(boot.series.daily.length,fullDaily.length,'canonical history remains daily');
+    assert.equal(context.bars.length,boot.series[unit].length,'display remains weekly/monthly');
+  }
+  vm.runInContext("switchProductionTimeframe('m5',false)",context);
   // Keep subsequent live-reference cases on their original fixture.
   boot.series.daily=structuredClone(daily);boot.latest=daily.at(-1);
 

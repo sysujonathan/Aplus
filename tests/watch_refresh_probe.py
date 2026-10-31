@@ -42,6 +42,12 @@ def run(folder):
         try:
             assert window.events.loaded.wait(15)
             wait("typeof window.aplusApplyHistory === 'function'")
+            evaluations=[]
+            original_eval=window.evaluate_js
+            def evaluate(script):
+                if 'window.aplusApplyHistory(' in script:evaluations.append(script)
+                return original_eval(script)
+            window.evaluate_js=evaluate
             def transport_run():
                 try:run_embedded_transport(window,bridge,session,0,native=SimpleNamespace(fit=lambda:not done.is_set()))
                 except Exception as exc:failures.append(repr(exc));done.set()
@@ -62,10 +68,31 @@ def run(folder):
             check("switchProductionTimeframe('daily',false) && bars.at(-1).date==='2026-10-30'")
             check("switchProductionTimeframe('m5',false) && bars.length===12")
             assert bridge.current.rows[-1]['date']=='2026-10-30'
+            # A genuine JS refusal gets one terminal receipt, never a 100ms loop.
+            bad=json.loads(json.dumps(new));bad['series']['daily'][-1]['low']=999
+            atomic_json(session.with_suffix('.history.json'),dict(id='bad-history',token=1,boot=bad))
+            receipt=session.with_suffix('.history-status.json')
+            def wait_receipt(identity):
+                from gui.chart_embed import read_notification
+                deadline=time.monotonic()+5
+                while time.monotonic()<deadline:
+                    value=read_notification(receipt)
+                    if value and value.get('id')==identity:return value
+                    time.sleep(.05)
+                raise AssertionError('history receipt missing: '+identity)
+            assert wait_receipt('bad-history')['accepted'] is False
+            count=len(evaluations);time.sleep(.35)
+            assert len(evaluations)==count
+            check("activeTimeframeUnit==='m5' && bars.length===12 && chartBoot.latest.date==='2026-10-30'")
+            window.evaluate_js('window.savedHistoryHandler=window.aplusApplyHistory;window.aplusApplyHistory=undefined;')
+            atomic_json(session.with_suffix('.history.json'),dict(id='missing-handler',token=1,boot=new))
+            assert wait_receipt('missing-handler')['accepted'] is False
+            count=len(evaluations);time.sleep(.35)
+            assert len(evaluations)==count and not window.events.closed.is_set()
             assert not failures,failures
             (folder/'result.json').write_text(json.dumps(dict(ok=True,real_webview=True,
                 real_history_ipc=True,minute_period_preserved=True,view_preserved=True,
-                daily_updated=True,synthetic=True)),encoding='utf-8')
+                daily_updated=True,rejected_once=True,missing_handler_reported=True,synthetic=True)),encoding='utf-8')
         except Exception as exc:
             failures.append(repr(exc))
         finally:

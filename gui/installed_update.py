@@ -21,6 +21,7 @@ class InstalledVersionController:
         self.window=window;self.results=queue.Queue();self.latest=None
         self.busy=False;self.queued=False;self.reserved=False;self.waiting=None
         self.downloaded=None
+        self._operation=0
         self.button=ttk.Button(parent,text='检查更新',width=14,command=self.manual_check,bootstyle='secondary')
         self.button.pack(side='right',padx=(8,0),ipady=2)
         self.download_bar=ttk.Progressbar(parent,length=90,maximum=100,mode='determinate',bootstyle='success')
@@ -41,8 +42,9 @@ class InstalledVersionController:
     def check(self,manual):
         if self.busy:return
         self.busy=True;self.last_check=time.monotonic()
+        self._operation+=1;operation=self._operation
         self.button.configure(text='检查更新…')
-        def work():self.results.put(('check',update.check_update(),manual))
+        def work():self.results.put(('check',update.check_update(),manual,operation))
         threading.Thread(target=work,daemon=True).start()
 
     def idle(self):
@@ -54,6 +56,7 @@ class InstalledVersionController:
         try:
             service=self.window.service
             service.reserve_code_update();self.reserved=True
+            self._operation+=1;operation=self._operation
             self.busy=True;self.button.configure(text='下载更新…',bootstyle='warning')
             self.download_bar.configure(value=0)
             self.download_bar.pack(side='right',padx=(8,0))
@@ -81,15 +84,16 @@ class InstalledVersionController:
                         def progress(done,total):
                             stamp=time.monotonic()
                             if done==0 or done==total or stamp-last[0]>=.3:
-                                self.results.put(('progress',(done,total),False));last[0]=stamp
+                                self.results.put(('progress',(done,total),False,operation));last[0]=stamp
                         update.download(target,folder/'setup.exe',progress=progress)
                     update.verify_package(target,folder/'setup.exe')
-                    self.results.put(('download',(folder,target),False))
-                except Exception as exc:self.results.put(('error',str(exc),False))
+                    self.results.put(('download',(folder,target),False,operation))
+                except Exception as exc:self.results.put(('error',str(exc),False,operation))
             threading.Thread(target=work,daemon=True).start()
         except Exception as exc:self.fail(str(exc))
 
     def fail(self,message,*,keep_available=False):
+        self._operation+=1  # Late notifications from this attempt cannot repaint a retry.
         self.download_bar.pack_forget()
         self.busy=False;self.queued=False;self.waiting=None;self.window._update_pending=False
         if self.reserved:
@@ -100,40 +104,61 @@ class InstalledVersionController:
         self.window.deiconify()
         messagebox.showinfo('当前版本继续使用',message,parent=self.window)
 
+    def _pending_results(self):
+        """Coalesce delayed progress, retaining control messages in FIFO order.
+
+        A bounded batch avoids starving Tk even with an abnormal producer. Normal
+        progress is throttled to at most about four messages per second.
+        """
+        pending=[]
+        for _ in range(64):
+            try:item=self.results.get_nowait()
+            except queue.Empty:break
+            kind,_,_,operation=item
+            if operation!=self._operation:continue
+            if pending and pending[-1][0]=='progress':
+                # Keep just the latest progress; a terminal message supersedes it.
+                if kind in ('progress','download','error'):pending.pop()
+            pending.append(item)
+        return pending
+
+    def _handle_result(self,kind,result,manual):
+        if kind=='check':
+            self.busy=False;self.latest=result
+            available=result['state']=='available'
+            self.button.configure(text='一键更新' if available else '检查更新',
+                                  bootstyle='success' if available else 'secondary')
+            if manual:messagebox.showinfo('软件更新',result['message'],parent=self.window)
+        elif kind=='error':self.fail(result)
+        elif kind=='progress':
+            done,total=result
+            percent=min(100,done*100//total)
+            self.download_bar.configure(value=percent)
+            self.button.configure(text=f'下载更新 {percent}%')
+        elif kind=='download':
+            self._operation+=1
+            self.download_bar.pack_forget()
+            folder,target=result
+            self.downloaded=(folder,target)
+            if open_forms(self.window):
+                raise ValueError('更新包已下载。请先保存并关闭编辑窗口，再点击更新。')
+            flush=getattr(self.window,'_flush_embedded_charts',lambda:True)
+            if not flush():raise ValueError('图表仍在保存，请稍后再更新。')
+            request=dict(target=target,parent_pid=os.getpid(),runtime=str(self.window.store.root),
+                install_root=os.environ['APLUS_INSTALL_ROOT'])
+            atomic_json(folder/'request.json',request)
+            subprocess.Popen([sys.executable,'--installed-update',str(folder/'request.json')],
+                creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            self.window._update_pending=True
+            self.waiting=(folder,time.monotonic()+15)
+            self.button.configure(text='准备重启…')
+
     def poll(self):
         if getattr(self.window,'_closing',False):return
-        try:
-            kind,result,manual=self.results.get_nowait()
-            if kind=='check':
-                self.busy=False;self.latest=result
-                available=result['state']=='available'
-                self.button.configure(text='一键更新' if available else '检查更新',
-                                      bootstyle='success' if available else 'secondary')
-                if manual:messagebox.showinfo('软件更新',result['message'],parent=self.window)
-            elif kind=='error':self.fail(result)
-            elif kind=='progress':
-                done,total=result
-                percent=min(100,done*100//total)
-                self.download_bar.configure(value=percent)
-                self.button.configure(text=f'下载更新 {percent}%')
-            elif kind=='download':
-                self.download_bar.pack_forget()
-                folder,target=result
-                self.downloaded=(folder,target)
-                if open_forms(self.window):
-                    raise ValueError('更新包已下载。请先保存并关闭编辑窗口，再点击更新。')
-                flush=getattr(self.window,'_flush_embedded_charts',lambda:True)
-                if not flush():raise ValueError('图表仍在保存，请稍后再更新。')
-                request=dict(target=target,parent_pid=os.getpid(),runtime=str(self.window.store.root),
-                    install_root=os.environ['APLUS_INSTALL_ROOT'])
-                atomic_json(folder/'request.json',request)
-                subprocess.Popen([sys.executable,'--installed-update',str(folder/'request.json')],
-                    creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-                self.window._update_pending=True
-                self.waiting=(folder,time.monotonic()+15)
-                self.button.configure(text='准备重启…')
-        except queue.Empty:pass
-        except Exception as exc:self.fail(str(exc),keep_available=(kind=='download' and self.downloaded is not None))
+        for kind,result,manual,operation in self._pending_results():
+            if operation!=self._operation:continue
+            try:self._handle_result(kind,result,manual)
+            except Exception as exc:self.fail(str(exc),keep_available=(kind=='download' and self.downloaded is not None))
         if self.waiting:
             folder,deadline=self.waiting
             if (folder/'ready.json').exists():
