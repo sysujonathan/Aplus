@@ -13,8 +13,10 @@ sys.path.insert(0, str(ROOT))
 
 def samples(folder):
     folder.mkdir(parents=True, exist_ok=True)
-    font = ImageFont.truetype('C:/Windows/Fonts/msyh.ttc', 24)
-    small = ImageFont.truetype('C:/Windows/Fonts/msyh.ttc', 18)
+    font_path = next((path for path in ('C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/arial.ttf')
+                      if Path(path).is_file()), None)
+    font = ImageFont.truetype(font_path, 24) if font_path else ImageFont.load_default()
+    small = ImageFont.truetype(font_path, 18) if font_path else font
     for index, word in enumerate(('microDB', 'ETHUSD', '锦和商业')):
         image = Image.new('RGB', (1400, 800), '#101923')
         draw = ImageDraw.Draw(image)
