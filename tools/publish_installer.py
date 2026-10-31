@@ -18,7 +18,7 @@ sys.path.insert(0,str(ROOT))
 
 
 def gh_json(path, *, missing_ok=False):
-    result=subprocess.run(['gh','api','repos/sysujonathan/Aplus'+path],capture_output=True,text=True)
+    result=subprocess.run(['gh','api','repos/sysujonathan/Aplus'+path],capture_output=True,text=True,encoding='utf-8')
     if result.returncode:
         if missing_ok and '(HTTP 404)' in result.stderr:return None
         raise RuntimeError('GitHub release lookup failed: '+result.stderr.strip())
@@ -101,8 +101,10 @@ def main():
     existing=None
     if args.resume:
         ensure_forward_release(value)
-        ref=gh_json('/commits/'+tag,missing_ok=True)
-        if ref and ref.get('sha')!=value['commit']:
+        # A missing commit-ish returns 422, not "tag absent". The exact Git
+        # reference endpoint returns 404; resolve existing annotated tags too.
+        ref=gh_json('/git/ref/tags/'+tag,missing_ok=True)
+        if ref is not None and gh_json('/commits/'+tag).get('sha')!=value['commit']:
             raise ValueError('Existing tag belongs to a different commit')
         existing=gh_json('/releases/tags/'+tag,missing_ok=True)
     # gh refuses duplicate tags/releases. Never rewrite a published package.
