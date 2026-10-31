@@ -372,6 +372,7 @@
       if (!window.confirm('资料尚未保存。放弃修改？')) return false;
       S.dirtyMetadata = false;
     }
+    S.caseSeq++;
     S.overlay = null; S.original = null;
     $('#overlay-root').innerHTML = '';
     return true;
@@ -519,14 +520,19 @@
     const c = fromTrial ? S.trialCase : S.case;
     if (!c || !imageOf(c,S.imageIndex)) return;
     S.imageError = null;
-    S.original = {case:c,index:S.imageIndex,zoom:1,x:0,y:0,drag:null,fromStudy,fromTrial};
+    const index = fromTrial && !S.trialRecord ? 0 : S.imageIndex;
+    S.original = {case:c,index,zoom:1,x:0,y:0,drag:null,fromStudy,fromTrial};
     renderOriginal();
   }
   function renderOriginal() {
     const original = S.original;
     const c = original.case;
     const image = imageOf(c,original.index);
-    const html = `<div class="overlay original-overlay"><section class="original-dialog" role="dialog" aria-modal="true" aria-label="原图速览"><div class="original-toolbar"><span class="image-name">${esc(image?.name || caseTitle(c))}${c.data_kind === 'test' ? ' · 测试样本' : ''} · 私密</span><div class="button-group"><button class="btn ghost icon-button" data-action="zoom-out" aria-label="缩小">${icon('minus')}</button><span class="zoom-label">${Math.round(original.zoom * 100)}%</span><button class="btn ghost icon-button" data-action="zoom-in" aria-label="放大">${icon('plus')}</button><button class="btn small" data-action="zoom-fit">适应</button><button class="btn small" data-action="zoom-native">1:1</button>${!original.fromStudy && !original.fromTrial ? '<button class="btn primary small" data-action="quick-study">研究此案例</button>' : ''}<button class="btn ghost icon-button" data-action="close-original" aria-label="返回">${icon('close')}</button></div></div><div class="original-stage" id="original-stage">${imageUrl(image) ? `<img id="original-image" src="${esc(imageUrl(image))}" alt="${esc(image?.name || caseTitle(c))}" draggable="false">` : `<div class="loading"><p>${esc(imageMessage(image))}</p>${S.imageError?.id === image?.id ? '<button class="btn" data-action="retry-image">重新读取原图</button>' : ''}</div>`}</div><div class="original-footer"><span>${original.index + 1} / ${c.images.length} · ${image?.width || ''}${image?.height ? ' × ' + image.height : ''}</span><span class="pan-hint">滚轮缩放 · 拖动平移 · Esc 返回</span><div class="button-group">${c.images.length > 1 ? `<button class="btn ghost small" data-action="original-prev" ${original.index <= 0 ? 'disabled' : ''}>上一张</button><button class="btn ghost small" data-action="original-next" ${original.index >= c.images.length - 1 ? 'disabled' : ''}>下一张</button>` : ''}</div></div></section></div>`;
+    // Detach the covered original so it cannot outlive eviction from the cache.
+    const background = S.page === 'study' ? $('.study-image') : S.page === 'trial' ? $('#trial-image-wrap') : null;
+    if (background) background.innerHTML = '';
+    const canBrowse = c.images.length > 1 && (!original.fromTrial || !!S.trialRecord);
+    const html = `<div class="overlay original-overlay"><section class="original-dialog" role="dialog" aria-modal="true" aria-label="原图速览"><div class="original-toolbar"><span class="image-name">${esc(image?.name || caseTitle(c))}${c.data_kind === 'test' ? ' · 测试样本' : ''} · 私密</span><div class="button-group"><button class="btn ghost icon-button" data-action="zoom-out" aria-label="缩小">${icon('minus')}</button><span class="zoom-label">${Math.round(original.zoom * 100)}%</span><button class="btn ghost icon-button" data-action="zoom-in" aria-label="放大">${icon('plus')}</button><button class="btn small" data-action="zoom-fit">适应</button><button class="btn small" data-action="zoom-native">1:1</button>${!original.fromStudy && !original.fromTrial ? '<button class="btn primary small" data-action="quick-study">研究此案例</button>' : ''}<button class="btn ghost icon-button" data-action="close-original" aria-label="返回">${icon('close')}</button></div></div><div class="original-stage" id="original-stage">${imageUrl(image) ? `<img id="original-image" src="${esc(imageUrl(image))}" alt="${esc(image?.name || caseTitle(c))}" draggable="false">` : `<div class="loading"><p>${esc(imageMessage(image))}</p>${S.imageError?.id === image?.id ? '<button class="btn" data-action="retry-image">重新读取原图</button>' : ''}</div>`}</div><div class="original-footer"><span>${original.index + 1} / ${c.images.length} · ${image?.width || ''}${image?.height ? ' × ' + image.height : ''}</span><span class="pan-hint">滚轮缩放 · 拖动平移 · Esc 返回</span><div class="button-group">${canBrowse ? `<button class="btn ghost small" data-action="original-prev" ${original.index <= 0 ? 'disabled' : ''}>上一张</button><button class="btn ghost small" data-action="original-next" ${original.index >= c.images.length - 1 ? 'disabled' : ''}>下一张</button>` : ''}</div></div></section></div>`;
     S.overlay = 'original'; $('#overlay-root').innerHTML = html;
     applyOriginalTransform();
     requestVisibleImage();
@@ -542,7 +548,7 @@
   }
   function closeOriginal() {
     const original = S.original;
-    S.imageIndex = original?.index || 0;
+    S.imageIndex = original?.fromTrial && !S.trialRecord ? 0 : original?.index || 0;
     S.original = null; S.overlay = null; $('#overlay-root').innerHTML = '';
     if (S.page === 'study' || S.page === 'trial') render();
   }
@@ -716,7 +722,12 @@
         if (image?.width && image.naturalWidth) { S.original.zoom = image.naturalWidth / image.width; S.original.x = 0; S.original.y = 0; applyOriginalTransform(); }
         break;
       }
-      case 'original-prev': case 'original-next': S.original.index += action === 'original-next' ? 1 : -1; S.original.zoom = 1; S.original.x = 0; S.original.y = 0; return renderOriginal();
+      case 'original-prev': case 'original-next': {
+        if (!S.original || (S.original.fromTrial && !S.trialRecord)) return;
+        S.original.index = Math.max(0,Math.min(S.original.case.images.length - 1,S.original.index + (action === 'original-next' ? 1 : -1)));
+        S.original.zoom = 1; S.original.x = 0; S.original.y = 0;
+        return renderOriginal();
+      }
       case 'retry-image': S.imageError = null; if (S.original) renderOriginal(); else render(); return;
       case 'quick-study': { const id = S.original.case.id; closeOriginal(); return openCase(id,false); }
       case 'choose-trial': return chooseTrial();
@@ -727,7 +738,7 @@
       case 'save-judgment': return saveJudgment();
       case 'save-trial-review': return saveTrialReview();
       case 'finish-trial': return finishTrial();
-      case 'trial-image': S.imageIndex = Number(element.dataset.index); render(); break;
+      case 'trial-image': if (!S.trialRecord) return; S.imageIndex = Number(element.dataset.index); render(); break;
       case 'select-topic': return selectTopic(element.dataset.id,false);
       case 'universe-enter': return selectTopic(element.dataset.id,true);
       case 'universe-root': S.topicSeq++; S.topicParent = null; S.topicId = null; S.topicCases = []; S.topicLoading = false; render(); break;

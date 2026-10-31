@@ -25,7 +25,7 @@ vm.runInContext(source.slice(0, cut) + `
   refreshData = async () => {};
   search = async () => {};
   toast = (message,error=false) => window.__events.push({message,error});
-  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,requestVisibleImage,rememberOriginal,
+  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
     imageBusy:()=>imageWorker,cacheStats:()=>({count:originalCache.size,bytes:originalCacheBytes}),
     clearImages:()=>{originalCache.clear();originalCacheBytes=0;imageWanted=null;},
     setRender:fn=>{render=fn;},setRefresh:fn=>{refreshData=fn;}};
@@ -271,6 +271,12 @@ async function run() {
   assert.equal(calls.length,3);assert.equal(production.cacheStats().count,2);
   assert(production.cacheStats().bytes<=64*1024*1024);
   assert.equal(imageUrl(metadata.images[0]),'','the oldest original is evicted instead of accumulating cases');
+  assert.match(element('.study-image').innerHTML,/data:image\/png/);
+  production.openOriginal();
+  assert.equal(element('.study-image').innerHTML,'','a covered study image cannot retain an evicted original outside the cache');
+  await production.dispatch('original-next',{},{});
+  assert.equal(S.original.index,2,'rapid next actions cannot move beyond the last image');
+  production.closeOriginal();
 
   reset();S.pending=[];S.page='study';S.case=metadata;
   const releaseImages=new Map();
@@ -303,7 +309,35 @@ async function run() {
   await production.startTrial(metadata.id);await settleImages();
   assert.deepEqual(calls,[['multi-case','a',false]],'a new trial reads only the first judgment image');
   assert.doesNotMatch(production.trial(),/data-action="trial-image"/,'later screenshots remain hidden until the first judgment');
+  production.openOriginal(false,true);
+  assert.doesNotMatch(element('#overlay-root').innerHTML,/data-action="original-(prev|next)"/,'fullscreen cannot reveal later screenshots before judgment');
+  assert.equal(element('#trial-image-wrap').innerHTML,'','the trial does not keep a second covered original');
+  await production.dispatch('original-next',{},{});
+  await production.dispatch('original-prev',{},{});
+  await production.dispatch('trial-image',{dataset:{index:'2'}},{});
+  assert.equal(S.original.index,0);assert.equal(S.imageIndex,0);
+  production.closeOriginal();await settleImages();
+  assert.equal(S.imageIndex,0,'closing pre-judgment fullscreen preserves the first screenshot');
+  assert.equal(calls.length,1,'pre-judgment controls never request a later original');
+  assert.match(production.trial(),/原截图可能含后续走势/);
+  S.trialRecord={id:'judged',judgment:'wait',details:{marks:[]}};
+  production.openOriginal(false,true);
+  assert.match(element('#overlay-root').innerHTML,/data-action="original-next"/);
+  await production.dispatch('original-next',{},{});await settleImages();
+  assert.equal(S.original.index,1);assert.equal(calls.at(-1)[1],'b','later images become available after the original judgment is saved');
+  production.closeOriginal();await settleImages();
+  assert.equal(S.imageIndex,1);assert.match(production.trial(),/data-action="trial-image"/);
   production.setRender(()=>{});
+
+  reset();S.pending=[];S.page='trial';S.overlay='trial-picker';
+  let releaseClosedTrial;
+  bridge.get_case=()=>new Promise(resolve=>{releaseClosedTrial=resolve;});
+  const closedTrial=production.startTrial(metadata.id);
+  await Promise.resolve();await Promise.resolve();
+  production.closeOverlay();
+  releaseClosedTrial({ok:true,case:metadata});await closedTrial;
+  assert.equal(S.trialCase,null,'closing a picker cancels its pending case response');
+  assert.equal(S.overlay,null);
 
   reset();S.pending=[];S.page='study';S.case=metadata;
   let releaseOldCase,releaseNewCase;
@@ -323,6 +357,6 @@ async function run() {
   S.context.can_compare=false;
   assert.doesNotMatch(production.study(),/data-action="compare"/,'unsupported comparison does not expose an ineffective action');
 
-  console.log(JSON.stringify({ok:true,checks:'durable-acknowledgement, failure-retention, duplicate-confirmation, independent-cases, draft-scope, close-guard, image-origin, escaping, pagination, append-failure-retention, load-guard, query-reset, comparison-search-entry, topic-draft-race, stale-topic-response, immediate-search-feedback, recent-outside-first-page, selected-original-only, latest-image-race, bounded-image-cache, image-failure-retry, stale-case-response, comparison-action-scope'}));
+  console.log(JSON.stringify({ok:true,checks:'durable-acknowledgement, failure-retention, duplicate-confirmation, independent-cases, draft-scope, close-guard, image-origin, escaping, pagination, append-failure-retention, load-guard, query-reset, comparison-search-entry, topic-draft-race, stale-topic-response, immediate-search-feedback, recent-outside-first-page, selected-original-only, latest-image-race, bounded-image-cache, image-failure-retry, stale-case-response, comparison-action-scope, trial-fullscreen-judgment-boundary, covered-original-release, closed-trial-response'}));
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

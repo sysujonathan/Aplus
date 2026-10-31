@@ -145,6 +145,9 @@ def run(folder, reopen=False):
             checks.extend(['three_keyword_partial_search', 'no_result_feedback', 'original_exact_bytes_zoom_back'])
             # Study note and original judgment are separate persisted records.
             case_id = store.pa_search('microDB')[0]['id']
+            store.pa_save_case([{'name': f'sample-{i}.png',
+                'data': (folder / 'samples' / f'sample-{i}.png').read_bytes()} for i in (2, 3)],
+                case_id=case_id, allow_duplicate=True)
             click('.case-card')
             wait("Boolean(document.querySelector('[data-action=quick-study]'))")
             click('[data-action=quick-study]')
@@ -158,11 +161,26 @@ def run(folder, reopen=False):
             click('[data-action=start-trial]')
             wait("document.querySelector('#trial-image')?.complete && document.querySelector('#trial-image')?.naturalWidth > 0")
             assert not evaluate("Boolean(document.querySelector('#trial-evidence'))")
+            first_trial_image = evaluate("document.querySelector('#trial-image').src")
+            click('[data-action=original]')
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0")
+            assert not evaluate("Boolean(document.querySelector('[data-action=original-next]') || document.querySelector('[data-action=original-prev]'))")
+            assert evaluate("document.querySelector('#original-image').src") == first_trial_image
+            click('[data-action=close-original]')
+            wait("document.querySelector('#trial-image')?.complete && document.querySelector('#trial-image')?.naturalWidth > 0")
+            assert evaluate("document.querySelector('#trial-image').src") == first_trial_image
             click('[data-action=judgment][data-value=wait]')
             click('[data-action=save-judgment]')
             wait("Boolean(document.querySelector('#trial-evidence'))")
+            click('[data-action=original]')
+            wait("Boolean(document.querySelector('[data-action=original-next]'))")
+            click('[data-action=original-next]')
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('.original-footer')?.innerText.includes('2 / 3')")
+            assert base64.b64decode(evaluate("document.querySelector('#original-image').src").split(',', 1)[1]) == (folder / 'samples/sample-2.png').read_bytes()
+            click('[data-action=close-original]')
             assert len(store.pa_growth()['trials']) == 1
-            checks.extend(['append_only_research_note', 'minimal_judgment_then_evidence_no_score'])
+            checks.extend(['append_only_research_note', 'minimal_judgment_then_evidence_no_score',
+                           'trial_original_respects_judgment_boundary'])
             click('[data-action=navigate][data-page=universe]')
             wait("Boolean(document.querySelector('[data-action=select-topic]'))")
             click('[data-action=select-topic][data-id=continuation]')
@@ -185,9 +203,6 @@ def run(folder, reopen=False):
             assert reopened.pa_growth()['stats']['trials'] == 1
             checks.append('fresh_store_reads_persisted_records')
             # Appending does not make the detail API carry all full-size images.
-            store.pa_save_case([{'name': f'sample-{i}.png',
-                'data': (folder / 'samples' / f'sample-{i}.png').read_bytes()} for i in (2, 3)],
-                case_id=case_id, allow_duplicate=True)
             before = len(image_reads)
             detail = bridge.get_case(case_id)
             assert detail['ok'] and len(detail['case']['images']) == 3
@@ -202,10 +217,13 @@ def run(folder, reopen=False):
             assert len(image_reads) == before, 'study/fullscreen reuse the current cached original'
             click('[data-action=original-next]')
             wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0 && document.querySelector('.original-footer')?.innerText.includes('2 / 3')")
-            assert image_reads[before:] == [(case_id, detail['case']['images'][1]['id'], False)]
-            assert base64.b64decode(evaluate("document.querySelector('#original-image').src").split(',', 1)[1]) == (folder / 'samples/sample-2.png').read_bytes()
+            assert len(image_reads) == before, 'the post-judgment original is still cached'
+            click('[data-action=original-next]')
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0 && document.querySelector('.original-footer')?.innerText.includes('3 / 3')")
+            assert image_reads[before:] == [(case_id, detail['case']['images'][2]['id'], False)]
+            assert base64.b64decode(evaluate("document.querySelector('#original-image').src").split(',', 1)[1]) == (folder / 'samples/sample-3.png').read_bytes()
             click('[data-action=original-prev]')
-            wait("document.querySelector('#original-image')?.complete && document.querySelector('.original-footer')?.innerText.includes('1 / 3')")
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('.original-footer')?.innerText.includes('2 / 3')")
             assert len(image_reads) == before + 1, 'returning one image reuses the bounded cache'
             click('[data-action=close-original]')
             checks.append('selected_original_only_and_cached_fullscreen')

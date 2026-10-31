@@ -84,6 +84,7 @@ def test_pa_growth_real_webview_store_capture_search_and_reopen():
         'original_exact_bytes_zoom_back',
         'append_only_research_note',
         'minimal_judgment_then_evidence_no_score',
+        'trial_original_respects_judgment_boundary',
         'knowledge_case_link_and_evidence_growth',
         'fresh_store_reads_persisted_records',
         'selected_original_only_and_cached_fullscreen',
