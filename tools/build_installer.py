@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import re
+import shutil
 from urllib.request import urlretrieve
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -87,6 +88,7 @@ def main(argv=None):
     # launch a provider child and exchange pipe messages. Probe offline before
     # wrapping any installer; never contact a supplier during this build gate.
     run([sys.executable,ROOT/'tools/test_installed_providers.py',app/'AplusApp.exe'],timeout=120)
+    run([sys.executable,ROOT/'tools/test_schema_migration.py',app/'AplusApp.exe'],timeout=150)
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     run([compiler,'/nologo','/target:winexe','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',
          '/win32icon:'+str(ROOT/'icon_aplus.ico'),'/out:'+str(payload/'Aplus.exe'),ROOT/'packaging/Launcher.cs',assembly])
@@ -94,6 +96,25 @@ def main(argv=None):
     sign(app/'AplusApp.exe')
     from workbench.installed_cleanup import write_inventory
     write_inventory(app)
+    # Legacy installed clients only accept a schema-eight program. Deliver a
+    # genuine small bootstrap (no business Store), with the schema-nine app
+    # explicitly declared and byte-bound as its nested primary payload.
+    bridge_release=dict(release,database_schema=8,component='schema_bridge',payload_schema=9)
+    bridge_metadata=ROOT/'build'/'bridge-metadata'/'installed-release.json'
+    bridge_metadata.parent.mkdir(parents=True,exist_ok=True)
+    bridge_metadata.write_text(json.dumps(bridge_release,indent=2),encoding='utf-8')
+    bridge_version,_=write_version_resources(bridge_release,bridge_metadata.parent)
+    run([sys.executable,'-m','PyInstaller','--noconfirm','--clean',ROOT/'packaging/Bridge.spec'],
+        env=dict(os.environ,APLUS_BUILD_METADATA=str(bridge_metadata),APLUS_BUILD_VERSION_FILE=str(bridge_version)))
+    bridge=payload/'AplusBridge'
+    if json.loads((bridge/'_internal/installed-release.json').read_text())!=bridge_release:
+        raise SystemExit('Compatibility bootstrap identity mismatch')
+    sign(bridge/'AplusApp.exe')
+    shutil.copytree(app,bridge/'primary')
+    write_inventory(bridge)
+    run([bridge/'AplusApp.exe','--bridge-self-test',ROOT/'build'/'bridge-self-test.json'],timeout=120)
+    release=dict(bridge_release,upgrade=dict(protocol=1,from_schema=8,to_schema=9,
+        entry='primary/AplusApp.exe',inventory_sha256=hashlib.sha256((bridge/'installed-files.json').read_bytes()).hexdigest()))
     (payload/'aplus-install.json').write_text(json.dumps({'protocol':1,'app_id':'Aplus-installed-v1'}),encoding='utf-8')
     bootstrap=payload/'MicrosoftEdgeWebview2Setup.exe'
     if not bootstrap.exists():
@@ -109,7 +130,7 @@ if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notm
     run(['powershell.exe','-NoProfile','-NonInteractive','-Command',verify],env=verify_env)
     output=payload/'installers';output.mkdir(exist_ok=True)
     run([args.iscc.resolve(),'/DAppVersion='+release['version'],'/DPayload='+str(payload),
-         '/DOutput='+str(output),ROOT/'packaging/Aplus.iss'])
+         '/DAppFolder=AplusBridge','/DOutput='+str(output),ROOT/'packaging/Aplus.iss'])
     setup=output/('AplusSetup-'+release['version']+'-x64.exe')
     sign(setup)
     release['package']=dict(url='https://github.com/sysujonathan/Aplus/releases/download/v'+

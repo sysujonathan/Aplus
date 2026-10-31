@@ -24,8 +24,16 @@ def binaries(tmp_path_factory):
     root=tmp_path_factory.mktemp('native-recovery')
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     launcher=root/'Aplus.exe'
+    source=root/'Launcher.cs'
+    text=(ROOT/'packaging/Launcher.cs').read_text(encoding='utf-8')
+    guard='Gate(@"Local\\AplusDesktopWorkbench")'
+    assert text.count(guard)==1
+    # Run the real guard/recovery with a test-owned desktop namespace. A user's
+    # genuine running desktop must never be stopped merely to run this suite.
+    name='Local\\AplusNativeRecovery-'+hashlib.sha256(str(root).encode()).hexdigest()[:20]
+    source.write_text(text.replace(guard,'Gate(@"'+name+'")'),encoding='utf-8')
     subprocess.run([str(compiler),'/nologo','/target:winexe','/reference:System.Windows.Forms.dll',
-        '/reference:System.Web.Extensions.dll','/out:'+str(launcher),str(ROOT/'packaging/Launcher.cs')],check=True,capture_output=True)
+        '/reference:System.Web.Extensions.dll','/out:'+str(launcher),str(source)],check=True,capture_output=True)
     stub=root/'Stub.cs'
     stub.write_text('''using System;using System.IO;class Stub {
 static void Main(){var path=Environment.GetEnvironmentVariable("APLUS_RECOVERY_PROOF");
