@@ -50,6 +50,12 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == '--installed-update':
         from workbench.installed_update import worker
         return worker(Path(sys.argv[2]))
+    if len(sys.argv)==3 and sys.argv[1]=='--installed-update-probe':
+        from tools.schema_bridge_probe import run
+        return run(sys.argv[2])
+    if len(sys.argv)==3 and sys.argv[1]=='--migration-self-test':
+        from tools.schema_migration_probe import run
+        return run(sys.argv[2])
     if len(sys.argv) > 2 and sys.argv[1] == '--smoke-test':
         from tools.installer_smoke import run
         return run(sys.argv[2])

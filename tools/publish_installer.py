@@ -57,7 +57,7 @@ def ensure_forward_release(value):
     except HTTPError as exc:
         if exc.code==404:return
         raise
-    latest=load_manifest(api=release_api)
+    latest=load_manifest(api=release_api,select_payload=False)
     if latest['sequence']>value['sequence'] or (latest['sequence']==value['sequence'] and latest!=value):
         raise ValueError('Refusing to replace a newer or different stable release')
 
@@ -68,7 +68,7 @@ def verify_online(value):
     for delay in (0,2,4):
         if delay:time.sleep(delay)
         try:
-            if load_manifest(api=release_api)==value:return
+            if load_manifest(api=release_api,select_payload=False)==value:return
         except (OSError,ValueError):pass
     raise ValueError('Release was published, but online update discovery is not yet confirmed; safely rerun publication')
 
