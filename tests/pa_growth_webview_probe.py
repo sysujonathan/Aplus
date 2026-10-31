@@ -162,7 +162,7 @@ def run(folder, reopen=False):
             wait("document.querySelector('#trial-image')?.complete && document.querySelector('#trial-image')?.naturalWidth > 0")
             assert not evaluate("Boolean(document.querySelector('#trial-evidence'))")
             first_trial_image = evaluate("document.querySelector('#trial-image').src")
-            click('[data-action=original]')
+            click('[data-action=trial-original]')
             wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0")
             assert not evaluate("Boolean(document.querySelector('[data-action=original-next]') || document.querySelector('[data-action=original-prev]'))")
             assert evaluate("document.querySelector('#original-image').src") == first_trial_image
@@ -172,7 +172,7 @@ def run(folder, reopen=False):
             click('[data-action=judgment][data-value=wait]')
             click('[data-action=save-judgment]')
             wait("Boolean(document.querySelector('#trial-evidence'))")
-            click('[data-action=original]')
+            click('[data-action=trial-original]')
             wait("Boolean(document.querySelector('[data-action=original-next]'))")
             click('[data-action=original-next]')
             wait("document.querySelector('#original-image')?.complete && document.querySelector('.original-footer')?.innerText.includes('2 / 3')")
