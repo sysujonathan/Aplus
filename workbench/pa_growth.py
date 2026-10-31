@@ -6,9 +6,13 @@ always be rebuilt by reopening the database; originals remain immutable bytes.
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import io
 import json
 import os
+import stat
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 import uuid
@@ -22,6 +26,8 @@ from .store import digest, dumps
 
 MAX_IMAGE_BYTES = 40 * 1024 * 1024
 MAX_IMAGE_PIXELS = 50_000_000
+MAX_CASE_IMAGES = 100
+MAX_CASE_BYTES = 128 * 1024 * 1024
 MAX_BACKUP_BYTES = 2 * 1024 * 1024 * 1024
 MAX_BACKUP_RECORDS = 20_000
 FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'), 'WEBP': ('image/webp', '.webp')}
@@ -80,10 +86,15 @@ def metadata(value=None, *, partial=False):
 def image_info(data):
     if not isinstance(data, bytes) or not data or len(data) > MAX_IMAGE_BYTES:
         raise ValueError('图片为空或超过 40 MB')
+    result = _image_details(lambda: io.BytesIO(data))
+    return dict(result, sha256=digest(data), bytes=len(data))
+
+
+def _image_details(source):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter('error', Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as image:
+            with Image.open(source()) as image:
                 if image.format not in FORMATS:
                     raise ValueError('仅支持 PNG、JPEG 或 WebP 图片')
                 if image.width * image.height > MAX_IMAGE_PIXELS:
@@ -93,14 +104,13 @@ def image_info(data):
                 image.verify()
             # verify() checks container integrity; decoding also catches a
             # truncated JPEG stream that would otherwise fail in the viewer.
-            with Image.open(io.BytesIO(data)) as image:
+            with Image.open(source()) as image:
                 image.load()
     except ValueError:
         raise
     except Exception as exc:
         raise ValueError('图片无法读取，请重新复制或选择原图') from exc
-    return {'sha256': digest(data), 'mime': mime, 'suffix': suffix,
-            'width': size[0], 'height': size[1], 'bytes': len(data)}
+    return {'mime': mime, 'suffix': suffix, 'width': size[0], 'height': size[1]}
 
 
 def _owner(store):
@@ -120,6 +130,14 @@ def _decode(row):
             value[key] = json.loads(value[key])
     value.pop('owner', None)
     return value
+
+
+def case_metadata(store):
+    """Statistics/labels need no image catalogue or original image reads."""
+    owner = _owner(store)
+    rows = store.rows("SELECT id,title,memory,symbol,topic_ids,data_kind FROM pa_cases "
+                      "WHERE owner=? AND status='private_draft'", (owner,))
+    return [_decode(row) for row in rows]
 
 
 def _case_row(store, case_id, owner):
@@ -177,15 +195,90 @@ def _write_original(store, owner, identifier, data, info):
         if path.exists():
             raise ValueError('原图保存位置已存在，请重新保存')
         os.replace(temporary, path)
+        created = getattr(store._atomic_local, 'pa_created', None)
+        if created is not None:
+            created.append((owner, relative, info['sha256'], info['bytes']))
     finally:
         temporary.unlink(missing_ok=True)
     return relative
+
+
+def _file_digest(path):
+    checksum = hashlib.sha256()
+    with Path(path).open('rb') as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b''):
+            checksum.update(block)
+    return checksum.hexdigest()
+
+
+def _cleanup_created(store, created):
+    """Best effort only after this PA scope has left its actual transaction.
+
+    A UUID alone is not deletion proof. Keep a file whenever references, path,
+    bytes, or file identity cannot be checked, including an uncertain commit.
+    """
+    with store._files_lock:
+        for owner, relative, checksum, length in created:
+            try:
+                candidate = store.root / relative
+                resolved = _asset_path(store, owner, relative)
+                if candidate.is_symlink() or candidate.absolute() != resolved:
+                    continue
+                before = candidate.stat()
+                if not stat.S_ISREG(before.st_mode) or before.st_size != length:
+                    continue
+                if _file_digest(candidate) != checksum:
+                    continue
+                # Store.atomic_write has already cleared its active connection
+                # and completed rollback/commit before cleanup can reach here.
+                with store.connect() as db:
+                    referenced = db.execute('SELECT 1 FROM pa_assets WHERE path=? LIMIT 1', (relative,)).fetchone()
+                if referenced:
+                    continue
+                after = candidate.stat()
+                if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                    continue
+                candidate.unlink()
+            except Exception:
+                # Never mask the save failure or sacrifice an uncertain file.
+                continue
+
+
+@contextlib.contextmanager
+def write_scope(store):
+    """PA-only file ownership around the existing Store transaction contract."""
+    if getattr(store._atomic_local, 'pa_created', None) is not None:
+        yield
+        return
+    if getattr(store._atomic_local, 'connection', None) is not None:
+        # A generic caller owns the final commit. Do not guess its outcome.
+        yield
+        return
+    created = []
+    store._atomic_local.pa_created = created
+    try:
+        try:
+            with store.atomic_write():
+                yield
+        except BaseException:
+            _cleanup_created(store, created)
+            raise
+    finally:
+        del store._atomic_local.pa_created
+
+
+def _check_case_capacity(count, size):
+    if count > MAX_CASE_IMAGES or size > MAX_CASE_BYTES:
+        raise ValueError('同一案例最多保存 100 张图片、总计 128 MB；请另存为新案例')
 
 
 def save_case(store, images, value=None, *, case_id=None, allow_duplicate=False):
     value = metadata(value, partial=bool(case_id))
     if not isinstance(images, list) or not images or len(images) > 100:
         raise ValueError('请选择 1 至 100 张图片')
+    _check_case_capacity(len(images), sum(len(item.get('data', b'')) for item in images
+                                         if isinstance(item, dict) and isinstance(item.get('data'), bytes)))
     prepared = []
     for item in images:
         if not isinstance(item, dict):
@@ -197,7 +290,7 @@ def save_case(store, images, value=None, *, case_id=None, allow_duplicate=False)
     owner = _owner(store)
     if case_id:
         _case_row(store, case_id, owner)
-    with store._files_lock:
+    with write_scope(store), store._files_lock:
         duplicates = {item['id']: item for data, _, _ in prepared for item in find_duplicates(store, data)}
         repeated_batch = len({info['sha256'] for _, info, _ in prepared}) < len(prepared)
         if (duplicates or repeated_batch) and not allow_duplicate:
@@ -211,11 +304,16 @@ def save_case(store, images, value=None, *, case_id=None, allow_duplicate=False)
             assets.append((asset_id, owner, info['sha256'], relative, name, info['mime'],
                            info['width'], info['height'], info['bytes'], timestamp))
         with store.connect() as db:
-            if getattr(store._atomic_local, 'connection', None) is None:
+            if not db.in_transaction:
                 db.execute('BEGIN IMMEDIATE')
             if case_id:
                 _case_row(store, case_id, owner)
+                existing = db.execute('SELECT COUNT(*) AS n,COALESCE(SUM(a.bytes),0) AS size '
+                                      'FROM pa_assets a JOIN pa_case_images i ON i.asset_id=a.id '
+                                      'WHERE i.case_id=? AND a.owner=?', (case_id, owner)).fetchone()
+                _check_case_capacity(existing['n'] + len(prepared), existing['size'] + sum(info['bytes'] for _, info, _ in prepared))
             else:
+                _check_case_capacity(len(prepared), sum(info['bytes'] for _, info, _ in prepared))
                 db.execute('INSERT INTO pa_cases(id,owner,status,title,memory,keywords,tags,topic_ids,symbol,timeframe,market,data_kind,created,updated) '
                            "VALUES(?,?,'private_draft',?,?,?,?,?,?,?,?,?,?,?)",
                            (identifier, owner, value['title'], value['memory'], dumps(value['keywords']),
@@ -379,7 +477,6 @@ def topic_note(store, topic_id, text):
 
 def growth(store):
     owner = _owner(store)
-    cases = search(store, limit=1000)
     # Counts use the full owner-scoped tables, independent of search pagination.
     count = lambda table: store.rows('SELECT COUNT(*) AS n FROM ' + table + ' WHERE owner=?', (owner,))[0]['n']
     notes = store.rows('SELECT n.id,n.case_id,n.author,n.text,n.created FROM pa_notes n JOIN pa_cases c ON c.id=n.case_id '
@@ -394,7 +491,8 @@ def growth(store):
         item['author'] = '我'
     researched = {item['topic_id'] for item in topic_notes}
     recent = store.rows("SELECT * FROM pa_cases WHERE owner=? AND status='private_draft' AND viewed<>'' ORDER BY viewed DESC LIMIT 6", (owner,))
-    return {'stats': {'cases': count('pa_cases'), 'images': count('pa_assets'), 'notes': count('pa_notes'),
+    cases = count('pa_cases')
+    return {'stats': {'cases': cases, 'images': count('pa_assets'), 'notes': count('pa_notes'),
                       'trials': count('pa_trials'), 'topics': len(researched)},
             'recent': [_summary(store, row, owner) for row in recent],
             'notes': notes, 'trials': trials, 'topic_notes': topic_notes,
@@ -447,7 +545,7 @@ def backup(store, path):
     return {'cases': len(cases), 'images': len(assets), 'path': str(Path(path).resolve())}
 
 
-def _read_backup(path):
+def _read_backup(path, staging):
     with zipfile.ZipFile(path) as archive:
         entries = archive.infolist()
         names = [item.filename for item in entries]
@@ -474,11 +572,29 @@ def _read_backup(path):
             entry = archive.getinfo('originals/' + asset_id)
             if entry.file_size > MAX_IMAGE_BYTES:
                 raise ValueError('备份原图过大')
-            data = archive.read(entry)
-            image = image_info(data)
+            staged = staging / asset_id
+            checksum = hashlib.sha256()
+            length = 0
+            with archive.open(entry) as source, staged.open('xb') as target:
+                while True:
+                    block = source.read(1024 * 1024)
+                    if not block:
+                        break
+                    length += len(block)
+                    if length > MAX_IMAGE_BYTES or length > entry.file_size:
+                        raise ValueError('备份原图过大或长度不一致')
+                    checksum.update(block)
+                    target.write(block)
+                target.flush()
+                os.fsync(target.fileno())
+            if not length or length != entry.file_size:
+                raise ValueError('备份原图为空或长度不一致')
+            image = dict(_image_details(lambda: staged), sha256=checksum.hexdigest(), bytes=length)
             if asset_id in asset_data or image['sha256'] != asset['sha256'] or image['bytes'] != asset['bytes']:
                 raise ValueError('备份原图校验失败')
-            asset_data[asset_id] = (data, image)
+            # Retain a path and small metadata only; the next image may be
+            # validated without keeping this image's bytes or decoded pixels.
+            asset_data[asset_id] = (staged, image)
         expected = {'manifest.json'} | {'originals/' + item for item in asset_data}
         if set(names) != expected:
             raise ValueError('备份包含未登记文件')
@@ -486,10 +602,20 @@ def _read_backup(path):
 
 
 def restore(store, path):
+    # Staging is private to this runtime and removed on success or failure.
+    # Never extract archive paths and never retain the complete image payload.
+    with tempfile.TemporaryDirectory(prefix='.pa-restore-', dir=store.root) as temporary:
+        staging = Path(temporary).resolve()
+        if not staging.is_relative_to(store.root.resolve()):
+            raise ValueError('恢复暂存目录必须位于本机运行目录')
+        return _restore_staged(store, path, staging)
+
+
+def _restore_staged(store, path, staging):
     # Validate the complete archive before writing anything. Importing creates
     # fresh identities and never replaces an existing case or trading record.
     try:
-        manifest, asset_data = _read_backup(path)
+        manifest, asset_data = _read_backup(path, staging)
         case_ids = [case['id'] for case in manifest['cases']]
         if len(case_ids) != len(set(case_ids)):
             raise ValueError('备份案例身份重复')
@@ -517,6 +643,9 @@ def restore(store, path):
         if len(pairs) != len(set(pairs)) or len(slots) != len(set(slots)) or any(
                 type(link['ordinal']) is not int or link['ordinal'] < 0 for link in links):
             raise ValueError('备份图片顺序或关联重复')
+        # Version 1 backups can contain older cases that exceed today's import
+        # limits. Restore those intact under the archive-wide bounds; save_case
+        # still prevents any further additions to an already oversized case.
         if any(item['case_id'] not in case_ids for item in manifest['notes'] + manifest['trials']):
             raise ValueError('备份研究记录关联无效')
         for item in manifest['notes']:
@@ -542,16 +671,21 @@ def restore(store, path):
     owner = _owner(store)
     case_map = {identifier: uuid.uuid4().hex for identifier in case_ids}
     asset_map = {identifier: uuid.uuid4().hex for identifier in asset_data}
-    with store._files_lock:
+    with write_scope(store), store._files_lock:
         new_assets = []
         for old in manifest['assets']:
-            data, image = asset_data[old['id']]
+            staged, image = asset_data[old['id']]
+            # The staged immutable image is the sole raw image held here.
+            data = staged.read_bytes()
+            if len(data) != image['bytes'] or digest(data) != image['sha256']:
+                raise ValueError('恢复暂存原图校验失败')
             identifier = asset_map[old['id']]
             relative = _write_original(store, owner, identifier, data, image)
+            del data
             new_assets.append((identifier, owner, image['sha256'], relative, _text(old['name'], 500), image['mime'],
                                image['width'], image['height'], image['bytes'], _text(old['created'], 100)))
         with store.connect() as db:
-            if getattr(store._atomic_local, 'connection', None) is None:
+            if not db.in_transaction:
                 db.execute('BEGIN IMMEDIATE')
             for case in manifest['cases']:
                 fields = TEXT_FIELDS + LIST_FIELDS + ('data_kind',)

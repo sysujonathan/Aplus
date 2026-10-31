@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 from pathlib import Path
 import sys
@@ -25,7 +26,14 @@ def run(folder, reopen=False):
         raise ValueError('Only isolated acceptance homes are allowed')
     samples(folder / 'samples')
     store = Store(folder / 'runtime')
-    bridge = GrowthBridge(store)
+    image_reads = []
+
+    class ObservedBridge(GrowthBridge):
+        def get_image(self, case_id, asset_id, thumbnail=False):
+            image_reads.append((case_id, asset_id, thumbnail))
+            return super().get_image(case_id, asset_id, thumbnail)
+
+    bridge = ObservedBridge(store)
     window = webview.create_window('PA 真实闭环验收 · 隔离测试', (ASSETS / 'index.html').as_uri(),
                                   js_api=bridge, hidden=True, width=1440, height=950)
     bridge._window = window
@@ -68,10 +76,17 @@ def run(folder, reopen=False):
             if reopen:
                 wait("Boolean(document.querySelector('.case-card'))")
                 assert not evaluate("Boolean(document.querySelector('.first-hint'))")
-                assert len(store.pa_search()) == 3
-                assert store.pa_growth()['stats'] == dict(cases=3, images=3, notes=1, trials=1, topics=1)
+                assert len(store.pa_search(limit=1000)) == 104
+                assert store.pa_growth()['stats'] == dict(cases=104, images=106, notes=1, trials=1, topics=1)
+                older_id = store.pa_search('microDB')[0]['id']
+                assert older_id not in {item['id'] for item in store.pa_search()}
+                wait("document.querySelector('.resume [data-action=study-open]')?.dataset.id === " + json.dumps(older_id))
+                click('.resume [data-action=study-open]')
+                wait("document.querySelector('.study-image img')?.complete && document.querySelector('.study-image img')?.naturalWidth > 0")
+                assert image_reads == [(older_id, store.pa_case(older_id, touch=False)['images'][0]['id'], False)]
                 (folder / 'reopened-result.json').write_text(json.dumps(dict(ok=True, new_process=True,
-                    original_notes_and_trials=True, no_repeated_hint=True)), encoding='utf-8')
+                    original_notes_and_trials=True, no_repeated_hint=True, recent_case_outside_first_page=True,
+                    one_original_on_resume=True)), encoding='utf-8')
                 return
             assert evaluate("Boolean(document.querySelector('.first-hint'))")
             stage([1], paste=True)
@@ -119,7 +134,7 @@ def run(folder, reopen=False):
             field('#search-input', 'microDB')
             wait("document.querySelector('.case-card')?.innerText.includes('microDB')")
             click('.case-card')
-            wait("Boolean(document.querySelector('#original-image'))")
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0")
             src = evaluate("document.querySelector('#original-image').src")
             assert base64.b64decode(src.split(',', 1)[1]) == (folder / 'samples/sample-1.png').read_bytes()
             before = evaluate("document.querySelector('.zoom-label').innerText")
@@ -141,7 +156,7 @@ def run(folder, reopen=False):
             click('[data-action=study-pane][data-pane=memory]')
             wait("Boolean(document.querySelector('[data-action=start-trial]'))")
             click('[data-action=start-trial]')
-            wait("Boolean(document.querySelector('[data-action=judgment]'))")
+            wait("document.querySelector('#trial-image')?.complete && document.querySelector('#trial-image')?.naturalWidth > 0")
             assert not evaluate("Boolean(document.querySelector('#trial-evidence'))")
             click('[data-action=judgment][data-value=wait]')
             click('[data-action=save-judgment]')
@@ -169,6 +184,43 @@ def run(folder, reopen=False):
             assert reopened.pa_case(case_id)['notes']
             assert reopened.pa_growth()['stats']['trials'] == 1
             checks.append('fresh_store_reads_persisted_records')
+            # Appending does not make the detail API carry all full-size images.
+            store.pa_save_case([{'name': f'sample-{i}.png',
+                'data': (folder / 'samples' / f'sample-{i}.png').read_bytes()} for i in (2, 3)],
+                case_id=case_id, allow_duplicate=True)
+            before = len(image_reads)
+            detail = bridge.get_case(case_id)
+            assert detail['ok'] and len(detail['case']['images']) == 3
+            assert all('data_url' not in image for image in detail['case']['images'])
+            assert len(image_reads) == before
+            click('[data-action=navigate][data-page=library]')
+            wait("Boolean(document.querySelector('#search-input'))")
+            field('#search-input', 'microDB')
+            wait("document.querySelector('.case-card')?.innerText.includes('microDB')")
+            click('.case-card')
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0")
+            assert len(image_reads) == before, 'study/fullscreen reuse the current cached original'
+            click('[data-action=original-next]')
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('#original-image')?.naturalWidth > 0 && document.querySelector('.original-footer')?.innerText.includes('2 / 3')")
+            assert image_reads[before:] == [(case_id, detail['case']['images'][1]['id'], False)]
+            assert base64.b64decode(evaluate("document.querySelector('#original-image').src").split(',', 1)[1]) == (folder / 'samples/sample-2.png').read_bytes()
+            click('[data-action=original-prev]')
+            wait("document.querySelector('#original-image')?.complete && document.querySelector('.original-footer')?.innerText.includes('1 / 3')")
+            assert len(image_reads) == before + 1, 'returning one image reuses the bounded cache'
+            click('[data-action=close-original]')
+            checks.append('selected_original_only_and_cached_fullscreen')
+            # The most recently viewed case may be older than the first 100.
+            from PIL import Image
+            tiny = io.BytesIO()
+            Image.new('RGB', (32, 24), (37, 47, 60)).save(tiny, format='PNG')
+            for index in range(101):
+                store.pa_save_case([{'name': 'isolated-pagination-test.png', 'data': tiny.getvalue()}],
+                    {'memory': f'分页隔离测试样本 {index}', 'data_kind': 'test'}, allow_duplicate=True)
+            store.pa_case(case_id)
+            assert case_id not in {item['id'] for item in store.pa_search()}
+            click('[data-action=navigate][data-page=home]')
+            wait("document.querySelector('.resume [data-action=study-open]')?.dataset.id === " + json.dumps(case_id))
+            checks.append('recent_case_outside_first_page')
             (folder / 'result.json').write_text(json.dumps(dict(ok=True, real_webview=True, real_store=True,
                 synthetic=True, checks=checks), ensure_ascii=False, indent=2), encoding='utf-8')
         except BaseException:

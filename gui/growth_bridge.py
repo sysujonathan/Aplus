@@ -60,37 +60,61 @@ def image_url(data, *, thumbnail=False):
     return 'data:' + mime + ';base64,' + base64.b64encode(data).decode('ascii')
 
 
+def _native_clipboard_png():
+    """Read one valid PNG allocation; malformed native formats may use DIB."""
+    import ctypes
+    from ctypes import wintypes
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    user.OpenClipboard.argtypes = [wintypes.HWND]
+    user.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    user.GetClipboardData.argtypes = [wintypes.UINT]
+    user.GetClipboardData.restype = wintypes.HANDLE
+    kernel.GlobalSize.argtypes = [wintypes.HANDLE]
+    kernel.GlobalSize.restype = ctypes.c_size_t
+    kernel.GlobalLock.argtypes = [wintypes.HANDLE]
+    kernel.GlobalLock.restype = ctypes.c_void_p
+    kernel.GlobalUnlock.argtypes = [wintypes.HANDLE]
+    if not user.OpenClipboard(None):
+        return None
+    try:
+        handle = user.GetClipboardData(user.RegisterClipboardFormatW('PNG'))
+        if not handle:
+            return None
+        size = kernel.GlobalSize(handle)
+        if size > MAX_IMAGE:
+            raise ValueError('单张图片不能超过32MB')
+        if not size:
+            return None
+        pointer = kernel.GlobalLock(handle)
+        if not pointer:
+            return None
+        try:
+            raw = ctypes.string_at(pointer, size)
+        finally:
+            kernel.GlobalUnlock(handle)
+        try:
+            with Image.open(io.BytesIO(raw)) as image:
+                if image.format != 'PNG':
+                    return None
+                image.verify()
+        except (OSError, ValueError, SyntaxError):
+            return None
+        return raw
+    finally:
+        user.CloseClipboard()
+
+
 def clipboard_images():
-    """Prefer the clipboard's PNG bytes; DIB-only clips need a lossless PNG."""
+    """Prefer valid original PNG bytes; invalid PNG may fall back to DIB."""
     import os
     if os.name == 'nt':
-        import ctypes
-        from ctypes import wintypes
-        user = ctypes.WinDLL('user32', use_last_error=True)
-        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-        user.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
-        user.GetClipboardData.argtypes = [wintypes.UINT]
-        user.GetClipboardData.restype = wintypes.HANDLE
-        kernel.GlobalSize.argtypes = [wintypes.HANDLE]
-        kernel.GlobalSize.restype = ctypes.c_size_t
-        kernel.GlobalLock.argtypes = [wintypes.HANDLE]
-        kernel.GlobalLock.restype = ctypes.c_void_p
-        kernel.GlobalUnlock.argtypes = [wintypes.HANDLE]
-        if user.OpenClipboard(None):
-            try:
-                handle = user.GetClipboardData(user.RegisterClipboardFormatW('PNG'))
-                if handle:
-                    size = kernel.GlobalSize(handle)
-                    if size > MAX_IMAGE:
-                        raise ValueError('单张图片不能超过32MB')
-                    ptr = kernel.GlobalLock(handle)
-                    if ptr:
-                        try:
-                            return [{'name': '粘贴截图.png', 'data': ctypes.string_at(ptr, size)}]
-                        finally:
-                            kernel.GlobalUnlock(handle)
-            finally:
-                user.CloseClipboard()
+        try:
+            raw = _native_clipboard_png()
+        except OSError:
+            raw = None
+        if raw is not None:
+            return [{'name': '粘贴截图.png', 'data': raw}]
     value = ImageGrab.grabclipboard()
     if isinstance(value, list):
         return read_image_files(value)
@@ -155,22 +179,6 @@ class GrowthBridge:
             result.append(row)
         return result
 
-    def _full_case(self, case):
-        case = dict(case)
-        case['images'] = [dict(item, data_url=image_url(self._store.pa_image(item['id'])))
-                          for item in case.get('images', [])]
-        return case
-
-    def _all_cases(self, query=''):
-        cases, offset = [], 0
-        while True:
-            page = self._store.pa_search(query, limit=1000, offset=offset)
-            cases.extend(page)
-            if len(page) < 1000:
-                break
-            offset += 1000
-        return cases
-
     def _topic_family(self, topic_id):
         family = {topic_id}
         for _ in range(len(TOPICS)):
@@ -180,19 +188,23 @@ class GrowthBridge:
             family.update(children)
         return family
 
-    def _topics(self):
-        cases = self._all_cases()
+    def _topics(self, cases=None):
+        if cases is None:
+            cases = self._store.pa_case_metadata()
+        families = {key: self._topic_family(key) for key, _, _ in TOPICS}
         return [dict(id=key, name=name, parent_id=parent, description='',
-                     case_count=sum(bool(self._topic_family(key).intersection(row.get('topic_ids', []))) for row in cases))
+                     case_count=sum(bool(families[key].intersection(row.get('topic_ids', []))) for row in cases))
                 for key, name, parent in TOPICS]
 
     @guarded
     def bootstrap(self):
-        growth = self._growth()
+        metadata = self._store.pa_case_metadata()
+        growth = self._growth(metadata)
         growth['recent_case_id'] = (growth.get('recent') or [{}])[0].get('id')
+        growth['recent_case'] = (growth.get('recent') or [None])[0]
         cases = self._store.pa_search(limit=101)
         return dict(cases=self._summaries(cases[:100]), has_more=len(cases) > 100,
-                    next_offset=min(100, len(cases)), topics=self._topics(),
+                    next_offset=min(100, len(cases)), topics=self._topics(metadata),
                     context=self._context, **growth)
 
     @guarded
@@ -220,7 +232,18 @@ class GrowthBridge:
 
     @guarded
     def get_case(self, case_id):
-        return {'case': self._full_case(self._store.pa_case(case_id))}
+        # Images remain metadata until the trader chooses one to inspect.
+        return {'case': self._store.pa_case(case_id)}
+
+    @guarded
+    def get_image(self, case_id, asset_id, thumbnail=False):
+        if type(thumbnail) is not bool:
+            raise ValueError('图片读取方式无效')
+        case = self._store.pa_case(case_id, touch=False)
+        item = next((image for image in case.get('images', []) if image['id'] == asset_id), None)
+        if item is None:
+            raise ValueError('图片不存在或不属于此案例')
+        return {'image': dict(item, data_url=image_url(self._store.pa_image(asset_id), thumbnail=thumbnail))}
 
     def _stage(self, images):
         total = sum(len(item['data']) for item in self._pending.values())
@@ -299,7 +322,13 @@ class GrowthBridge:
     @guarded
     def compare_case(self, case_id):
         self._store.pa_case(case_id, touch=False)
-        return self.return_chart()
+        callback = getattr(self, '_compare_case', None)
+        if callback is None:
+            if self._context.get('comparison'):
+                return {'already_comparing': True}
+            raise ValueError('请从 Aplus 当前图表打开案例对照')
+        callback(case_id)
+        return {'comparison': True, 'case_id': case_id}
 
     @guarded
     def save_capture(self, tokens, metadata=None, options=None):
@@ -319,9 +348,8 @@ class GrowthBridge:
             if duplicates:
                 return {'cases': [], 'duplicates': duplicates}
         results = []
-        # One outer Store transaction prevents partial batch success. Original
-        # immutable files may survive rollback, but no failed case is searchable.
-        with self._store.atomic_write():
+        # One PA write scope commits the whole batch and owns rollback cleanup.
+        with self._store.pa_write():
             if options.get('case_id') or options.get('group'):
                 result = self._store.pa_save_case(images, metadata, case_id=options.get('case_id'), allow_duplicate=allow)
                 if not result['saved']:
@@ -339,7 +367,7 @@ class GrowthBridge:
 
     @guarded
     def update_case(self, case_id, metadata):
-        return {'case': self._full_case(self._store.pa_update_case(case_id, metadata))}
+        return {'case': self._store.pa_update_case(case_id, metadata)}
 
     @guarded
     def add_note(self, case_id, text):
@@ -364,9 +392,10 @@ class GrowthBridge:
     def growth(self):
         return self._growth()
 
-    def _growth(self):
+    def _growth(self, cases=None):
         data = self._store.pa_growth()
-        cases = self._all_cases()
+        if cases is None:
+            cases = self._store.pa_case_metadata()
         case_map = {row['id']: row for row in cases}
         for row in data.get('trials', []) + data.get('notes', []):
             case = case_map.get(row.get('case_id'), {})

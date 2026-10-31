@@ -30,6 +30,9 @@ def test_pa_growth_browser_acknowledgements_and_private_drafts():
     assert 'durable-acknowledgement' in verdict['checks']
     assert 'duplicate-confirmation' in verdict['checks']
     assert 'draft-scope' in verdict['checks']
+    assert 'selected-original-only' in verdict['checks']
+    assert 'latest-image-race' in verdict['checks']
+    assert 'recent-outside-first-page' in verdict['checks']
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='正式桌面 UI 使用 Windows Edge WebView')
@@ -83,6 +86,8 @@ def test_pa_growth_real_webview_store_capture_search_and_reopen():
         'minimal_judgment_then_evidence_no_score',
         'knowledge_case_link_and_evidence_growth',
         'fresh_store_reads_persisted_records',
+        'selected_original_only_and_cached_fullscreen',
+        'recent_case_outside_first_page',
     }.issubset(verdict['checks'])
     # A fresh native process must find the same originals and research without
     # relying on a browser reload or a live Store instance from the first run.
@@ -94,3 +99,5 @@ def test_pa_growth_real_webview_store_capture_search_and_reopen():
     assert reopened['new_process'] is True
     assert reopened['original_notes_and_trials'] is True
     assert reopened['no_repeated_hint'] is True
+    assert reopened['recent_case_outside_first_page'] is True
+    assert reopened['one_original_on_resume'] is True

@@ -238,6 +238,14 @@ class Store:
         from .pa_growth import search
         return search(self, query, filters, limit, offset)
 
+    def pa_case_metadata(self):
+        from .pa_growth import case_metadata
+        return case_metadata(self)
+
+    def pa_write(self):
+        from .pa_growth import write_scope
+        return write_scope(self)
+
     def pa_case(self, case_id, touch=True):
         from .pa_growth import read_case
         return read_case(self, case_id, touch=touch)

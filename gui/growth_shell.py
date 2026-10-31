@@ -97,6 +97,8 @@ def run_session(session_path):
         bridge._window = window
         bridge._return_chart = lambda: atomic_json(session.with_suffix('.actions.json'),
                                                   {'return_chart': True, 'id': time.time_ns()})
+        bridge._compare_case = lambda case_id: atomic_json(session.with_suffix('.actions.json'),
+                                                  {'compare_case': case_id, 'id': time.time_ns()})
         guard = GrowthCloseGuard(window, bridge, status)
         window.events.closing += guard.request
 

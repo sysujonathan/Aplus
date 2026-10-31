@@ -33,7 +33,9 @@ def test_batch_persist_search_originals_notes_and_reopen(tmp_path):
     cases = reopened.search_cases('microd')['cases']
     assert len(cases) == 2 and all(row['thumbnail'].startswith('data:image/jpeg') for row in cases)
     detail = reopened.get_case(cases[0]['id'])['case']
-    assert base64.b64decode(detail['images'][0]['data_url'].split(',', 1)[1]) in (red, blue)
+    assert all('data_url' not in item for item in detail['images'])
+    original = reopened.get_image(detail['id'], detail['images'][0]['id'])['image']
+    assert base64.b64decode(original['data_url'].split(',', 1)[1]) in (red, blue)
     assert reopened.add_note(detail['id'], 'ETH 反思')['ok']
     assert reopened.bootstrap()['recent_case_id'] == detail['id']
     assert reopened.growth()['stats']['notes'] == 1

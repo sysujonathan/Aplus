@@ -15,10 +15,12 @@ from .theme import APP_BG, MUTED
 
 
 class GrowthHost:
-    def __init__(self, parent, store, context=None, on_error=None, on_closed=None, on_return=None):
+    def __init__(self, parent, store, context=None, on_error=None, on_closed=None, on_return=None,
+                 on_compare=None):
         self.parent, self.store = parent, store
         self.on_error, self.on_closed = on_error, on_closed
         self.on_return = on_return
+        self.on_compare = on_compare
         self.process = None
         self.closing = False
         self.session = store.root / 'pa_sessions' / (uuid.uuid4().hex + '.json')
@@ -49,6 +51,8 @@ class GrowthHost:
             self._last_action = action['id']
             if action.get('return_chart') and self.on_return:
                 self.on_return()
+            if action.get('compare_case') and self.on_compare:
+                self.on_compare(action['compare_case'])
         if result.get('closeCancelled') and result.get('id') != self._last_cancel:
             self._last_cancel = result.get('id')
             self.closing = False
@@ -155,6 +159,12 @@ def open_chart_cases(owner, store, item):
         owner._switch_section('premarket')
         owner.lift()
         owner.focus_force()
-    host = GrowthHost(canvas, store, context, on_error=error, on_closed=window.destroy, on_return=return_chart)
+    def compare_case(_case_id):
+        owner._switch_section('premarket')
+        owner.lift()
+        window.lift()
+        window.focus_force()
+    host = GrowthHost(canvas, store, context, on_error=error, on_closed=window.destroy,
+                      on_return=return_chart, on_compare=compare_case)
     window.protocol('WM_DELETE_WINDOW', host.request_close)
     return host
