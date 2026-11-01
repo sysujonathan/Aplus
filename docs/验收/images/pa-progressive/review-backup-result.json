@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "synthetic": true,
+  "real_webview": true,
+  "checks": [
+    "empty_universe_single_origin_no_phantom_topics",
+    "unclassified_case_grows_one_real_star",
+    "case_backed_galaxy_drilldown_zoom_and_return",
+    "mask_hides_future_pixels_title_and_fullscreen",
+    "explicit_four_stage_reveal_original_bytes_and_judgment_preserved",
+    "backup_restore_quarantine_warning_in_real_ui"
+  ]
+}
