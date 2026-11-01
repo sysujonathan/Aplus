@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import hashlib
 from functools import wraps
 import io
@@ -203,7 +204,7 @@ class GrowthBridge:
         growth['recent_case_id'] = (growth.get('recent') or [{}])[0].get('id')
         growth['recent_case'] = (growth.get('recent') or [None])[0]
         cases = self._store.pa_search(limit=101)
-        return dict(cases=self._summaries(cases[:100]), has_more=len(cases) > 100,
+        return dict(cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
                     next_offset=min(100, len(cases)), topics=self._topics(metadata),
                     context=self._context, **growth)
 
@@ -233,7 +234,17 @@ class GrowthBridge:
     @guarded
     def get_case(self, case_id):
         # Images remain metadata until the trader chooses one to inspect.
-        return {'case': self._store.pa_case(case_id)}
+        case = self._store.pa_case(case_id)
+        try:
+            case['trial_setup'] = self._store.pa_trial_setup(case_id)
+        except (ValueError, json.JSONDecodeError):
+            case['trial_setup'] = None
+            case['trial_setup_error'] = '试炼设置无法读取，请重新设置；原图仍可查看。'
+        return {'case': case}
+
+    @guarded
+    def set_trial_setup(self, case_id, value):
+        return {'setup': self._store.pa_trial_setup(case_id, value)}
 
     @guarded
     def get_image(self, case_id, asset_id, thumbnail=False):
@@ -367,7 +378,13 @@ class GrowthBridge:
 
     @guarded
     def update_case(self, case_id, metadata):
-        return {'case': self._store.pa_update_case(case_id, metadata)}
+        case = self._store.pa_update_case(case_id, metadata)
+        try:
+            case['trial_setup'] = self._store.pa_trial_setup(case_id)
+        except (ValueError, json.JSONDecodeError):
+            case['trial_setup'] = None
+            case['trial_setup_error'] = '试炼设置无法读取，请重新设置；原图仍可查看。'
+        return {'case': case}
 
     @guarded
     def add_note(self, case_id, text):
@@ -375,6 +392,13 @@ class GrowthBridge:
 
     @guarded
     def save_trial(self, case_id, value):
+        if (value.get('details') or {}).get('source') == 'progressive-screenshot':
+            setup = self._store.pa_trial_setup(case_id)
+            if not setup:
+                raise ValueError('请先设置试炼的入场分界或前后截图')
+            if value['details'].get('presentation') != setup:
+                raise ValueError('试炼设置已改变，请重新开始后记录判断')
+            value = dict(value, details=dict(value['details'], presentation=setup))
         return {'trial': self._store.pa_add_trial(case_id, value.get('judgment', ''),
             value.get('depth', 'quick'), value.get('details'))}
 

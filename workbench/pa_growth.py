@@ -30,6 +30,7 @@ MAX_CASE_IMAGES = 100
 MAX_CASE_BYTES = 128 * 1024 * 1024
 MAX_BACKUP_BYTES = 2 * 1024 * 1024 * 1024
 MAX_BACKUP_RECORDS = 20_000
+MAX_BACKUP_MANIFEST_BYTES = 20 * 1024 * 1024
 FORMATS = {'PNG': ('image/png', '.png'), 'JPEG': ('image/jpeg', '.jpg'), 'WEBP': ('image/webp', '.webp')}
 TEXT_FIELDS = ('title', 'memory', 'symbol', 'timeframe', 'market')
 LIST_FIELDS = ('keywords', 'tags', 'topic_ids')
@@ -519,7 +520,9 @@ def _durable_zip(path, writer):
 
 
 def backup(store, path):
+    from .pa_trial import backup_setting, validate_issues
     owner = _owner(store)
+    warnings = []
     # Serialize with local image saves. SQLite snapshot covers notes/case edits.
     with store._files_lock, store.connect() as db:
         db.execute('BEGIN')
@@ -527,6 +530,20 @@ def backup(store, path):
         assets = [dict(row) for row in db.execute('SELECT DISTINCT a.* FROM pa_assets a JOIN pa_case_images i ON i.asset_id=a.id '
                   'JOIN pa_cases c ON c.id=i.case_id WHERE a.owner=? AND c.owner=?', (owner, owner))]
         links = [dict(row) for row in db.execute('SELECT i.* FROM pa_case_images i JOIN pa_cases c ON c.id=i.case_id WHERE c.owner=?', (owner,))]
+        image_ids = {}
+        for link in links:
+            image_ids.setdefault(link['case_id'], set()).add(link['asset_id'])
+        for case in cases:
+            setup = db.execute('SELECT value FROM meta WHERE key=?', (f"pa_trial_setup:{owner}:{case['id']}",)).fetchone()
+            ids = image_ids.get(case['id'], set())
+            case['trial_setup'], issue = backup_setting(setup[0] if setup else None, ids)
+            previous = db.execute('SELECT value FROM meta WHERE key=?', (f"pa_trial_setup_issue:{owner}:{case['id']}",)).fetchone()
+            issues = validate_issues(json.loads(previous[0])) if previous else []
+            if issue and issue not in issues:
+                issues.append(issue)
+            if issues:
+                case['trial_setup_issues'] = validate_issues(issues)
+                warnings.append({'case_id': case['id'], 'code': 'trial_setup_quarantined'})
         notes = [dict(row) for row in db.execute('SELECT * FROM pa_notes WHERE owner=?', (owner,))]
         trials = [dict(row) for row in db.execute('SELECT * FROM pa_trials WHERE owner=?', (owner,))]
         topics = [dict(row) for row in db.execute('SELECT * FROM pa_topic_notes WHERE owner=?', (owner,))]
@@ -537,12 +554,22 @@ def backup(store, path):
                 item.pop('owner', None)
         for asset in assets:
             asset.pop('path')
+        payload = dumps(manifest).encode('utf-8')
+        if any(len(manifest[key]) > MAX_BACKUP_RECORDS for key in ('cases', 'assets', 'links', 'notes', 'trials', 'topic_notes')):
+            raise ValueError('备份资料条目超过可恢复上限，未生成备份')
+        if len(payload) > MAX_BACKUP_MANIFEST_BYTES:
+            raise ValueError('备份目录超过可恢复大小上限，未生成备份')
+        if len(payload) + sum(asset['bytes'] for asset in assets) > MAX_BACKUP_BYTES:
+            raise ValueError('备份资料超过可恢复容量上限，未生成备份')
         def writer(archive):
-            archive.writestr('manifest.json', dumps(manifest))
+            archive.writestr('manifest.json', payload)
             for asset in assets:
                 archive.writestr('originals/' + asset['id'], read_image(store, asset['id']))
         _durable_zip(path, writer)
-    return {'cases': len(cases), 'images': len(assets), 'path': str(Path(path).resolve())}
+    result = {'cases': len(cases), 'images': len(assets), 'path': str(Path(path).resolve())}
+    if warnings:
+        result['warnings'] = warnings
+    return result
 
 
 def _read_backup(path, staging):
@@ -556,7 +583,7 @@ def _read_backup(path, staging):
         if sum(item.file_size for item in entries) > MAX_BACKUP_BYTES:
             raise ValueError('备份解压大小超过限制')
         info = archive.getinfo('manifest.json')
-        if info.file_size > 20 * 1024 * 1024:
+        if info.file_size > MAX_BACKUP_MANIFEST_BYTES:
             raise ValueError('备份目录过大')
         manifest = json.loads(archive.read('manifest.json'))
         if not isinstance(manifest, dict) or manifest.get('format') != 'aplus-pa-private' or manifest.get('version') != 1:
@@ -646,6 +673,12 @@ def _restore_staged(store, path, staging):
         # Version 1 backups can contain older cases that exceed today's import
         # limits. Restore those intact under the archive-wide bounds; save_case
         # still prevents any further additions to an already oversized case.
+        from .pa_trial import validate, validate_issues
+        for case in manifest['cases']:
+            if case.get('trial_setup') is not None:
+                case['trial_setup'] = validate(case['trial_setup'], {link['asset_id'] for link in links if link['case_id'] == case['id']})
+            if 'trial_setup_issues' in case:
+                validate_issues(case['trial_setup_issues'])
         if any(item['case_id'] not in case_ids for item in manifest['notes'] + manifest['trials']):
             raise ValueError('备份研究记录关联无效')
         for item in manifest['notes']:
@@ -660,6 +693,8 @@ def _restore_staged(store, path, staging):
             if (item['depth'] not in ('quick', 'structure', 'deep') or not isinstance(details, dict)
                     or len(dumps(details)) > 30_000 or set(details) & {'score', 'win_rate', 'correct', 'profit'}):
                 raise ValueError('备份判断记录无效')
+            if details.get('source') == 'progressive-screenshot':
+                validate(details.get('presentation'), {link['asset_id'] for link in links if link['case_id'] == item['case_id']})
         for item in manifest['topic_notes']:
             if item['topic_id'] not in TOPIC_IDS:
                 raise ValueError('备份知识主题无效')
@@ -671,6 +706,16 @@ def _restore_staged(store, path, staging):
     owner = _owner(store)
     case_map = {identifier: uuid.uuid4().hex for identifier in case_ids}
     asset_map = {identifier: uuid.uuid4().hex for identifier in asset_data}
+    def restored_details(raw):
+        value = json.loads(raw)
+        if value.get('source') == 'progressive-screenshot':
+            value['presentation']['image_ids'] = [asset_map[i] for i in value['presentation']['image_ids']]
+        if isinstance(value.get('image_id'), str):
+            value['image_id'] = asset_map.get(value['image_id'], value['image_id'])
+        for mark in value.get('marks', []) if isinstance(value.get('marks'), list) else []:
+            if isinstance(mark, dict) and isinstance(mark.get('image_id'), str):
+                mark['image_id'] = asset_map.get(mark['image_id'], mark['image_id'])
+        return dumps(value)
     with write_scope(store), store._files_lock:
         new_assets = []
         for old in manifest['assets']:
@@ -697,13 +742,25 @@ def _restore_staged(store, path, staging):
             db.executemany('INSERT INTO pa_assets VALUES(?,?,?,?,?,?,?,?,?,?)', new_assets)
             db.executemany('INSERT INTO pa_case_images VALUES(?,?,?)',
                            [(case_map[link['case_id']], asset_map[link['asset_id']], int(link['ordinal'])) for link in links])
+            for case in manifest['cases']:
+                setup = case.get('trial_setup')
+                if setup:
+                    setup = dict(setup, image_ids=[asset_map[i] for i in setup['image_ids']])
+                    store.pa_trial_setup(case_map[case['id']], setup)
+                if case.get('trial_setup_issues'):
+                    store.execute('INSERT INTO meta(key,value) VALUES(?,?)',
+                                  (f"pa_trial_setup_issue:{owner}:{case_map[case['id']]}", dumps(case['trial_setup_issues'])))
             db.executemany('INSERT INTO pa_notes VALUES(?,?,?,?,?,?)',
                            [(uuid.uuid4().hex, case_map[item['case_id']], owner, _text(item['author'], 200), _text(item['text']),
                              _text(item['created'], 100)) for item in manifest['notes']])
             db.executemany('INSERT INTO pa_trials VALUES(?,?,?,?,?,?,?)',
-                           [(uuid.uuid4().hex, case_map[item['case_id']], owner, _text(item['judgment'], 2000), item['depth'], item['details'],
+                           [(uuid.uuid4().hex, case_map[item['case_id']], owner, _text(item['judgment'], 2000), item['depth'], restored_details(item['details']),
                              _text(item['created'], 100)) for item in manifest['trials']])
             db.executemany('INSERT INTO pa_topic_notes VALUES(?,?,?,?,?)',
                            [(uuid.uuid4().hex, owner, item['topic_id'], _text(item['text']), _text(item['created'], 100))
                             for item in manifest['topic_notes']])
-    return {'cases': len(case_map), 'images': len(asset_map), 'notes': len(manifest['notes']), 'trials': len(manifest['trials'])}
+    result = {'cases': len(case_map), 'images': len(asset_map), 'notes': len(manifest['notes']), 'trials': len(manifest['trials'])}
+    issues = [case for case in manifest['cases'] if case.get('trial_setup_issues')]
+    if issues:
+        result['warnings'] = [{'case_id': case_map[case['id']], 'code': 'trial_setup_quarantined'} for case in issues]
+    return result

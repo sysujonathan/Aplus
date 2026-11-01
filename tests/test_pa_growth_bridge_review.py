@@ -184,5 +184,5 @@ def test_pa_helpers_keep_same_schema_source_updates_compatible():
     before = ast.parse(source)
     store_class = next(node for node in before.body if isinstance(node, ast.ClassDef) and node.name == 'Store')
     store_class.body = [node for node in store_class.body
-                        if not isinstance(node, ast.FunctionDef) or node.name not in ('pa_write', 'pa_case_metadata')]
+                        if not isinstance(node, ast.FunctionDef) or node.name not in ('pa_write', 'pa_case_metadata', 'pa_trial_setup')]
     assert compatible_store_extension(ast.unparse(before), source)

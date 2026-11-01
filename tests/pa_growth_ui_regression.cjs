@@ -25,7 +25,7 @@ vm.runInContext(source.slice(0, cut) + `
   refreshData = async () => {};
   search = async () => {};
   toast = (message,error=false) => window.__events.push({message,error});
-  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
+  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,backupAction,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
     imageBusy:()=>imageWorker,cacheStats:()=>({count:originalCache.size,bytes:originalCacheBytes}),
     clearImages:()=>{originalCache.clear();originalCacheBytes=0;imageWanted=null;},
     setRender:fn=>{render=fn;},setRefresh:fn=>{refreshData=fn;}};
@@ -39,7 +39,7 @@ function reset() {
     overlay:'capture',draftText:{},dirtyMetadata:false,trialThought:'',trialReview:{},
     judgment:'',trialRecord:null,marks:[],hasMore:false,searchBusy:false,searchSeq:0,
     searchError:'',query:'',filters:{symbol:'',timeframe:'',market:'',data_kind:''},cases:[],context:null,
-    topicSeq:0,topicId:null,topicParent:null,topicCases:[],topicLoading:false,topics:[],
+    topicSeq:0,topicId:null,topicParent:null,topicCases:[],topicLoading:false,topics:[],atlasCases:[],atlasView:{x:0,y:0,zoom:1},trialStep:0,trialReveal:0,
     caseSeq:0,imageError:null,original:null,case:null,trialCase:null,imageIndex:0,boot:{}});
   context.window.__test.clearImages();
   events.length = 0; calls.length = 0;
@@ -190,7 +190,7 @@ async function run() {
   assert.equal(S.cases[0].id,'bootstrap-first-page');assert.equal(S.hasMore,true);
 
   reset();S.pending=[];S.page='universe';
-  S.topics=[{id:'context',name:'市场背景',parent_id:null},{id:'continuation',name:'趋势延续',parent_id:null},{id:'cont-h2',name:'H2',parent_id:'continuation'}];
+  S.topics=[{id:'context',name:'市场背景',parent_id:null,case_count:1},{id:'continuation',name:'趋势延续',parent_id:null,case_count:1},{id:'cont-h2',name:'H2',parent_id:'continuation',case_count:1}];
   const topicField=element('#topic-note');
   Object.assign(topicField,{dataset:{draft:'topic-note:context'},value:'背景主题原有草稿'});
   const topicRenders=[];
@@ -253,7 +253,7 @@ async function run() {
   assert.match(resumed,/data-action="study-open" data-id="older-research"/);
   assert.match(resumed,/继续研究 · 旧图仍能继续研究/,'recent research does not depend on the first search page');
 
-  const metadata={id:'multi-case',memory:'同品种三张独立截图',images:[{id:'a',name:'a.png'},{id:'b',name:'b.png'},{id:'c',name:'c.png'}]};
+  const metadata={trial_setup:{mode:'sequence',image_ids:['a','b','c']},id:'multi-case',memory:'同品种三张独立截图',images:[{id:'a',name:'a.png'},{id:'b',name:'b.png'},{id:'c',name:'c.png'}]};
   const encoded=id=>({id,name:id+'.png',data_url:'data:image/png;base64,'+Buffer.from(id).toString('base64')});
   reset();S.pending=[];S.page='study';S.case=metadata;
   bridge.get_image=async(...args)=>{calls.push(args);return {ok:true,image:encoded(args[1])};};
@@ -319,14 +319,13 @@ async function run() {
   production.closeOriginal();await settleImages();
   assert.equal(S.imageIndex,0,'closing pre-judgment fullscreen preserves the first screenshot');
   assert.equal(calls.length,1,'pre-judgment controls never request a later original');
-  assert.match(production.trial(),/原截图可能含后续走势/);
+  assert.match(production.trial(),/截图原有文字可能包含提示/);
   S.trialRecord={id:'judged',judgment:'wait',details:{marks:[]}};
   production.openOriginal(false,true);
-  assert.match(element('#overlay-root').innerHTML,/data-action="original-next"/);
-  await production.dispatch('original-next',{},{});await settleImages();
-  assert.equal(S.original.index,1);assert.equal(calls.at(-1)[1],'b','later images become available after the original judgment is saved');
+  assert.doesNotMatch(element('#overlay-root').innerHTML,/data-action="original-next"/,'fullscreen cannot skip the explicit reveal stage');
   production.closeOriginal();await settleImages();
-  assert.equal(S.imageIndex,1);assert.match(production.trial(),/data-action="trial-image"/);
+  await production.dispatch('trial-next',{},{});await settleImages();
+  assert.equal(S.imageIndex,1);assert.equal(calls.at(-1)[1],'b','next stage loads only after saved judgment and explicit reveal');
   production.setRender(()=>{});
 
   reset();S.pending=[];S.page='trial';S.overlay='trial-picker';
@@ -357,6 +356,18 @@ async function run() {
   S.context.can_compare=false;
   assert.doesNotMatch(production.study(),/data-action="compare"/,'unsupported comparison does not expose an ineffective action');
 
-  console.log(JSON.stringify({ok:true,checks:'durable-acknowledgement, failure-retention, duplicate-confirmation, independent-cases, draft-scope, close-guard, image-origin, escaping, pagination, append-failure-retention, load-guard, query-reset, comparison-search-entry, topic-draft-race, stale-topic-response, immediate-search-feedback, recent-outside-first-page, selected-original-only, latest-image-race, bounded-image-cache, image-failure-retry, stale-case-response, comparison-action-scope, trial-fullscreen-judgment-boundary, covered-original-release, closed-trial-response'}));
+  reset();S.pending=[];production.setRender(()=>{});production.setRefresh(async()=>{});
+  for(const restore of [false,true]) {
+    bridge[restore?'restore_backup':'export_backup']=async()=>({ok:true,result:{cases:2,warnings:[{case_id:'private-case',code:'trial_setup_quarantined'}]}});
+    await production.backupAction(restore);
+    assert.match(element('#backup-result').textContent,/已单独保留 1 个案例的异常试炼设置/);
+    assert.match(events.at(-1).message,/原图和研究记录已/);
+    assert.equal(S.saving,0);
+  }
+  bridge.export_backup=async()=>({ok:true,result:{cases:2}});
+  await production.backupAction(false);
+  assert.equal(element('#backup-result').textContent,'备份已保存到所选位置。','a later healthy backup clears the previous warning');
+
+  console.log(JSON.stringify({ok:true,checks:'durable-acknowledgement, failure-retention, duplicate-confirmation, independent-cases, draft-scope, close-guard, image-origin, escaping, pagination, append-failure-retention, load-guard, query-reset, comparison-search-entry, topic-draft-race, stale-topic-response, immediate-search-feedback, recent-outside-first-page, selected-original-only, latest-image-race, bounded-image-cache, image-failure-retry, stale-case-response, comparison-action-scope, trial-fullscreen-judgment-boundary, covered-original-release, closed-trial-response, backup-quarantine-feedback'}));
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});
