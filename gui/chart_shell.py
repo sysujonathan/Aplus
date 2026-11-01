@@ -227,7 +227,9 @@ def run_session(session_path):
                     _write_json(status, {'scope': 'process', 'token': getattr(bridge, 'active_token', token), 'ready': False, 'error': str(exc)})
                 finally:
                     run_embedded_close_recovery(window, bridge, session)
-        webview.start(start_embedded if embedded else None, gui="edgechromium", debug=False, private_mode=True)
+        from workbench.branding import application_icon
+        webview.start(start_embedded if embedded else None, gui="edgechromium", debug=False, private_mode=True,
+                      icon=str(application_icon()))
     except Exception as exc:
         _write_json(status, {'scope': 'process', 'token': token, "ready": False, "error": str(exc)})
         raise

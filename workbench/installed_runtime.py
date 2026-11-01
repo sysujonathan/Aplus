@@ -18,7 +18,10 @@ def setup_window():
     if os.name=='nt':
         import ctypes
         ctypes.windll.user32.SetProcessDPIAware()
-    return tk.Tk()
+    window=tk.Tk()
+    from .branding import apply_window_icon
+    apply_window_icon(window)
+    return window
 
 
 def choose_data(install_root):

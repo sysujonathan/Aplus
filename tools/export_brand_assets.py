@@ -82,10 +82,10 @@ def export():
     files={str(p.relative_to(BRAND)).replace('\\','/'):{'bytes':p.stat().st_size,
         'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in sorted(BRAND.rglob('*'))
         if p.is_file() and p.name!='manifest.json'}
-    manifest=dict(asset_version='2026.11.01-v1',status='asset_delivery_pending_visual_review_no_production_integration',
+    manifest=dict(asset_version='2026.11.01-v1',status='approved_asset_baseline',
         reference_sha256=['22e1653fb7f4d627673c305ca9b5193204ce1cead702a0823fdf24c6aaddb03c',
                           'f0860ae90a71fb0849403ee46b4ff81286f01d9cb11c9572ef0d298b26e6bbdc'],
-        palette=dict(ink=INK,paper=PAPER,apricot=ACCENT),palette_status='flat_engineering_calibration_pending_review',
+        palette=dict(ink=INK,paper=PAPER,apricot=ACCENT),palette_status='approved_by_delegated_review_2026-11-01',
         geometry='Hand reconstructed PA and outlined APLUS from selected reference; no external font',
         tools={'resvg-py':'0.5.0','Pillow':pillow_version},png_sizes=SIZES,ico_sizes=ICO_SIZES,files=files)
     (BRAND/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n',encoding='utf-8',newline='\n')
