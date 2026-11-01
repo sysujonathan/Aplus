@@ -48,8 +48,8 @@ def main():
             raise RuntimeError('安装包图表或成长空间组件不完整')
         return
     if len(sys.argv) > 2 and sys.argv[1] == '--installed-update':
-        from workbench.installed_update import worker
-        return worker(Path(sys.argv[2]))
+        from workbench.installed_progress import run_update
+        return run_update(Path(sys.argv[2]))
     if len(sys.argv)==3 and sys.argv[1]=='--installed-update-probe':
         from tools.schema_bridge_probe import run
         return run(sys.argv[2])

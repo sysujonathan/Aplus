@@ -199,6 +199,9 @@ def launch():
                     from .installed_update import current_release
                     release=current_release()
                     def confirm():
+                        if not self.winfo_ismapped():
+                            self.after(100,confirm)
+                            return
                         atomic_json(path,dict(started=True,version=release['version'],commit=release['commit'],
                             runtime=str(self.store.root),database_schema=release['database_schema']))
                         if os.environ.get('APLUS_MIGRATION_RECOVERY')=='1':
