@@ -62,6 +62,8 @@ Type: files; Name: "{app}\current.txt"
 Type: files; Name: "{app}\previous.txt"
 Type: files; Name: "{app}\current.txt.new"
 [Code]
+#include "ShortcutIcons.iss"
+
 function MoveFileEx(ExistingFile, NewFile: String; Flags: Cardinal): Boolean;
   external 'MoveFileExW@kernel32.dll stdcall';
 
@@ -151,7 +153,7 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var Code: Integer; OldPointer: AnsiString; Report, Pointer: String;
+var Code, Refreshed: Integer; OldPointer: AnsiString; Report, Pointer: String;
 begin
   if CurStep = ssPostInstall then begin
     if not WebViewPresent then begin
@@ -175,5 +177,9 @@ begin
       RaiseException('无法准备版本指针，原版本继续可用。');
     if not MoveFileEx(Pointer+'.new',Pointer,1 or 8) then
       RaiseException('无法切换版本指针，原版本继续可用。');
+    Refreshed := RefreshExistingShortcutIcons(ExpandConstant('{userdesktop}'),
+      ExpandConstant('{app}\Aplus.exe'),
+      ExpandConstant('{app}\app\{#AppVersion}\_internal\icon_aplus.ico'));
+    Log('APLUS existing desktop shortcut icons refreshed: '+IntToStr(Refreshed));
   end;
 end;
