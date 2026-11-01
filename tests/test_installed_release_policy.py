@@ -167,15 +167,16 @@ def test_manifest_version_sequence_and_package_location_cannot_disagree(mutate):
 def test_actual_workflow_allocator_respects_shipped_preview_and_releases(tmp_path,tags,main_ok,expected):
     root=Path(__file__).resolve().parents[1]
     workflow=(root/'.github/workflows/installed-release.yml').read_text()
-    block=workflow.split('          $head = git rev-parse HEAD',1)[1].split('      - name: Build exact',1)[0]
-    block=textwrap.dedent('          $head = git rev-parse HEAD'+block)
+    import yaml
+    jobs=yaml.load(workflow,Loader=yaml.BaseLoader)['jobs']
+    block=next(s['run'] for s in jobs['identity']['steps'] if s.get('id')=='identity')
     block=block.replace('[DateTime]::UtcNow',"[DateTime]::Parse('2026-10-30T14:00:00Z').ToUniversalTime()")
     (tmp_path/'packaging').mkdir()
     (tmp_path/'packaging/release.json').write_text(json.dumps(dict(sequence=202610300006)))
     output=tmp_path/'env.txt'
     history=json.dumps([dict(tag_name=t) for t in tags])
     script=tmp_path/'allocate.ps1'
-    script.write_text("$ErrorActionPreference='Stop'\nfunction git { 'accepted-head' }\n"+
+    script.write_text("$ErrorActionPreference='Stop'\n$global:LASTEXITCODE=0\nfunction git { 'accepted-head' }\n"+
         "function gh { if ($args -contains '--jq') { '"+('accepted-head' if main_ok else 'different-main')+
         "' } else { '"+history+"' } }\n"+block,encoding='utf-8-sig')
     env=dict(os.environ,GITHUB_ENV=str(output),GITHUB_OUTPUT=str(tmp_path/'outputs.txt'),GITHUB_REPOSITORY='sysujonathan/Aplus')

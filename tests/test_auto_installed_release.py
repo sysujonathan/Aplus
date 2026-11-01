@@ -114,6 +114,18 @@ def test_workflow_keeps_build_read_only_and_publishes_only_its_successful_artifa
     assert workflow['on']['workflow_run']==dict(workflows=['A acceptance'],branches=['main'],types=['completed'])
     assert workflow['concurrency']['cancel-in-progress']=='false'
     build=workflow['jobs']['build'];publish=workflow['jobs']['publish']
+    allocator=workflow['jobs']['identity']
+    assert allocator['permissions']=={'contents':'write','actions':'read'}
+    assert build['needs']=='identity'
+    assert build['env']=={'APLUS_VERSION':'${{ needs.identity.outputs.version }}',
+                          'APLUS_SEQUENCE':'${{ needs.identity.outputs.sequence }}'}
+    assert allocator['outputs']['commit']=='${{ steps.gate.outputs.commit }}'
+    assert allocator['steps'][1]['with']['persist-credentials']=='false'
+    # Only reviewed repository code and metadata run with the draft-visible token.
+    assert not any('pip install' in s.get('run','') or 'build_installer.py' in s.get('run','')
+                   or 'Start-Process' in s.get('run','') for s in allocator['steps'])
+    assert any('release_preflight.py' in s.get('run','') for s in allocator['steps'])
+    assert any('release_preflight.py' in s.get('run','') for s in build['steps'])
     assert 'permissions' not in build and publish['permissions']=={'contents':'write','actions':'read'}
     assert publish['needs']=='build' and "needs.build.outputs.ready == 'true'" in publish['if']
     assert 'refs/heads/main' in build['if'] and "workflow_run.event == 'push'" in build['if']
@@ -141,11 +153,15 @@ def test_workflow_keeps_build_read_only_and_publishes_only_its_successful_artifa
     ('workflow_dispatch','push','refs/heads/main',gate.REPO,gate.REPO,True)])
 def test_actual_workflow_admission_expression(event_name,run_event,ref,repo,head_repo,allowed):
     workflow=yaml.load((ROOT/'.github/workflows/installed-release.yml').read_text(),Loader=yaml.BaseLoader)
-    expression=workflow['jobs']['build']['if'].replace('&&',' and ').replace('||',' or ')
     github=SimpleNamespace(repository=repo,ref=ref,event_name=event_name,event=SimpleNamespace(
         workflow_run=SimpleNamespace(event=run_event,conclusion='success',head_branch='main',
                                      head_repository=SimpleNamespace(full_name=head_repo))))
-    assert bool(eval(expression,{'__builtins__':{}},{'github':github})) is allowed
+    for job in ('identity','build'):
+        expression=workflow['jobs'][job]['if'].replace('&&',' and ').replace('||',' or ')
+        for ready in ('true','false'):
+            needs=SimpleNamespace(identity=SimpleNamespace(outputs=SimpleNamespace(ready=ready)))
+            expected=allowed and (job=='identity' or ready=='true')
+            assert bool(eval(expression,{'__builtins__':{}},{'github':github,'needs':needs})) is expected
 
 
 @pytest.fixture
