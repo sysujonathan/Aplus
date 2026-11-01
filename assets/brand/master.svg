@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="700" viewBox="0 0 760 700">
+  <title>APLUS PA monogram and outlined wordmark</title>
+  <desc>Flat vector reconstruction of the selected 2026-11-01 reference. Geometry v1; production integration pending.</desc>
+  <defs>
+    <g id="symbol">
+      <path data-role="ink" fill="#111214" d="M12 0H265C335 0 390 55 390 128C390 163 376 195 359 212L302 128C288 103 277 78 247 78H89Q79 78 79 89V305Q90 299 100 285L225 130Q235 116 245 130L447 444Q457 467 439 467H377Q365 467 357 454L234 266Q224 250 213 264L100 404Q93 412 86 414V455Q86 467 74 467H12Q0 467 0 455V12Q0 0 12 0Z"/>
+      <path data-role="accent" fill="#FFA578" d="M215 310Q215 295 225 301L327 453Q333 467 321 467H250C230 467 215 450 215 432Z"/>
+    </g>
+    <g id="wordmark" fill="#111214" fill-rule="evenodd">
+      <path d="M0 90L50 8Q60 -8 70 8L120 90H101L60 21L19 90Z"/>
+      <path d="M170 90V0H222C242 0 253 12 253 28S242 56 222 56H187V90ZM187 16V40H221Q237 40 237 28T221 16Z"/>
+      <path d="M307 0H324V66Q324 74 332 74H378V90H327Q307 90 307 70Z"/>
+      <path d="M428 0H445V51Q445 75 469 75T493 51V0H510V52Q510 92 469 92T428 52Z"/>
+      <path d="M645 0V16H600Q584 16 584 27Q584 38 600 38H618Q650 38 650 64Q650 90 618 90H568V74H618Q633 74 633 64T618 54H600Q567 54 567 27Q567 0 600 0Z"/>
+    </g>
+  </defs>
+  <use href="#symbol" x="155" y="30"/>
+  <use href="#wordmark" x="55" y="565"/>
+</svg>
