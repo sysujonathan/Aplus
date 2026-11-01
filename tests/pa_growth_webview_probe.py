@@ -148,6 +148,7 @@ def run(folder, reopen=False):
             store.pa_save_case([{'name': f'sample-{i}.png',
                 'data': (folder / 'samples' / f'sample-{i}.png').read_bytes()} for i in (2, 3)],
                 case_id=case_id, allow_duplicate=True)
+            store.pa_trial_setup(case_id, {'mode':'sequence','image_ids':[i['id'] for i in store.pa_case(case_id,touch=False)['images']]})
             click('.case-card')
             wait("Boolean(document.querySelector('[data-action=quick-study]'))")
             click('[data-action=quick-study]')
@@ -172,9 +173,9 @@ def run(folder, reopen=False):
             click('[data-action=judgment][data-value=wait]')
             click('[data-action=save-judgment]')
             wait("Boolean(document.querySelector('#trial-evidence'))")
+            click('[data-action=trial-next]')
+            wait("document.querySelector('#trial-image')?.complete && document.querySelector('#trial-image')?.naturalWidth > 0")
             click('[data-action=trial-original]')
-            wait("Boolean(document.querySelector('[data-action=original-next]'))")
-            click('[data-action=original-next]')
             wait("document.querySelector('#original-image')?.complete && document.querySelector('.original-footer')?.innerText.includes('2 / 3')")
             assert base64.b64decode(evaluate("document.querySelector('#original-image').src").split(',', 1)[1]) == (folder / 'samples/sample-2.png').read_bytes()
             click('[data-action=close-original]')

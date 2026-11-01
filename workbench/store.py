@@ -262,6 +262,10 @@ class Store:
         from .pa_growth import add_note
         return add_note(self, case_id, text)
 
+    def pa_trial_setup(self, case_id, value=None):
+        from .pa_trial import settings
+        return settings(self, case_id, value)
+
     def pa_add_trial(self, case_id, judgment, depth='quick', details=None):
         from .pa_growth import add_trial
         return add_trial(self, case_id, judgment, depth, details)
