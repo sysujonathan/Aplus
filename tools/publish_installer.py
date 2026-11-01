@@ -25,6 +25,29 @@ def gh_json(path, *, missing_ok=False):
     return json.loads(result.stdout)
 
 
+def release_for_tag(tag, *, required=False):
+    """The by-tag endpoint exposes published releases, not new drafts."""
+    value=gh_json('/releases/tags/'+tag,missing_ok=True)
+    if value is not None:return value
+    matches=[]
+    for page in range(1,101):
+        values=gh_json('/releases?per_page=100&page='+str(page))
+        if not isinstance(values,list):raise ValueError('Release listing is invalid')
+        matches.extend(item for item in values if isinstance(item,dict) and item.get('tag_name')==tag)
+        if len(values)<100:break
+    else:raise ValueError('Release listing exceeds safe lookup bounds')
+    if len(matches)>1:raise ValueError('Multiple drafts claim the same release tag; retained for review')
+    if not matches:
+        if required:raise ValueError('Uploaded release is not visible; draft retained')
+        return None
+    identifier=matches[0].get('id')
+    if type(identifier) is not int or identifier<1:raise ValueError('Release ID is invalid')
+    value=gh_json('/releases/'+str(identifier))
+    if value.get('id')!=identifier or value.get('tag_name')!=tag:
+        raise ValueError('Release identity changed during lookup')
+    return value
+
+
 def verify_uploaded(tag,value,release,*,allow_missing=False):
     """Draft retries may reuse only exactly the same target and uploaded bytes."""
     if (release.get('tag_name')!=tag or release.get('target_commitish')!=value['commit']
@@ -106,14 +129,14 @@ def main():
         ref=gh_json('/git/ref/tags/'+tag,missing_ok=True)
         if ref is not None and gh_json('/commits/'+tag).get('sha')!=value['commit']:
             raise ValueError('Existing tag belongs to a different commit')
-        existing=gh_json('/releases/tags/'+tag,missing_ok=True)
+        existing=release_for_tag(tag)
     # gh refuses duplicate tags/releases. Never rewrite a published package.
     if existing is None:
         subprocess.run(['gh','release','create',tag,str(args.setup.resolve()),str(args.manifest.resolve()),
                         '--repo','sysujonathan/Aplus','--target',value['commit'],'--draft',
                         '--title','Aplus '+value['version'],'--notes','Aplus Windows 安装版。软件内可一键更新。'],check=True)
     if args.resume:
-        existing=gh_json('/releases/tags/'+tag)
+        existing=release_for_tag(tag,required=True)
         if existing.get('draft') is True:
             uploaded={item.get('name') for item in existing.get('assets',[])}
             missing=[path for path in (args.setup,args.manifest) if path.name not in uploaded]
@@ -121,7 +144,7 @@ def main():
                 verify_uploaded(tag,value,existing,allow_missing=True)
                 subprocess.run(['gh','release','upload',tag,*map(lambda p:str(p.resolve()),missing),
                                 '--repo','sysujonathan/Aplus'],check=True)
-                existing=gh_json('/releases/tags/'+tag)
+                existing=release_for_tag(tag,required=True)
         verify_uploaded(tag,value,existing)
     # Recheck at the actual publication point; an older slow build must never
     # overwrite latest after main has moved.
