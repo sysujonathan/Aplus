@@ -770,7 +770,11 @@
       if (result.cancelled || result.canceled) return;
       const restored = result.cases_restored ?? result.count ?? result.cases?.length ?? result.result?.cases;
       $('#backup-result').textContent = restore ? (restored === undefined ? '恢复完成。' : `恢复完成 · ${restored} 个案例`) : '备份已保存到所选位置。';
-      await refreshData(); render(); toast(restore ? '案例资料已恢复' : '备份已保存');
+      const warnings = result.result?.warnings || result.warnings || [];
+      const notice = warnings.length ? `已单独保留 ${warnings.length} 个案例的异常试炼设置，请检查相关案例。原图和研究记录已${restore ? '恢复' : '备份'}。` : '';
+      $('#backup-result').className = warnings.length ? 'alert-line' : 'micro';
+      if (notice) $('#backup-result').textContent += ' ' + notice;
+      await refreshData(); render(); toast(notice || (restore ? '案例资料已恢复' : '备份已保存'));
     } catch (error) { $('#backup-error').textContent = error.message; }
     finally { S.saving--; $$('[data-action="export-backup"],[data-action="restore-backup"]').forEach(button => { button.disabled = false; }); }
   }

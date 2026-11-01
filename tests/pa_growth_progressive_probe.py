@@ -137,6 +137,26 @@ def run(folder, visual=False):
             assert [store.pa_image(i['id']) for i in c['images']] == original
             checks.append('explicit_four_stage_reveal_original_bytes_and_judgment_preserved')
             checkpoint('04-revealed')
+            # Only the native file picker is replaced; production buttons,
+            # bridge, ZIP writer/reader and user-facing warnings remain real.
+            owner = store.rows("SELECT value FROM meta WHERE key='pa_local_owner'")[0]['value']
+            store.execute('UPDATE meta SET value=? WHERE key=?',
+                          (json.dumps(dict(cfg, cutoff=0)), f"pa_trial_setup:{owner}:{c['id']}"))
+            backup_path = folder / 'optional-setting.zip'
+            window.create_file_dialog = lambda *args, **kwargs: (str(backup_path),)
+            click('[data-action=backup]')
+            click('[data-action=export-backup]')
+            wait("document.querySelector('#backup-result')?.innerText.includes('已单独保留 1 个案例的异常试炼设置') && !window.aplusGrowthBusy()")
+            assert backup_path.is_file()
+            target = Store(folder / 'restored-runtime')
+            bridge._store = target
+            click('[data-action=restore-backup]')
+            wait("document.querySelector('#backup-result')?.innerText.includes('恢复完成') && document.querySelector('#backup-result')?.innerText.includes('异常试炼设置') && !window.aplusGrowthBusy()")
+            restored_case = target.pa_case(target.pa_search()[0]['id'])
+            assert [target.pa_image(i['id']) for i in restored_case['images']] == original
+            assert restored_case['trials'][0]['details']['presentation']['cutoff'] == .45
+            checks.append('backup_restore_quarantine_warning_in_real_ui')
+            checkpoint('05-backup-warning')
             (folder / 'result.json').write_text(json.dumps(dict(ok=True, synthetic=True, real_webview=True,
                                                                 checks=checks), ensure_ascii=False, indent=2), encoding='utf-8')
         except Exception:

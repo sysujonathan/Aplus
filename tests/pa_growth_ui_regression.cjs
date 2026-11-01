@@ -25,7 +25,7 @@ vm.runInContext(source.slice(0, cut) + `
   refreshData = async () => {};
   search = async () => {};
   toast = (message,error=false) => window.__events.push({message,error});
-  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
+  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,backupAction,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
     imageBusy:()=>imageWorker,cacheStats:()=>({count:originalCache.size,bytes:originalCacheBytes}),
     clearImages:()=>{originalCache.clear();originalCacheBytes=0;imageWanted=null;},
     setRender:fn=>{render=fn;},setRefresh:fn=>{refreshData=fn;}};
@@ -356,6 +356,18 @@ async function run() {
   S.context.can_compare=false;
   assert.doesNotMatch(production.study(),/data-action="compare"/,'unsupported comparison does not expose an ineffective action');
 
-  console.log(JSON.stringify({ok:true,checks:'durable-acknowledgement, failure-retention, duplicate-confirmation, independent-cases, draft-scope, close-guard, image-origin, escaping, pagination, append-failure-retention, load-guard, query-reset, comparison-search-entry, topic-draft-race, stale-topic-response, immediate-search-feedback, recent-outside-first-page, selected-original-only, latest-image-race, bounded-image-cache, image-failure-retry, stale-case-response, comparison-action-scope, trial-fullscreen-judgment-boundary, covered-original-release, closed-trial-response'}));
+  reset();S.pending=[];production.setRender(()=>{});production.setRefresh(async()=>{});
+  for(const restore of [false,true]) {
+    bridge[restore?'restore_backup':'export_backup']=async()=>({ok:true,result:{cases:2,warnings:[{case_id:'private-case',code:'trial_setup_quarantined'}]}});
+    await production.backupAction(restore);
+    assert.match(element('#backup-result').textContent,/已单独保留 1 个案例的异常试炼设置/);
+    assert.match(events.at(-1).message,/原图和研究记录已/);
+    assert.equal(S.saving,0);
+  }
+  bridge.export_backup=async()=>({ok:true,result:{cases:2}});
+  await production.backupAction(false);
+  assert.equal(element('#backup-result').textContent,'备份已保存到所选位置。','a later healthy backup clears the previous warning');
+
+  console.log(JSON.stringify({ok:true,checks:'durable-acknowledgement, failure-retention, duplicate-confirmation, independent-cases, draft-scope, close-guard, image-origin, escaping, pagination, append-failure-retention, load-guard, query-reset, comparison-search-entry, topic-draft-race, stale-topic-response, immediate-search-feedback, recent-outside-first-page, selected-original-only, latest-image-race, bounded-image-cache, image-failure-retry, stale-case-response, comparison-action-scope, trial-fullscreen-judgment-boundary, covered-original-release, closed-trial-response, backup-quarantine-feedback'}));
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

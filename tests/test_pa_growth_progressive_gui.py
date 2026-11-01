@@ -28,4 +28,5 @@ def test_case_driven_atlas_and_mask_pixels_in_real_webview():
         'case_backed_galaxy_drilldown_zoom_and_return',
         'mask_hides_future_pixels_title_and_fullscreen',
         'explicit_four_stage_reveal_original_bytes_and_judgment_preserved',
+        'backup_restore_quarantine_warning_in_real_ui',
     }

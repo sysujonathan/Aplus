@@ -37,4 +37,31 @@ def settings(store, case_id, value=None):
         store.execute('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)', (key, dumps(value)))
         return value
     rows = store.rows('SELECT value FROM meta WHERE key=?', (key,))
+    if not rows and store.rows('SELECT 1 FROM meta WHERE key=?', (f'pa_trial_setup_issue:{owner}:{case_id}',)):
+        raise ValueError('备份中的试炼设置已隔离，请重新设置')
     return validate(json.loads(rows[0]['value']), image_ids()) if rows else None
+
+
+def backup_setting(raw, image_ids):
+    """Normalize active settings; preserve invalid source text as inert evidence."""
+    if raw is None:
+        return None, None
+    try:
+        return validate(json.loads(raw), image_ids), None
+    except (ValueError, TypeError) as exc:
+        return None, {'raw': raw, 'reason': str(exc)[:500]}
+
+
+def validate_issue(value):
+    # Diagnostic text never becomes configuration or a filesystem path.
+    if (not isinstance(value, dict) or set(value) != {'raw', 'reason'}
+            or not isinstance(value['raw'], str) or not isinstance(value['reason'], str)
+            or len(value['reason']) > 500):
+        raise ValueError('备份中的试炼设置诊断无效')
+    return value
+
+
+def validate_issues(value):
+    if not isinstance(value, list) or len(value) > 20_000:
+        raise ValueError('备份中的试炼设置诊断无效或过多')
+    return [validate_issue(item) for item in value]
