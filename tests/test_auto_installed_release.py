@@ -176,7 +176,11 @@ def release_world(tmp_path,monkeypatch):
                     return subprocess.CompletedProcess(command,1,stdout='',
                         stderr='gh: No commit found for SHA: v'+value['version']+' (HTTP 422)')
                 data=dict(sha=HEAD)
-            else:data=state.release
+            elif '/releases/tags/' in command[2]:
+                # GitHub's tag endpoint does not expose unpublished drafts.
+                data=state.release if state.release and not state.release['draft'] else None
+            elif '/releases?' in command[2]:data=[dict(state.release,id=123)] if state.release else []
+            else:data=dict(state.release,id=123) if state.release else None
             if data is None:return subprocess.CompletedProcess(command,1,stdout='',stderr='gh: Not Found (HTTP 404)')
             return subprocess.CompletedProcess(command,0,stdout=json.dumps(data),stderr='')
         action=command[2]
@@ -362,3 +366,36 @@ def test_gh_json_decodes_real_utf8_output_independent_of_windows_codepage(monkey
             'import sys; sys.stdout.buffer.write(bytes.fromhex('+repr(raw.hex())+'))'],**kwargs)
     monkeypatch.setattr(publisher.subprocess,'run',run)
     assert publisher.gh_json('/commits/v2026.10.31.2')==value
+
+
+def test_draft_lookup_pages_then_reads_exact_id_without_using_placeholder_tag(monkeypatch):
+    tag='v2026.11.01.1';calls=[]
+    draft=dict(id=123,tag_name=tag,draft=True,target_commitish=HEAD)
+    def api(path,**kwargs):
+        calls.append(path)
+        if path=='/releases/tags/'+tag:return None
+        if path=='/releases?per_page=100&page=1':return [dict(id=i+1,tag_name='other-'+str(i)) for i in range(100)]
+        if path=='/releases?per_page=100&page=2':return [draft]
+        if path=='/releases/123':return draft
+        raise AssertionError(path)
+    monkeypatch.setattr(publisher,'gh_json',api)
+    assert publisher.release_for_tag(tag,required=True)==draft
+    assert calls[-1]=='/releases/123' and not any('untagged-' in path for path in calls)
+
+
+@pytest.mark.parametrize('problem',['ambiguous','bad_id','changed_id','changed_tag','invalid_listing','denied','missing'])
+def test_draft_lookup_unknown_or_ambiguous_identity_fails_closed(monkeypatch,problem):
+    tag='v2026.11.01.1';draft=dict(id=123,tag_name=tag,draft=True)
+    def api(path,**kwargs):
+        if path.startswith('/releases/tags/'):return None
+        if path.startswith('/releases?'):
+            if problem=='denied':raise RuntimeError('GitHub lookup failed (HTTP 403)')
+            if problem=='invalid_listing':return {}
+            if problem=='missing':return []
+            if problem=='bad_id':return [dict(draft,id=True)]
+            return [draft,dict(draft,id=124)] if problem=='ambiguous' else [draft]
+        if path=='/releases/123':
+            return dict(draft,id=124) if problem=='changed_id' else dict(draft,tag_name='another-tag')
+        raise AssertionError(path)
+    monkeypatch.setattr(publisher,'gh_json',api)
+    with pytest.raises((ValueError,RuntimeError)):publisher.release_for_tag(tag,required=True)

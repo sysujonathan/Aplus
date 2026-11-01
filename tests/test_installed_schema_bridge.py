@@ -179,7 +179,7 @@ def test_native_guard_rejects_active_desktop_without_touching_pending(tmp_path,m
     assert result.returncode==1 and pending.read_bytes()==b'{"retain":"pending"}'
 
 
-@pytest.mark.parametrize('outcome',['success','launch_failed','new_write_then_failed','release_changed'])
+@pytest.mark.parametrize('outcome',['success','launch_failed','new_write_then_failed','release_changed','rate_limited','timeout'])
 def test_handoff_worker_uses_installed_payload_once_and_preserves_business_data(tmp_path,monkeypatch,outcome):
     home=tmp_path/'state';folder=home/'updates/attempt';folder.mkdir(parents=True)
     monkeypatch.setenv('APLUS_INSTALL_STATE',str(home))
@@ -196,9 +196,18 @@ def test_handoff_worker_uses_installed_payload_once_and_preserves_business_data(
     monkeypatch.setattr(update,'update_mutex',lambda *args:nullcontext())
     monkeypatch.setattr(update,'application_mutex',nullcontext)
     monkeypatch.setattr(update,'require_web_closed',lambda:None)
-    monkeypatch.setattr(update,'load_manifest',lambda:dict(target,commit='d'*40) if outcome=='release_changed' else target)
+    def manifest():
+        if outcome=='rate_limited':
+            from urllib.error import HTTPError
+            raise HTTPError('https://api.github.com/repos/sysujonathan/Aplus/releases/latest',
+                403,'rate limit exceeded',{'X-RateLimit-Remaining':'0'},None)
+        if outcome=='timeout':raise TimeoutError('The read operation timed out')
+        return dict(target,commit='d'*40) if outcome=='release_changed' else target
+    monkeypatch.setattr(update,'load_manifest',manifest)
     kernel=types.SimpleNamespace(OpenProcess=Mock(return_value=1),WaitForSingleObject=Mock(return_value=0),CloseHandle=Mock())
-    monkeypatch.setattr(update.ctypes,'windll',types.SimpleNamespace(kernel32=kernel))
+    notice=Mock()
+    monkeypatch.setattr(update.ctypes,'windll',types.SimpleNamespace(kernel32=kernel,
+        user32=types.SimpleNamespace(MessageBoxW=notice)))
     calls=[]
     def start(command,**kwargs):
         calls.append(command)
@@ -227,6 +236,13 @@ def test_handoff_worker_uses_installed_payload_once_and_preserves_business_data(
         assert result['state']=='rolled_back' and database.read_bytes()==before
         assert (root/'current.txt').read_text()==previous
         assert Path(calls[-1][0])==old/'AplusApp.exe'
+    if outcome in ('rate_limited','timeout'):
+        assert result['target']==target['version'] and result['previous']==previous
+        assert not (folder/'migration').exists() and len(calls)==1
+        text=notice.call_args.args[1]
+        assert target['version'] in text and previous in text and '尚未完成' in text
+        assert ('暂时限制' if outcome=='rate_limited' else '超时') in text
+    else:notice.assert_not_called()
 
 
 @pytest.mark.parametrize('problem',['official','runtime','program','state','unmarked','target_official'])

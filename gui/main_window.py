@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import messagebox
 import ttkbootstrap as ttk
 
@@ -24,15 +25,19 @@ from .theme import (
 )
 
 
-def right_list_width(window_width):
+def right_list_width(window_width, scale=1):
     """右侧双层清单约为旧关注栏的 1.5 倍，同时保护 K 线空间。"""
-    width = max(1280, int(window_width or 0))
-    return max(330, min(390, round(width * 0.225)))
+    width = max(round(1280*scale), int(window_width or 0))
+    return max(round(330*scale), min(round(390*scale), round(width * 0.225)))
 
 
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
         super().__init__(themename="darkly", title="Brooks-AI 操盘台")
+        self._display_scale = self.winfo_fpixels('1i') / 96
+        listing_font = tkfont.Font(root=self, family='Microsoft YaHei UI', size=9)
+        listing_height = max(round(26*self._display_scale),
+                             listing_font.metrics('linespace')+round(6*self._display_scale))
         self.style.colors.primary = ACCENT
         self.configure(background=APP_BG)
         self.style.configure("TFrame", background=APP_BG)
@@ -40,7 +45,7 @@ class AplusMainWindow(ttk.Window):
         self.style.configure(
             "Treeview",
             font=("Microsoft YaHei UI", 9),
-            rowheight=26,
+            rowheight=listing_height,
             background=PANEL_BG,
             fieldbackground=PANEL_BG,
             foreground=TEXT,
@@ -182,7 +187,7 @@ class AplusMainWindow(ttk.Window):
         # 高频关注列表通常比当日策略结果更长：上方 1/3、下方 2/3。
         self.list_pane.rowconfigure(0, weight=1)
         self.list_pane.rowconfigure(2, weight=2)
-        self.list_pane.configure(width=360)
+        self.list_pane.configure(width=round(360*self._display_scale))
         self.list_pane.grid_propagate(False)
         self.candidates = CandidateTabs(
             self.list_pane,
@@ -460,7 +465,7 @@ class AplusMainWindow(ttk.Window):
         if event.widget is not self:
             return
         # 两个列表共用右栏，宽度约为旧关注栏的 1.5 倍。
-        self.list_pane.configure(width=right_list_width(event.width))
+        self.list_pane.configure(width=right_list_width(event.width,self._display_scale))
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):

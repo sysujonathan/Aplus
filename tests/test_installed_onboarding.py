@@ -7,8 +7,34 @@ import sys
 import pytest
 
 
+def assert_desktop_metrics(app):
+    import ctypes
+    from tkinter import font
+    user=ctypes.windll.user32
+    user.GetDpiForWindow.argtypes=[ctypes.c_void_p]
+    dpi=user.GetDpiForWindow(app.winfo_id())
+    assert dpi and abs(app.winfo_fpixels('1i')-dpi)<2
+    listing=font.Font(root=app,font=app.style.lookup('Treeview','font'))
+    assert app.style.lookup('Treeview','rowheight')>=listing.metrics('linespace')+4
+
+
+@pytest.mark.skipif(os.name!='nt',reason='Windows DPI initialization order')
+def test_setup_establishes_dpi_before_first_tcl_interpreter(monkeypatch):
+    import ctypes
+    from types import SimpleNamespace
+    from workbench import installed_runtime as runtime
+    calls=[]
+    monkeypatch.setattr(ctypes,'windll',SimpleNamespace(user32=SimpleNamespace(
+        SetProcessDPIAware=lambda:calls.append('dpi'))))
+    sentinel=object()
+    def window():calls.append('tk');return sentinel
+    monkeypatch.setattr(runtime.tk,'Tk',window)
+    assert runtime.setup_window() is sentinel
+    assert calls==['dpi','tk']
+
+
 @pytest.mark.skipif(os.name!='nt',reason='Windows desktop first-run lifecycle')
-@pytest.mark.parametrize('mode',['existing','new','failure','cancel'])
+@pytest.mark.parametrize('mode',['existing','new','failure','cancel','restart'])
 def test_welcome_then_real_desktop(tmp_path,mode):
     script=r'''
 import os,sys
@@ -19,8 +45,9 @@ os.environ['A_WORKBENCH_HOME']=str(folder/'original')
 from workbench.store import Store
 store=Store(folder/'original')
 from tools.onboarding_probe import run
-observed=run(store.root,folder,new=mode=='new',fail=mode=='failure',cancel=mode=='cancel')
-if mode in ('existing','new'):
+if mode!='restart':
+    observed=run(store.root,folder,new=mode=='new',fail=mode=='failure',cancel=mode=='cancel')
+if mode in ('existing','new','restart'):
     # Import only after welcome: reproduces real installed entry ordering.
     from gui.main_window import AplusMainWindow
     from workbench.service import Service
@@ -28,6 +55,8 @@ if mode in ('existing','new'):
     app=AplusMainWindow(service=service,store=store,enable_tray=False)
     app.withdraw();app.update_idletasks()
     assert app.style.master.tk is app.tk
+    from tests.test_installed_onboarding import assert_desktop_metrics
+    assert_desktop_metrics(app)
     app.destroy();service.pool.shutdown(wait=True)
 print('first_run_ok',mode)
 '''
@@ -73,4 +102,5 @@ def test_recovery_confirmation_and_background_result(tmp_path,monkeypatch,mode):
         store=Store(tmp_path/'synthetic');service=Service(store)
         app=AplusMainWindow(service=service,store=store,enable_tray=False)
         app.withdraw();app.update_idletasks();assert app.style.master.tk is app.tk
+        assert_desktop_metrics(app)
         app.destroy();service.pool.shutdown(wait=True)

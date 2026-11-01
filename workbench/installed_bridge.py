@@ -91,7 +91,9 @@ def handoff_window(app,bridge,primary,root,runtime,probe):
             subprocess.Popen([str(primary),command,str(folder/'request.json')],cwd=root,
                              env=dict(os.environ),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             results.put(('waiting',folder))
-        except Exception as exc:results.put(('error',str(exc)))
+        except Exception as exc:
+            from .installed_update import network_failure_message
+            results.put(('error',network_failure_message(exc) or str(exc)))
     def poll():
         if not started[0]:
             try:

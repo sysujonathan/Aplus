@@ -11,12 +11,22 @@ from .installed_data import (state_home, bound_runtime, discover_hints, candidat
                              bind_existing, bind_new, RecoveryRequired, recover_bound_runtime)
 
 
+def setup_window():
+    # Match ttkbootstrap's desktop DPI mode before the first Tcl interpreter.
+    # Creating an unaware welcome/recovery window first caches 96-DPI fonts;
+    # a later aware desktop then mixes tiny explicit fonts with normal buttons.
+    if os.name=='nt':
+        import ctypes
+        ctypes.windll.user32.SetProcessDPIAware()
+    return tk.Tk()
+
+
 def choose_data(install_root):
     # The welcome window has a short-lived Tcl interpreter. Do not initialize
     # ttkbootstrap's process-wide Style singleton here: the desktop must own
     # it, otherwise it retains this destroyed window after data binding.
     from tkinter import ttk
-    window = tk.Tk()
+    window = setup_window()
     window.title('欢迎使用 Aplus')
     window.geometry('720x450')
     window.minsize(640, 400)
@@ -123,7 +133,7 @@ def choose_data(install_root):
 
 
 def recover_data():
-    window=tk.Tk();window.withdraw()
+    window=setup_window();window.withdraw()
     if not messagebox.askyesno('恢复上次未完成的写入',
         '检测到上次异常退出留下的事务。\n是否先备份原数据库与事务文件，再由 SQLite 恢复？\n'
         '请先退出其他 Aplus；不会创建空库，事务文件由 SQLite 自行恢复处理。',parent=window):
@@ -156,7 +166,7 @@ def launch():
         runtime=recover_data()
         if runtime is None:return
     except Exception as exc:
-        root=tk.Tk();root.withdraw()
+        root=setup_window();root.withdraw()
         retry=messagebox.askyesno('请确认原数据位置',str(exc)+'\n\n是否重新选择原数据位置？',parent=root)
         root.destroy()
         if not retry:return
