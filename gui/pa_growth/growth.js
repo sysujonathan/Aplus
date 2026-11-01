@@ -347,6 +347,7 @@
   }
   async function navigate(page) {
     if (S.overlay) { if (!closeOverlay()) return; }
+    cancelSearch();
     S.caseSeq++; S.page = page;
     $('#main').scrollTop = 0;
     if (page === 'library') { render(); await search(false); }
@@ -398,6 +399,10 @@
       }
     }
   }
+  function cancelSearch() {
+    clearTimeout(S.searchTimer); S.searchTimer = null;
+    S.searchSeq++; S.searchBusy = false;
+  }
   function scheduleSearch() {
     clearTimeout(S.searchTimer);
     S.searchTimer = setTimeout(() => {
@@ -406,6 +411,7 @@
     },180);
   }
   async function openCase(id, quick = false) {
+    cancelSearch();
     const seq = ++S.caseSeq;
     try {
       const result = await api('get_case',id);

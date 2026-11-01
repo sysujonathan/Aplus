@@ -32,15 +32,32 @@ class Launcher {
     static bool Manifest(Dictionary<string,object> target) {
         string version=Text(target,"version");
         if(!Version(version) || !Number(target,"protocol",1,1) || Text(target,"channel")!="stable" ||
-           !Number(target,"database_schema",9,9) || !target.ContainsKey("preview") ||
+           !Number(target,"database_schema",8,9) || !target.ContainsKey("preview") ||
            !(target["preview"] is bool) || (bool)target["preview"] ||
            !Regex.IsMatch(Text(target,"commit"),@"^[0-9a-f]{40}\z")) return false;
         var p=version.Split('.');long sequence=Int64.Parse(p[0]+p[1]+p[2])*10000+Int64.Parse(p[3]);
         if(!Number(target,"sequence",sequence,sequence) || !target.ContainsKey("package")) return false;
         var package=target["package"] as Dictionary<string,object>;
-        return package!=null && Number(package,"bytes",1,2000000000) &&
+        bool valid=package!=null && Number(package,"bytes",1,2000000000) &&
             Regex.IsMatch(Text(package,"sha256"),@"^[0-9a-f]{64}\z") && Text(package,"url")==
             "https://github.com/sysujonathan/Aplus/releases/download/v"+version+"/AplusSetup-"+version+"-x64.exe";
+        if(!valid) return false;
+        if(Number(target,"database_schema",8,8)) {
+            var upgrade=target.ContainsKey("upgrade") ? target["upgrade"] as Dictionary<string,object> : null;
+            return Text(target,"component")=="schema_bridge" && upgrade!=null && upgrade.Count==5 &&
+                Number(upgrade,"protocol",1,1) && Number(upgrade,"from_schema",8,8) && Number(upgrade,"to_schema",9,9) &&
+                Text(upgrade,"entry")=="primary/AplusApp.exe" && Regex.IsMatch(Text(upgrade,"inventory_sha256"),@"^[0-9a-f]{64}\z");
+        }
+        if(target.ContainsKey("bridge_manifest")) {
+            var bridge=target["bridge_manifest"] as Dictionary<string,object>;
+            if(bridge==null || bridge.ContainsKey("bridge_manifest") || !Manifest(bridge) || !Number(bridge,"database_schema",8,8) ||
+                Text(bridge,"version")!=version || Text(bridge,"commit")!=Text(target,"commit") ||
+                !Number(bridge,"sequence",sequence,sequence)) return false;
+            var original=bridge["package"] as Dictionary<string,object>;
+            return original!=null && Text(original,"url")==Text(package,"url") &&
+                Text(original,"sha256")==Text(package,"sha256") && Number(original,"bytes",Convert.ToInt64(package["bytes"]),Convert.ToInt64(package["bytes"]));
+        }
+        return true;
     }
     static Mutex Gate(string name) {
         bool created;
@@ -70,10 +87,38 @@ class Launcher {
         try { using(var p=Process.GetProcessById(pid)) return !p.HasExited; }
         catch(ArgumentException) { return false; }
     }
+    static bool RestoreMigration(Dictionary<string,object> plan,string runtime,string folder,string home) {
+        var profile=Read(Path.Combine(home,"data.json"));
+        if(!Same(Text(profile,"runtime"),runtime) || !Same(Text(plan,"runtime"),runtime) ||
+           !Number(plan,"protocol",1,1) || !Number(plan,"from_schema",8,8) || !Number(plan,"to_schema",9,9))
+            throw new Exception("数据升级恢复身份不一致，原件已保留。");
+        string backup=Path.Combine(folder,"migration","original.sqlite3");
+        if(!Same(Text(plan,"backup"),backup) || !Same(Text(plan,"shadow"),Path.Combine(folder,"migration","shadow","workbench.sqlite3")))
+            throw new Exception("数据备份恢复路径无效。");
+        foreach(string path in new[]{runtime,folder,Path.GetDirectoryName(backup),backup})
+            if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0) throw new Exception("数据恢复路径已变化。");
+        string before=Text(plan,"original_sha256"),after=Text(plan,"migrated_sha256");
+        if(!Regex.IsMatch(before,@"^[0-9a-f]{64}\z") || !Regex.IsMatch(after,@"^[0-9a-f]{64}\z") || Hash(backup)!=before)
+            throw new Exception("原数据备份未通过校验，恢复记录已保留。");
+        string database=Path.Combine(runtime,"workbench.sqlite3");
+        foreach(string suffix in new[]{"-journal","-wal"})
+            if(File.Exists(database+suffix) && new FileInfo(database+suffix).Length>0) return false;
+        string actual=Hash(database);
+        if(actual==before) return true;
+        if(actual!=after) return false;
+        string temp=database+".aplus-restore-"+Guid.NewGuid().ToString("N")+".tmp";
+        try {
+            using(var input=File.OpenRead(backup)) using(var output=new FileStream(temp,FileMode.CreateNew,FileAccess.Write)) {
+                input.CopyTo(output);output.Flush(true);
+            }
+            if(Hash(temp)!=before || !MoveFileEx(temp,database,9)) throw new Exception("原数据恢复未完成，备份已保留。");
+        } finally { if(File.Exists(temp)) File.Delete(temp); }
+        return true;
+    }
     static void Recover(string root) {
         string pending=Path.Combine(root,"update-pending.json");
         if(!File.Exists(pending)) return;
-        using(Gate(@"Local\AplusInstalledUpdate")) using(Gate(@"Local\AplusInstalledSetup")) {
+        using(Gate(@"Local\AplusInstalledUpdate")) using(Gate(@"Local\AplusInstalledSetup")) using(Gate(@"Local\AplusDesktopWorkbench")) {
             var record=Read(pending);
             string folder=Text(record,"folder");
             string home=Environment.GetEnvironmentVariable("APLUS_INSTALL_STATE");
@@ -86,7 +131,7 @@ class Launcher {
             if(!Same(Text(request,"install_root"),root) || !Manifest(target))
                 throw new Exception("更新恢复身份不一致，原数据已保留。");
             string phase=Text(record,"phase");
-            if(phase!="installing" && phase!="installed" && phase!="launching" && phase!="startup_wait")
+            if(phase!="installing" && phase!="migrating" && phase!="installed" && phase!="launching" && phase!="startup_wait")
                 throw new Exception("恢复信息不完整，请保留现场并联系维护者；原数据已保留。");
             string previous=Text(record,"previous");
             if(!Version(previous)) throw new Exception("旧版本指针无效，原数据已保留。");
@@ -96,7 +141,8 @@ class Launcher {
                     var started=Read(ack);
                     if(started.ContainsKey("started") && started["started"] is bool && (bool)started["started"] &&
                        Text(started,"version")==version && Text(started,"commit")==Text(target,"commit") &&
-                       Same(Text(started,"runtime"),Text(request,"runtime"))) {
+                       Same(Text(started,"runtime"),Text(request,"runtime")) &&
+                       (!record.ContainsKey("migration") || Number(started,"database_schema",9,9))) {
                         Atomic(Path.Combine(folder,"receipt.json"),Json.Serialize(new {state="completed",version=version}));
                         File.Delete(pending);
                         try {
@@ -110,12 +156,28 @@ class Launcher {
                 } catch(ArgumentException) { } // Malformed ACK is not success.
             }
             int pid=record.ContainsKey("pid") ? Convert.ToInt32(record["pid"]) : 0;
-            if((pid!=0 && Alive(pid)) || Active(Path.Combine(root,"app",version,"AplusApp.exe")))
+            if((pid!=0 && Alive(pid)) || Active(Path.Combine(root,"app",version,"AplusApp.exe")) ||
+               Active(Path.Combine(root,"app",version,"primary","AplusApp.exe")))
                 throw new Exception("新版仍在运行并等待启动确认，请稍后；原数据已保留。");
             string oldExe=Path.Combine(root,"app",previous,"AplusApp.exe");
             string expected=Text(record,"previous_sha256");
             if(!File.Exists(oldExe) || expected.Length!=64 || Hash(oldExe)!=expected)
                 throw new Exception("旧版本身份未能确认，请保留恢复现场。");
+            if(record.ContainsKey("migration")) {
+                var migration=record["migration"] as Dictionary<string,object>;
+                if(migration==null || !Number(target,"database_schema",9,9) || !target.ContainsKey("bridge_manifest"))
+                    throw new Exception("数据升级恢复声明不完整。");
+                if(!RestoreMigration(migration,Text(request,"runtime"),folder,home)) {
+                    // Data may contain new business writes. Retain the new
+                    // code and retry its real startup; never restore old bytes.
+                    Atomic(Path.Combine(root,"current.txt"),version);
+                    record["phase"]="startup_wait";record.Remove("pid");Atomic(pending,Json.Serialize(record));
+                    Atomic(Path.Combine(folder,"receipt.json"),Json.Serialize(new {state="startup_unconfirmed",message="新版数据已有写入，继续启动新版。"}));
+                    Environment.SetEnvironmentVariable("APLUS_INSTALLED_ACK",ack);
+                    Environment.SetEnvironmentVariable("APLUS_MIGRATION_RECOVERY","1");
+                    return;
+                }
+            }
             Atomic(Path.Combine(root,"current.txt"),previous);
             Atomic(Path.Combine(folder,"receipt.json"),Json.Serialize(new {state="rolled_back",previous=previous}));
             File.Delete(pending);
@@ -145,6 +207,7 @@ class Launcher {
             }
         } catch(Exception ex) {
             if(args.Length==0) MessageBox.Show(ex.Message,"Aplus 启动提示",MessageBoxButtons.OK,MessageBoxIcon.Error);
+            else { try { Console.OutputEncoding=new UTF8Encoding(false);Console.Error.WriteLine(ex.ToString()); } catch { } }
             return 1;
         }
     }
