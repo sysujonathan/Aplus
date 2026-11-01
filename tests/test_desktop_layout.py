@@ -212,6 +212,9 @@ def test_single_chart_toolbar_option_and_wider_right_list_pane():
     assert right_list_width(1280) == 330
     assert right_list_width(1600) == 360
     assert right_list_width(2880) == 390
+    assert right_list_width(2880,2) == 660
+    assert right_list_width(3200,2) == 720
+    assert right_list_width(5760,2) == 780
 
     source = (ROOT / "gui" / "main_window.py").read_text(encoding="utf-8")
     toolbar_source = (ROOT / "gui" / "toolbar.py").read_text(encoding="utf-8")

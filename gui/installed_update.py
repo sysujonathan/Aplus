@@ -88,7 +88,7 @@ class InstalledVersionController:
                         update.download(target,folder/'setup.exe',progress=progress)
                     update.verify_package(target,folder/'setup.exe')
                     self.results.put(('download',(folder,target),False,operation))
-                except Exception as exc:self.results.put(('error',str(exc),False,operation))
+                except Exception as exc:self.results.put(('error',update.network_failure_message(exc) or str(exc),False,operation))
             threading.Thread(target=work,daemon=True).start()
         except Exception as exc:self.fail(str(exc))
 

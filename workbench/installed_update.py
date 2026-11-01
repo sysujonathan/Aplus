@@ -11,6 +11,8 @@ import shutil
 import time
 from urllib.request import Request, urlopen
 import uuid
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
 
 from .installed_data import state_home, atomic_json, bound_runtime, bind_existing, file_sha256
 from .version_update import github_json, acceptance, application_mutex, require_web_closed
@@ -23,6 +25,26 @@ DATABASE_SCHEMA=9
 
 def current_release():
     return read_identity()
+
+
+def network_failure_message(error, *, now=None):
+    """Explain a real transport failure without weakening release admission."""
+    if isinstance(error,HTTPError):
+        headers=error.headers or {}
+        if error.code==429 or (error.code==403 and headers.get('X-RateLimit-Remaining')=='0'):
+            when=''
+            try:
+                reset=float(headers.get('X-RateLimit-Reset',''))
+                if 0<reset-(time.time() if now is None else now)<=7200:
+                    stamp=datetime.fromtimestamp(reset,timezone(timedelta(hours=8)))
+                    when='预计北京时间 '+stamp.strftime('%H:%M:%S')+' 后可重试。'
+            except (TypeError,ValueError,OverflowError,OSError):pass
+            return 'GitHub 暂时限制了当前网络的更新查询次数。'+when+'请稍后再检查更新；反复点击不会加快恢复。'
+        return None  # A 403 is not necessarily a rate limit.
+    reason=error.reason if isinstance(error,URLError) else error
+    if isinstance(reason,TimeoutError):
+        return '连接更新服务器超时，请检查网络后重试。'
+    return None
 
 
 def validate_manifest(value):
@@ -114,7 +136,9 @@ def check_update(current=None, *, api=github_json, opener=urlopen):
             return dict(state='current',message=prefix+'当前已是最新版本。')
         return dict(state='available',target=target,message=prefix+'发现新版 '+version_label(target)+'，更新后自动重启。')
     except Exception as exc:
-        return dict(state='unavailable',message=prefix+'暂时无法检查更新，当前版本可继续使用。',detail=str(exc))
+        reason=network_failure_message(exc)
+        return dict(state='unavailable',message=prefix+(reason+'\n' if reason else '暂时无法检查更新，')+
+                    '当前版本可继续使用。',detail=str(exc))
 
 
 def verify_package(target,path):
@@ -309,7 +333,13 @@ def worker(request_path):
                         receipt('startup_unconfirmed',message='新版数据已有写入，保留新版以便继续启动，不回退数据。')
                         return
             temp=root/'current.txt.new';temp.write_text(previous,encoding='ascii');os.replace(temp,root/'current.txt')
-            receipt('rolled_back',message=str(exc),previous=previous)
+            explanation=network_failure_message(exc)
+            receipt('rolled_back',message=explanation or str(exc),previous=previous,target=target['version'])
             (root/'update-pending.json').unlink(missing_ok=True)
             subprocess.Popen([str(previous_exe)],cwd=root,
                 env=dict(os.environ,APLUS_INSTALL_ROOT=str(root)))
+            if explanation:
+                ctypes.windll.user32.MessageBoxW(0,
+                    '更新到 '+target['version']+' 尚未完成。\n'+explanation+
+                    '\n已恢复 '+previous+'，原数据保留，请继续使用当前版本。',
+                    '本次更新未完成',0x40)
