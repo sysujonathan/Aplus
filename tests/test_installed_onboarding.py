@@ -27,10 +27,12 @@ def test_setup_establishes_dpi_before_first_tcl_interpreter(monkeypatch):
     monkeypatch.setattr(ctypes,'windll',SimpleNamespace(user32=SimpleNamespace(
         SetProcessDPIAware=lambda:calls.append('dpi'))))
     sentinel=object()
+    from workbench import branding
+    monkeypatch.setattr(branding,'apply_window_icon',lambda window:calls.append('icon') if window is sentinel else None)
     def window():calls.append('tk');return sentinel
     monkeypatch.setattr(runtime.tk,'Tk',window)
     assert runtime.setup_window() is sentinel
-    assert calls==['dpi','tk']
+    assert calls==['dpi','tk','icon']
 
 
 @pytest.mark.skipif(os.name!='nt',reason='Windows desktop first-run lifecycle')

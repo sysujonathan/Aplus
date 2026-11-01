@@ -136,8 +136,9 @@ def run_session(session_path):
                             guard.request()
                     time.sleep(.2)
 
+        from workbench.branding import application_icon
         webview.start(transport, gui='edgechromium', debug=False, private_mode=True,
-                      storage_path=str(session.with_suffix('.webview')))
+                      storage_path=str(session.with_suffix('.webview')),icon=str(application_icon()))
     except Exception as exc:
         atomic_json(status, {'ready': False, 'error': str(exc)})
         raise

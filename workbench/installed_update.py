@@ -224,7 +224,7 @@ def update_mutex(name='Local\\AplusInstalledUpdate'):
     finally:kernel.CloseHandle(ctypes.c_void_p(handle))
 
 
-def worker(request_path):
+def worker(request_path, *, progress=None):
     request_path=Path(request_path).resolve();folder=request_path.parent
     request=json.loads(request_path.read_text(encoding='utf-8'))
     if folder.parent!=state_home()/'updates' or request_path.name!='request.json':
@@ -233,11 +233,17 @@ def worker(request_path):
     target=validate_manifest(request['target'])
     setup=folder/'setup.exe'
     def receipt(state,**extra):atomic_json(folder/'receipt.json',dict(state=state,**extra))
+    def report(stage):
+        # Display-only: a UI failure must never change release admission or recovery.
+        if progress:
+            try:progress(stage)
+            except Exception:pass
     with update_mutex():
         kernel=ctypes.windll.kernel32;kernel.OpenProcess.restype=ctypes.c_void_p
         parent=kernel.OpenProcess(0x100000,False,int(request['parent_pid']))
         if not parent:raise ValueError('无法确认旧程序进程，未更新。')
         try:
+            report('waiting')
             atomic_json(folder/'ready.json',{'ready':True})
             if kernel.WaitForSingleObject(ctypes.c_void_p(parent),60000)!=0:
                 raise ValueError('旧程序未退出，当前版本保持不变。')
@@ -248,6 +254,7 @@ def worker(request_path):
         process=None;migration=None;handoff=request.get('bundle_handoff') is True;fallback_verified=not handoff
         try:
             if (folder/'cancelled.json').exists():raise ValueError('本次更新已取消。')
+            report('verifying')
             current=read_identity(root/'app'/previous/'_internal')
             from .installed_bundle import installed_identity, canonical_manifest, verify_payload
             from .installed_data import inspect_data
@@ -274,6 +281,7 @@ def worker(request_path):
                 require_web_closed()
                 runtime=bound_runtime()
                 if str(runtime)!=request['runtime']:raise ValueError('数据绑定已变化，未更新。')
+                report('protecting')
                 bind_existing(runtime,install_root=root)
                 if current['database_schema']==8 and inspect_data(runtime)['schema']!=8:
                     raise ValueError('程序与数据版本不一致，已保留原件。')
@@ -282,6 +290,7 @@ def worker(request_path):
                          previous_sha256=file_sha256(previous_exe))
             atomic_json(root/'update-pending.json',pending)
             if not handoff:
+                report('installing')
                 code=subprocess.run([str(setup),'/CURRENTUSER','/SILENT','/SUPPRESSMSGBOXES','/NORESTART',
                                      '/DIR='+str(root)],timeout=900).returncode
                 if code!=0:raise ValueError('新版安装未完成，正在恢复旧版本。')
@@ -294,16 +303,19 @@ def worker(request_path):
                 from . import installed_migration
                 with application_mutex():
                     require_web_closed()
+                    report('protecting')
                     migration=installed_migration.prepare(runtime,folder)
                     pending.update(phase='migrating',migration=migration)
                     atomic_json(root/'update-pending.json',pending)
                     receipt('migrating',message='副本已验证，正在安全接续数据。')
+                    report('connecting')
                     installed_migration.commit(migration,runtime,folder)
             pending.update(phase='installed')
             atomic_json(root/'update-pending.json',pending)
             env=dict(os.environ,APLUS_INSTALL_ROOT=str(root),APLUS_INSTALLED_ACK=str(folder/'started.json'))
             pending.update(phase='launching')
             atomic_json(root/'update-pending.json',pending)
+            report('starting')
             process=subprocess.Popen([str(root/'app'/target['version']/'AplusApp.exe')],env=env,cwd=root)
             pending.update(phase='startup_wait',pid=process.pid)
             atomic_json(root/'update-pending.json',pending)
@@ -311,6 +323,7 @@ def worker(request_path):
             while time.monotonic()<deadline and process.poll() is None:
                 if confirmed_start(folder,target,request['runtime']):
                     receipt('completed',version=target['version'])
+                    report('started')
                     (root/'update-pending.json').unlink(missing_ok=True)
                     from .installed_cleanup import finish_update
                     finish_update(root,request['runtime'],folder,target)
@@ -325,6 +338,7 @@ def worker(request_path):
                 return  # Never switch code underneath a potentially live new app.
             if not fallback_verified:
                 receipt('blocked',message=str(exc));return
+            report('recovering')
             if migration is not None:
                 from .installed_migration import restore_if_unchanged
                 with application_mutex():

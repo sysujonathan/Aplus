@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 root=Path(SPECPATH).parent
 a=Analysis([str(root/'tools/installed_bridge_entry.py')],pathex=[str(root)],
-    datas=[(os.environ['APLUS_BUILD_METADATA'],'.')],
+    datas=[(os.environ['APLUS_BUILD_METADATA'],'.'),(str(root/'icon_aplus.ico'),'.')],
     excludes=['workbench.store','workbench.installed_migration','core','config','gui',
               'pandas','numpy','matplotlib','streamlit','pytest','IPython'],
     module_collection_mode={'workbench':'py'})

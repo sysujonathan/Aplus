@@ -69,7 +69,10 @@ def main():
 def handoff_window(app,bridge,primary,root,runtime,probe):
     import tkinter as tk
     from tkinter import ttk,messagebox
-    window=tk.Tk();window.title('Aplus 正在安全更新');window.geometry('570x190')
+    window=tk.Tk()
+    from .branding import apply_window_icon
+    apply_window_icon(window)
+    window.title('Aplus 正在安全更新');window.geometry('570x190')
     status=tk.StringVar(value='正在接续已下载的新版程序，行情和交易记录保留原位…')
     ttk.Label(window,textvariable=status,wraplength=520).pack(padx=24,pady=25)
     bar=ttk.Progressbar(window,mode='indeterminate');bar.pack(fill='x',padx=24);bar.start(15)
@@ -120,6 +123,9 @@ def handoff_window(app,bridge,primary,root,runtime,probe):
                 results.put(('error','升级助手未就绪，原数据未修改。'));waiting[0]=None
         window.after(150,poll)
     def ready():
+        if not window.winfo_ismapped():
+            window.after(50,ready)
+            return
         if phase_one:
             ack=Path(phase_one).resolve()
             if ack.name!='started.json' or ack.parent.parent!=state_home()/'updates':

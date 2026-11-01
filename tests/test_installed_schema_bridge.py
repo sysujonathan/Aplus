@@ -223,12 +223,18 @@ def test_handoff_worker_uses_installed_payload_once_and_preserves_business_data(
         return types.SimpleNamespace(pid=4321,poll=lambda:None)
     monkeypatch.setattr(update.subprocess,'Popen',start)
     monkeypatch.setattr(update.subprocess,'run',lambda *a,**k:pytest.fail('handoff must reuse installed payload, not run Setup again'))
-    update.worker(folder/'request.json')
+    stages=[]
+    def progress(stage):
+        stages.append(stage)
+        if outcome=='success' and stage=='protecting':
+            raise RuntimeError('injected display callback failure must not alter transaction')
+    update.worker(folder/'request.json',progress=progress)
     result=json.loads((folder/'receipt.json').read_text(encoding='utf-8'))
     if outcome=='success':
         assert result['state']=='completed' and data.inspect_data(runtime)['schema']==9
         assert (folder/'migration/original.sqlite3').read_bytes()==before
         assert len(calls)==1
+        assert stages==['waiting','verifying','protecting','protecting','connecting','starting','started']
     elif outcome=='new_write_then_failed':
         assert result['state']=='startup_unconfirmed' and data.inspect_data(runtime)['schema']==9
         assert (root/'update-pending.json').exists() and len(calls)==1

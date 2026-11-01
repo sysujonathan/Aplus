@@ -33,7 +33,9 @@ def right_list_width(window_width, scale=1):
 
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
-        super().__init__(themename="darkly", title="Brooks-AI 操盘台")
+        from workbench.branding import APPLICATION_TITLE, apply_window_icon
+        super().__init__(themename="darkly", title=APPLICATION_TITLE)
+        apply_window_icon(self)
         self._display_scale = self.winfo_fpixels('1i') / 96
         listing_font = tkfont.Font(root=self, family='Microsoft YaHei UI', size=9)
         listing_height = max(round(26*self._display_scale),
@@ -321,12 +323,11 @@ class AplusMainWindow(ttk.Window):
     def _setup_tray(self):
         """关闭窗口时驻留系统托盘；托盘回调不直接跨线程操作 Tk。"""
         try:
-            from pathlib import Path
-
             from PIL import Image
             import pystray
+            from workbench.branding import APPLICATION_TITLE, application_icon
 
-            icon_path = Path(__file__).resolve().parents[1] / "icon_aplus.ico"
+            icon_path = application_icon()
             image = Image.open(icon_path).convert("RGBA")
             menu = pystray.Menu(
                 pystray.MenuItem(
@@ -340,7 +341,7 @@ class AplusMainWindow(ttk.Window):
                 ),
             )
             self._tray_icon = pystray.Icon(
-                "aplus-workbench", image, "Brooks-AI 操盘台", menu
+                "aplus-workbench", image, APPLICATION_TITLE, menu
             )
             self._tray_icon.run_detached()
             self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)

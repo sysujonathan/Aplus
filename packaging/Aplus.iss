@@ -53,8 +53,8 @@ Source: "{#Payload}\Aplus.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\aplus-install.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 [Icons]
-Name: "{autodesktop}\Aplus"; Filename: "{app}\Aplus.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{group}\Aplus"; Filename: "{app}\Aplus.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Aplus"; Filename: "{app}\Aplus.exe"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\app\{#AppVersion}\_internal\icon_aplus.ico"
+Name: "{group}\Aplus"; Filename: "{app}\Aplus.exe"; WorkingDir: "{app}"; IconFilename: "{app}\app\{#AppVersion}\_internal\icon_aplus.ico"
 [Run]
 Filename: "{app}\Aplus.exe"; Description: "打开 Aplus，接续已有数据或开始使用"; Flags: nowait postinstall skipifsilent
 [UninstallDelete]
