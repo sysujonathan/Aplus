@@ -12,20 +12,83 @@ concurrency:
   group: aplus-installed-release
   cancel-in-progress: false
 jobs:
-  build:
+  identity:
+    # GitHub lists drafts only for a caller with push access. Keep that token
+    # out of dependency installation, compiler execution, and package builds.
+    permissions:
+      contents: write
+      actions: read
     if: github.repository == 'sysujonathan/Aplus' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
     outputs:
       ready: ${{ steps.gate.outputs.build }}
       commit: ${{ steps.gate.outputs.commit }}
       version: ${{ steps.identity.outputs.version }}
-      artifact: ${{ steps.installer.outputs.artifact-id }}
+      sequence: ${{ steps.identity.outputs.sequence }}
     steps:
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || 'main' }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Admit exact accepted main
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release_preflight.py --output "$env:GITHUB_OUTPUT"
+      - name: Allocate release identity
+        id: identity
+        if: steps.gate.outputs.build == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $head = git rev-parse HEAD
+          $main = gh api repos/$env:GITHUB_REPOSITORY/commits/main --jq .sha
+          if ($head -ne $main) { throw 'Main moved; a later accepted main will build instead' }
+          $releaseTime = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'China Standard Time')
+          $date = $releaseTime.ToString('yyyy.MM.dd')
+          $floor = [long]($releaseTime.ToString('yyyyMMdd')+'0000')
+          $baseline = Get-Content packaging/release.json -Raw | ConvertFrom-Json
+          $sequence = [Math]::Max($floor+1, [long]$baseline.sequence+1)
+          $pages = gh api repos/$env:GITHUB_REPOSITORY/releases?per_page=100 --paginate --slurp
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot list reserved release identities' }
+          $pages = $pages | ConvertFrom-Json
+          $releases = @($pages | ForEach-Object { $_ })
+          foreach ($release in $releases) {
+            if ($release.tag_name -match '^v(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$') {
+              $old = [long]('{0}{1:D2}{2:D2}{3:D4}' -f [int]$Matches[1],[int]$Matches[2],[int]$Matches[3],[int]$Matches[4])
+              if ($old -ge $sequence) { $sequence = $old+1 }
+            }
+          }
+          if ($sequence -ge $floor+10000) { throw 'Release sequence needs manual review' }
+          $version = "$date.$($sequence-$floor)"
+          "APLUS_VERSION=$version" >> $env:GITHUB_ENV
+          "APLUS_SEQUENCE=$sequence" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "sequence=$sequence" >> $env:GITHUB_OUTPUT
+  build:
+    needs: identity
+    env:
+      APLUS_VERSION: ${{ needs.identity.outputs.version }}
+      APLUS_SEQUENCE: ${{ needs.identity.outputs.sequence }}
+    if: needs.identity.outputs.ready == 'true' && (github.repository == 'sysujonathan/Aplus' && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)))
+    runs-on: windows-latest
+    timeout-minutes: 45
+    outputs:
+      ready: ${{ steps.gate.outputs.build }}
+      commit: ${{ steps.gate.outputs.commit }}
+      version: ${{ needs.identity.outputs.version }}
+      artifact: ${{ steps.installer.outputs.artifact-id }}
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.commit }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -54,34 +117,6 @@ jobs:
           $process = Start-Process $compiler -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
           "APLUS_ISCC=$destination\ISCC.exe" >> $env:GITHUB_ENV
-      - name: Allocate release identity
-        id: identity
-        if: steps.gate.outputs.build == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $head = git rev-parse HEAD
-          $main = gh api repos/$env:GITHUB_REPOSITORY/commits/main --jq .sha
-          if ($head -ne $main) { throw 'Main moved; a later accepted main will build instead' }
-          $releaseTime = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'China Standard Time')
-          $date = $releaseTime.ToString('yyyy.MM.dd')
-          $floor = [long]($releaseTime.ToString('yyyyMMdd')+'0000')
-          $baseline = Get-Content packaging/release.json -Raw | ConvertFrom-Json
-          $sequence = [Math]::Max($floor+1, [long]$baseline.sequence+1)
-          $pages = gh api repos/$env:GITHUB_REPOSITORY/releases?per_page=100 --paginate --slurp | ConvertFrom-Json
-          $releases = @($pages | ForEach-Object { $_ })
-          foreach ($release in $releases) {
-            if ($release.tag_name -match '^v(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$') {
-              $old = [long]('{0}{1:D2}{2:D2}{3:D4}' -f [int]$Matches[1],[int]$Matches[2],[int]$Matches[3],[int]$Matches[4])
-              if ($old -ge $sequence) { $sequence = $old+1 }
-            }
-          }
-          if ($sequence -ge $floor+10000) { throw 'Release sequence needs manual review' }
-          $version = "$date.$($sequence-$floor)"
-          "APLUS_VERSION=$version" >> $env:GITHUB_ENV
-          "APLUS_SEQUENCE=$sequence" >> $env:GITHUB_ENV
-          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build exact accepted main installer
         if: steps.gate.outputs.build == 'true'
         run: python tools/build_installer.py --official --version $env:APLUS_VERSION --sequence $env:APLUS_SEQUENCE --iscc "$env:APLUS_ISCC"
