@@ -49,20 +49,11 @@ def powershell(script, fixture):
     return result.stdout
 
 
-SETUP_LINKS=r"""
+PROTECT_READONLY_LINKS=r"""
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $fixture=Get-Content -LiteralPath $env:APLUS_SHORTCUT_FIXTURE -Raw -Encoding UTF8 | ConvertFrom-Json
-$shell=New-Object -ComObject WScript.Shell
 foreach($entry in $fixture.links) {
-  $link=$shell.CreateShortcut($entry.path)
-  $link.TargetPath=$entry.target
-  $link.Arguments='--synthetic "keep parameters"'
-  $link.WorkingDirectory=$fixture.working
-  $link.Description='Preserve user description'
-  $link.WindowStyle=3
-  if($entry.icon) { $link.IconLocation=$entry.icon }
-  $link.Save()
   if($entry.readonly) { (Get-Item -LiteralPath $entry.path).IsReadOnly=$true }
 }
 """
@@ -126,11 +117,16 @@ def test_real_inno_repairs_only_owned_managed_existing_links(tmp_path,case):
     ]:
         if case!='no_links':links.append(dict(name=name,path=str(desktop/(name+'.lnk')),target=str(link_target),icon=location,readonly=readonly))
     fixture=tmp_path/'fixture.json';fixture.write_text(json.dumps(dict(links=links,working=str(working))),encoding='utf-8')
-    powershell(SETUP_LINKS,fixture)
     broken=desktop/'broken.lnk';broken.write_bytes(b'not a shortcut')
     (desktop/'directory.lnk').mkdir()
-    before=json.loads(powershell(READ_LINKS,fixture))
     script=tmp_path/'probe.iss';proof=tmp_path/'proof.txt'
+    # Create real links through the native installer API, not the WSH TargetPath
+    # setter rejected by the hosted Windows runner before repair can run.
+    # https://jrsoftware.org/ishelp/topic_isxfunc_createshelllink.htm
+    prepare='\n'.join("    CreateShellLink("+','.join("'"+quoted(value)+"'" for value in (
+        item['path'],'Preserve user description',item['target'],
+        '--synthetic "keep parameters"',working,item['icon'].removesuffix(',0')))+',0,3);'
+        for item in links)
     script.write_text('''[Setup]
 AppName=Aplus shortcut isolated test
 AppVersion=1.0
@@ -146,13 +142,26 @@ Compression=none
 function InitializeSetup(): Boolean;
 var Count: Integer;
 begin
+  if ExpandConstant('{param:prepare|0}') = '1' then begin
+'''+prepare+'''
+  end else begin
   Count := RefreshExistingShortcutIcons('''+"'"+quoted(desktop)+"','"+quoted(target)+"','"+quoted(icon)+"');\n"+
         "  SaveStringToFile('"+quoted(proof)+"',IntToStr(Count),False);\n"+
-        '  Result := False;\nend;\n',encoding='utf-8')
+        '  end;\n  Result := False;\nend;\n',encoding='utf-8-sig')
     compiled=subprocess.run([str(compiler),'/Q',str(script)],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=45)
     assert compiled.returncode==0,compiled.stdout+'\n'+compiled.stderr
     command=[str(tmp_path/'shortcut-probe.exe'),'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART']
     try:
+        result=subprocess.run([*command,'/prepare=1'],capture_output=True,timeout=30)
+        assert result.returncode==1  # Native fixture creation only; no installation.
+        powershell(PROTECT_READONLY_LINKS,fixture)
+        before=json.loads(powershell(READ_LINKS,fixture))
+        assert len(before)==len(links)
+        for expected,actual in zip(links,before):
+            assert Path(actual['target'])==Path(expected['target'])
+            assert actual['arguments']=='--synthetic "keep parameters"'
+            assert Path(actual['working'])==working
+            assert actual['description']=='Preserve user description' and actual['style']==3
         result=subprocess.run(command,capture_output=True,timeout=30)
         assert result.returncode==1  # Harness exits before any installation.
         after=json.loads(powershell(READ_LINKS,fixture))
@@ -169,4 +178,4 @@ begin
         assert len(list(desktop.glob('*.lnk')))==len(links)+2  # broken file + directory, no recreated links.
     finally:
         for item in links:
-            if item['readonly']:Path(item['path']).chmod(0o666)
+            if item['readonly'] and Path(item['path']).exists():Path(item['path']).chmod(0o666)
