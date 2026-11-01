@@ -124,7 +124,8 @@ python tools/build_installer.py --iscc <ISCC.exe路径>
 编译 Setup 后再签最终安装器，最后生成最终包哈希；不会在源码中保存私钥或密码。
 `.github/workflows/installed-release.yml` 在官方 main 的 push 验收成功后自动构建、校验并发布正式安装包。
 只有官方仓库、main 分支及对应精确提交的最新一轮 `A acceptance` 成功才获准；PR 检查、分叉仓库事件、
-失败/取消的验收均不能发布。手动运行也须满足同一门禁，不改变 A acceptance 的必需检查、触发或完整测试范围。
+失败/取消的验收均不能发布。手动运行也须满足同一门禁，不改变 A acceptance 的必需检查、触发或主线完整测试范围。
+PR 可以按明确影响范围执行专项验收，主线 push 的完整预检/pytest 不裁剪；快速 PR 绿灯不能直接触发发行或替代 main 的验收结果。
 只读构建任务先核对是否已经发布该提交，避免重复构建；通过真实 EXE 行情通信、冻结校验及 GUI/WebView 冒烟后，
 上传该次构建的 artifact。独立发布任务只接收同一构建任务输出的 artifact ID 与精确提交，
 仅该任务取得 `contents: write`，使用 GitHub 自带的短期令牌，不要求维护者配置个人令牌或购买证书。

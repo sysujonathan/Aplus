@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-main-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -19,12 +22,32 @@ jobs:
       # 否则 LF/CRLF 改变文件字节，verify_frozen 全线失败（2026-09-28 定位）
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-lock.txt
+      - name: Select acceptance scope (unknown changes run full suite)
+        id: scope
+        run: python tools/ci_test_plan.py
       - run: python -m pip install -r requirements-lock.txt
-      - name: Upgrade bridge preflight (fail fast)
-        run: python -m pytest -q tests/test_legacy_update_bridge.py -x --durations=10
-      - run: python -m pytest -q --durations=30
+      - name: Verify frozen source bytes
+        run: python -c "from workbench.strategies import verify_frozen; print(verify_frozen())"
+      - name: Install verified compiler for actual shortcut tests
+        if: steps.scope.outputs.lane != 'docs'
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $compiler
+          $signature = Get-AuthenticodeSignature $compiler
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B.V.') { throw 'Compiler signature mismatch' }
+          $destination = Join-Path $env:RUNNER_TEMP 'Inno'
+          $arguments = @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',('/DIR='+$destination))
+          $process = Start-Process $compiler -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
+          "APLUS_ISCC=$destination\ISCC.exe" >> $env:GITHUB_ENV
+      - name: Run required acceptance tests
+        run: python tools/ci_test_plan.py --run

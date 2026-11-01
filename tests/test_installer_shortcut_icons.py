@@ -24,7 +24,20 @@ def compiler_path():
         str(Path(os.environ.get('LOCALAPPDATA',''))/'Programs/Inno Setup 7/ISCC.exe'),
         str(Path(os.environ.get('ProgramFiles',''))/'Inno Setup 6/ISCC.exe'),
         str(ROOT.parent/'aplus-windows-installer/.build-tools/Inno/ISCC.exe')]
-    return next((Path(p) for p in candidates if p and Path(p).is_file()),None)
+    found=next((Path(p) for p in candidates if p and Path(p).is_file()),None)
+    if found is None and os.environ.get('APLUS_ISCC'):
+        pytest.fail('CI compiler was configured but is missing; native tests must not skip')
+    return found
+
+
+def test_configured_ci_compiler_missing_cannot_silently_skip(monkeypatch, tmp_path):
+    monkeypatch.setenv('APLUS_ISCC',str(tmp_path/'missing.exe'))
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path/'local'))
+    monkeypatch.setenv('ProgramFiles',str(tmp_path/'programs'))
+    monkeypatch.setattr(shutil,'which',lambda _:None)
+    monkeypatch.setitem(compiler_path.__globals__,'ROOT',tmp_path/'checkout')
+    with pytest.raises(pytest.fail.Exception,match='native tests must not skip'):
+        compiler_path()
 
 
 def powershell(script, fixture):
