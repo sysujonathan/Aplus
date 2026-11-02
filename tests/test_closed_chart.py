@@ -122,7 +122,7 @@ def test_snapshot_selection_supports_csv_etf_history_and_checks_integrity(tmp_pa
     (store.root / data["dataset"]["path"]).write_bytes(b"tampered")
     with pytest.raises(ValueError, match="校验"):
         load_closed_chart(store, summary(code="159570"))
-    with pytest.raises(ValueError, match="本地没有"):
+    with pytest.raises(ValueError, match="本地暂无"):
         load_closed_chart(store, summary(code="600001"))
 
 
@@ -278,7 +278,8 @@ def check_native_closed_viewer(tmp_path, _embedded_available):
         row = {**summary(), "position_id": "real"}
         page._selected_closed.return_value = row
         TradeManagementFrame._edit_closed(page)
-        page._view_closed_chart.assert_called_once_with(row)
+        page._open_closed_fills_dialog.assert_called_once_with(row)
+        page._view_closed_chart.assert_not_called()
         page._open_closed_dialog.assert_not_called()
     finally:
         root.destroy()

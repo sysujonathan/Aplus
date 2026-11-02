@@ -7,6 +7,10 @@ import math
 from .market import code_of, load_dataset
 
 
+class MissingClosedHistory(ValueError):
+    """Trade records remain usable while separate chart history is missing."""
+
+
 class _ReadOnlySnapshots:
     """Keep load_dataset validation, without its Store read-audit write."""
     def __init__(self, store):
@@ -74,8 +78,8 @@ def closed_chart_events(frame, row, fills=(), *, adjustment=""):
     return events, warnings
 
 
-def load_closed_chart(store, row):
-    """Only read immutable daily snapshots and this record's own position fills."""
+def load_closed_chart(store, row, *, history=None):
+    """Read verified daily history and this record's own position fills."""
     code = code_of(row["code"])
     close_date = date.fromisoformat(str(row["close_date"])).isoformat()
     fills = []
@@ -93,11 +97,21 @@ def load_closed_chart(store, row):
         "ORDER BY CASE WHEN adjustment='不复权' THEN 0 ELSE 1 END,end DESC,created DESC,rowid DESC",
         (code, first, close_date),
     )
-    if not snapshots:
-        raise ValueError("本地没有覆盖清仓日期的日线行情，请先在盘前任务更新该标的行情。")
+    if history is None and not snapshots:
+        from .watch_history import cached_history, chart_source
+        history = cached_history(store, code, chart_source(store, code))
+    if history is not None:
+        from .market import validate_bars
+        frame, record = history
+        frame = validate_bars(frame)
+        if (record['code'] != code or record['timeframe'] != 'daily' or
+                frame.date.iloc[0] > first or frame.date.iloc[-1] < close_date):
+            raise MissingClosedHistory("日线尚未覆盖这笔交易；原始成交仍可查看和修正。")
+    elif not snapshots:
+        raise MissingClosedHistory("本地暂无该标的交易期间日线；可按需获取 K 图，不影响查看或修正成交。")
     # Prefer a snapshot with enough history, but never silently skip a failed
     # integrity check. Both engine and chart retain the source snapshot identity.
-    for snapshot in snapshots:
+    for snapshot in (() if history is not None else snapshots):
         frame, record = load_dataset(_ReadOnlySnapshots(store), snapshot["id"])
         if fills or (frame.date.le(close_date).sum() >= max(int(row["holding_days"]), 1)):
             break

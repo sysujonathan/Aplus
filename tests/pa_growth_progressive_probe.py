@@ -62,6 +62,21 @@ def run(folder, visual=False):
     def pixel(x=.9):
         return js(f"Array.from(document.querySelector('#trial-image').getContext('2d').getImageData(Math.floor(document.querySelector('#trial-image').width*{x}),Math.floor(document.querySelector('#trial-image').height*.5),1,1).data).slice(0,3)")
 
+    def painted_pixel():
+        # The evidence form exists before asynchronous Image.onload paints the
+        # replacement canvas. Read readiness and pixels in one JS evaluation:
+        # a second render may replace the canvas between separate calls.
+        deadline = time.monotonic()+20
+        while time.monotonic()<deadline:
+            value=js("""(()=>{const c=document.querySelector('#trial-image');
+              if(!c?.complete)return null;
+              return Array.from(c.getContext('2d').getImageData(
+                Math.floor(c.width*.9),Math.floor(c.height*.5),1,1).data).slice(0,3)})()""")
+            if value is not None:
+                return value
+            time.sleep(.1)
+        raise AssertionError('replacement trial canvas did not finish painting')
+
     def probe():
         try:
             assert window.events.loaded.wait(25)
@@ -124,14 +139,25 @@ def run(folder, visual=False):
             assert not js("!!document.querySelector('.toast.error')"), 'drawing must not emit spurious errors'
             checkpoint('03-mask')
             click('[data-action=judgment][data-value=wait]')
+            wait("document.querySelector('[data-action=save-judgment]')?.disabled===false")
+            # Exercise slow native image loads after saving re-renders the page.
+            js("""window._acceptanceImage=window.Image;window.Image=function(...args){
+              const image=new window._acceptanceImage(...args);
+              const source=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,'src');
+              Object.defineProperty(image,'src',{get(){return source.get.call(image)},
+                set(value){setTimeout(()=>source.set.call(image,value),150)}});
+              return image;
+            };""")
             click('[data-action=save-judgment]')
             wait("!!document.querySelector('#trial-evidence')")
-            assert pixel() == [8, 17, 28], 'saving alone must not reveal'
+            actual = painted_pixel()
+            assert actual == [8, 17, 28], f'saving alone must not reveal: {actual}'
             for _ in range(4):
                 click('[data-action=trial-next]')
             wait("document.querySelector('#trial-image')?.complete")
             assert pixel() == list(Image.open(folder / 'samples/sample-1.png').getpixel((1260, 400)))
             assert not js("!!document.querySelector('[data-action=trial-next]')")
+            js('window.Image=window._acceptanceImage;delete window._acceptanceImage')
             record = store.pa_case(c['id'])['trials'][0]
             assert record['details']['presentation'] == cfg
             assert [store.pa_image(i['id']) for i in c['images']] == original

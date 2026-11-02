@@ -575,19 +575,42 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         super()._destroyed(event)
 
 
+def open_closed_chart_dialog(parent, store, row):
+    """A user-requested single-code chart, independent of scan universes."""
+    from workbench.closed_chart import MissingClosedHistory
+    try:
+        data = load_closed_chart(store, row)
+    except MissingClosedHistory:
+        from workbench.watch_history import chart_source, fetch_history
+        source = chart_source(store, row['code'])
+        data = _fetch_chart_data_dialog(parent,
+            lambda cancel: load_closed_chart(store, row, history=fetch_history(store, row['code'], source, cancel)),
+            title='正在准备清仓图', hint='正在按需获取这只标的的日线。成交记录可独立查看和修正。',
+            error='未能取得清仓图日线；成交记录仍可查看和修正。')
+        if data is None: return None
+    return ClosedTradeChartDialog(parent, store, row, data=data)
+
+
 def fetch_missing_holding_chart_dialog(parent, store, row, *, quote=None):
     """Responsive modal fetch for a holding absent from premarket history."""
     from workbench.holding_chart import fetch_missing_holding_chart
+    return _fetch_chart_data_dialog(parent,
+        lambda cancel: fetch_missing_holding_chart(store, row, cancel, quote=quote),
+        title='正在准备持仓图', hint='本地没有该标的日K，正在按需获取持仓图行情…',
+        error='未能取得该标的持仓图日K；持仓记录不受影响。')
+
+
+def _fetch_chart_data_dialog(parent, fetch, *, title, hint, error):
     owner = parent.winfo_toplevel()
     top = tk.Toplevel(parent)
-    top.title("正在准备持仓图")
+    top.title(title)
     top.configure(bg=APP_BG)
     top.resizable(False, False)
     top.transient(owner)
     top.grab_set()
     cancel = threading.Event()
     results = queue.Queue()
-    ttk.Label(top, text="本地没有该标的日K，正在按需获取持仓图行情…",
+    ttk.Label(top, text=hint,
               padding=(24, 20)).pack(fill=tk.X)
     ttk.Label(top, text="不会写入或混入盘前的 BaoStock、TickFlow、腾讯行情。",
               foreground=MUTED, padding=(24, 0, 24, 14)).pack(fill=tk.X)
@@ -597,7 +620,7 @@ def fetch_missing_holding_chart_dialog(parent, store, row, *, quote=None):
 
     def work():
         try:
-            results.put((fetch_missing_holding_chart(store, row, cancel, quote=quote), None))
+            results.put((fetch(cancel), None))
         except Exception as exc:
             results.put((None, exc))
 
@@ -619,5 +642,5 @@ def fetch_missing_holding_chart_dialog(parent, store, row, *, quote=None):
     if cancel.is_set() and outcome["data"] is None:
         return None
     if outcome["error"] is not None:
-        raise ValueError("未能取得该标的持仓图日K；持仓记录不受影响。\n" + str(outcome["error"]))
+        raise ValueError(error + "\n" + str(outcome["error"]))
     return outcome["data"]

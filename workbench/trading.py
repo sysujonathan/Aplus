@@ -214,6 +214,41 @@ def history_reconciliation(initial_equity, broker_total_assets=None,
     }
 
 
+def holding_trading_days(first, last, calendar=None):
+    """Inclusive exchange sessions; unknown dates never become weekdays."""
+    from .exchange_calendar import _validated_days, is_trading_day
+    try:
+        start = datetime.fromisoformat(str(first)).date()
+        end = datetime.fromisoformat(str(last)).date()
+    except (TypeError, ValueError):
+        return None
+    span = (end-start).days
+    if span < 0 or span > 36600:
+        return None
+    # Reuse the calendar's validator once, rather than rebuilding and hashing
+    # its full trading-day tuple for every day of every historical position.
+    if isinstance(calendar, dict):
+        try:
+            a, b, days = calendar['start'], calendar['end'], calendar['trading_days']
+            if (isinstance(a, str) and isinstance(b, str) and isinstance(days, list)
+                    and len(days)<=100000 and a<=start.isoformat()<=end.isoformat()<=b):
+                verified = _validated_days(a, b, tuple(days))
+                if start.isoformat() not in verified or end.isoformat() not in verified:
+                    return None
+                return sum(start.isoformat()<=day<=end.isoformat() for day in verified)
+        except (KeyError, ValueError, TypeError):
+            pass
+    if is_trading_day(start, calendar) is not True or is_trading_day(end, calendar) is not True:
+        return None
+    count = 0
+    for offset in range(span+1):
+        opened = is_trading_day(start+timedelta(days=offset), calendar)
+        if opened is None:
+            return None
+        count += int(opened)
+    return count
+
+
 def management_report(store, account_id, price_map=None):
     """Build the broker-style current-position and closed-trade dashboard."""
     accounts = store.rows("SELECT * FROM accounts WHERE id=?", (account_id,))
@@ -291,6 +326,14 @@ def management_report(store, account_id, price_map=None):
         "SELECT * FROM closed_trades WHERE account_id=? ORDER BY close_date DESC,created DESC,id DESC",
         (account_id,),
     )
+    from .sources import calendar_file
+    try:
+        calendar = json.loads(calendar_file(store, market_source(store)).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        calendar = None
+    for row in closed:
+        buys = [f['trade_date'] for f in by_position.get(row['position_id'], []) if f['side']=='BUY']
+        row['holding_trading_days'] = holding_trading_days(min(buys), row['close_date'], calendar) if buys else None
     closed_pnl = sum(_number(row["pnl"]) for row in closed)
     cash_flows = store.list_cash_flows(account_id)
     cash_adjustments = sum(_number(row["amount"]) for row in cash_flows)

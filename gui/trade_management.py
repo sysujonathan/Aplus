@@ -243,7 +243,8 @@ class TradeManagementFrame(ttk.Frame):
         self._sort_reverse[marker] = reverse
         summary_iid = "__summary__" if tree.exists("__summary__") else None
         rows = [(tree.set(iid, column), iid) for iid in tree.get_children("") if iid != summary_iid]
-        rows.sort(key=lambda item: _sort_value(item[0]), reverse=reverse)
+        rows.sort(key=lambda item: _sort_value(item[0].split('/', 1)[0] if key=='closed' and column=='days'
+                                               else item[0]), reverse=reverse)
         for index, (_value, iid) in enumerate(rows):
             tree.move(iid, "", index)
         if summary_iid:
@@ -334,11 +335,15 @@ class TradeManagementFrame(ttk.Frame):
         closed.rowconfigure(1, weight=0)
         self.closed_tree = self._tree(closed, (
             ("number", "序号", 54), ("code", "代码", 74), ("name", "名称", 100),
-            ("date", "清仓日期", 92), ("days", "持仓天数", 78),
+            ("date", "清仓日期", 92), ("days", "持有天数（自然/交易）", 160),
             ("pnl", "盈亏", 82), ("return", "收益率", 76),
         ), "closed", grid_row=0)
         self.closed_tree.bind("<Button-3>", self._closed_menu)
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
+        ToolTip(self.closed_tree, text="持有天数按 自然日/交易日 显示，例如 8/6。\n"
+                "自然日保留原有口径；交易日从首次买入到清仓，包含买卖当天，扣除周末和交易所休市日。\n"
+                "同日买卖为 0/1。无准确买入日期或日历未覆盖时，交易日显示 —，不按工作日猜算。\n"
+                "点击本列表的持有天数表头，按自然日数量排序。")
 
         calendar_body = self._panel(2, 1, "盈亏日历")
         self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns,
@@ -484,10 +489,14 @@ class TradeManagementFrame(ttk.Frame):
         try:
             self._names = code_names(self.store)
             self._report = management_report(self.store, account_id)
-            calculated = historical_daily_returns(self.store, account_id)
+            missing = {}
+            calculated = historical_daily_returns(self.store, account_id, missing=missing)
             self.store.save_daily_returns(account_id, calculated, replace_local=True)
             daily_rows = self.store.list_daily_returns(account_id)
-            self.return_calendar.set_rows(daily_rows)
+            recorded_days = {r['date'] for r in daily_rows}
+            self.return_calendar.set_rows(daily_rows + [
+                {'date': day, 'status': 'missing', 'missing': codes}
+                for day, codes in missing.items() if day not in recorded_days])
             quote_day = self._report["summary"]["quote_date"]
             daily = next((r for r in daily_rows if r["date"] == quote_day), None)
             self._report["summary"]["daily_pnl"] = daily["pnl"] if daily else None
@@ -698,7 +707,8 @@ class TradeManagementFrame(ttk.Frame):
             tag = "profit" if row["pnl"] > 0 else ("loss" if row["pnl"] < 0 else "")
             iid = self.closed_tree.insert("", tk.END, values=(
                 number, numeric_stock_code(row["code"]), row["name"], row["close_date"],
-                row["holding_days"], _money(row["pnl"]), _pct(row["return_pct"]),
+                f"{row['holding_days']}/{row['holding_trading_days'] if row.get('holding_trading_days') is not None else '—'}",
+                _money(row["pnl"]), _pct(row["return_pct"]),
             ), tags=(tag,) if tag else ())
             self._closed_ids[iid] = row["id"]
         self.after_idle(self._refit_tree, self.closed_tree)
@@ -943,6 +953,7 @@ class TradeManagementFrame(ttk.Frame):
         self.closed_tree.selection_set(iid)
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="编辑清仓记录", command=self._edit_closed)
+        menu.add_command(label="查看 K 线", command=lambda: self._view_closed_chart(self._selected_closed()))
         menu.add_command(label="删除误录记录", command=self._delete_closed)
         menu.tk_popup(event.x_root, event.y_root)
 
@@ -1005,18 +1016,30 @@ class TradeManagementFrame(ttk.Frame):
         if not row:
             return
         if row.get("position_id"):
-            self._view_closed_chart(row)
+            self._open_closed_fills_dialog(row)
             return
         self._open_closed_dialog(row)
 
     def _view_closed_chart(self, row):
-        from .closed_trade_chart import ClosedTradeChartDialog
+        if not row: return
+        from .closed_trade_chart import open_closed_chart_dialog
         try:
-            dialog = ClosedTradeChartDialog(self, self.store, row)
+            dialog = open_closed_chart_dialog(self, self.store, row)
         except Exception as exc:
             messagebox.showerror("无法查看 K 线", str(exc), parent=self)
             return
-        self.wait_window(dialog.top)
+        if dialog is not None:
+            self.wait_window(dialog.top)
+            self.reload_data()
+
+    def _open_closed_fills_dialog(self, row):
+        try:
+            dialog = _ClosedFillsDialog(self, self.store, row)
+            self.wait_window(dialog.top)
+        except Exception as exc:
+            messagebox.showerror('清仓记录修正失败', str(exc), parent=self)
+            return
+        self.reload_data()
 
     def _open_closed_dialog(self, row):
         if not self.current_account_id():
@@ -1181,6 +1204,10 @@ class _ReturnCalendar:
             value = "—" if future else ("日历待更新" if unknown_calendar else "待补数据")
         elif item["status"] == "closed":
             value = "休市"
+        elif item['status'] == 'missing':
+            value = '待补行情'
+            codes = list(item.get('missing', {}))
+            detail = ('缺行情：'+numeric_stock_code(codes[0])+('等'+str(len(codes))+'只' if len(codes)>1 else '')) if codes else '请核对原始成交'
         else:
             pnl = item["pnl"]
             value = "••••••" if self.hidden else f"{pnl:+,.2f}"
@@ -1246,6 +1273,79 @@ class _BaseDialog:
         box.grid(row=row, column=0, columnspan=span, sticky=tk.E, pady=(12, 0))
         ttk.Button(box, text="确认", bootstyle="primary", command=command).pack(side=tk.LEFT, padx=4)
         ttk.Button(box, text="取消", bootstyle="secondary", command=self.top.destroy).pack(side=tk.LEFT, padx=4)
+
+
+class _ClosedFillsDialog(_BaseDialog):
+    """Confirmed execution editor; prices/charts are never an admission gate."""
+    def __init__(self, parent, store, row):
+        self.store, self.record = store, dict(row)
+        positions = store.rows("SELECT * FROM positions WHERE id=? AND account_id=? AND status='CLOSED'",
+                               (row['position_id'], row['account_id']))
+        if not positions or positions[0]['code'] != row['code']:
+            raise ValueError('清仓记录已变化，请刷新后重试')
+        self.original = store.rows('SELECT * FROM position_fills WHERE position_id=? ORDER BY trade_date,created,id',
+                                   (row['position_id'],))
+        if not self.original: raise ValueError('原始成交链路缺失，请核对记录')
+        super().__init__(parent, '查看与修正清仓成交')
+        self.top.resizable(True, True)
+        self.top.geometry('850x500')
+        self.form.columnconfigure(0, weight=1)
+        self.form.rowconfigure(1, weight=1)
+        ttk.Label(self.form, text=f"{row['code']} {row['name']} · 已清仓 · 原始买卖成交").grid(row=0, column=0, sticky=tk.W)
+        host = ttk.Frame(self.form)
+        host.grid(row=1, column=0, sticky=tk.NSEW, pady=10)
+        host.columnconfigure(0, weight=1); host.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(host, highlightthickness=0, bg=APP_BG)
+        canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        scrollbar = ttk.Scrollbar(host, orient=tk.VERTICAL, command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky=tk.NS)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        fields = ttk.Frame(canvas)
+        window = canvas.create_window((0,0), window=fields, anchor=tk.NW)
+        fields.bind('<Configure>', lambda _e: canvas.configure(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(window, width=e.width))
+        for col, label in enumerate(('方向','成交日期','成交价','股数（非手数）','税费合计')):
+            ttk.Label(fields, text=label).grid(row=0, column=col, padx=5, pady=4)
+            fields.columnconfigure(col, weight=1)
+        self.entries = []
+        for index, fill in enumerate(self.original, 1):
+            ttk.Label(fields, text='买入' if fill['side']=='BUY' else '卖出').grid(row=index,column=0,padx=5,pady=4)
+            values = {}
+            for col, key in enumerate(('trade_date','price','quantity','fees'), 1):
+                var = tk.StringVar(value=str(fill[key]))
+                ttk.Entry(fields,textvariable=var,width=14).grid(row=index,column=col,padx=5,pady=4,sticky=tk.EW)
+                values[key] = var
+            self.entries.append(values)
+        ttk.Label(self.form, text='无需行情即可修正。保存后重算整笔盈亏及本地日历；券商补录日历保持原值。\n'
+                  '买卖方向与记录归属保留，全部买卖股数须相等；取消不会保存。K 图使用已保存成交。',
+                  foreground=MUTED, wraplength=780).grid(row=2,column=0,sticky=tk.W)
+        self.chart_button = ttk.Button(self.form,text='查看 K 线（按需获取）',command=self._view_chart,
+                                       bootstyle='primary-outline')
+        self.chart_button.grid(row=3,column=0,sticky=tk.W,pady=6)
+        self.buttons(4,self._ok,span=1)
+
+    def _view_chart(self):
+        from .closed_trade_chart import open_closed_chart_dialog
+        try:
+            dialog = open_closed_chart_dialog(self.top,self.store,self.record)
+            if dialog is not None: self.top.wait_window(dialog.top)
+        except Exception as exc:
+            messagebox.showerror('暂无 K 线', str(exc),parent=self.top)
+        finally:
+            if self.top.winfo_exists(): self.top.grab_set()
+
+    def _ok(self):
+        try:
+            self.values = [{**fill,'trade_date':entry['trade_date'].get().strip(),
+                            'price':float(entry['price'].get()),'quantity':int(entry['quantity'].get()),
+                            'fees':float(entry['fees'].get() or 0)} for fill,entry in zip(self.original,self.entries)]
+            self.store.correct_closed_position(self.record['account_id'],self.record['id'],self.values,
+                                               expected_fills=self.original)
+        except Exception as exc:
+            messagebox.showerror('无法保存修正',str(exc),parent=self.top)
+            return
+        self.confirmed = True
+        self.top.destroy()
 
 
 class _CashFlowDialog(_BaseDialog):
@@ -1995,18 +2095,18 @@ class _ClosedDialog(_IdentityDialog):
         self.buttons(5, self._ok)
 
     def _view_chart(self):
-        from .closed_trade_chart import ClosedTradeChartDialog
+        from .closed_trade_chart import open_closed_chart_dialog
         try:
             code = self._resolve_name()
             if not code:
                 raise ValueError("请填写有效的股票代码或名称。")
             row = {**self.record, "code": code, "name": self.name.get().strip(),
                    "close_date": self.close_date.get().strip(), "holding_days": int(self.days.get())}
-            dialog = ClosedTradeChartDialog(self.top, self.store, row)
+            dialog = open_closed_chart_dialog(self.top, self.store, row)
         except Exception as exc:
             messagebox.showerror("无法查看 K 线", str(exc), parent=self.top)
             return
-        self.top.wait_window(dialog.top)
+        if dialog is not None: self.top.wait_window(dialog.top)
         if self.top.winfo_exists():
             self.top.grab_set()
 
