@@ -243,7 +243,8 @@ class TradeManagementFrame(ttk.Frame):
         self._sort_reverse[marker] = reverse
         summary_iid = "__summary__" if tree.exists("__summary__") else None
         rows = [(tree.set(iid, column), iid) for iid in tree.get_children("") if iid != summary_iid]
-        rows.sort(key=lambda item: _sort_value(item[0]), reverse=reverse)
+        rows.sort(key=lambda item: _sort_value(item[0].split('/', 1)[0] if key=='closed' and column=='days'
+                                               else item[0]), reverse=reverse)
         for index, (_value, iid) in enumerate(rows):
             tree.move(iid, "", index)
         if summary_iid:
@@ -334,11 +335,15 @@ class TradeManagementFrame(ttk.Frame):
         closed.rowconfigure(1, weight=0)
         self.closed_tree = self._tree(closed, (
             ("number", "序号", 54), ("code", "代码", 74), ("name", "名称", 100),
-            ("date", "清仓日期", 92), ("days", "持仓天数", 78),
+            ("date", "清仓日期", 92), ("days", "持有天数（自然/交易）", 160),
             ("pnl", "盈亏", 82), ("return", "收益率", 76),
         ), "closed", grid_row=0)
         self.closed_tree.bind("<Button-3>", self._closed_menu)
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
+        ToolTip(self.closed_tree, text="持有天数按 自然日/交易日 显示，例如 8/6。\n"
+                "自然日保留原有口径；交易日从首次买入到清仓，包含买卖当天，扣除周末和交易所休市日。\n"
+                "同日买卖为 0/1。无准确买入日期或日历未覆盖时，交易日显示 —，不按工作日猜算。\n"
+                "点击本列表的持有天数表头，按自然日数量排序。")
 
         calendar_body = self._panel(2, 1, "盈亏日历")
         self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns,
@@ -702,7 +707,8 @@ class TradeManagementFrame(ttk.Frame):
             tag = "profit" if row["pnl"] > 0 else ("loss" if row["pnl"] < 0 else "")
             iid = self.closed_tree.insert("", tk.END, values=(
                 number, numeric_stock_code(row["code"]), row["name"], row["close_date"],
-                row["holding_days"], _money(row["pnl"]), _pct(row["return_pct"]),
+                f"{row['holding_days']}/{row['holding_trading_days'] if row.get('holding_trading_days') is not None else '—'}",
+                _money(row["pnl"]), _pct(row["return_pct"]),
             ), tags=(tag,) if tag else ())
             self._closed_ids[iid] = row["id"]
         self.after_idle(self._refit_tree, self.closed_tree)
