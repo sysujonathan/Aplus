@@ -11,7 +11,7 @@ import re
 from datetime import date
 from .sources import market_source
 
-def calculate_daily_pnl(fills, quotes, asof):
+def calculate_daily_pnl(fills, quotes, asof, *, missing=None):
     """Opening inventory movement + same-day trade cash/stock changes - fees.
 
     None means incomplete inputs, never zero. Selling all stock still contributes
@@ -31,32 +31,46 @@ def calculate_daily_pnl(fills, quotes, asof):
         else:
             book["trades"].append(fill)
     total = 0.0
+    incomplete = False
     for code, book in books.items():
         opening, trades = book["opening"], book["trades"]
         if opening < 0:
-            return None
+            if missing is not None: missing[code] = "卖出数量超过已记录买入数量"
+            incomplete = True
+            continue
         if not opening and not trades:
             continue
         quote = quotes.get(code, {})
         ending = opening + sum(
             int(t["quantity"]) * (1 if t["side"] == "BUY" else -1) for t in trades
         )
-        if ending < 0 or quote.get("date", "")[:10] != asof:
-            return None
+        # A fully intraday round trip has neither opening nor closing inventory:
+        # confirmed trade cash flows and fees are sufficient, including ETFs
+        # outside the market-update universe. Never demand an unused quote.
+        if ending < 0:
+            if missing is not None: missing[code] = "卖出数量超过已记录买入数量"
+            incomplete = True
+            continue
+        if (opening or ending) and quote.get("date", "")[:10] != asof:
+            if missing is not None: missing[code] = "缺少该日持仓估值行情"
+            incomplete = True
+            continue
         close, previous = quote.get("price"), quote.get("previous_close")
         if (ending and (close is None or not math.isfinite(float(close)))) or (
             opening and (previous is None or not math.isfinite(float(previous)))
         ):
-            return None
-        total += ending * float(close or 0) - opening * float(previous or 0)
+            if missing is not None: missing[code] = "缺少收盘或前收盘价格"
+            incomplete = True
+            continue
+        total += (ending * float(close) if ending else 0) - (opening * float(previous) if opening else 0)
         for trade in trades:
             value = float(trade["price"]) * int(trade["quantity"])
             total += value if trade["side"] == "SELL" else -value
             total -= float(trade.get("fees") or 0)
-    return round(total, 2)
+    return None if incomplete else round(total, 2)
 
 
-def historical_daily_returns(store, account_id):
+def historical_daily_returns(store, account_id, *, missing=None):
     """Revalue confirmed historical inventory with saved daily market prices.
 
     No quantities are inferred from rounded percentages/holding-days summaries.
@@ -75,16 +89,29 @@ def historical_daily_returns(store, account_id):
     manual = store.rows("SELECT MAX(close_date) AS last_day FROM closed_trades "
                         "WHERE account_id=? AND position_id IS NULL", (account_id,))[0]["last_day"]
     by_day = {}
+    # Trade-only days must exist even when none of these instruments has a
+    # daily snapshot. This is enough for closed same-day T+0 trades, not for
+    # overnight inventory. Summary-only legacy history remains excluded.
+    for fill in fills:
+        day = fill['trade_date'][:10]
+        if not manual or day > manual[:10]:
+            by_day.setdefault(day, {})
     for code in sorted({f["code"] for f in fills}):
         snapshots = store.rows(
             "SELECT id FROM datasets WHERE code=? AND source=? AND timeframe='daily' "
             "ORDER BY end DESC,created DESC,rowid DESC LIMIT 1", (code,market_source(store)),
         )
-        if not snapshots:
-            continue
         try:
-            frame, _record = load_dataset(store, snapshots[0]["id"])
-        except (ValueError, OSError):
+            if snapshots:
+                frame, _record = load_dataset(store, snapshots[0]["id"])
+            else:
+                # ETF chart-only histories are intentionally outside scan
+                # coverage, but verified real daily closes can value inventory.
+                from .watch_history import cached_history, chart_source
+                cached = cached_history(store, code, chart_source(store, code))
+                if cached is None: continue
+                frame, _record = cached
+        except (ValueError, OSError, KeyError, TypeError):
             continue
         previous = None
         for bar in frame.itertuples(index=False):
@@ -97,8 +124,10 @@ def historical_daily_returns(store, account_id):
     flows = store.list_cash_flows(account_id)
     rows = []
     for day, quotes in sorted(by_day.items()):
-        pnl = calculate_daily_pnl(fills, quotes, day)
+        gaps = {}
+        pnl = calculate_daily_pnl(fills, quotes, day, missing=gaps)
         if pnl is None:
+            if missing is not None: missing[day] = gaps
             continue
         for flow in flows:
             if flow["flow_date"][:10] == day and not any(

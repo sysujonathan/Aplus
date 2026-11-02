@@ -967,6 +967,91 @@ class Store:
         self.event(None, "记录持仓卖出", self.path, position_id=position_id,
                    quantity=sum(batch["quantity"] for batch in batches))
 
+    def correct_closed_position(self, account_id, closed_id, fills, *, expected_fills):
+        """Correct confirmed fills atomically; never reopen a closed position.
+
+        Stable fill/position/archive identities and optimistic comparison keep
+        corrections distinct from new executions or summary-only imports.
+        No market data, schema change, strategy or plan state is involved.
+        """
+        if not isinstance(fills, list) or not fills:
+            raise ValueError("请保留完整的原始买卖成交")
+        cleaned = []
+        for fill in fills:
+            day = str(fill.get('trade_date') or '')
+            try:
+                if datetime.fromisoformat(day).date().isoformat() != day: raise ValueError()
+            except (ValueError, TypeError):
+                raise ValueError("成交日期请填写 YYYY-MM-DD") from None
+            price, quantity, fees = fill.get('price'), fill.get('quantity'), fill.get('fees')
+            if not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+                raise ValueError("成交股数必须是正整数")
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                   for v in (price, fees)) or price <= 0 or fees < 0:
+                raise ValueError("成交价必须大于零，税费必须是非负有效数字")
+            cleaned.append({**fill, 'trade_date': day, 'price': float(price), 'fees': float(fees)})
+        stamp = now()
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            closed = db.execute('SELECT * FROM closed_trades WHERE id=? AND account_id=?',
+                                (closed_id, account_id)).fetchone()
+            if not closed or not closed['position_id']:
+                raise ValueError("没有可修正的原始成交链路")
+            position_id = closed['position_id']
+            position = db.execute("SELECT * FROM positions WHERE id=? AND account_id=? AND status='CLOSED'",
+                                  (position_id, account_id)).fetchone()
+            if not position or position['code'] != closed['code']:
+                raise ValueError("清仓与原持仓关联不一致，请刷新")
+            actual = [dict(r) for r in db.execute('SELECT * FROM position_fills WHERE position_id=?', (position_id,))]
+            signature = lambda rows: sorted((r['id'], r['position_id'], r['side'], r['trade_date'],
+                                            r['price'], r['quantity'], r['fees'], r['created']) for r in rows)
+            if signature(actual) != signature(expected_fills):
+                raise ValueError("成交记录已变化，请关闭后重新打开，避免覆盖其他修改")
+            originals = {r['id']: r for r in actual}
+            if len(cleaned) != len(originals) or {r.get('id') for r in cleaned} != set(originals):
+                raise ValueError("修正必须保留全部原始成交，不能增删或重复")
+            if any(r.get('side') != originals[r['id']]['side'] or
+                   r.get('position_id') != position_id for r in cleaned):
+                raise ValueError("不能改动成交方向或归属")
+            buys = [r for r in cleaned if r['side'] == 'BUY']
+            sells = [r for r in cleaned if r['side'] == 'SELL']
+            if len(buys)+len(sells) != len(cleaned):
+                raise ValueError("原始成交方向无效，请核对记录")
+            if not buys or not sells or sum(r['quantity'] for r in buys) != sum(r['quantity'] for r in sells):
+                raise ValueError("清仓记录的买卖股数必须相等；修正不能变成未清仓")
+            inventory = 0
+            for day in sorted({r['trade_date'] for r in cleaned}):
+                inventory += sum((1 if r['side'] == 'BUY' else -1)*r['quantity']
+                                 for r in cleaned if r['trade_date'] == day)
+                if inventory < 0:
+                    raise ValueError("卖出日期不能早于对应买入；同日 T+0 可正常记录")
+            cost = sum(r['price']*r['quantity']+r['fees'] for r in buys)
+            proceeds = sum(r['price']*r['quantity']-r['fees'] for r in sells)
+            pnl = proceeds-cost
+            return_pct = pnl/cost*100 if cost else float('nan')
+            if not all(math.isfinite(v) for v in (cost,proceeds,pnl,return_pct)):
+                raise ValueError("成交金额超出可计算范围")
+            first, last = min(r['trade_date'] for r in buys), max(r['trade_date'] for r in sells)
+            holding_days = (datetime.fromisoformat(last)-datetime.fromisoformat(first)).days
+            for r in cleaned:
+                db.execute('UPDATE position_fills SET trade_date=?,price=?,quantity=?,fees=? WHERE id=? AND position_id=?',
+                           (r['trade_date'], r['price'], r['quantity'], r['fees'], r['id'], position_id))
+            db.execute('UPDATE closed_trades SET close_date=?,holding_days=?,pnl=?,return_pct=?,updated=? WHERE id=?',
+                       (last, holding_days, pnl, return_pct, stamp, closed_id))
+            db.execute('UPDATE positions SET updated=? WHERE id=?', (stamp, position_id))
+            key = f'daily_returns:{account_id}'
+            cached = db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+            if cached:
+                retained = {day: item for day, item in json.loads(cached['value']).items() if item['source'] == 'broker'}
+                db.execute('UPDATE meta SET value=? WHERE key=?', (dumps(retained), key))
+            # Keep the correction and its audit in the same transaction.
+            fields = ('id', 'position_id', 'side', 'trade_date', 'price', 'quantity', 'fees')
+            detail = dict(closed_id=closed_id, position_id=position_id,
+                          before=[{k: r[k] for k in fields} for r in actual],
+                          after=[{k: r[k] for k in fields} for r in cleaned])
+            db.execute('INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)',
+                       (stamp, None, '修正清仓原始成交', str(self.path), dumps(detail)))
+
     def save_closed_trade(self, account_id, code, name, close_date, holding_days,
                           pnl, return_pct, notes="", closed_id=None):
         code = str(code or "").strip().lower()
@@ -983,7 +1068,11 @@ class Store:
         with self.connect() as db:
             if not db.execute("SELECT 1 FROM accounts WHERE id=?", (account_id,)).fetchone():
                 raise ValueError("交易账户不存在")
-            existing = db.execute("SELECT 1 FROM closed_trades WHERE id=?", (closed_id,)).fetchone()
+            existing = db.execute("SELECT account_id,position_id FROM closed_trades WHERE id=?", (closed_id,)).fetchone()
+            if existing and existing['account_id'] != account_id:
+                raise ValueError("清仓记录不属于当前账户")
+            if existing and existing['position_id']:
+                raise ValueError("自动归档记录请修正原始成交，不能直接改写汇总盈亏")
             if existing:
                 db.execute(
                     "UPDATE closed_trades SET code=?,name=?,close_date=?,holding_days=?,pnl=?,"
