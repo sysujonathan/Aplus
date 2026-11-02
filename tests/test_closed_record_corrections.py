@@ -164,6 +164,29 @@ def test_linked_archive_summary_cannot_be_overwritten_independently(tmp_path):
     assert business(store)==before
 
 
+def test_partial_sales_fee_and_date_corrections_recompute_whole_trade(tmp_path):
+    from workbench.trading import management_report
+    store=Store(tmp_path)
+    aid=store.save_account('合成分批成交',10000,accounting_mode='history')
+    pid=store.save_position(aid,'sz.002912','合成标的',25.6,21,29,
+                            [dict(date='2026-10-22',price=25.6,hands=3,fees=18.94)])
+    store.sell_position(pid,[dict(date='2026-10-23',price=22.15,hands=1)],0)
+    store.sell_position(pid,[dict(date=DAY,price=26.79,hands=2)],0)
+    row=store.rows('SELECT * FROM closed_trades WHERE position_id=?',(pid,))[0]
+    fills=store.rows('SELECT * FROM position_fills WHERE position_id=? ORDER BY trade_date,created,id',(pid,))
+    updates=copy.deepcopy(fills)
+    sells=[r for r in updates if r['side']=='SELL']
+    sells[0].update(trade_date='2026-10-26',fees=2)
+    sells[1].update(trade_date='2026-10-28',fees=3)
+    store.correct_closed_position(aid,row['id'],updates,expected_fills=fills)
+    changed=store.rows('SELECT * FROM closed_trades WHERE id=?',(row['id'],))[0]
+    assert changed['pnl']==pytest.approx(-130.94)
+    assert changed['return_pct']==pytest.approx(-130.94/7698.94*100)
+    assert changed['close_date']=='2026-10-28' and changed['holding_days']==6
+    assert len(store.rows('SELECT * FROM position_fills WHERE position_id=?',(pid,)))==3
+    assert management_report(store,aid)['summary']['total_assets']==pytest.approx(9869.06)
+
+
 def test_user_chart_request_fetches_one_etf_without_joining_scan_universe(tmp_path,monkeypatch):
     from gui import closed_trade_chart as view
     store=Store(tmp_path);_,_,row,_=closed(store)
