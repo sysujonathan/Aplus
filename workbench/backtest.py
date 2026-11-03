@@ -7,6 +7,10 @@ import numpy as np
 
 from .strategies import signal_at_end
 
+# Preserve the existing 124-bar study warmup. A future change to indicator lookback
+# must review this contract explicitly; do not silently shift historical results.
+MIN_STUDY_HISTORY_BARS = 124
+
 
 @dataclass
 class Assumptions:
@@ -98,7 +102,7 @@ def simulate(frame, signal_index, signal, assumptions):
 def run_study(spec, frame, start, end, assumptions, progress=lambda *a:None, cancelled=lambda:False):
     assumptions.validate()
     frame = frame[frame.date <= end].reset_index(drop=True)
-    eligible = [i for i in range(124,len(frame)) if frame.iloc[i].date >= start]
+    eligible = [i for i in range(MIN_STUDY_HISTORY_BARS,len(frame)) if frame.iloc[i].date >= start]
     records,seen = [],set()
     for k,i in enumerate(eligible):
         if cancelled():
