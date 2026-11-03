@@ -24,6 +24,7 @@ _SUMMARY_RE = re.compile(
 def _number(text, *, percent=False):
     cleaned = str(text or "").strip().replace(",", "").replace(" ", "")
     cleaned = cleaned.replace("−", "-").replace("－", "-").replace("＋", "+")
+    # This helper parses numeric OCR fields only: O/o are common zero misreads.
     cleaned = cleaned.replace("O", "0").replace("o", "0")
     if percent:
         cleaned = cleaned.replace("%", "")
@@ -48,6 +49,41 @@ def _looks_like_name(token):
     )):
         return False
     return bool(re.search(r"[\u4e00-\u9fffA-Za-z]", text))
+
+
+
+_DEDUPE_FIELDS = ("holding_days", "pnl", "return_pct")
+
+
+def _dedupe_records(records):
+    """Prefer complete OCR rows and discard repeated overlapping screenshot rows.
+
+    The stable completeness sort and 2-decimal fingerprint preserve the existing
+    import behavior for both single- and multi-screenshot workflows.
+    """
+    records.sort(
+        key=lambda item: sum(item[field] != "" for field in _DEDUPE_FIELDS),
+        reverse=True,
+    )
+    complete_name_dates = {
+        (item["name"], item["close_date"])
+        for item in records
+        if all(item[field] != "" for field in _DEDUPE_FIELDS)
+    }
+    seen, unique = set(), []
+    for record in records:
+        if (any(record[field] == "" for field in _DEDUPE_FIELDS)
+                and (record["name"], record["close_date"]) in complete_name_dates):
+            continue
+        fingerprint = (
+            record["name"], record["close_date"], record["holding_days"],
+            round(record["pnl"], 2) if record["pnl"] != "" else "",
+            round(record["return_pct"], 2) if record["return_pct"] != "" else "",
+        )
+        if fingerprint not in seen:
+            seen.add(fingerprint)
+            unique.append(record)
+    return unique
 
 
 def parse_broker_tokens(tokens):
@@ -122,27 +158,7 @@ def parse_broker_tokens(tokens):
             "notes": "截图识别导入",
         })
 
-    unique, seen = [], set()
-    records.sort(key=lambda item: sum(item[key] != "" for key in ("holding_days", "pnl", "return_pct")),
-                 reverse=True)
-    complete_name_dates = {
-        (item["name"], item["close_date"])
-        for item in records
-        if all(item[key] != "" for key in ("holding_days", "pnl", "return_pct"))
-    }
-    for record in records:
-        if any(record[key] == "" for key in ("holding_days", "pnl", "return_pct")) \
-                and (record["name"], record["close_date"]) in complete_name_dates:
-            continue
-        fingerprint = (
-            record["name"], record["close_date"], record["holding_days"],
-            round(record["pnl"], 2) if record["pnl"] != "" else "",
-            round(record["return_pct"], 2) if record["return_pct"] != "" else "",
-        )
-        if fingerprint not in seen:
-            seen.add(fingerprint)
-            unique.append(record)
-    return unique, summaries, warnings
+    return _dedupe_records(records), summaries, warnings
 
 
 def recognize_screenshot(image, engine=None):
@@ -181,22 +197,4 @@ def recognize_screenshots(images):
         records.extend(parsed)
         summaries.extend(found_summaries)
         warnings.extend(f"第 {index} 张：{warning}" for warning in found_warnings)
-    unique, seen = [], set()
-    records.sort(key=lambda item: sum(item[key] != "" for key in ("holding_days", "pnl", "return_pct")),
-                 reverse=True)
-    complete_name_dates = {
-        (item["name"], item["close_date"])
-        for item in records
-        if all(item[key] != "" for key in ("holding_days", "pnl", "return_pct"))
-    }
-    for record in records:
-        if any(record[field] == "" for field in ("holding_days", "pnl", "return_pct")) \
-                and (record["name"], record["close_date"]) in complete_name_dates:
-            continue
-        key = (record["name"], record["close_date"], record["holding_days"],
-               round(record["pnl"], 2) if record["pnl"] != "" else "",
-               round(record["return_pct"], 2) if record["return_pct"] != "" else "")
-        if key not in seen:
-            seen.add(key)
-            unique.append(record)
-    return unique, summaries, warnings
+    return _dedupe_records(records), summaries, warnings
