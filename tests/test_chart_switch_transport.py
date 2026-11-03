@@ -154,7 +154,8 @@ def test_actual_exclusive_live_file_does_not_prevent_next_selection(tmp_path,mon
     ('2026-10-30T09:00',False),('2026-10-30T10:00',True),
     ('2026-10-30T11:45',False),('2026-10-30T14:00',True),
     ('2026-10-30T16:00',False),('2026-10-31T10:00',False)])
-def test_symbol_first_read_is_independent_of_market_session(tmp_path,monkeypatch,clock,expected):
+@pytest.mark.parametrize('auto_enabled', [True, False])
+def test_symbol_first_read_is_independent_of_market_session(tmp_path,monkeypatch,clock,expected,auto_enabled):
     from gui.chart_panel import ChartPanel
     from workbench import holding_quotes
     from workbench.live_minutes import CHINA
@@ -163,13 +164,15 @@ def test_symbol_first_read_is_independent_of_market_session(tmp_path,monkeypatch
                            busy=True,delay=8)
     panel=SimpleNamespace(_intraday_on=True,winfo_exists=lambda:True,_intraday_poller=poller,
         _code='sz.000002',_intraday_code='sz.000001',_intraday_loaded=True,_intraday_due=0,
+        _auto_quotes=auto_enabled,
         _hourly=None,_intraday_calendar_state=lambda:None,after=Mock(),_intraday_tick=Mock(),CLOSED_RETRY_SECONDS=60)
+    panel._auto_quotes_enabled=lambda:ChartPanel._auto_quotes_enabled(panel)
     ChartPanel._intraday_tick(panel)
     poller.invalidate.assert_called_once();poller.start.assert_called_once_with('sz.000002')
-    # First history is loaded even when shut; subsequent refreshes follow session.
+    # First history is loaded even when shut/disabled; repeats need both auto and session.
     panel._intraday_loaded=True;panel._intraday_due=0
     ChartPanel._intraday_tick(panel)
-    assert poller.start.call_count==(2 if expected else 1)
+    assert poller.start.call_count==(2 if expected and auto_enabled else 1)
 
 
 def test_session_transitions_pause_and_resume_polling_without_blocking_selection(monkeypatch):
@@ -179,7 +182,10 @@ def test_session_transitions_pause_and_resume_polling_without_blocking_selection
     poller=SimpleNamespace(take=lambda:None,start=Mock(return_value=True),delay=8)
     panel=SimpleNamespace(_intraday_on=True,winfo_exists=lambda:True,_intraday_poller=poller,
         _code='sz.000002',_intraday_code='sz.000002',_intraday_loaded=True,_intraday_due=0,
+        _intraday_attempted=True,
         _hourly=None,_intraday_calendar_state=lambda:None,after=Mock(),_intraday_tick=Mock(),CLOSED_RETRY_SECONDS=300)
+    # No shared setting is supplied by standalone charts: preserve automatic polling.
+    panel._auto_quotes_enabled=lambda:ChartPanel._auto_quotes_enabled(panel)
     for clock,count in [('09:00',0),('09:31',1),('11:45',2),('13:01',3),('15:30',4)]:
         monkeypatch.setattr(holding_quotes,'china_now',lambda c=clock:datetime.fromisoformat('2026-10-30T'+c).replace(tzinfo=CHINA))
         panel._intraday_due=0;ChartPanel._intraday_tick(panel)
