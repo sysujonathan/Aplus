@@ -75,7 +75,7 @@ class ChartPanel(native_ttk.Frame):
     #: 休市时只做一次首帧读取；失败后隔这么久再试，避免离线时反复打网络。
     CLOSED_RETRY_SECONDS = 300
     def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None,
-                 minute_fetch=None, hourly_fetch=None):
+                 minute_fetch=None, hourly_fetch=None, auto_quotes=None):
         _configure_chart_styles()
         super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
         self.store = store
@@ -99,6 +99,8 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_source = None
         self._minute_fetch = minute_fetch
         self._hourly_fetch = hourly_fetch
+        self._auto_quotes = auto_quotes
+        self._intraday_attempted = False
         self._intraday_frame = None
         self._hourly = None
         self._intraday_after = None
@@ -265,6 +267,15 @@ class ChartPanel(native_ttk.Frame):
         self._accept_intraday(bool(active))
 
     # ---- live intraday on the active tile --------------------------------
+    def _auto_quotes_enabled(self):
+        value = getattr(self, '_auto_quotes', None)
+        return True if value is None else bool(value() if callable(value) else value)
+
+    def auto_quotes_changed(self):
+        if self._intraday_poller is not None:
+            self._intraday_poller.invalidate()
+        self._intraday_due = 0.0
+
     def _accept_intraday(self, on):
         """Poll live minutes only while this tile is the one being read.
 
@@ -309,6 +320,7 @@ class ChartPanel(native_ttk.Frame):
             poller.invalidate()
             self._intraday_code, self._intraday_sent = self._code, None
             self._intraday_loaded = False
+            self._intraday_attempted = False
             self._intraday_frame = None
             self._intraday_due = 0.0
         result = poller.take() if poller is not None else None
@@ -330,11 +342,15 @@ class ChartPanel(native_ttk.Frame):
             # trader opening the watch list at noon or in the evening must still
             # get the five-minute, hourly and half-day units instead of three
             # dead buttons.  Only the repeat polling is limited to the session.
-            if should_read_intraday(loaded=self._intraday_loaded, in_session=in_session) \
+            auto = self._auto_quotes_enabled()
+            read = ((not getattr(self, '_intraday_attempted', False)) or
+                    (auto and should_read_intraday(loaded=self._intraday_loaded, in_session=in_session)))
+            if read \
                     and time.monotonic() >= self._intraday_due:
                 # start() rejects an in-flight read of this generation, but a
                 # slow response for the previous symbol must not block this one.
                 if poller.start(self._code):
+                    self._intraday_attempted = True
                     self._intraday_due = time.monotonic() + (
                         poller.delay if in_session else self.CLOSED_RETRY_SECONDS)
         if self._hourly is not None and self._code in self._hourly.take(successful_only=True):
@@ -562,6 +578,8 @@ class ChartPanel(native_ttk.Frame):
             self._cancel_manual()
 
     def _refresh_manual(self):
+        self._intraday_attempted = False
+        self._intraday_due = 0.0
         if self._manual_controller is not None:
             self._manual_controller.refresh()
 
@@ -663,10 +681,11 @@ class ChartGrid(ttk.Frame):
     """TradingView 式活动图格：候选分页，关注点击/拖拽只替换指定格。"""
 
     def __init__(self, parent, store=None, layout_count=4, on_page_state=None,
-                 on_active_item=None, interactive=False, on_layout_request=None):
+                 on_active_item=None, interactive=False, on_layout_request=None, auto_quotes=None):
         super().__init__(parent)
         self.store = store
         self._interactive = interactive
+        self._auto_quotes = auto_quotes
         self._slot_pool = []
         self._layout_count = layout_count if layout_count in _LAYOUT_SHAPES else 4
         self._on_page_state = on_page_state
@@ -803,6 +822,10 @@ class ChartGrid(ttk.Frame):
         for slot in self._slots:
             slot.set_timeframe(tf)
 
+    def auto_quotes_changed(self):
+        for slot in self._slot_pool:
+            slot.auto_quotes_changed()
+
     def clear(self):
         self.set_items([])
 
@@ -827,7 +850,8 @@ class ChartGrid(ttk.Frame):
                 slot = ChartPanel(self.host, self.store,
                     on_activate=lambda i=index: self._activate_slot(i),
                     image_cache=self._image_cache, interactive=self._interactive,
-                    on_layout=self._on_layout_request or self.set_layout)
+                    on_layout=self._on_layout_request or self.set_layout,
+                    auto_quotes=self._auto_quotes)
                 self._slot_pool.append(slot)
             slot.grid(row=row, column=column, sticky=tk.NSEW, padx=3, pady=3)
             self._slots.append(slot)

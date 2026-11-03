@@ -147,8 +147,8 @@ w.version_controller.startup_check_id=None
 w.update()
 c=w.version_controller; c.root=Path(sys.argv[1]); (c.root/'.git').mkdir()
 height=w.chart.winfo_height()
-assert w.usage_button.master is w.section_nav
-w.usage_button.invoke(); w.update()
+assert not hasattr(w,'usage_button')
+show_usage(w); w.update()
 help_window=w._usage_window
 assert help_window.winfo_exists()
 assert show_usage(w) is help_window

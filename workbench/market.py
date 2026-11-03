@@ -67,16 +67,26 @@ def validate_bars(df):
     if df.empty:
         raise ValueError("行情为空；不会当作同步成功")
     dates = pd.to_datetime(df.date, errors="raise")
-    df['date'] = dates.dt.strftime('%Y-%m-%d')
+    if dates.dt.tz is None:
+        # Vectorized day formatting avoids one Python strftime per history row.
+        # Preserve the old NaT representation and local-day behavior for tz data.
+        df['date'] = pd.Series(dates.to_numpy().astype('datetime64[D]').astype(str),
+                               index=df.index, dtype=object).where(dates.notna())
+    else:
+        df['date'] = dates.dt.strftime('%Y-%m-%d')
     if df.date.duplicated().any():
         raise ValueError("同一股票存在重复日期，请先核对 CSV")
     for col in FIELDS[1:]:
         df[col] = pd.to_numeric(df[col], errors="raise").astype(float)
     if not np.isfinite(df[FIELDS[1:]].to_numpy()).all():
         raise ValueError("行情包含空值或无穷值，不自动用未来价格填补")
-    invalid = ((df[['open', 'high', 'low', 'close']] <= 0).any(axis=1)
-               | (df.high < df[['open', 'close', 'low']].max(axis=1))
-               | (df.low > df[['open', 'close', 'high']].min(axis=1)) | (df.volume < 0))
+    # The finite check above has already rejected NaN/inf. Comparing these
+    # float64 arrays keeps the same rules without constructing/reducing three
+    # temporary DataFrames for every stock (and again for weekly aggregation).
+    opening, high, low, close, volume = df[FIELDS[1:]].to_numpy().T
+    invalid = ((opening <= 0) | (high <= 0) | (low <= 0) | (close <= 0)
+               | (high < opening) | (high < close) | (high < low)
+               | (low > opening) | (low > close) | (low > high) | (volume < 0))
     if invalid.any():
         raise ValueError(f"有 {int(invalid.sum())} 根 K 线价格关系不合法")
     return df.sort_values('date').reset_index(drop=True)

@@ -1,0 +1,67 @@
+{
+  "baseline": "9f74c295a2ecfb7aefccfe35f68edc03c8ad188f",
+  "synthetic": true,
+  "validation_ms": {
+    "300": {
+      "before": 3.11359000126166,
+      "after": 2.1493957145139575,
+      "ratio": 1.4485885406009267
+    },
+    "3000": {
+      "before": 16.7956414299884,
+      "after": 12.200895715172269,
+      "ratio": 1.3765908521865649
+    }
+  },
+  "scan": {
+    "before": 7.9566110000014305,
+    "after": 8.043445399962366,
+    "ratio": 0.9892043277920005,
+    "equivalent": true,
+    "synthetic": true,
+    "cases": [
+      {
+        "round": 0,
+        "label": "after",
+        "seconds": 8.170460800058208,
+        "judgments": 120,
+        "signals": 0
+      },
+      {
+        "round": 0,
+        "label": "before",
+        "seconds": 7.478811200009659,
+        "judgments": 120,
+        "signals": 0
+      },
+      {
+        "round": 1,
+        "label": "before",
+        "seconds": 7.9566110000014305,
+        "judgments": 120,
+        "signals": 0
+      },
+      {
+        "round": 1,
+        "label": "after",
+        "seconds": 8.043445399962366,
+        "judgments": 120,
+        "signals": 0
+      },
+      {
+        "round": 2,
+        "label": "after",
+        "seconds": 7.46301249996759,
+        "judgments": 120,
+        "signals": 0
+      },
+      {
+        "round": 2,
+        "label": "before",
+        "seconds": 8.671718499972485,
+        "judgments": 120,
+        "signals": 0
+      }
+    ]
+  }
+}

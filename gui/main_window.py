@@ -97,6 +97,7 @@ class AplusMainWindow(ttk.Window):
         self._chart_mode = "candidates"
         self._candidate_source = REALTIME_MARKET_SOURCE
         self._case_comparisons = []
+        self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
         self._build_ui()
         self._load_strategies()
         import sys
@@ -121,10 +122,10 @@ class AplusMainWindow(ttk.Window):
         # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
         self.section_nav = ttk.Frame(self, padding=(8, 6))
         self.section_nav.grid(row=0, column=0, sticky=tk.EW)
-        from .usage_help import show_usage
-        self.usage_button = ttk.Button(self.section_nav, text="使用说明", bootstyle="secondary",
-                                      command=lambda: show_usage(self))
-        self.usage_button.pack(side=tk.RIGHT, padx=(8, 0), ipady=2)
+        self.auto_quote_button = ttk.Checkbutton(
+            self.section_nav, text="自动行情", variable=self.auto_quote_var,
+            command=self._toggle_auto_quotes, bootstyle="success-round-toggle")
+        self.auto_quote_button.pack(side=tk.LEFT, padx=(0, 12))
         self._section_buttons = {}
         self._pages = {}
         section_names = (
@@ -180,6 +181,7 @@ class AplusMainWindow(ttk.Window):
             on_active_item=self._on_chart_item_activated,
             interactive=True,
             on_layout_request=self._on_chart_layout,
+            auto_quotes=lambda: bool(self.auto_quote_var.get()),
         )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
 
@@ -260,7 +262,8 @@ class AplusMainWindow(ttk.Window):
                 page = StrategyIterationPage(self.page_host, self.service, self.store)
             elif key == 'other':
                 from .trade_management import TradeManagementFrame
-                page = TradeManagementFrame(self.page_host, self.store)
+                page = TradeManagementFrame(self.page_host, self.store,
+                                            auto_quote_var=self.auto_quote_var)
             elif key == 'growth':
                 from .growth_space import GrowthSpacePage
                 page = GrowthSpacePage(self.page_host, self.store)
@@ -306,6 +309,14 @@ class AplusMainWindow(ttk.Window):
             )
         if key == "other":
             self.trade_management.reload()
+
+    def _toggle_auto_quotes(self):
+        if self.store is not None:
+            self.store.holding_auto_quotes(self.auto_quote_var.get())
+        self.chart.auto_quotes_changed()
+        page = self._pages.get('other')
+        if page is not None:
+            page._toggle_auto_quotes(persist=False)
 
     def _open_case_comparison(self):
         item = self.chart.current_item()

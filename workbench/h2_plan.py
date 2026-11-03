@@ -259,6 +259,11 @@ def plan_at_end(instance, calculated, code=None, setup_date=None):
     positions = _positions(calculated, 'signal_gap_h2')
     if setup_date:
         positions = [i for i in positions if _date(calculated, i) == str(setup_date)[:10]]
+    else:
+        # A pending setup can be exactly TIMEOUT bars old, but never older.
+        # Keep the full frame for the surviving candidates: floor/MM context,
+        # lifecycle ordering and prior open gaps must still use original bars.
+        positions = [i for i in positions if len(calculated) - 1 - i <= TIMEOUT]
     for i in reversed(positions):
         structure = _structure(calculated, i, lookback)
         plan = project_plan(calculated, structure, code, lookback=lookback)
