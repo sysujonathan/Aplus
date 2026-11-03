@@ -85,6 +85,7 @@ def _dedupe_records(records):
             unique.append(record)
     return unique
 
+
 def parse_broker_tokens(tokens):
     """Parse spatial OCR tokens from Ping An-style closed-position screenshots.
 
