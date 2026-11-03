@@ -549,3 +549,4 @@ body.embedded .rangebar nav {flex-shrink:0}
   body.embedded .leftbar {padding-top:2px;padding-bottom:2px}
   body.embedded .leftbar>.tool {height:28px;min-height:28px}
 }
+.drawing-basis-note:not([hidden]) { position: absolute; bottom: 70px; left: 80px; right: 75px; z-index: 4; pointer-events: none; color: #e7c16d; background: #171b22e8; border-radius: 4px; padding: 5px 9px; font-size: 12px; width: fit-content; max-width: calc(100% - 155px); }

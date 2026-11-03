@@ -54,6 +54,7 @@ let draftPoints = [];
 let pendingDrawingText = null;
 let selectedId = null;
 let gesture = null;
+let seriesRefreshPending = false;
 let priceZoom = 1;
 let priceCenterOffset = 0;
 let magnetEnabled = true;
@@ -197,9 +198,14 @@ function savePrototypeState(flushOnly = false) {
     try { localStorage.setItem(tvStateKey, JSON.stringify(state)); } catch (_) { /* Store remains authoritative. */ }
     if (chartBoot.production && window.pywebview?.api?.save_state) {
       document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>正在保存到本机…';
-      const saveArgs = [state, bridgeRevision];
-      if (chartBoot.sessionToken != null) saveArgs.push(chartBoot.sessionToken);
-      bridgeSaveChain = bridgeSaveChain.then(() => window.pywebview.api.save_state(...saveArgs))
+      const sessionToken = chartBoot.sessionToken;
+      bridgeSaveChain = bridgeSaveChain.then(() => {
+        // Each immutable edit waits for the preceding acknowledged revision.
+        // Capture the session now, but never queue a stale expected revision.
+        const saveArgs = [state, bridgeRevision];
+        if (sessionToken != null) saveArgs.push(sessionToken);
+        return window.pywebview.api.save_state(...saveArgs);
+      })
         .then(result => {
           bridgeRevision = Number(result.revision);
           if (Array.isArray(result.alerts)) { chartAlerts = result.alerts; updateObjectTree(); }
@@ -306,16 +312,15 @@ function saveFibTemplate(object) {
 }
 
 function objectVisibleAtTimeframe(object) {
-  // Drawings are anchored to daily dates. Projecting one onto a minute axis
-  // stretches it across unrelated sessions, so the read-only intraday view
-  // hides them unless an object explicitly opts in.
-  if (/^m\d+$/.test(String(activeTimeframeUnit || ''))
-      && object.visibility?.[activeTimeframeUnit] !== true) return false;
-  if (object.type !== 'fib') return object.visibility?.[activeTimeframeUnit] !== false;
+  if (object.visibility?.[activeTimeframeUnit] === false) return false;
+  if (object.type !== 'fib') return true;
   const visibility = ensureFibSettings(object).fibVisibility;
-  const key = activeTimeframeUnit === 'weekly' ? 'weeks' : activeTimeframeUnit === 'monthly' ? 'months' : 'days';
+  const minutes = /^m\d+$/.test(activeTimeframeUnit) ? Number(activeTimeframeUnit.slice(1)) : null;
+  const key = minutes ? minutes < 60 ? 'minutes' : 'hours' :
+    activeTimeframeUnit === 'weekly' ? 'weeks' : activeTimeframeUnit === 'monthly' ? 'months' : 'days';
+  const count = minutes ? minutes < 60 ? minutes : minutes / 60 : 1;
   const setting=visibility[key];
-  return setting?.enabled !== false && (setting?.min??1)<=1 && (setting?.max??1)>=1;
+  return setting?.enabled !== false && (setting?.min??1)<=count && (setting?.max??count)>=count;
 }
 
 function segmentDistance(px, py, ax, ay, bx, by) {
@@ -408,6 +413,15 @@ function timeAxisTicks(view) {
 
 function renderWorkspace(mode = 'all') {
   const visibleObjects = userObjects.filter(drawingVisibleInWorkspace);
+  const basisNote = document.querySelector('#drawingBasisNote');
+  if (basisNote) {
+    const normalize = value => ({raw:'不复权',none:'不复权',qfq:'前复权',hfq:'后复权'})[value] || value;
+    const basis = normalize(/^m\d+$/.test(activeTimeframeUnit) ? chartBoot.live?.adjustment || '不复权' : chartBoot.adjustment);
+    basisNote.hidden = !visibleObjects.some(object => {
+      const original = normalize(object.priceBasis || chartBoot.adjustment);
+      return original && basis && original !== basis;
+    });
+  }
   document.querySelector('#selectedObject').classList.toggle('visible', visibleObjects.some(item => item.id === selectedId));
   if(typeof syncDrawingQuickbar==='function')syncDrawingQuickbar(visibleObjects.find(item=>item.id===selectedId)||null);
   const rect = wrap.getBoundingClientRect();
@@ -619,7 +633,7 @@ function calculateEma() {
 
 function drawHoldingLevels(ctx, view) {
   // Account levels are prices rather than dates, so they stay valid on every
-  // timeframe, including the read-only intraday axis.
+  // timeframe, including the intraday axis.
   if (replayActive) return; // current account levels are not historical replay evidence
   const { left, width, right, y } = view;
   const plotRight = width - right;
@@ -1030,6 +1044,7 @@ function exitDrawingMode() {
   document.querySelectorAll('[data-favorite], .tool[data-tool]:not(.magnet):not([data-tool="lock"])').forEach(item => item.classList.remove('active'));
   document.querySelector('[data-tool="cross"]').classList.add('active');
   canvas.classList.remove('drawing');
+  if (typeof seriesRefreshPending !== 'undefined' && seriesRefreshPending) repaintCurrentSeries();
 }
 
 function placeDrawing(point) {
@@ -1053,6 +1068,7 @@ function placeDrawing(point) {
   const object = {
     id: `${activeDrawingTool}-${Date.now()}`, type: activeDrawingTool,
     a: draftAnchor, b: onePointTools.has(activeDrawingTool) ? draftAnchor : finish,
+    priceBasis: /^m\d+$/.test(activeTimeframeUnit) ? chartBoot.live?.adjustment || '不复权' : chartBoot.adjustment,
     color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, createdAtIndex: replayActive ? replayIndex : bars.length - 1,
     createdAtDate: replayActive ? replayCutoffDate || bars[replayIndex].date : bars.at(-1).date
   };
@@ -1100,6 +1116,7 @@ function finishPath(point = null) {
   if (Math.abs(points.at(-1).index - snapped.index) > .2 || Math.abs(points.at(-1).value - snapped.value) > .01) points.push(snapped);
   rememberObjects();
   const object = { id: `path-${Date.now()}`, type: 'path', a: points[0], b: points.at(-1), points, color: '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true, startStyle:'none',endStyle:'arrow',createdAtIndex: replayActive ? replayIndex : bars.length - 1,
+    priceBasis: /^m\d+$/.test(activeTimeframeUnit) ? chartBoot.live?.adjustment || '不复权' : chartBoot.adjustment,
     createdAtDate: replayActive ? replayCutoffDate || bars[replayIndex].date : bars.at(-1).date };
   Object.assign(object,structuredClone(drawingTemplates.path || {}));
   // Old polyline objects/templates keep their saved geometry. New drawings use
@@ -1338,6 +1355,7 @@ canvas.addEventListener('pointerup', event => {
   } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && !gesture.moved) selectObject(gesture.objectId, point.x, point.y);
   if (gesture.moved && ['price-scale', 'time-scale', 'pan'].includes(gesture.mode)) saveViewState();
   gesture = null;
+  if (seriesRefreshPending) repaintCurrentSeries();
 });
 
 function cancelChartGesture() {
@@ -1347,6 +1365,7 @@ function cancelChartGesture() {
   if(gesture?.mode==='time-scale')viewCount=gesture.startCount;
   if(gesture?.mode==='pan'){viewOffset=gesture.startOffset;priceCenterOffset=gesture.startPriceCenterOffset;}
   gesture=null;hideZoomSelection();flushWorkspaceRender(overlayOnly?'overlay':'all');
+  if (typeof seriesRefreshPending !== 'undefined' && seriesRefreshPending) repaintCurrentSeries();
 }
 canvas.addEventListener('pointercancel', cancelChartGesture);
 canvas.addEventListener('mouseleave', () => { crosshair.classList.remove('show'); updateReadout(bars[Math.min(replayIndex, bars.length - 1)]); });
@@ -1793,6 +1812,8 @@ function switchProductionTimeframe(timeframe, persist = true) {
     (chartBoot.seriesCloseDates?.[timeframe]?.[row.date] || row.date) <= cutoff) : target.length - 1;
   if (lastVisible < 0) {showToast('所选日期之前没有已收盘的该周期K线');return false;}
   if (replayActive && typeof stopReplayTimer === 'function') stopReplayTimer();
+  if (typeof cancelChartGesture === 'function') cancelChartGesture();
+  if (typeof exitDrawingMode === 'function') exitDrawingMode();
   userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
   bars.splice(0, bars.length, ...structuredClone(replayFrame ? replayFrame.rows : target));
   userObjects.forEach(object => chartCoordinates.projectObject(object, bars, timeframe));
@@ -1820,12 +1841,20 @@ function switchProductionTimeframe(timeframe, persist = true) {
    back to the right edge or redrawing the whole page. */
 function repaintCurrentSeries() {
   if (replayActive) return true; // never disturb a frozen replay frame
+  // Keep the axis under the pointer stable until a drawing/drag is finished.
+  // Apply the cached update on gesture completion, even if polling has stopped.
+  if ((typeof gesture !== 'undefined' && gesture) || (typeof draftAnchor !== 'undefined' && draftAnchor)) {
+    seriesRefreshPending = true; return true;
+  }
+  seriesRefreshPending = false;
   const current = chartBoot.series[activeTimeframeUnit];
   if (!Array.isArray(current) || current.length < 1) return true;
   const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
   userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
   bars.splice(0, bars.length, ...structuredClone(current));
   userObjects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit));
+  [undoStack, redoStack].forEach(stack => stack.forEach(objects =>
+    objects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit))));
   replayIndex = bars.length - 1;
   if (anchorDate) {
     const at = bars.findIndex(row => row.date === anchorDate);
@@ -1955,7 +1984,7 @@ function openDrawingTemplateMenu(anchor) {
 document.querySelector('#objectTemplate').addEventListener('click', event=>openDrawingTemplateMenu(event.currentTarget));
 document.querySelectorAll('[data-template-action]').forEach(button => button.addEventListener('click', () => {
   const object = objectAtSelection();if(!object)return;
-  const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked','arrow_marker_version','path_version']);
+  const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked','arrow_marker_version','path_version','priceBasis']);
   if (button.dataset.templateAction === 'save') {
     drawingTemplates[object.type] = structuredClone(Object.fromEntries(Object.entries(object).filter(([key])=>!excluded.has(key))));
     savePrototypeState();showToast('绘图模板已保存到本机');
@@ -2488,8 +2517,7 @@ workspaceResize.observe(wrap);
 applyProductionContext();
 if(!chartBoot.production && initialPrototypeState.timeframe && initialPrototypeState.timeframe!=='daily')
   switchProductionTimeframe(initialPrototypeState.timeframe,false);
-// An embedded chart that already carries verified intraday bars opens on them;
-// the daily unit stays one click away and remains the ledger-anchored series.
+// Start in the requested unit after applyProductionContext restored drawings.
 if(chartBoot.production && chartBoot.startTimeframe && chartBoot.series?.[chartBoot.startTimeframe]?.length)
   switchProductionTimeframe(chartBoot.startTimeframe,false);
 calculateEma();
