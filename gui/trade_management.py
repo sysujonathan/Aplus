@@ -60,9 +60,10 @@ def _sort_value(value):
 
 
 class TradeManagementFrame(ttk.Frame):
-    def __init__(self, parent, store=None):
+    def __init__(self, parent, store=None, *, auto_quote_var=None):
         super().__init__(parent, padding=(12, 8))
         self.store = store
+        self._shared_auto_quote_var = auto_quote_var
         self._account_by_label = {}
         self._report = None
         self._names = {}
@@ -100,10 +101,12 @@ class TradeManagementFrame(ttk.Frame):
             command=self._manual_quote_refresh,
         )
         self.refresh_button.pack(side=tk.RIGHT, padx=(6, 0))
-        self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
-        ttk.Checkbutton(header, text="自动行情", variable=self.auto_quote_var,
-                        command=self._toggle_auto_quotes, bootstyle="success-round-toggle").pack(
-                            side=tk.RIGHT, padx=(8, 0))
+        self.auto_quote_var = self._shared_auto_quote_var
+        if self.auto_quote_var is None:
+            self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
+            ttk.Checkbutton(header, text="自动行情", variable=self.auto_quote_var,
+                            command=self._toggle_auto_quotes, bootstyle="success-round-toggle").pack(
+                                side=tk.RIGHT, padx=(8, 0))
         self.eye_button = ttk.Button(
             header, text="👁 显示", width=9, bootstyle="primary",
             command=self._toggle_fund_values,
@@ -526,9 +529,9 @@ class TradeManagementFrame(ttk.Frame):
         except (OSError, ValueError, AttributeError):
             return None
 
-    def _toggle_auto_quotes(self):
+    def _toggle_auto_quotes(self, *, persist=True):
         self._quote_poller.invalidate()
-        if self.store is not None:
+        if persist and self.store is not None:
             self.store.holding_auto_quotes(self.auto_quote_var.get())
         self._quote_due = 0.0
         self._quote_view_key = None

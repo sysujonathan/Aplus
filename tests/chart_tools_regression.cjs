@@ -272,6 +272,7 @@ context.pathDrawing.startStyle='arrow';context.pathDrawing.endStyle='none';
 paths=[];vm.runInContext('drawUserObject(ctx,testView,pathDrawing)',context);
 assert.equal(paths.length,2);assert.deepEqual(paths[1].points[0],[0,10]);
 const pathFinish=vm.createContext({structuredClone,Math,Date,activeDrawingTool:'path',
+  activeTimeframeUnit:'daily',chartBoot:{adjustment:'不复权'},
   draftPoints:[{index:0,value:10},{index:1,value:11}],draftCursor:{index:2,value:999},
   bars:[{date:'2026-10-12'},{date:'2026-10-13'}],replayActive:false,replayIndex:1,
   userObjects:[],drawingTemplates:{path:{closed:true,fill:true}},

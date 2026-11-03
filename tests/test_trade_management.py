@@ -112,10 +112,16 @@ def test_risk_math_never_counts_stop_above_cost_as_new_loss(tmp_path):
 
 
 def test_desktop_replaces_other_tools_with_single_trade_management_page():
+    import ast
     source = (Path(__file__).parents[1] / "gui" / "main_window.py").read_text(encoding="utf-8")
     page = (Path(__file__).parents[1] / "gui" / "trade_management.py").read_text(encoding="utf-8")
     assert '("other", "交易管理")' in source
-    assert 'TradeManagementFrame(self.page_host, self.store)' in source
+    calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == 'TradeManagementFrame']
+    assert len(calls) == 1
+    assert [ast.unparse(arg) for arg in calls[0].args] == ['self.page_host', 'self.store']
+    assert {kw.arg: ast.unparse(kw.value) for kw in calls[0].keywords} == {
+        'auto_quote_var': 'self.auto_quote_var'}
     assert '其他工具' not in source
     assert 'self.rowconfigure(1, weight=1, minsize=210)' in page
     assert 'self.rowconfigure(2, weight=3, minsize=630)' in page

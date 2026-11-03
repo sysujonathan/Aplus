@@ -47,6 +47,52 @@ def anchored_plan(spec, bars, day):
     return plan_at_end(instance, calculated, 'sh.600000', day)
 
 
+def test_scan_selection_skips_only_expired_setups_and_keeps_history(h2_spec, h2_bars, monkeypatch):
+    from workbench import h2_plan
+    bars = h2_bars
+    for _ in range(31):
+        bars = append_bar(bars, 11.6, 10.5)
+    instance, calculated = calculate(h2_spec, bars)
+    original = h2_plan._structure
+    calls = []
+    def structure(*args):
+        calls.append(args[1])
+        return original(*args)
+    monkeypatch.setattr(h2_plan, '_structure', structure)
+    assert plan_at_end(instance, calculated)['pending_state'] == 'UNAVAILABLE'
+    assert calls == []  # No repeated structure reconstruction for expired candidates.
+    history = plan_at_end(instance, calculated, setup_date=h2_bars.date.iloc[-1])
+    assert history['pending_state'] == 'EXPIRED' and calls == [129]
+    calls.clear()
+    at_boundary = calculated.iloc[:-1].copy()
+    assert plan_at_end(instance, at_boundary)['pending_state'] == 'PENDING'
+    assert calls == [129]  # Exactly 30 bars old remains eligible.
+
+
+@pytest.mark.parametrize('seed', range(8))
+def test_optimized_selector_matches_full_selector(seed, h2_spec):
+    from workbench import h2_plan
+    rng = np.random.default_rng(seed)
+    count = 300
+    close = 20 + np.cumsum(rng.normal(0, .7, count))
+    opening = close + rng.normal(0, .2, count)
+    frame = pd.DataFrame(dict(date=pd.bdate_range('2024-01-01',periods=count).strftime('%Y-%m-%d'),
+        open=opening, high=np.maximum(opening,close)+.3, low=np.minimum(opening,close)-.3,
+        close=close, volume=1000.))
+    instance, calculated = calculate(h2_spec, frame)
+    for end in range(125, count+1, 7):
+        prefix = calculated.iloc[:end].copy()
+        expected = None
+        for at in reversed(h2_plan._positions(prefix,'signal_gap_h2')):
+            value = project_plan(prefix,h2_plan._structure(prefix,at,instance.LOOKBACK_WINDOW),'sh.600000',
+                                 lookback=instance.LOOKBACK_WINDOW)
+            if value['pending_state']=='PENDING':
+                expected = value
+                break
+        expected = expected or project_plan(prefix,None,'sh.600000',lookback=instance.LOOKBACK_WINDOW)
+        assert plan_at_end(instance,prefix,'sh.600000') == expected
+
+
 def test_daily_entry_floor_sl_two_r_and_reference_levels(h2_spec, h2_bars):
     first = signal_at_end(h2_spec, h2_bars)
     assert first is not None
