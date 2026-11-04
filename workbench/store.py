@@ -282,6 +282,10 @@ class Store:
         from .pa_growth import backup
         return backup(self, path)
 
+    def pa_shared(self, operation, *args, drive=None):
+        from .pa_shared import dispatch
+        return dispatch(self, operation, *args, drive=drive)
+
     def pa_restore(self, path):
         from .pa_growth import restore
         return restore(self, path)

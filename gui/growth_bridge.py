@@ -158,6 +158,42 @@ class GrowthBridge:
         self._thumbnail_size = 0
         self._lock = threading.RLock()
         self._window = None
+        from workbench.pa_shared import GoogleDrive
+        self._drive = GoogleDrive()
+
+    def _public(self, operation, *args):
+        return self._store.pa_shared(operation, *args, drive=self._drive)
+
+    @guarded
+    def connect_google(self):
+        import webview
+        paths = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=False,
+            file_types=('Google Desktop OAuth (*.json)',))
+        if not paths:
+            return {'cancelled': True}
+        user = self._drive.session.login(paths[0])
+        return {'user': user, **self._public('refresh')}
+
+    @guarded
+    def disconnect_google(self):
+        self._drive.session.logout()
+        self._thumbnails.clear()
+        self._thumbnail_size = 0
+        return {}
+
+    @guarded
+    def refresh_shared(self):
+        self._thumbnails.clear()
+        self._thumbnail_size = 0
+        return self._public('refresh')
+
+    @guarded
+    def publish_case(self, case_id):
+        return self._public('publish', case_id)
+
+    @guarded
+    def mark_studied(self, case_id):
+        return {'record': self._public('record', 'studied', case_id, None)}
 
     def _summaries(self, rows):
         result = []
@@ -168,7 +204,8 @@ class GrowthBridge:
             if asset_id:
                 try:
                     if asset_id not in self._thumbnails:
-                        url = image_url(self._store.pa_image(asset_id), thumbnail=True)
+                        data = self._public('image', row['id'], asset_id, True) if row.get('status') == 'shared' else self._store.pa_image(asset_id)
+                        url = image_url(data, thumbnail=True)
                         while self._thumbnails and self._thumbnail_size + len(url) > 32 * 1024 * 1024:
                             oldest = next(iter(self._thumbnails))
                             self._thumbnail_size -= len(self._thumbnails.pop(oldest))
@@ -205,7 +242,9 @@ class GrowthBridge:
         growth['recent_case_id'] = (growth.get('recent') or [{}])[0].get('id')
         growth['recent_case'] = (growth.get('recent') or [None])[0]
         cases = self._store.pa_search(limit=101)
-        return dict(terms=list(TERMS), graph=graph(metadata), cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
+        shared = self._public('catalogue')
+        return dict(shared_status=self._public('status'), public_cases=self._summaries(shared[:100]),
+                    terms=list(TERMS), graph=graph(shared), public_count=len(shared), cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
                     next_offset=min(100, len(cases)), topics=self._topics(metadata),
                     context=self._context, **growth)
 
@@ -213,6 +252,11 @@ class GrowthBridge:
     def search_cases(self, query='', filters=None, offset=0):
         if type(offset) is not int or offset < 0:
             raise ValueError('结果分页无效')
+        if filters and filters.get('scope') == 'public':
+            result = self._public('search', query, {k:v for k,v in filters.items() if k != 'scope'}, offset)
+            result['cases'] = self._summaries(result['cases'])
+            return result
+        filters = {k:v for k,v in (filters or {}).items() if k not in ('scope', 'contributor')}
         if filters and filters.get('topic_id'):
             family = self._topic_family(filters['topic_id'])
             if len(family) > 1:
@@ -235,6 +279,8 @@ class GrowthBridge:
     @guarded
     def get_case(self, case_id):
         # Images remain metadata until the trader chooses one to inspect.
+        if str(case_id).startswith('shared:'):
+            return {'case': self._public('case', case_id)}
         case = self._store.pa_case(case_id)
         try:
             case['trial_setup'] = self._store.pa_trial_setup(case_id)
@@ -245,17 +291,20 @@ class GrowthBridge:
 
     @guarded
     def set_trial_setup(self, case_id, value):
+        if str(case_id).startswith('shared:'):
+            raise ValueError('公共案例保留原提交设置，请另存私密案例后修改')
         return {'setup': self._store.pa_trial_setup(case_id, value)}
 
     @guarded
     def get_image(self, case_id, asset_id, thumbnail=False):
         if type(thumbnail) is not bool:
             raise ValueError('图片读取方式无效')
-        case = self._store.pa_case(case_id, touch=False)
+        shared = str(case_id).startswith('shared:')
+        case = self._public('case', case_id) if shared else self._store.pa_case(case_id, touch=False)
         item = next((image for image in case.get('images', []) if image['id'] == asset_id), None)
         if item is None:
             raise ValueError('图片不存在或不属于此案例')
-        return {'image': dict(item, data_url=image_url(self._store.pa_image(asset_id), thumbnail=thumbnail))}
+        return {'image': dict(item, data_url=image_url(self._public('image', case_id, asset_id, thumbnail) if shared else self._store.pa_image(asset_id), thumbnail=thumbnail))}
 
     def _stage(self, images):
         total = sum(len(item['data']) for item in self._pending.values())
@@ -333,7 +382,10 @@ class GrowthBridge:
 
     @guarded
     def compare_case(self, case_id):
-        self._store.pa_case(case_id, touch=False)
+        if str(case_id).startswith('shared:'):
+            self._public('case', case_id)
+        else:
+            self._store.pa_case(case_id, touch=False)
         callback = getattr(self, '_compare_case', None)
         if callback is None:
             if self._context.get('comparison'):
@@ -381,6 +433,8 @@ class GrowthBridge:
 
     @guarded
     def update_case(self, case_id, metadata):
+        if str(case_id).startswith('shared:'):
+            raise ValueError('公共案例保留原始提交；个人研究请保存为笔记')
         case = self._store.pa_update_case(case_id, metadata)
         try:
             case['trial_setup'] = self._store.pa_trial_setup(case_id)
@@ -391,10 +445,14 @@ class GrowthBridge:
 
     @guarded
     def add_note(self, case_id, text):
+        if str(case_id).startswith('shared:'):
+            return {'note': self._public('record', 'notes', case_id, text)}
         return {'note': self._store.pa_add_note(case_id, text)}
 
     @guarded
     def save_trial(self, case_id, value):
+        if str(case_id).startswith('shared:'):
+            return {'trial': self._public('record', 'trials', case_id, value)}
         if (value.get('details') or {}).get('source') == 'progressive-screenshot':
             setup = self._store.pa_trial_setup(case_id)
             if not setup:
@@ -409,6 +467,8 @@ class GrowthBridge:
     def add_topic_note(self, topic_id, text):
         if topic_id not in {item[0] for item in TOPICS} | TERM_IDS:
             raise ValueError('知识主题不存在')
+        if topic_id in TERM_IDS and self._public('status')['connected']:
+            return {'note': self._public('record', 'topic_notes', topic_id, text)}
         return {'note': self._store.pa_topic_note(topic_id, text)}
 
     @guarded

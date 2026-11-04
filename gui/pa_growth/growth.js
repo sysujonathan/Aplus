@@ -156,7 +156,7 @@
     try {
       const data = await api('bootstrap');
       S.terms = data.terms || S.terms; S.graph = data.graph || S.graph; S.boot = data; S.atlasCases = data.atlas_cases || [];
-      S.cases = data.cases || [];
+      S.cases = S.scope==='public' ? (data.public_cases || []) : (data.cases || []);
       S.hasMore = data.has_more === true;
       S.topics = data.topics || [];
       S.stats = data.stats || {};
@@ -180,10 +180,11 @@
     S.topics = data.topics || S.topics;
     S.trials = data.trials || [];
     S.records = data.records || [];
-    if (S.page === 'home') { S.cases = data.cases || []; S.hasMore = data.has_more === true; }
+    if (S.page === 'home') { S.cases = S.scope==='public' ? (data.public_cases || []) : (data.cases || []); S.hasMore = S.scope==='public' ? data.public_count>100 : data.has_more === true; }
     return data;
   }
   function navigation() {
+    const account=$('#shared-account');if(account){const a=S.boot.shared_status;account.innerHTML=a?.connected?`<span class="micro">${esc(a.user.name)}</span><button class="quiet-button" data-action="refresh-shared">刷新公共案例</button><button class="quiet-button" data-action="disconnect-google">断开连接</button>`:'<button class="quiet-button" data-action="connect-google">连接 Google Drive</button>'; }
     $('#navigation').innerHTML = navItems.map(([id,label]) => `<button class="${S.page === id || (S.page === 'study' && id === 'library') ? 'active' : ''}" data-action="navigate" data-page="${id}" title="${label}">${icon(id)}<span>${label}</span></button>`).join('');
   }
   function contextBanner() {
@@ -194,11 +195,18 @@
   function searchBox(value, id = 'search-input') {
     return `<div class="search-box">${icon('search')}<input id="${id}" type="search" value="${esc(value)}" autocomplete="off" placeholder="品种、关键词或一句记忆" aria-label="搜索案例"><span class="key">Ctrl K</span><button class="btn small" data-action="search-now">搜索</button></div>`;
   }
+  function sharedBanner() {
+    const a=S.boot.shared_status;
+    return `<div class="shared-banner"><div class="button-group"><button class="btn small ${S.scope==='public'?'primary':''}" data-action="set-scope" data-scope="public">公共案例</button><button class="btn small ${S.scope==='private'?'primary':''}" data-action="set-scope" data-scope="private">私密草稿</button></div><span class="micro">${S.scope==='private'?'仅本机可见':a?.cached?`缓存于 ${esc(date(a.refreshed))}`:'连接后查看共享知识空间'}</span><button class="btn small" data-action="${a?.connected?'refresh-shared':'connect-google'}">${a?.connected?'刷新':'连接 Google Drive'}</button></div>`;
+  }
+  function termColors(c) {
+    return `<span class="term-colors">${[...new Set((c.term_ids||c.topic_ids||[]).map(id=>S.terms.find(t=>t.id===id)?.color).filter(Boolean))].map(color=>`<i style="background:${color}"></i>`).join('')}</span>`;
+  }
   function card(c) {
     const src = thumbOf(c);
     const reasons = c.match_reasons || c.hit_reasons || c.matches || [];
     const hit = Array.isArray(reasons) ? reasons.map(v => typeof v === 'string' ? v : v.label || v.field || '').join(' · ') : String(reasons);
-    return `<button class="case-card" data-action="quick-open" data-id="${esc(c.id)}" aria-label="查看 ${esc(caseTitle(c))}"><div class="case-photo">${src ? `<img src="${esc(src)}" alt="${esc(caseTitle(c))}" loading="lazy">` : '<span class="micro">图片暂不可用</span>'}${c.data_kind === 'test' ? '<span class="test-tag">测试样本</span>' : ''}</div><div class="case-info"><small class="between"><span>${esc(summary(c))}</span><span class="privacy">私密</span></small><b>${esc(caseTitle(c))}</b>${hit ? `<span class="hit">命中：${esc(hit)}</span>` : `<small>${esc((c.keywords || []).join ? (c.keywords || []).join(' / ') : c.keywords || '')}${c.image_count > 1 ? ` · ${c.image_count} 张图` : ''}</small>`}</div></button>`;
+    return `<button class="case-card" data-action="quick-open" data-id="${esc(c.id)}" aria-label="查看 ${esc(caseTitle(c))}"><div class="case-photo">${src ? `<img src="${esc(src)}" alt="${esc(caseTitle(c))}" loading="lazy">` : '<span class="micro">图片暂不可用</span>'}${c.data_kind === 'test' ? '<span class="test-tag">测试样本</span>' : ''}</div><div class="case-info"><small class="between"><span>${esc(summary(c))}</span><span class="privacy">${c.status==='shared'?esc(c.contributor.name):'私密'}</span></small><b>${esc(caseTitle(c))}</b>${termColors(c)}${hit ? `<span class="hit">命中：${esc(hit)}</span>` : `<small>${esc((c.keywords || []).join ? (c.keywords || []).join(' / ') : c.keywords || '')}${c.image_count > 1 ? ` · ${c.image_count} 张图` : ''}</small>`}</div></button>`;
   }
   function grid(cases, emptyText = '还没有案例') {
     return cases.length ? `<div class="case-grid">${cases.map(card).join('')}</div>` : `<div class="empty"><strong>${esc(emptyText)}</strong><p>粘贴或导入一张截图。</p><button class="btn primary" data-action="paste">${icon('paste')} 粘贴截图</button><button class="btn" style="margin-left:8px" data-action="import">${icon('upload')} 导入图片</button></div>`;
@@ -206,7 +214,7 @@
   function home() {
     const hasUse = (S.stats.cases || S.cases.length || 0) > 0 || (S.stats.trials || 0) > 0;
     const recent = S.boot.recent_case || (S.boot.recent_case_id && S.cases.find(c => c.id === S.boot.recent_case_id));
-    return `<section class="page home-page">${contextBanner()}<div class="hero"><div class="hero-copy"><span class="eyebrow">MY TRADING MEMORY</span><h1>${hasUse ? '欢迎回来。' : '我的交易记忆'}</h1>${searchBox(S.query,'home-search')}<div class="hero-shortcuts"><button class="btn ghost small" data-action="navigate" data-page="library">${icon('library')} 全部案例</button><button class="btn ghost small" data-action="navigate" data-page="trial">${icon('trial')} 开始 PA 试炼</button></div>${!hasUse ? '<div class="first-hint">Ctrl+V 收录截图；不填标题也可以保存。</div>' : ''}</div><div class="drop-box" data-action="import" role="button" tabindex="0" aria-label="导入截图"><div class="drop-icon">${icon('paste')}</div><h2>收录截图</h2><p>拖入图片 · 批量导入</p><span class="paste-key">Ctrl + V</span><button class="btn small" data-action="paste">粘贴截图</button></div></div>${recent ? `<div class="resume"><div><h3>继续研究 · ${esc(caseTitle(recent))}</h3><p>${esc(summary(recent))}</p></div><button class="btn" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : ''}<div class="section-head"><h2>${hasUse ? '最近案例' : '案例素材'}</h2>${hasUse ? '<button class="btn ghost small" data-action="navigate" data-page="library">全部案例 →</button>' : ''}</div>${grid(S.cases.slice(0,6))}</section>`;
+    return `<section class="page home-page">${contextBanner()}${sharedBanner()}<div class="hero"><div class="hero-copy"><span class="eyebrow">MY TRADING MEMORY</span><h1>${hasUse ? '欢迎回来。' : '我的交易记忆'}</h1>${searchBox(S.query,'home-search')}<div class="hero-shortcuts"><button class="btn ghost small" data-action="navigate" data-page="library">${icon('library')} 全部案例</button><button class="btn ghost small" data-action="navigate" data-page="trial">${icon('trial')} 开始 PA 试炼</button></div>${!hasUse ? '<div class="first-hint">Ctrl+V 收录截图；不填标题也可以保存。</div>' : ''}</div><div class="drop-box" data-action="import" role="button" tabindex="0" aria-label="导入截图"><div class="drop-icon">${icon('paste')}</div><h2>收录截图</h2><p>拖入图片 · 批量导入</p><span class="paste-key">Ctrl + V</span><button class="btn small" data-action="paste">粘贴截图</button></div></div>${recent ? `<div class="resume"><div><h3>继续研究 · ${esc(caseTitle(recent))}</h3><p>${esc(summary(recent))}</p></div><button class="btn" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : ''}<div class="section-head"><h2>${hasUse ? '最近案例' : '案例素材'}</h2>${hasUse ? '<button class="btn ghost small" data-action="navigate" data-page="library">全部案例 →</button>' : ''}</div>${grid(S.cases.slice(0,6))}</section>`;
   }
   function library() {
     const count = S.cases.length;
@@ -214,7 +222,7 @@
       ? `<div class="save-error">${esc(S.searchError)}<br><button class="link-button" data-action="search-now">重新搜索</button></div>`
       : count ? grid(S.cases) : `<div class="empty"><strong>${S.query || Object.values(S.filters).some(Boolean) ? '没有找到对应案例' : '还没有案例'}</strong><p>${S.query || Object.values(S.filters).some(Boolean) ? '试试更短的关键词，或清除筛选。' : '粘贴或导入一张截图。'}</p>${S.query || Object.values(S.filters).some(Boolean) ? '<button class="btn" data-action="reset-search">查看全部案例</button>' : '<button class="btn primary" data-action="import">收录截图</button>'}</div>`;
     const more = S.hasMore ? `${S.searchError && count ? `<div class="save-error" style="margin-top:18px">${esc(S.searchError)}</div>` : ''}<div style="display:flex;justify-content:center;margin-top:22px"><button class="btn" data-action="load-more" ${S.searchBusy ? 'disabled' : ''}>${S.searchBusy ? '正在加载…' : S.searchError ? '重试加载更多' : '加载更多案例'}</button></div>` : '';
-    return `<section class="page">${contextBanner()}<div class="library-header between"><div><span class="eyebrow">CASE STUDIES</span><h1>案例研究</h1></div><div class="button-group"><button class="btn" data-action="paste">${icon('paste')} 粘贴</button><button class="btn primary" data-action="import">${icon('plus')} 收录截图</button></div></div>${searchBox(S.query)}<div class="between results-head"><span>${S.searchBusy ? '正在找图…' : `${S.hasMore ? '已显示 ' : ''}${count} 个案例${S.query ? ` · “${esc(S.query)}”` : ''}`}</span><button class="btn ghost small" data-action="toggle-filters" aria-expanded="${S.filterOpen}">${icon('filter')} 筛选${Object.values(S.filters).some(Boolean) ? ' · 已启用' : ''}</button></div>${S.filterOpen ? `<div class="filter-bar"><label>品种<input class="field" data-filter="symbol" value="${esc(S.filters.symbol)}" placeholder="名称或代码"></label><label>周期<input class="field" data-filter="timeframe" value="${esc(S.filters.timeframe)}" placeholder="如 日线、5m"></label><label>市场<input class="field" data-filter="market" value="${esc(S.filters.market)}" placeholder="如 A股、加密"></label><label>来源<select class="field" data-filter="data_kind"><option value="">全部</option><option value="imported" ${S.filters.data_kind === 'imported' ? 'selected' : ''}>个人导入</option><option value="test" ${S.filters.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label><button class="btn ghost small" data-action="clear-filters">清除</button></div>` : ''}<div id="search-results">${results}${more}</div></section>`;
+    return `<section class="page">${contextBanner()}${sharedBanner()}<div class="library-header between"><div><span class="eyebrow">CASE STUDIES</span><h1>案例研究</h1></div><div class="button-group"><button class="btn" data-action="paste">${icon('paste')} 粘贴</button><button class="btn primary" data-action="import">${icon('plus')} 收录截图</button></div></div>${searchBox(S.query)}<div class="between results-head"><span>${S.searchBusy ? '正在找图…' : `${S.hasMore ? '已显示 ' : ''}${count} 个案例${S.query ? ` · “${esc(S.query)}”` : ''}`}</span><button class="btn ghost small" data-action="toggle-filters" aria-expanded="${S.filterOpen}">${icon('filter')} 筛选${Object.values(S.filters).some(Boolean) ? ' · 已启用' : ''}</button></div>${S.filterOpen ? `<div class="filter-bar"><label>品种<input class="field" data-filter="symbol" value="${esc(S.filters.symbol)}" placeholder="名称或代码"></label><label>周期<input class="field" data-filter="timeframe" value="${esc(S.filters.timeframe)}" placeholder="如 日线、5m"></label><label>市场<input class="field" data-filter="market" value="${esc(S.filters.market)}" placeholder="如 A股、加密"></label><label>贡献者<select class="field" data-filter="contributor"><option value="">全部</option><option value="me" ${S.filters.contributor==='me'?'selected':''}>我上传的案例</option></select></label><label>来源<select class="field" data-filter="data_kind"><option value="">全部</option><option value="imported" ${S.filters.data_kind === 'imported' ? 'selected' : ''}>个人导入</option><option value="test" ${S.filters.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label><button class="btn ghost small" data-action="clear-filters">清除</button></div>` : ''}<div id="search-results">${results}${more}</div></section>`;
   }
   function study() {
     const c = S.case;
@@ -222,14 +230,14 @@
     const image = imageOf(c,S.imageIndex);
     const src = imageUrl(image);
     const topics = c.topic_ids || [];
-    return `<section class="page study-page">${contextBanner()}<div class="study-header between"><div><h1>${esc(caseTitle(c))}</h1><p>${esc(summary(c))} · ${sourceLabel(c)} · 本机私密草稿</p></div><div class="button-group"><button class="btn" data-action="study-back">${icon('back')} 返回搜索</button><button class="btn" data-action="original">${icon('zoom')} 查看原图</button>${S.context?.can_compare === true && !S.context?.comparison ? '<button class="btn primary" data-action="compare">' + icon('layers') + ' 与当前行情对照</button>' : ''}</div></div><div class="study-layout"><section class="photo-panel"><div class="photo-heading"><span>${icon('image')} 历史原图</span><span class="muted">${c.data_kind === 'test' ? '测试样本 · ' : ''}${S.imageIndex + 1} / ${(c.images || []).length}</span></div><button class="study-image" data-action="original" title="放大原图">${src ? `<img src="${esc(src)}" alt="${esc(image?.name || caseTitle(c))}">` : `<span class="muted">${esc(imageMessage(image))}</span>`}</button>${gallery(c)}<div class="photo-footer"><div class="topic-list">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div><button class="btn ghost small" data-action="append-images">${icon('plus')} 追加图片</button></div></section><aside class="study-side"><h2>案例笔记</h2><nav class="tabs">${[['memory','当时的记忆'],['notes','研究记录'],['topics','知识线索']].map(([id,name]) => `<button data-action="study-pane" data-pane="${id}" class="${S.studyPane === id ? 'active' : ''}">${name}</button>`).join('')}</nav><div class="side-content">${studyPane(c,topics)}</div></aside></div></section>`;
+    return `<section class="page study-page">${contextBanner()}<div class="study-header between"><div><h1>${esc(caseTitle(c))}</h1><p>${esc(summary(c))} · ${c.status==='shared'?'公共案例 · '+esc(c.contributor.name):sourceLabel(c)+' · 本机私密草稿'}</p></div><div class="button-group"><button class="btn" data-action="study-back">${icon('back')} 返回搜索</button><button class="btn" data-action="original">${icon('zoom')} 查看原图</button>${S.context?.can_compare === true && !S.context?.comparison ? '<button class="btn primary" data-action="compare">' + icon('layers') + ' 与当前行情对照</button>' : ''}</div></div><div class="study-layout"><section class="photo-panel"><div class="photo-heading"><span>${icon('image')} 历史原图</span><span class="muted">${c.data_kind === 'test' ? '测试样本 · ' : ''}${S.imageIndex + 1} / ${(c.images || []).length}</span></div><button class="study-image" data-action="original" title="放大原图">${src ? `<img src="${esc(src)}" alt="${esc(image?.name || caseTitle(c))}">` : `<span class="muted">${esc(imageMessage(image))}</span>`}</button>${gallery(c)}<div class="photo-footer"><div class="topic-list">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>${c.status==='shared'?termColors(c):`<button class="btn ghost small" data-action="append-images">${icon('plus')} 追加图片</button>`}</div></section><aside class="study-side"><h2>案例笔记</h2><nav class="tabs">${[['memory','当时的记忆'],['notes','研究记录'],['topics','知识线索']].map(([id,name]) => `<button data-action="study-pane" data-pane="${id}" class="${S.studyPane === id ? 'active' : ''}">${name}</button>`).join('')}</nav><div class="side-content">${studyPane(c,topics)}</div></aside></div></section>`;
   }
   function gallery(c, action = 'case-image') {
     return c.images?.length > 1 ? `<div class="small-gallery">${c.images.map((image,index) => `<button class="${S.imageIndex === index ? 'active' : ''}" data-action="${action}" data-index="${index}" aria-label="第 ${index + 1} 张图片" title="${esc(image.name || '案例图片')}"><span class="micro">第 ${index + 1} 张</span></button>`).join('')}</div>` : '';
   }
   function studyPane(c,topics) {
-    if (S.studyPane === 'memory') return `${c.trial_setup_error?`<div class="alert-line">${esc(c.trial_setup_error)}</div>`:''}<div class="memory">${esc(c.memory || '尚未添加记忆描述')}</div><div class="rule"></div><div class="source-details">${c.keywords?.length ? `<div>关键词 <strong>${esc(Array.isArray(c.keywords) ? c.keywords.join(' / ') : c.keywords)}</strong></div>` : ''}<div>收录于 <strong>${esc(date(c.created))}</strong></div><div>图片 <strong>${c.images?.length || 0} 张</strong></div></div><div class="form-actions"><button class="btn small" data-action="edit-case">${icon('edit')} 编辑资料</button></div><div class="rule"></div><button class="btn ghost small" data-action="start-trial" data-id="${esc(c.id)}">${icon('trial')} 开始分阶段试炼</button><button class="btn ghost small" data-action="configure-trial">设置试炼</button>`;
-    if (S.studyPane === 'topics') return `<div class="topic-list">${topics.length ? topics.map(id => `<button class="topic-chip" data-action="open-topic" data-id="${esc(id)}">${esc(topicName(id))}</button>`).join('') : '<span class="micro">尚未关联知识主题</span>'}</div><div class="form-actions"><button class="btn small" data-action="edit-case">关联主题</button></div>`;
+    if (S.studyPane === 'memory') return `${c.trial_setup_error?`<div class="alert-line">${esc(c.trial_setup_error)}</div>`:''}<div class="memory">${esc(c.memory || '尚未添加记忆描述')}</div><div class="rule"></div><div class="source-details">${c.keywords?.length ? `<div>关键词 <strong>${esc(Array.isArray(c.keywords) ? c.keywords.join(' / ') : c.keywords)}</strong></div>` : ''}<div>收录于 <strong>${esc(date(c.created))}</strong></div><div>图片 <strong>${c.images?.length || 0} 张</strong></div></div><div class="form-actions">${c.status==='shared'?'<button class="btn small" data-action="mark-studied">记为已研究</button>':'<button class="btn small" data-action="edit-case">编辑资料</button><button class="btn primary small" data-action="publish-preview">提交到公共空间</button>'}</div><div class="rule"></div><button class="btn ghost small" data-action="start-trial" data-id="${esc(c.id)}">${icon('trial')} 开始分阶段试炼</button>${c.status==='shared'?'':'<button class="btn ghost small" data-action="configure-trial">设置试炼</button>'}`;
+    if (S.studyPane === 'topics') return `<div class="topic-list">${topics.length ? topics.map(id => `<button class="topic-chip" data-action="open-topic" data-id="${esc(id)}">${esc(topicName(id))}</button>`).join('') : '<span class="micro">尚未关联知识主题</span>'}</div>${c.status==='shared'?'':'<div class="form-actions"><button class="btn small" data-action="edit-case">关联术语</button></div>'}`;
     return `${notesOf(c).length ? `<div class="note-list">${notesOf(c).map(note => `<article class="note-item"><small>${esc(note.author || '我')} · ${esc(date(note.created))}</small><p>${esc(note.text || note.content || '')}</p></article>`).join('')}</div>` : '<div class="inline-empty">还没有研究记录。</div>'}<div class="note-composer"><label class="field-label" for="case-note">添加个人研究</label><textarea id="case-note" class="field" data-draft="case-note:${esc(c.id)}" placeholder="现在看到了什么？">${esc(S.draftText['case-note:' + c.id] || '')}</textarea><button class="btn primary small" data-action="save-note">保存研究笔记</button></div>`;
   }
   function trialFraction() {
@@ -342,7 +350,7 @@
     if (append && (S.searchBusy || !S.hasMore)) return;
     const seq = ++S.searchSeq;
     const query = S.query;
-    const filters = {...S.filters};
+    const filters = {...S.filters,scope:S.scope};
     const offset = append ? S.cases.length : 0;
     if (!append) { S.cases = []; S.hasMore = false; }
     S.searchBusy = true; S.searchError = '';
@@ -352,7 +360,7 @@
     if (moreButton) { moreButton.disabled = true; moreButton.textContent = '正在加载…'; }
     try {
       const result = await api('search_cases',query,filters,offset);
-      if (seq !== S.searchSeq || S.page !== 'library' || query !== S.query || JSON.stringify(filters) !== JSON.stringify(S.filters)) return;
+      if (seq !== S.searchSeq || S.page !== 'library' || query !== S.query || JSON.stringify(filters) !== JSON.stringify({...S.filters,scope:S.scope})) return;
       S.cases = append ? [...S.cases,...(result.cases || [])] : result.cases || [];
       S.hasMore = result.has_more === true;
     } catch (error) {
@@ -600,7 +608,7 @@
     const background = S.page === 'study' ? $('.study-image') : S.page === 'trial' ? $('#trial-image-wrap') : null;
     if (background) background.innerHTML = '';
     const canBrowse = c.images.length > 1 && !original.fromTrial;
-    const html = `<div class="overlay original-overlay"><section class="original-dialog" role="dialog" aria-modal="true" aria-label="原图速览"><div class="original-toolbar"><span class="image-name">${original.fromTrial&&!S.trialRecord?'当前阶段':esc(image?.name || caseTitle(c))}${c.data_kind === 'test' ? ' · 测试样本' : ''} · 私密</span><div class="button-group"><button class="btn ghost icon-button" data-action="zoom-out" aria-label="缩小">${icon('minus')}</button><span class="zoom-label">${Math.round(original.zoom * 100)}%</span><button class="btn ghost icon-button" data-action="zoom-in" aria-label="放大">${icon('plus')}</button><button class="btn small" data-action="zoom-fit">适应</button><button class="btn small" data-action="zoom-native">1:1</button>${!original.fromStudy && !original.fromTrial ? '<button class="btn primary small" data-action="quick-study">研究此案例</button>' : ''}<button class="btn ghost icon-button" data-action="close-original" aria-label="返回">${icon('close')}</button></div></div><div class="original-stage" id="original-stage">${imageUrl(image) ? (original.fromTrial?trialMarkup(image,'original-image'):`<img id="original-image" src="${esc(imageUrl(image))}" alt="${esc(image?.name || caseTitle(c))}" draggable="false">`) : `<div class="loading"><p>${esc(imageMessage(image))}</p>${S.imageError?.id === image?.id ? '<button class="btn" data-action="retry-image">重新读取原图</button>' : ''}</div>`}</div><div class="original-footer"><span>${original.index + 1} / ${c.images.length} · ${image?.width || ''}${image?.height ? ' × ' + image.height : ''}</span><span class="pan-hint">滚轮缩放 · 拖动平移 · Esc 返回</span><div class="button-group">${canBrowse ? `<button class="btn ghost small" data-action="original-prev" ${original.index <= 0 ? 'disabled' : ''}>上一张</button><button class="btn ghost small" data-action="original-next" ${original.index >= c.images.length - 1 ? 'disabled' : ''}>下一张</button>` : ''}</div></div></section></div>`;
+    const html = `<div class="overlay original-overlay"><section class="original-dialog" role="dialog" aria-modal="true" aria-label="原图速览"><div class="original-toolbar"><span class="image-name">${original.fromTrial&&!S.trialRecord?'当前阶段':esc(image?.name || caseTitle(c))}${c.data_kind === 'test' ? ' · 测试样本' : ''} · ${c.status==='shared'?'公共案例':'私密'}</span><div class="button-group"><button class="btn ghost icon-button" data-action="zoom-out" aria-label="缩小">${icon('minus')}</button><span class="zoom-label">${Math.round(original.zoom * 100)}%</span><button class="btn ghost icon-button" data-action="zoom-in" aria-label="放大">${icon('plus')}</button><button class="btn small" data-action="zoom-fit">适应</button><button class="btn small" data-action="zoom-native">1:1</button>${!original.fromStudy && !original.fromTrial ? '<button class="btn primary small" data-action="quick-study">研究此案例</button>' : ''}<button class="btn ghost icon-button" data-action="close-original" aria-label="返回">${icon('close')}</button></div></div><div class="original-stage" id="original-stage">${imageUrl(image) ? (original.fromTrial?trialMarkup(image,'original-image'):`<img id="original-image" src="${esc(imageUrl(image))}" alt="${esc(image?.name || caseTitle(c))}" draggable="false">`) : `<div class="loading"><p>${esc(imageMessage(image))}</p>${S.imageError?.id === image?.id ? '<button class="btn" data-action="retry-image">重新读取原图</button>' : ''}</div>`}</div><div class="original-footer"><span>${original.index + 1} / ${c.images.length} · ${image?.width || ''}${image?.height ? ' × ' + image.height : ''}</span><span class="pan-hint">滚轮缩放 · 拖动平移 · Esc 返回</span><div class="button-group">${canBrowse ? `<button class="btn ghost small" data-action="original-prev" ${original.index <= 0 ? 'disabled' : ''}>上一张</button><button class="btn ghost small" data-action="original-next" ${original.index >= c.images.length - 1 ? 'disabled' : ''}>下一张</button>` : ''}</div></div></section></div>`;
     S.overlay = 'original'; $('#overlay-root').innerHTML = html;
     applyOriginalTransform();
     requestVisibleImage(); paintMask();
@@ -702,7 +710,7 @@
     S.topicCases = []; S.topicLoading = true;
     render();
     try {
-      const result = await api('search_cases','',{topic_id:id});
+      const result = await api('search_cases','',{topic_id:id,scope:'public'});
       if (seq !== S.topicSeq || S.topicId !== id || S.page !== 'universe') return;
       const field = $('#topic-note');
       const key = 'topic-note:' + id;
@@ -763,10 +771,40 @@
     } catch (error) { $('#backup-error').textContent = error.message; }
     finally { S.saving--; $$('[data-action="export-backup"],[data-action="restore-backup"]').forEach(button => { button.disabled = false; }); }
   }
+  async function cloudAction(method) {
+    if(S.saving) return;
+    S.saving++;
+    try {
+      const result=await api(method);
+      if(result.cancelled)return;
+      if(method==='disconnect_google') {originalCache.clear();originalCacheBytes=0;S.case=null;S.trialCase=null;S.original=null;S.draftText={};S.trials=[];S.records=[];S.page='home';closeOverlay(true);}
+      await refreshData();
+      if(S.page==='library')await search(false); else render();
+      toast(method==='refresh_shared'?'公共案例已刷新':method==='connect_google'?'Google Drive 已连接':'已断开连接');
+    } catch(e){toast(e.message,true);}finally{S.saving--;}
+  }
+  function publishPreview() {
+    const c=S.case;
+    overlayHTML(dialog('提交公共案例',`<p>${esc(caseTitle(c))}</p><p class="micro">将共享 ${c.images.length} 张原图、案例描述和标准术语。个人研究与判断留在本机。</p><div class="topic-list">${(c.topic_ids||[]).filter(id=>S.terms.some(t=>t.id===id)).map(id=>`<span class="tag">${esc(topicName(id))}</span>`).join('')}</div><div id="publish-result" class="save-error"></div>`,`<button class="btn" data-action="close-overlay">返回</button><button class="btn primary" data-action="publish-case">确认提交</button>`),'publish');
+  }
+  async function publishCase() {
+    if(S.saving)return;S.saving++;
+    const button=$('[data-action="publish-case"]');if(button){button.disabled=true;button.textContent='正在上传并校验…';}
+    try {const result=await api('publish_case',S.case.id);if(!result.published)throw Error('未收到云端提交确认');closeOverlay(true);toast('公共案例已提交');try{await api('refresh_shared');await refreshData();render();}catch(e){toast('提交已确认，列表刷新失败：'+e.message,true);}}
+    catch(e){const node=$('#publish-result');if(node)node.textContent=e.message;else toast(e.message,true);}
+    finally{S.saving--;if(button){button.disabled=false;button.textContent='重试提交';}}
+  }
   async function dispatch(action,element,event) {
     if (S.saving && !['zoom-in','zoom-out','zoom-fit','zoom-native'].includes(action)) return;
     switch (action) {
       case 'navigate': return navigate(element.dataset.page);
+      case 'set-scope': S.scope=element.dataset.scope;S.filters={};S.query='';cancelSearch();S.page='library';render();return search(false);
+      case 'connect-google': return cloudAction('connect_google');
+      case 'disconnect-google': if(!canLeaveDraft()||!window.confirm('断开当前 Google 账号？'))return;return cloudAction('disconnect_google');
+      case 'refresh-shared': return cloudAction('refresh_shared');
+      case 'publish-preview': return publishPreview();
+      case 'publish-case': return publishCase();
+      case 'mark-studied': await api('mark_studied',S.case.id);toast('已记录本次研究');await refreshData();return;
       case 'retry-boot': return boot();
       case 'search-now': S.query = ($('#home-search') || $('#search-input'))?.value.trim() || ''; if (S.page !== 'library') { S.page = 'library'; render(); } return search();
       case 'load-more': return search(true,true);
