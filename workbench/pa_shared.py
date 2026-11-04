@@ -9,6 +9,7 @@ import base64
 import hashlib
 import io
 import json
+from pathlib import Path
 import re
 import uuid
 from urllib.parse import urlencode, urlparse
@@ -17,14 +18,14 @@ from PIL import Image
 
 from .pa_auth import GoogleSession, DriveError, request, protect, atomic_secret
 from .pa_growth import now, metadata, image_info, _owner, MAX_CASE_BYTES, MAX_IMAGE_BYTES
-from .pa_terms import IDS, TERMS, selected, matching, graph
+from .pa_terms import IDS, selected, matching
 from .pa_trial import validate as validate_trial
 from .store import dumps
 
 FOLDER = '1r_wPMsPboY9BXZ_k4X2dtKULVXcwE7YW'
 MAX_MANIFEST = 256 * 1024
 MAX_CASES = 20_000
-FIELDS = 'id,name,mimeType,parents,trashed,size,owners(permissionId),properties,capabilities(canAddChildren)'
+FIELDS = 'id,name,mimeType,parents,trashed,size,shared,md5Checksum,owners(permissionId),properties,capabilities(canAddChildren)'
 
 
 def identifier(value):
@@ -42,8 +43,8 @@ def checksum(data):
 
 
 class GoogleDrive:
-    def __init__(self, session=None):
-        self.session = session or GoogleSession()
+    def __init__(self, session=None, *, profile=None):
+        self.session = session or GoogleSession(profile)
 
     def call(self, path, *, data=None, method=None, headers=None, limit=MAX_MANIFEST):
         token = self.session.access_token()
@@ -71,6 +72,7 @@ class GoogleDrive:
         info = self.info(FOLDER)
         if info.get('trashed') or info.get('mimeType') != 'application/vnd.google-apps.folder':
             raise ValueError('指定的 PA 共享目录不可用')
+        self.folder_shared = info.get('shared')
         return info.get('capabilities', {}).get('canAddChildren', False)
 
     def allocate(self, count):
@@ -152,19 +154,42 @@ class Workspace:
             return dict(connected=False, folder_id=FOLDER, cached=False)
         access = self.get('pa_shared_access:' + user['id'], {})
         return dict(connected=True, user=user, folder_id=FOLDER, cached=bool(access.get('granted')),
-                    refreshed=access.get('refreshed'), writable=access.get('writable', False))
+                    refreshed=access.get('refreshed'), writable=access.get('writable', False),
+                    directory_shared=access.get('shared'),
+                    cache_error=getattr(self.store, '_pa_shared_cache_error', None))
 
     def refresh(self):
-        user = self.drive.identity(True)
+        user = self.drive.identity()
         key = 'pa_shared_access:' + user['id']
         try:
+            self.drive.identity(True)
             writable = self.drive.check_folder()
             rows = self.drive.list_cases()
+            try:
+                previous = {c['id']: c for c in self.get('pa_shared_catalogue', [])}
+            except (ValueError, TypeError, KeyError):
+                previous = {}  # Rebuild derived cache; authority stays in Drive.
             cases = []
             for row in rows:
+                cached = previous.get('shared:' + row['id'])
+                if cached and cached.get('cloud_md5') and row.get('md5Checksum'):
+                    if cached['cloud_md5'] != row['md5Checksum']:
+                        raise ValueError('已有公共案例在云端被修改，请核对原提交；未覆盖有效缓存')
+                    if (FOLDER not in row.get('parents', []) or row.get('trashed')
+                            or cached['contributor']['id'] not in [v.get('permissionId') for v in row.get('owners', [])]):
+                        raise ValueError('已有公共案例的目录或贡献身份改变，未覆盖有效缓存')
+                    cases.append(cached)
+                    continue
                 raw = self.drive.read(row['id'], MAX_MANIFEST)
-                value = validate_manifest(json.loads(raw), row)
+                try:
+                    value = validate_manifest(json.loads(raw), row)
+                except (KeyError, TypeError, json.JSONDecodeError):
+                    raise ValueError('公共案例资料损坏，未替换上次有效缓存') from None
                 cases.append(value)
+            if len({c['global_id'] for c in cases}) != len(cases):
+                raise ValueError('云端存在重复的全局案例身份，请核对原提交；未替换本地缓存')
+            if len(encoded(cases)) > 32 * 1024 * 1024:
+                raise ValueError('公共案例目录超过本版缓存上限；未替换原缓存')
         except DriveError as exc:
             if exc.status in (401, 403, 404):
                 self.set(key, {'granted': False})
@@ -172,15 +197,32 @@ class Workspace:
         # Replace snapshot only after the entire catalogue validates. Another
         # client's concurrent commits appear on the next explicit refresh.
         cases.sort(key=lambda c: (c['updated'], c['id']), reverse=True)
-        self.set('pa_shared_catalogue', cases)
-        self.set(key, dict(granted=True, writable=writable, refreshed=now()))
+        with self.store.atomic_write():
+            self.set('pa_shared_catalogue', cases)
+            self.set('pa_shared_catalogue_stamp', uuid.uuid4().hex)
+            self.set(key, dict(granted=True, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None)))
+        self.store._pa_shared_cache_error = None
         return dict(count=len(cases), status=self.status())
 
     def catalogue(self):
         status = self.status()
         if not status['connected'] or not status['cached']:
             return []
-        return self.get('pa_shared_catalogue', [])
+        stamp = self.get('pa_shared_catalogue_stamp')
+        cached = getattr(self.store, '_pa_shared_catalogue_cache', None)
+        if stamp and cached and cached[0] == stamp:
+            return cached[1]
+        try:
+            result = self.get('pa_shared_catalogue', [])
+            if not isinstance(result, list) or any(not isinstance(c, dict) or
+                    not {'id', 'contributor', 'term_ids', 'images', 'updated', 'data_kind'} <= c.keys() for c in result):
+                raise ValueError('公共目录缓存无效')
+        except (ValueError, TypeError):
+            self.store._pa_shared_cache_error = '公共目录缓存无法读取，请联网刷新；私密草稿仍可使用。'
+            return []
+        self.store._pa_shared_cache_error = None
+        self.store._pa_shared_catalogue_cache = (stamp, result)
+        return result
 
     def search(self, query='', filters=None, offset=0):
         filters = filters or {}
@@ -191,6 +233,12 @@ class Workspace:
         q = query.casefold().strip()
         terms = set(matching(q)) if q else set()
         user = self.status().get('user', {})
+        personal_error = None
+        try:
+            note_hits = {n['case_id'] for n in self.personal()['notes'] if q and q in n['text'].casefold()} if q and user else set()
+        except ValueError:
+            note_hits = set()
+            personal_error = '个人笔记暂时无法检索，公共案例资料仍可搜索'
         results = []
         for c in self.catalogue():
             if any(value and value.casefold() not in str(c.get(key, '')).casefold()
@@ -205,39 +253,56 @@ class Workspace:
                        if q and q in str(c.get(key, '')).casefold()]
             if terms.intersection(c['term_ids']):
                 reasons.append('Brooks 标准术语')
+            if c['id'] in note_hits:
+                reasons.append('个人研究')
             if q and not reasons:
                 continue
             results.append(dict(c, match_reasons=reasons))
         return dict(cases=results[offset:offset + 100], has_more=len(results) > offset + 100,
-                    next_offset=offset + min(100, max(0, len(results) - offset)))
+                    next_offset=offset + min(100, max(0, len(results) - offset)), personal_error=personal_error)
 
     def case(self, case_id):
         value = next((c for c in self.catalogue() if c['id'] == case_id), None)
         if value is None:
             raise ValueError('公共案例不存在或尚未获得访问权限，请刷新')
-        records = self.personal()
+        try:
+            records = self.personal()
+        except ValueError:
+            return dict(value, notes=[], trials=[], personal_error='个人学习记录暂时无法读取，原图仍可查看；请从个人学习备份恢复。')
         return dict(value, notes=[v for v in records['notes'] if v['case_id'] == case_id],
                     trials=[v for v in records['trials'] if v['case_id'] == case_id])
 
-    def image(self, case_id, image_id, thumbnail=False):
-        case = self.case(case_id)
+    def image(self, case_id, image_id, thumbnail=False, cache_only=False):
+        case = next((c for c in self.catalogue() if c['id'] == case_id), None)
+        if case is None:
+            raise ValueError('公共案例不存在或无权访问')
         image = next((i for i in case['images'] if i['id'] == image_id), None)
         if not image:
             raise ValueError('原图不属于当前公共案例')
         if thumbnail and case.get('cover'):
             image = case['cover']
+        def verify_dimensions(data):
+            if not thumbnail:
+                with Image.open(io.BytesIO(data)) as source:
+                    if (source.width != image['width'] or source.height != image['height']
+                            or Image.MIME.get(source.format) != image['mime']):
+                        raise ValueError('原图尺寸或格式与案例不符，未展示试炼画面')
         path = self.store.root / 'pa_growth' / 'shared_cache' / identifier(image['id'])
         if path.exists():
-            if path.stat().st_size != image['bytes']:
-                raise ValueError('缓存原图校验失败，请刷新后重新下载')
-            data = path.read_bytes()
-            if checksum(data) == image['sha256']:
-                return data
-            raise ValueError('缓存原图校验失败，请刷新后重新下载')
+            if path.stat().st_size == image['bytes']:
+                data = path.read_bytes()
+                if checksum(data) == image['sha256']:
+                    verify_dimensions(data)
+                    return data
+            # Cache is disposable; replace only after a new download passes
+            # the canonical hash. Offline failures leave the old file intact.
+        if cache_only:
+            raise ConnectionError('此图片尚未缓存，请连接后刷新')
         data = self.drive.read(image['id'], MAX_IMAGE_BYTES)
         if len(data) != image['bytes'] or checksum(data) != image['sha256']:
             raise ValueError('云端原图校验失败，已保留原记录')
         image_info(data)
+        verify_dimensions(data)
         atomic_secret(path, data)
         return data
 
@@ -305,17 +370,18 @@ class Workspace:
         user = self.drive.identity()
         raw = self.get('pa_personal:' + identifier(user['id']))
         if raw is None:
-            return dict(owner=user['id'], notes=[], trials=[], topic_notes=[], studied=[])
+            return dict(owner=user['id'], notes=[], trials=[], topic_notes=[], studied=[], visited=[])
         value = json.loads(protect(base64.b64decode(raw, validate=True), True))
         if value['owner'] != user['id']:
             raise ValueError('个人学习记录身份不匹配')
+        value.setdefault('visited', [])
         return value
 
     def record_case(self, case_id):
         return self.case(case_id) if str(case_id).startswith('shared:') else self.store.pa_case(case_id, touch=False)
 
     def record(self, kind, case_id, value):
-        if kind not in ('notes', 'trials', 'topic_notes', 'studied'):
+        if kind not in ('notes', 'trials', 'topic_notes', 'studied', 'visited'):
             raise ValueError('学习记录类型无效')
         user = self.drive.identity()
         if kind == 'topic_notes':
@@ -323,6 +389,8 @@ class Workspace:
         else:
             self.record_case(case_id)
         if kind == 'trials':
+            if not isinstance(value, dict) or set(value) - {'judgment', 'depth', 'details'}:
+                raise ValueError('判断记录包含未知字段')
             case = self.record_case(case_id)
             setup = case.get('trial_setup') if case.get('status') == 'shared' else self.store.pa_trial_setup(case_id)
             if not setup or value.get('details', {}).get('presentation') != setup:
@@ -341,7 +409,7 @@ class Workspace:
                 if (not isinstance(mark, dict) or mark.get('image_id') not in setup['image_ids']
                         or any(type(mark.get(k)) not in (int, float) or not 0 <= mark[k] <= 1 for k in ('x', 'y'))):
                     raise ValueError('判断位置不属于此试炼')
-        elif kind != 'studied' and (not isinstance(value, str) or not value.strip() or len(value) > 20_000):
+        elif kind not in ('studied', 'visited') and (not isinstance(value, str) or not value.strip() or len(value) > 20_000):
             raise ValueError('请填写有效研究记录')
         item = dict(id=uuid.uuid4().hex, created=now(), author='我', case_id=case_id)
         if kind == 'trials':
@@ -357,9 +425,72 @@ class Workspace:
         with self.store.atomic_write():
             records = self.personal()
             records[kind].append(item)
+            if kind == 'visited':
+                records[kind] = records[kind][-100:]
+            if len(encoded(records)) > 20 * 1024 * 1024:
+                raise ValueError('个人学习记录超过本版容量，请先备份联系维护者；原记录已保留')
             raw = protect(encoded(records))
             self.set('pa_personal:' + user['id'], base64.b64encode(raw).decode())
         return item
+
+    def export_learning(self, path):
+        records = self.personal()
+        atomic_secret(Path(path), protect(encoded(records)))
+        return {'saved': True}
+
+    def restore_learning(self, path):
+        path = Path(path)
+        if path.stat().st_size > 24 * 1024 * 1024:
+            raise ValueError('个人学习备份超过上限')
+        value = json.loads(protect(path.read_bytes(), True))
+        user = self.drive.identity()
+        if not isinstance(value, dict) or value.get('owner') != user['id']:
+            raise ValueError('此个人学习备份不属于当前 Google 账号')
+        kinds = ('notes', 'trials', 'topic_notes', 'studied', 'visited')
+        if set(value) - {'owner', *kinds}:
+            raise ValueError('个人学习备份字段无效')
+        for kind in kinds:
+            rows = value.get(kind, [])
+            if not isinstance(rows, list) or len(rows) > 20_000:
+                raise ValueError('个人学习备份记录无效')
+            for row in rows:
+                if (not isinstance(row, dict) or not re.fullmatch(r'[a-f0-9]{32}', row.get('id', ''))
+                        or not isinstance(row.get('created'), str) or len(encoded(row)) > 32_000
+                        or not isinstance(row.get('topic_id' if kind == 'topic_notes' else 'case_id'), str)
+                        or (kind in ('notes', 'topic_notes') and not isinstance(row.get('text'), str))):
+                    raise ValueError('个人学习备份条目无效')
+                if kind == 'trials' and (row.get('judgment') not in ('consider', 'wait', 'pass')
+                                          or row.get('depth') not in ('quick', 'structure', 'deep')
+                                          or not isinstance(row.get('details'), dict)):
+                    raise ValueError('个人判断备份无效')
+        isolated = False
+        with self.store.atomic_write():
+            try:
+                records = self.personal()
+            except ValueError:
+                # Explicit recovery from a validated own-account backup may
+                # replace unreadable active bytes, while retaining them intact.
+                source_key = 'pa_personal:' + user['id']
+                rows = self.store.rows('SELECT value FROM meta WHERE key=?', (source_key,))
+                if rows:
+                    self.store.execute('INSERT INTO meta(key,value) VALUES(?,?)',
+                        ('pa_personal_issue:' + user['id'] + ':' + uuid.uuid4().hex, rows[0]['value']))
+                records = dict(owner=user['id'], **{kind: [] for kind in kinds})
+                isolated = True
+            added = 0
+            for kind in kinds:
+                known = {r['id']: r for r in records[kind]}
+                for row in value.get(kind, []):
+                    if row['id'] in known and known[row['id']] != row:
+                        raise ValueError('个人学习记录身份冲突，已保留原记录')
+                    if row['id'] not in known:
+                        records[kind].append(row)
+                        known[row['id']] = row
+                        added += 1
+            if len(encoded(records)) > 20 * 1024 * 1024:
+                raise ValueError('合并后个人学习记录超过上限，已保留原记录')
+            self.set('pa_personal:' + user['id'], base64.b64encode(protect(encoded(records))).decode())
+        return {'restored': added, 'isolated_unreadable': isolated}
 
 
 def validate_manifest(value, info):
@@ -372,7 +503,7 @@ def validate_manifest(value, info):
             or not isinstance(author.get('name'), str) or len(author['name']) > 300):
         raise ValueError('公共案例贡献身份无法核实')
     identifier(author['id'])
-    selected(value.get('term_ids'), required=True)
+    terms = selected(value.get('term_ids'), required=True)
     meta = metadata({k: value[k] for k in ('title', 'memory', 'keywords', 'tags', 'symbol', 'timeframe', 'market', 'data_kind')})
     images = value.get('images')
     if not isinstance(images, list) or not 1 <= len(images) <= 100:
@@ -386,6 +517,7 @@ def validate_manifest(value, info):
         if type(image['bytes']) is not int or not 0 < image['bytes'] <= MAX_IMAGE_BYTES:
             raise ValueError('公共案例图片容量无效')
         if (type(image.get('width')) is not int or type(image.get('height')) is not int
+                or image['width'] <= 0 or image['height'] <= 0
                 or not 0 < image['width'] * image['height'] <= 50_000_000
                 or image.get('mime') not in ('image/png', 'image/jpeg', 'image/webp')
                 or not isinstance(image.get('name'), str) or len(image['name']) > 500):
@@ -403,13 +535,17 @@ def validate_manifest(value, info):
     setup = value.get('trial_setup')
     if setup is not None:
         setup = validate_trial(setup, ids)
-    return dict(meta, id='shared:' + identifier(info['id']), global_id=value['uuid'], contributor=author,
-                term_ids=value['term_ids'], topic_ids=value['term_ids'], created=value['created'], updated=value['updated'],
-                images=images, image_count=len(images), cover=cover, trial_setup=setup, status='shared')
+    clean_images = [{k: image[k] for k in ('id', 'name', 'sha256', 'mime', 'width', 'height', 'bytes')} for image in images]
+    return dict(meta, id='shared:' + identifier(info['id']), global_id=value['uuid'],
+                contributor={'id': author['id'], 'name': author['name']},
+                term_ids=terms, topic_ids=terms, created=value['created'], updated=value['updated'],
+                images=clean_images, image_count=len(images), cover={k: cover[k] for k in ('id', 'bytes', 'sha256')}, trial_setup=setup, status='shared',
+                cloud_md5=info.get('md5Checksum'))
 
 
 def dispatch(store, operation, *args, drive=None):
-    workspace = Workspace(store, drive or GoogleDrive())
-    if operation not in ('status', 'refresh', 'catalogue', 'search', 'case', 'image', 'publish', 'personal', 'record'):
+    workspace = Workspace(store, drive or GoogleDrive(profile=store.root))
+    if operation not in ('status', 'refresh', 'catalogue', 'search', 'case', 'image', 'publish', 'personal', 'record',
+                         'export_learning', 'restore_learning'):
         raise ValueError('未知共享操作')
     return getattr(workspace, operation)(*args)

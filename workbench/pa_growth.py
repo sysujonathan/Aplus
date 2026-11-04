@@ -137,7 +137,7 @@ def _decode(row):
 def case_metadata(store):
     """Statistics/labels need no image catalogue or original image reads."""
     owner = _owner(store)
-    rows = store.rows("SELECT id,title,memory,symbol,topic_ids,data_kind,created,updated FROM pa_cases "
+    rows = store.rows("SELECT id,title,memory,symbol,topic_ids,data_kind FROM pa_cases "
                       "WHERE owner=? AND status='private_draft'", (owner,))
     return [_decode(row) for row in rows]
 

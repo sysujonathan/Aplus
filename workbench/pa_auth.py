@@ -89,8 +89,9 @@ def atomic_secret(path, data):
 
 
 class GoogleSession:
-    def __init__(self):
-        self.path = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'Aplus' / 'PA-Google' / 'session.dpapi'
+    def __init__(self, profile=None):
+        profile_id = hashlib.sha256(os.path.normcase(str(Path(profile).resolve()) if profile else 'default').encode()).hexdigest()[:24]
+        self.path = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'Aplus' / 'PA-Google' / profile_id / 'session.dpapi'
         self.value = None
 
     def load(self):
@@ -113,9 +114,14 @@ class GoogleSession:
         if not value:
             raise ValueError('请先连接 Google Drive')
         if value.get('expires', 0) < time.time() + 60:
-            raw, _ = request('https://oauth2.googleapis.com/token', data=urlencode({
-                'client_id': value['client_id'], 'client_secret': value['client_secret'],
-                'refresh_token': value['refresh_token'], 'grant_type': 'refresh_token'}).encode())
+            try:
+                raw, _ = request('https://oauth2.googleapis.com/token', data=urlencode({
+                    'client_id': value['client_id'], 'client_secret': value['client_secret'],
+                    'refresh_token': value['refresh_token'], 'grant_type': 'refresh_token'}).encode())
+            except DriveError as exc:
+                if exc.status in (400, 401):
+                    raise DriveError(401) from None
+                raise
             token = json.loads(raw)
             value = dict(value, access_token=token['access_token'], expires=time.time() + token['expires_in'])
             self.save(value)
@@ -131,6 +137,13 @@ class GoogleSession:
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
         outcome = {}
+        class CallbackServer(HTTPServer):
+            def get_request(self):
+                connection, address = super().get_request()
+                # An unrelated loopback connection must not hold the consent
+                # thread forever without sending an HTTP request.
+                connection.settimeout(2)
+                return connection, address
         class Callback(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
@@ -145,7 +158,7 @@ class GoogleSession:
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.end_headers()
                 self.wfile.write('授权已返回 Aplus，可以关闭此页。'.encode())
-        with HTTPServer(('127.0.0.1', 0), Callback) as server:
+        with CallbackServer(('127.0.0.1', 0), Callback) as server:
             server.timeout = 1
             redirect = f'http://127.0.0.1:{server.server_port}/callback'
             url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urlencode({

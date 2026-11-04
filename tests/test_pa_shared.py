@@ -203,3 +203,166 @@ def test_dpapi_roundtrip_and_no_plaintext():
     assert protect(encrypted, True) == raw
     with pytest.raises(ValueError):
         protect(encrypted[:-10], True)
+
+
+def test_cache_rebuild_revoke_and_private_note_search(tmp_path):
+    cloud = Cloud()
+    store = Store(tmp_path)
+    w = Workspace(store, Drive(cloud, 'a'))
+    c, original = make_case(store)
+    public_id = w.publish(c['id'])['case_id']
+    w.refresh()
+    public = w.case(public_id)
+    image_id = public['images'][0]['id']
+    assert w.image(public_id, image_id) == original
+    cover = w.image(public_id, image_id, True)
+    path = store.root / 'pa_growth/shared_cache' / image_id
+    path.write_bytes(b'invalid cache')
+    cloud.offline = True
+    assert w.image(public_id, image_id, True, True) == cover
+    with pytest.raises(ConnectionError):
+        w.image(public_id, image_id)
+    assert path.read_bytes() == b'invalid cache'
+    cloud.offline = False
+    assert w.image(public_id, image_id) == original
+    assert path.read_bytes() == original
+    w.record('notes', public_id, '专属笔记关键词')
+    assert w.search('专属笔记关键词')['cases'][0]['match_reasons'] == ['个人研究']
+    w.drive = Drive(cloud, 'b')
+    w.refresh()
+    assert not w.search('专属笔记关键词')['cases']
+    def denied(online=False):
+        if online:
+            raise DriveError(401)
+        return {'id': 'b', 'name': 'B'}
+    w.drive.identity = denied
+    with pytest.raises(DriveError):
+        w.refresh()
+    assert not w.catalogue()
+    assert store.pa_case(c['id'])['images']
+
+
+def test_learning_backup_is_encrypted_identity_checked_and_merges_without_loss(tmp_path):
+    cloud = Cloud()
+    store = Store(tmp_path / 'a')
+    w = Workspace(store, Drive(cloud, 'a'))
+    c, _ = make_case(store)
+    public = w.publish(c['id'])['case_id']
+    w.refresh()
+    note = w.record('notes', public, '只属于 A 的学习备份')
+    path = tmp_path / 'learning.palearn'
+    assert w.export_learning(path)['saved']
+    assert '只属于 A'.encode() not in path.read_bytes()
+    other = Workspace(Store(tmp_path / 'b'), Drive(cloud, 'b'))
+    with pytest.raises(ValueError, match='不属于'):
+        other.restore_learning(path)
+    assert not other.personal()['notes']
+    restored = Workspace(Store(tmp_path / 'new-a'), Drive(cloud, 'a'))
+    assert restored.restore_learning(path)['restored'] == 1
+    assert restored.personal()['notes'] == [note]
+    assert restored.restore_learning(path)['restored'] == 0
+    corrupt = tmp_path / 'bad.palearn'
+    corrupt.write_bytes(path.read_bytes()[:-10])
+    with pytest.raises(ValueError):
+        restored.restore_learning(corrupt)
+    assert restored.personal()['notes'] == [note]
+    restored.store.execute('UPDATE meta SET value=? WHERE key=?', ('"broken ciphertext"', 'pa_personal:a'))
+    restored.refresh()
+    assert restored.case(public)['personal_error']
+    assert restored.search('ETHUSD')['cases']
+    before = restored.store.rows("SELECT value FROM meta WHERE key='pa_personal:a'")[0]['value']
+    with pytest.raises(ValueError):
+        restored.record('notes', public, '不能覆盖损坏记录')
+    assert restored.store.rows("SELECT value FROM meta WHERE key='pa_personal:a'")[0]['value'] == before
+    assert restored.restore_learning(path)['isolated_unreadable']
+    assert restored.personal()['notes'] == [note]
+    assert restored.store.rows("SELECT value FROM meta WHERE key LIKE 'pa_personal_issue:a:%'")[0]['value'] == before
+
+
+def test_incremental_discovery_and_rebuilding_invalid_catalogue(tmp_path):
+    import hashlib
+    class RevisionDrive(Drive):
+        reads = 0
+        def info(self, file_id):
+            info = super().info(file_id)
+            return dict(info, md5Checksum=hashlib.md5(self.cloud.files[file_id]['data']).hexdigest())
+        def list_cases(self):
+            return [self.info(row['id']) for row in super().list_cases()]
+        def read(self, *args):
+            self.reads += 1
+            return super().read(*args)
+    cloud = Cloud()
+    store = Store(tmp_path)
+    drive = RevisionDrive(cloud, 'a')
+    w = Workspace(store, drive)
+    case, _ = make_case(store)
+    public_id = w.publish(case['id'])['case_id']
+    w.refresh()
+    drive.reads = 0
+    w.refresh()
+    assert drive.reads == 0, 'unchanged immutable manifests do not redownload'
+    store.execute('UPDATE meta SET value=? WHERE key=?', ('{broken cache', 'pa_shared_catalogue'))
+    restarted = Workspace(Store(tmp_path), drive)
+    assert restarted.catalogue() == []
+    assert restarted.status()['cache_error']
+    assert restarted.refresh()['count'] == 1
+    assert restarted.case(public_id)['id'] == public_id
+    assert not restarted.status()['cache_error']
+    file_id = public_id.split(':')[1]
+    cloud.files[file_id]['data'] += b' '
+    with pytest.raises(ValueError, match='被修改'):
+        restarted.refresh()
+    assert restarted.catalogue()[0]['id'] == public_id
+
+
+def test_manifest_cannot_inject_preview_bytes_or_misstate_trial_dimensions(tmp_path):
+    cloud = Cloud()
+    store = Store(tmp_path)
+    w = Workspace(store, Drive(cloud, 'a'))
+    c, _ = make_case(store)
+    public_id = w.publish(c['id'])['case_id']
+    manifest = cloud.files[public_id.split(':')[1]]
+    value = json.loads(manifest['data'])
+    value['images'][0]['data_url'] = 'data:image/png;base64,ZmFrZQ=='
+    value['images'][0]['width'] = 6000
+    manifest['data'] = json.dumps(value).encode()
+    w.refresh()
+    public = w.case(public_id)
+    assert 'data_url' not in public['images'][0]
+    with pytest.raises(ValueError, match='尺寸或格式'):
+        w.image(public_id, public['images'][0]['id'])
+    setup = public['trial_setup']
+    with pytest.raises(ValueError, match='未知字段'):
+        w.record('trials', public_id, dict(id='forged', judgment='wait', depth='quick', details={'presentation': setup}))
+    assert not w.personal()['trials']
+
+
+def test_cold_shared_thumbnails_do_not_block_search_or_private_save(tmp_path):
+    store = Store(tmp_path)
+    cloud = Cloud()
+    bridge = GrowthBridge(store)
+    bridge._drive = Drive(cloud, 'a')
+    c, _ = make_case(store)
+    public_id = bridge.publish_case(c['id'])['case_id']
+    bridge.refresh_shared()
+    public = bridge._public('case', public_id)
+    entered, release = threading.Event(), threading.Event()
+    read = bridge._drive.read
+    def slow(*args):
+        entered.set()
+        assert release.wait(10)
+        return read(*args)
+    bridge._drive.read = slow
+    # Metadata search neither downloads thumbnails nor waits for their I/O.
+    assert bridge.search_cases('ETH', {'scope': 'public'})['cases'][0]['thumbnail_pending']
+    with ThreadPoolExecutor(2) as pool:
+        image = pool.submit(bridge.get_image, public_id, public['images'][0]['id'], True)
+        assert entered.wait(3)
+        try:
+            staging = pool.submit(bridge._stage, [dict(name='another.png', data=make_case(Store(tmp_path / 'source'), 'pink')[1])])
+            pending = staging.result(timeout=3)['pending'][0]['token']
+            saved = pool.submit(bridge.save_capture, [pending], {}, {})
+            assert saved.result(timeout=3)['ok']
+        finally:
+            release.set()
+        assert image.result(timeout=3)['ok']
