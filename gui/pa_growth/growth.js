@@ -26,7 +26,7 @@
   const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.image}</svg>`;
   const navItems = [['home','首页'],['trial','PA 交易试炼'],['library','案例研究'],['universe','知识宇宙'],['growth','个人成长']];
   const S = {
-    ready:false, page:'home', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
+    terms:[], graph:{nodes:[],edges:[]}, scope:'public', ready:false, page:'home', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
     query:'', filters:{symbol:'',timeframe:'',market:'',data_kind:''}, filterOpen:false,
     searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, hasMore:false, case:null, imageIndex:0,
     studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
@@ -78,7 +78,7 @@
   function thumbOf(c) {
     return imageUrl({data_url:c?.thumbnail_data_url || c?.thumbnail || c?.image_data_url}) || imageUrl(imageOf(c));
   }
-  function topicName(id) { return S.topics.find(topic => topic.id === id)?.name || id; }
+  function topicName(id) { return S.terms.find(t => t.id===id)?.name || S.topics.find(topic => topic.id === id)?.name || id; }
   function imageTarget() {
     const c = S.original?.case || (S.page === 'study' ? S.case : S.page === 'trial' ? S.trialCase : null);
     const index = S.original ? S.original.index : S.imageIndex;
@@ -155,7 +155,7 @@
   async function boot() {
     try {
       const data = await api('bootstrap');
-      S.boot = data; S.atlasCases = data.atlas_cases || [];
+      S.terms = data.terms || S.terms; S.graph = data.graph || S.graph; S.boot = data; S.atlasCases = data.atlas_cases || [];
       S.cases = data.cases || [];
       S.hasMore = data.has_more === true;
       S.topics = data.topics || [];
@@ -175,7 +175,7 @@
   }
   async function refreshData() {
     const data = await api('bootstrap');
-    S.boot = data; S.atlasCases = data.atlas_cases || [];
+    S.terms = data.terms || S.terms; S.graph = data.graph || S.graph; S.boot = data; S.atlasCases = data.atlas_cases || [];
     S.stats = data.stats || {};
     S.topics = data.topics || S.topics;
     S.trials = data.trials || [];
@@ -297,30 +297,12 @@
     return `<div class="section-head"><h2>我的判断记录</h2></div><div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}</p><small>${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>`;
   }
   function universe() {
-    const visible = S.topics.filter(t => Number(t.case_count) > 0);
-    const parent = visible.find(t => t.id === S.topicParent);
-    const selected = visible.find(t => t.id === S.topicId);
-    const nodes = visible.filter(t => (t.parent_id || null) === (parent?.id || null));
-    const raw = S.atlasCases || [];
-    const loose = parent ? [] : raw.filter(c => !(c.topic_ids || []).length);
-    const positioned = nodes.map((node,i) => {
-      const a = -Math.PI/2 + i * Math.PI * 2 / Math.max(nodes.length,1);
-      return {node,x:500+Math.cos(a)*295,y:420+Math.sin(a)*210};
-    });
-    const stars = loose.map((c,i) => {
-      const a = i * 2.39996 - .8, r = 105 + Math.sqrt(i)*42;
-      return {c,x:500+Math.cos(a)*r,y:420+Math.sin(a)*r*.65};
-    });
-    const empty = !raw.length;
-    const dust = Array.from({length:75},(_,i)=>`<circle cx="${(i*317+71)%1000}" cy="${(i*173+83)%800}" r="${i%4===0?1.2:.6}" fill="#a9c7e8" opacity="${.08+(i%5)*.035}"/>`).join('');
-    const orbits = (x,y,r=1) => `<g transform="translate(${x} ${y}) rotate(-18)">${[1,1.6,2.2].map(k=>`<ellipse rx="${94*k*r}" ry="${53*k*r}" class="galaxy-orbit"/>`).join('')}</g>`;
-    const relations = positioned.map(({x,y})=>`<line class="relationship" x1="500" y1="420" x2="${x}" y2="${y}"/>`).join('');
-    const galaxy = positioned.map(({node,x,y})=>`${node.parent_id?'':orbits(x,y,.65)}<g class="topic-node ${S.topicId===node.id?'selected':''}" data-action="select-topic" data-id="${esc(node.id)}" role="button" tabindex="0" aria-label="${esc(node.name)}"><circle class="galaxy-glow" cx="${x}" cy="${y}" r="${node.parent_id?25:58}"/><circle class="node-core" cx="${x}" cy="${y}" r="${node.parent_id?4:24}"/><text x="${x}" y="${y+(node.parent_id?22:5)}">${esc(node.name)}</text><text class="node-count" x="${x}" y="${y+42}">${node.case_count} 个案例</text></g>`).join('');
-    const singles = stars.map(({c,x,y})=>`<g class="case-star" data-action="study-open" data-id="${esc(c.id)}" role="button" tabindex="0" aria-label="${esc(caseTitle(c))}"><circle cx="${x}" cy="${y}" r="17" fill="transparent"/><circle cx="${x}" cy="${y}" r="3.5" fill="#c1d7f6"/><text x="${x}" y="${y+21}">${esc(caseTitle(c).slice(0,18))}</text></g>`).join('');
-    const core = `<g class="universe-core">${parent?orbits(500,420,1.4):''}<circle class="galaxy-glow" cx="500" cy="420" r="${parent?80:25}"/><circle class="${parent?'galaxy-nucleus':'origin-point'}" cx="500" cy="420" r="${parent?52:3}"/>${parent?`<text x="500" y="425">${esc(parent.name)}</text>`:''}</g>`;
-    const view = S.atlasView;
-    const mini = [...positioned.map(n=>({x:n.x,y:n.y})),...stars].map(n=>`<circle cx="${n.x}" cy="${n.y}" r="10"/>`).join('');
-    return `<section class="universe-page"><div class="universe-top"><span class="eyebrow">KNOWLEDGE UNIVERSE</span><h1>PA 知识宇宙</h1><div class="universe-breadcrumbs"><button data-action="universe-root">全部宇宙</button>${parent?`<span>／</span><button data-action="universe-back">${esc(parent.name)} · 返回上层</button>`:''}</div></div><div class="universe-stage"><svg id="atlas-map" viewBox="0 0 1000 800" role="group" aria-label="可拖动缩放的个人知识宇宙">${empty?'':dust}<g id="atlas-world" transform="translate(${view.x} ${view.y}) translate(500 400) scale(${view.zoom}) translate(-500 -400)">${relations}${core}${galaxy}${singles}</g></svg></div><div class="atlas-hud">${empty?'':`${raw.length} 个案例 · ${visible.length} 个已关联主题`}</div><div class="atlas-tools"><button class="btn small" data-action="atlas-reset">定位</button><button class="btn small" data-action="atlas-out" aria-label="缩小星图">−</button><button class="btn small" data-action="atlas-in" aria-label="放大星图">＋</button></div><svg class="atlas-mini" viewBox="0 0 1000 800" aria-label="当前星图概览">${mini}<rect id="atlas-viewport" x="${500-500/view.zoom-view.x/view.zoom}" y="${400-400/view.zoom-view.y/view.zoom}" width="${1000/view.zoom}" height="${800/view.zoom}"/></svg><aside class="universe-inspector"><div class="atlas-emblem">${icon('universe')}</div><span class="eyebrow">${selected||parent?'知识星系':'我的宇宙'}</span><h2>${esc(selected?.name || parent?.name || (empty?'起点':'案例星图'))}</h2>${empty?'<p class="universe-empty">从一个案例开始。</p><button class="btn primary" data-action="import">收录截图</button>':!selected&&!parent?'<p class="universe-empty">选择星点查看案例，或进入已形成的星系。</p>':''}${selected&&selected.id!==parent?.id&&visible.some(t=>t.parent_id===selected.id)?`<button class="btn primary" data-action="universe-enter" data-id="${esc(selected.id)}">深入${esc(selected.name)} ${icon('arrow')}</button>`:''}<div class="topic-case-list">${S.topicLoading?'<span>正在查找案例…</span>':S.topicCases.slice(0,10).map(c=>`<button class="topic-case" data-action="study-open" data-id="${esc(c.id)}">${thumbOf(c)?`<img src="${esc(thumbOf(c))}" alt="">`:''}<span>${esc(caseTitle(c))}</span></button>`).join('')}</div>${selected?`<div class="topic-note-entry"><div class="rule"></div><label class="field-label" for="topic-note">个人研究</label><textarea id="topic-note" class="field" data-draft="topic-note:${esc(S.topicId)}" placeholder="留下新的认识">${esc(S.draftText['topic-note:'+S.topicId]||'')}</textarea><div class="form-actions"><button class="btn small" data-action="save-topic-note">保存记录</button></div></div>`:''}</aside></section>`;
+    const graph=S.graph||{nodes:[],edges:[]}, nodes=graph.nodes||[], selected=nodes.find(n=>n.id===S.topicId);
+    const positions=new Map(nodes.map((n,i)=>{const a=i*2.39996,r=90+Math.sqrt(i)*66;return [n.id,{x:500+Math.cos(a)*r,y:415+Math.sin(a)*r*.8}];}));
+    const lines=(graph.edges||[]).map(e=>{const a=positions.get(e.source),b=positions.get(e.target);return a&&b?`<line class="cooccurrence" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${Math.min(3,.5+Math.log2(e.count+1)*.4)}"><title>${e.count} shared cases</title></line>`:'';}).join('');
+    const dots=nodes.map(n=>{const p=positions.get(n.id),r=5+Math.min(13,Math.sqrt(n.case_count)*2);return `<g class="term-node ${selected?.id===n.id?'selected':''}" data-action="select-topic" data-id="${esc(n.id)}" role="button" tabindex="0" aria-label="${esc(n.name)}"><circle cx="${p.x}" cy="${p.y}" r="${r+10}" fill="transparent"/><circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${n.color}"/><text x="${p.x}" y="${p.y+r+19}">${esc(n.name)} · ${n.case_count}</text></g>`;}).join('');
+    const v=S.atlasView;
+    return `<section class="universe-page graph-page"><div class="universe-top"><span class="eyebrow">KNOWLEDGE GRAPH</span><h1>知识宇宙</h1><span class="micro">公共案例 · ${nodes.length} terms</span></div><div class="universe-stage"><svg id="atlas-map" viewBox="0 0 1000 800" role="group" aria-label="共享知识图谱"><g id="atlas-world" transform="translate(${v.x} ${v.y}) translate(500 400) scale(${v.zoom}) translate(-500 -400)">${lines}${dots}${nodes.length?'':'<circle class="origin-point" cx="500" cy="415" r="3"/>'}</g></svg></div><div class="atlas-tools"><button class="btn small" data-action="atlas-reset">定位</button><button class="btn small" data-action="atlas-out" aria-label="缩小图谱">−</button><button class="btn small" data-action="atlas-in" aria-label="放大图谱">＋</button></div><aside class="universe-inspector"><span class="eyebrow">SHARED CASES</span><h2>${esc(selected?.name||'知识关联')}</h2>${!nodes.length?'<p class="micro">还没有带标准术语的公共案例。</p>':!selected?'<p class="micro">选择术语，查看相关案例。</p>':''}<div class="topic-case-list">${S.topicLoading?'正在查找…':S.topicCases.map(c=>`<button class="topic-case" data-action="study-open" data-id="${esc(c.id)}">${thumbOf(c)?`<img src="${esc(thumbOf(c))}" alt="">`:''}<span>${esc(caseTitle(c))}</span></button>`).join('')}</div>${selected?`<div class="topic-note-entry"><div class="rule"></div><label class="field-label" for="topic-note">个人研究</label><textarea id="topic-note" class="field" data-draft="topic-note:${esc(S.topicId)}">${esc(S.draftText['topic-note:'+S.topicId]||'')}</textarea><button class="btn small" data-action="save-topic-note">保存记录</button></div>`:''}</aside></section>`;
   }
   function atlasZoom(factor) {
     S.atlasView.zoom=Math.min(2.5,Math.max(.55,S.atlasView.zoom*factor));
@@ -474,16 +456,19 @@
     result.topic_ids = $$('[data-topic-select]:checked',form).map(field => field.dataset.topicSelect);
     return result;
   }
+  function termPicker(metadata) {
+    return `<label class="field-label">Brooks terms</label><input class="field" data-term-search placeholder="Search · H2, Breakout…" aria-label="Search Brooks terms"><div class="term-picker">${S.terms.map(t=>`<label data-term-option data-match="${esc([t.name,...t.aliases].join(' ').toLowerCase())}"><input type="checkbox" data-topic-select="${esc(t.id)}" ${(metadata.topic_ids||[]).includes(t.id)?'checked':''}><i style="background:${t.color}"></i>${esc(t.name)}</label>`).join('')}</div>`;
+  }
   function metadataForm(metadata = {}, id = 'capture-form') {
     const keywords = Array.isArray(metadata.keywords) ? metadata.keywords.join('，') : metadata.keywords || '';
     const tags = Array.isArray(metadata.tags) ? metadata.tags.join('，') : metadata.tags || '';
-    return `<div id="${id}" class="capture-form"><label class="field-label" for="${id}-memory">一句记忆（可选）</label><textarea id="${id}-memory" class="field" data-meta="memory" placeholder="当时最想记住什么？">${esc(metadata.memory || '')}</textarea><label class="field-label" for="${id}-keywords">关键词（可选）</label><input id="${id}-keywords" class="field" data-meta="keywords" value="${esc(keywords)}" placeholder="如 microDB，ETHUSD，锦和商业"><details class="advanced-fields"><summary>补充资料</summary><label class="field-label" for="${id}-title">标题</label><input id="${id}-title" class="field" data-meta="title" value="${esc(metadata.title || '')}"><div class="metadata-grid" style="margin-top:13px"><label class="field-label">品种<input class="field" data-meta="symbol" value="${esc(metadata.symbol || '')}" placeholder="代码或名称"></label><label class="field-label">周期<input class="field" data-meta="timeframe" value="${esc(metadata.timeframe || '')}" placeholder="如 日线、5m"></label><label class="field-label">市场<input class="field" data-meta="market" value="${esc(metadata.market || '')}" placeholder="如 A股、加密"></label><label class="field-label">资料来源<select class="field" data-meta="data_kind"><option value="imported" ${metadata.data_kind !== 'test' ? 'selected' : ''}>个人导入</option><option value="test" ${metadata.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label></div><label class="field-label">已确认的 PA 标签</label><input class="field" data-meta="tags" value="${esc(tags)}" placeholder="多个标签用逗号分隔"><label class="field-label">关联知识主题</label><div class="topic-selector">${S.topics.filter(topic => topic.parent_id).map(topic => `<label><input type="checkbox" data-topic-select="${esc(topic.id)}" ${(metadata.topic_ids || []).includes(topic.id) ? 'checked' : ''}>${esc(topic.name)}</label>`).join('')}</div></details></div>`;
+    return `<div id="${id}" class="capture-form">${termPicker(metadata)}<label class="field-label" for="${id}-memory">一句记忆（可选）</label><textarea id="${id}-memory" class="field" data-meta="memory" placeholder="当时最想记住什么？">${esc(metadata.memory || '')}</textarea><label class="field-label" for="${id}-keywords">关键词（可选）</label><input id="${id}-keywords" class="field" data-meta="keywords" value="${esc(keywords)}" placeholder="如 microDB，ETHUSD，锦和商业"><details class="advanced-fields"><summary>补充资料</summary><label class="field-label" for="${id}-title">标题</label><input id="${id}-title" class="field" data-meta="title" value="${esc(metadata.title || '')}"><div class="metadata-grid" style="margin-top:13px"><label class="field-label">品种<input class="field" data-meta="symbol" value="${esc(metadata.symbol || '')}" placeholder="代码或名称"></label><label class="field-label">周期<input class="field" data-meta="timeframe" value="${esc(metadata.timeframe || '')}" placeholder="如 日线、5m"></label><label class="field-label">市场<input class="field" data-meta="market" value="${esc(metadata.market || '')}" placeholder="如 A股、加密"></label><label class="field-label">资料来源<select class="field" data-meta="data_kind"><option value="imported" ${metadata.data_kind !== 'test' ? 'selected' : ''}>个人导入</option><option value="test" ${metadata.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label></div><label class="field-label">已确认的 PA 标签</label><input class="field" data-meta="tags" value="${esc(tags)}" placeholder="多个标签用逗号分隔"><label class="field-label">关联知识主题</label><div class="topic-selector">${S.topics.filter(topic => topic.parent_id && (metadata.topic_ids || []).includes(topic.id)).map(topic => `<label><input type="checkbox" data-topic-select="${esc(topic.id)}" ${(metadata.topic_ids || []).includes(topic.id) ? 'checked' : ''}>${esc(topic.name)}</label>`).join('')}</div></details></div>`;
   }
   function renderCapture() {
     const hasDuplicates = S.pending.some(p => p.duplicate_cases?.length);
     const append = !!S.captureCaseId;
     const body = `<div class="save-error">${esc(S.captureError)}</div><div class="capture-layout"><div><div class="pending-list">${S.pending.map((pending,index) => `<div class="pending-photo"><img src="${esc(imageUrl(pending))}" alt="待保存截图 ${index + 1}"><div><span>${esc(pending.name || `截图 ${index + 1}`)}</span><span>未保存</span></div>${pending.duplicate_cases?.length ? `<p>已收录过相同图片：${esc(pending.duplicate_cases.map(c => typeof c === 'string' ? c : caseTitle(c)).join('、'))}</p>` : ''}</div>`).join('')}</div><div class="button-group" style="margin-top:11px"><button class="btn small" data-action="import">${icon('plus')} 继续导入</button><button class="btn ghost small" data-action="paste">${icon('paste')} 粘贴</button></div></div><div>${append ? `<div class="memory">追加到 · ${esc(caseTitle(S.case))}<br>新图保存后会与原图并列保留。</div>` : metadataForm(S.captureMetadata)}${!append && S.pending.length > 1 ? `<div class="grouping"><label><input type="radio" name="capture-grouping" ${!S.captureGroup ? 'checked' : ''}>每张图保存为独立案例</label><label><input id="capture-group" type="radio" name="capture-grouping" ${S.captureGroup ? 'checked' : ''}>组成同一个研究案例</label></div>` : ''}${hasDuplicates ? `<div class="alert-line">图片重复。原有案例会保留。</div><label class="field-label row"><input id="capture-duplicate" type="checkbox" ${S.duplicateAllowed ? 'checked' : ''}>我知道图片重复，仍${append ? '追加原图' : '保存新案例'}</label>` : ''}</div></div>`;
-    const foot = `<span class="micro">${icon('lock')} 本机私密草稿 · ${S.pending.length} 张待保存</span><div class="button-group"><button class="btn ghost" data-action="close-overlay">取消</button><button id="capture-save" class="btn primary" data-action="save-capture" ${S.saving ? 'disabled' : ''}>${S.saving ? '正在保存…' : append ? '保存追加图片' : '保存案例'}</button></div>`;
+    const foot = `<span class="micro">${icon('lock')} 本机私密草稿 · ${S.pending.length} 张待保存</span><div class="button-group"><button class="btn ghost" data-action="close-overlay">取消</button>${!append?'<button class="btn" data-action="save-draft">存草稿</button>':''}<button id="capture-save" class="btn primary" data-action="save-capture" ${S.saving ? 'disabled' : ''}>${S.saving ? '正在保存…' : append ? '保存追加图片' : '保存案例'}</button></div>`;
     overlayHTML(dialog(append ? '追加图片' : '收录截图',body,foot,true),'capture');
     if (!append && !S.captureMetadata.memory) setTimeout(() => $('#capture-form-memory')?.focus(),0);
   }
@@ -523,7 +508,7 @@
     if (values.length) return queuePending(() => api('stage_images',values,S.captureCaseId));
     } finally { S.staging--; }
   }
-  async function saveCapture() {
+  async function saveCapture(formal = false) {
     if (S.saving || !S.pending.length) return;
     captureMetadata();
     if (S.pending.some(p => p.duplicate_cases?.length) && !S.duplicateAllowed) {
@@ -533,7 +518,7 @@
     S.saving++; renderCapture();
     let committed = false;
     try {
-      const result = await api('save_capture',tokens,S.captureMetadata,{allow_duplicates:S.duplicateAllowed,case_id:S.captureCaseId,group:S.captureGroup});
+      const result = await api('save_capture',tokens,S.captureMetadata,{allow_duplicates:S.duplicateAllowed,case_id:S.captureCaseId,group:S.captureGroup,formal:formal&&!S.captureCaseId});
       if (result.duplicates?.length && !result.cases?.length) {
         S.captureError = '发现重复图片。请确认仍要保存。';
         S.pending[0].duplicate_cases = result.duplicates;
@@ -796,7 +781,8 @@
       case 'import': return importFiles();
       case 'paste': return pasteNative();
       case 'append-images': S.captureCaseId = S.case.id; S.captureMetadata = {}; await importFiles(); if (!S.pending.length) S.captureCaseId = null; return;
-      case 'save-capture': return saveCapture();
+      case 'save-capture': return saveCapture(true);
+      case 'save-draft': return saveCapture(false);
       case 'capture-separate': S.captureGroup = false; break;
       case 'close-overlay': return closeOverlay();
       case 'edit-case': return editCase();
@@ -860,6 +846,7 @@
   });
   document.addEventListener('input', event => {
     const target = event.target;
+    if (target.hasAttribute('data-term-search')) {const q=target.value.toLowerCase().replace(/\s/g,'');$$('[data-term-option]',target.parentElement).forEach(n=>{n.hidden=!n.dataset.match.replace(/\s/g,'').includes(q);});}
     if (target.id === 'search-input') { S.query = target.value; scheduleSearch(); }
     if (target.id === 'home-search') { S.query = target.value; scheduleSearch(); }
     if (target.dataset.filter) { S.filters[target.dataset.filter] = target.value; scheduleSearch(); }

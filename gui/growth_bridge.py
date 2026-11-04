@@ -11,6 +11,7 @@ import threading
 import uuid
 
 from PIL import Image, ImageGrab
+from workbench.pa_terms import TERMS, IDS as TERM_IDS, graph, selected
 
 
 TOPICS = [
@@ -204,7 +205,7 @@ class GrowthBridge:
         growth['recent_case_id'] = (growth.get('recent') or [{}])[0].get('id')
         growth['recent_case'] = (growth.get('recent') or [None])[0]
         cases = self._store.pa_search(limit=101)
-        return dict(cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
+        return dict(terms=list(TERMS), graph=graph(metadata), cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
                     next_offset=min(100, len(cases)), topics=self._topics(metadata),
                     context=self._context, **growth)
 
@@ -344,6 +345,8 @@ class GrowthBridge:
     @guarded
     def save_capture(self, tokens, metadata=None, options=None):
         options = options or {}
+        if options.get('formal'):
+            selected([i for i in (metadata or {}).get('topic_ids', []) if i in TERM_IDS], required=True)
         if not tokens or any(token not in self._pending for token in tokens):
             raise ValueError('待保存图片已失效，请重新导入')
         images = [self._pending[token] for token in tokens]
@@ -404,7 +407,7 @@ class GrowthBridge:
 
     @guarded
     def add_topic_note(self, topic_id, text):
-        if topic_id not in {item[0] for item in TOPICS}:
+        if topic_id not in {item[0] for item in TOPICS} | TERM_IDS:
             raise ValueError('知识主题不存在')
         return {'note': self._store.pa_topic_note(topic_id, text)}
 
