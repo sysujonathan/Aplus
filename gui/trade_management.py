@@ -1800,6 +1800,15 @@ class _IdentityDialog(_BaseDialog):
         self.name = self.entry(0, "名称", name, column=1)
         self.form.grid_slaves(row=0, column=1)[0].bind("<FocusOut>", lambda _e: self._resolve_code())
         self.form.grid_slaves(row=0, column=3)[0].bind("<FocusOut>", lambda _e: self._resolve_name())
+        from .security_name_lookup import SecurityNameLookup
+        self._name_status = tk.StringVar(value='名称')
+        self.form.grid_slaves(row=0, column=2)[0].configure(textvariable=self._name_status)
+        self._name_lookup = SecurityNameLookup(self.top, self.code, self.name, self.names,
+            self._name_status, on_resolved=self._remember_security_name)
+
+    def _remember_security_name(self, code, name):
+        self.lookup = StockNameLookup(self.names)
+        self.by_name.setdefault(name, code)
 
     def _resolve_code(self):
         text = self.code.get().strip()
@@ -1810,7 +1819,9 @@ class _IdentityDialog(_BaseDialog):
         except ValueError:
             return None
         self.code.set(numeric_stock_code(full))
-        if self.names.get(full):
+        if getattr(self, '_name_lookup', None):
+            self._name_lookup.request(full)
+        elif self.names.get(full):
             self.name.set(self.names[full])
         return full
 
