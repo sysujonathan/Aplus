@@ -2,15 +2,15 @@
 
 ## 使用与权限准备
 
-公共案例只有一个权威位置：[Aplus_PA共享知识空间](https://drive.google.com/drive/folders/1r_wPMsPboY9BXZ_k4X2dtKULVXcwE7YW)。文件夹 ID 固定在客户端，不接受页面传入替代目录。
+公共案例只有一个权威位置：[PA知识库](https://drive.google.com/drive/folders/18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX)。文件夹 ID 固定在客户端，不接受页面传入替代目录。
 
-2026-11-04 已读取目录权限，`shared=false`、只有 owner。当前连接器能访问不代表 Aplus 已获授权，也不代表团队成员能访问。
+2026-11-04 用户明确将目标改为截图中的“PA知识库”，已按精确名称及 ID 核实；旧目录不再是活动知识源，不自动搬迁或删除其资料。新目录已读取权限，`shared=false`、只有 owner。当前连接器能访问不代表 Aplus 已获授权，也不代表团队成员能访问。
 
 产品负责人需完成：
 
 1. 在 [Google Cloud](https://console.cloud.google.com/apis/library/drive.googleapis.com) 的同一个项目启用 **Google Drive API**。
 2. 在 Google Auth Platform 配置应用和受众。若仍是测试应用，将两位验收成员加入测试用户；创建 **Desktop app** 类型 OAuth 客户端并下载 JSON。通过安全渠道向测试客户端提供同一份桌面客户端配置，不把 JSON、刷新令牌或登录缓存提交 GitHub。
-3. 在指定 Drive 文件夹点“共享”，加入第二位成员的 Google 账号，授予“编辑者”。不要开启公开链接，不修改其他 A++ 历史目录。
+3. 在指定 Drive 文件夹点“共享”，加入第二位成员的 Google 账号，授予“编辑者”。不要开启公开链接，不修改其他历史目录。
 4. Aplus → PA 成长空间 → 左下“连接 Google Drive”，选择下载的桌面客户端 JSON，在系统浏览器由本人登录和授权。两位成员分别使用自己的 Google 账号。Codex 不代填认证或绕过 Google 安全提示。
 5. 两个独立运行环境先使用明确标识的测试样本：A 提交 3 例、B 提交 2 例，双方点“刷新”，对照案例 ID、原图和术语，以及贡献数 3/2、彼此独立的研究和判断。
 
@@ -42,7 +42,7 @@
 
 刷新分页发现所有公共 manifest；已经校验且 Drive MD5 未变的记录复用缓存，云端内容被改动时明确拒绝覆盖。新增 manifest 检查固定父目录、贡献者与 Drive 所有者的 permissionId 一致、唯一案例 UUID、有效术语及渐进设置。整批通过才替换缓存；损坏目录保留上次有效快照并报错。当前有界加载上限为 20,000 例、目录 32 MiB，单例仍最多 100 张/128 MiB。拒绝超限不删除原记录。
 
-公共目录缓存存于 Store `meta`，原图/封面按需校验并缓存于 `<运行目录>/pa_growth/shared_cache/`。缓存是权威云端记录的副本，不能在离线时新增公共案例或修改公共原件。缩略图独立逐张加载，不等待网络后才显示文字结果，也不占用保存写入锁。离线可浏览已经缓存的图片；未下载图片明确失败。校验异常时只在新下载验证通过后替换可重建缓存。收到明确 401/403/404 访问拒绝时停用该账号公共缓存授权，需重新授权或恢复权限后刷新。
+公共目录缓存、访问确认和上传 ID 保留均按 Folder ID 命名隔离，内存缓存也核对 Folder ID；旧版无目录标记的缓存/访问确认及旧上传保留原样保留，不作为新目录成功访问或提交的证据。公共目录缓存存于 Store `meta`，原图/封面按需校验并缓存于 `<运行目录>/pa_growth/shared_cache/<Folder ID>/`。缓存是权威云端记录的副本，不能在离线时新增公共案例或修改公共原件。缩略图独立逐张加载，不等待网络后才显示文字结果，也不占用保存写入锁。离线可浏览已经缓存的图片；未下载图片明确失败。校验异常时只在新下载验证通过后替换可重建缓存。收到明确 401/403/404 访问拒绝时停用该账号公共缓存授权，需重新授权或恢复权限后刷新。
 
 ## 图谱、试炼和个人记录
 
@@ -58,6 +58,6 @@
 
 ## 验收边界
 
-隔离双身份协议、真实 Windows WebView 和真实 Google 多账号是不同证据。当前真实云端 OAuth/成员共享仍等待负责人配置，不能称团队已上线。Windows 拼音键盘验收需要空闲桌面，自动 composition 测试不能代替。
+隔离双身份协议、真实 Windows WebView 和真实 Google 多账号是不同证据。当前真实云端 OAuth/成员共享仍等待负责人配置，不能称团队已上线。2026-11-04 已在隔离样本窗口用 Windows 拼音实际按键确认首页/案例搜索及个人研究笔记输入，归档原图缩放返回、试炼判断前后和成长记录的运行截图；自动 composition 回执与该人工操作证据分别保存，均不代表真实 Google 已验收。
 
 实现依据：[Brooks 官方术语表](https://www.brookstradingcourse.com/price-action-trading-terms-glossary/)、[Google 桌面 OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)、[Drive 上传协议](https://developers.google.com/workspace/drive/api/guides/manage-uploads)、[预分配 Drive 文件 ID](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/generateIds)。词库只采用精简英文名称和缩写，不复制长篇课程内容。

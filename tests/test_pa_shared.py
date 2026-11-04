@@ -25,8 +25,9 @@ class Cloud:
 
 
 class Drive:
-    def __init__(self, cloud, user):
+    def __init__(self, cloud, user, folder=FOLDER):
         self.cloud, self.user = cloud, user
+        self.folder = folder
 
     def check(self):
         if self.cloud.offline:
@@ -50,7 +51,7 @@ class Drive:
             if file_id not in self.cloud.files:
                 raise DriveError(404)
             value = self.cloud.files[file_id]
-            return dict(id=file_id, parents=[FOLDER], owners=[dict(permissionId=value['owner'])])
+            return dict(id=file_id, parents=[self.folder], owners=[dict(permissionId=value['owner'])])
 
     def read(self, file_id, limit):
         self.info(file_id)
@@ -61,7 +62,7 @@ class Drive:
     def list_cases(self):
         self.check()
         with self.cloud.lock:
-            return [dict(id=k, parents=[FOLDER], owners=[dict(permissionId=v['owner'])])
+            return [dict(id=k, parents=[self.folder], owners=[dict(permissionId=v['owner'])])
                     for k, v in self.cloud.files.items() if v['kind'] == 'case-v1']
 
     def put_once(self, file_id, name, data, mime, kind):
@@ -216,7 +217,7 @@ def test_cache_rebuild_revoke_and_private_note_search(tmp_path):
     image_id = public['images'][0]['id']
     assert w.image(public_id, image_id) == original
     cover = w.image(public_id, image_id, True)
-    path = store.root / 'pa_growth/shared_cache' / image_id
+    path = store.root / 'pa_growth/shared_cache' / FOLDER / image_id
     path.write_bytes(b'invalid cache')
     cloud.offline = True
     assert w.image(public_id, image_id, True, True) == cover
@@ -301,7 +302,7 @@ def test_incremental_discovery_and_rebuilding_invalid_catalogue(tmp_path):
     drive.reads = 0
     w.refresh()
     assert drive.reads == 0, 'unchanged immutable manifests do not redownload'
-    store.execute('UPDATE meta SET value=? WHERE key=?', ('{broken cache', 'pa_shared_catalogue'))
+    store.execute('UPDATE meta SET value=? WHERE key=?', ('{broken cache', w.space_key('catalogue')))
     restarted = Workspace(Store(tmp_path), drive)
     assert restarted.catalogue() == []
     assert restarted.status()['cache_error']
@@ -366,3 +367,49 @@ def test_cold_shared_thumbnails_do_not_block_search_or_private_save(tmp_path):
         finally:
             release.set()
         assert image.result(timeout=3)['ok']
+
+
+def test_folder_change_never_reuses_old_grants_cache_or_upload_reservations(tmp_path, monkeypatch):
+    from workbench import pa_shared
+    store = Store(tmp_path)
+    old_cloud, new_cloud = Cloud(), Cloud()
+    old = Workspace(store, Drive(old_cloud, 'a', folder='old-authority'))
+    monkeypatch.setattr(pa_shared, 'FOLDER', 'old-authority')
+    c, original = make_case(store)
+    first = old.publish(c['id'])['case_id']
+    old.refresh()
+    public = old.case(first)
+    old.image(first, public['images'][0]['id'])
+    assert old.catalogue()  # Warm the same Store instance's in-memory cache.
+    old_files = copy.deepcopy(old_cloud.files)
+    old_meta = store.rows("SELECT key,value FROM meta WHERE key LIKE 'pa_shared_%' OR key LIKE 'pa_publish:%'")
+
+    monkeypatch.setattr(pa_shared, 'FOLDER', FOLDER)
+    current = Workspace(store, Drive(new_cloud, 'a'))
+    assert not current.status()['cached']
+    assert not current.catalogue()
+    with pytest.raises(ValueError):
+        current.image(first, public['images'][0]['id'])
+    assert current.refresh()['count'] == 0
+    second = current.publish(c['id'])['case_id']
+    assert first != second
+    assert current.refresh()['count'] == 1
+    assert current.catalogue()[0]['id'] == second
+    assert old_cloud.files == old_files
+    assert store.pa_image(c['images'][0]['id']) == original
+    for row in old_meta:
+        assert store.rows('SELECT value FROM meta WHERE key=?', (row['key'],))[0]['value'] == row['value']
+
+
+def test_unscoped_legacy_cache_and_grant_are_preserved_but_not_activated(tmp_path):
+    store = Store(tmp_path)
+    w = Workspace(store, Drive(Cloud(), 'a'))
+    w.set('pa_shared_access:a', {'granted': True, 'writable': True})
+    w.set('pa_shared_catalogue', [{'id': 'shared:old-file'}])
+    w.set('pa_shared_catalogue_stamp', 'legacy-stamp')
+    store._pa_shared_catalogue_cache = ('legacy-stamp', [{'id': 'shared:old-file'}])
+    assert not w.status()['cached']
+    assert w.catalogue() == []
+    assert w.refresh()['count'] == 0
+    assert w.get('pa_shared_catalogue') == [{'id': 'shared:old-file'}]
+    assert w.get('pa_shared_access:a')['granted']

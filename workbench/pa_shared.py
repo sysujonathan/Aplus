@@ -22,7 +22,7 @@ from .pa_terms import IDS, selected, matching
 from .pa_trial import validate as validate_trial
 from .store import dumps
 
-FOLDER = '1r_wPMsPboY9BXZ_k4X2dtKULVXcwE7YW'
+FOLDER = '18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX'
 MAX_MANIFEST = 256 * 1024
 MAX_CASES = 20_000
 FIELDS = 'id,name,mimeType,parents,trashed,size,shared,md5Checksum,owners(permissionId),properties,capabilities(canAddChildren)'
@@ -147,12 +147,17 @@ class Workspace:
     def set(self, key, value):
         self.store.execute('INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)', (key, dumps(value)))
 
+    def space_key(self, kind):
+        # Cache grants and upload reservations belong to one authority. A
+        # product-owner directory change must not reuse an old folder's state.
+        return f'pa_shared_{kind}:{FOLDER}'
+
     def status(self):
         try:
             user = self.drive.identity()
         except ValueError:
             return dict(connected=False, folder_id=FOLDER, cached=False)
-        access = self.get('pa_shared_access:' + user['id'], {})
+        access = self.get(self.space_key('access') + ':' + user['id'], {})
         return dict(connected=True, user=user, folder_id=FOLDER, cached=bool(access.get('granted')),
                     refreshed=access.get('refreshed'), writable=access.get('writable', False),
                     directory_shared=access.get('shared'),
@@ -160,13 +165,13 @@ class Workspace:
 
     def refresh(self):
         user = self.drive.identity()
-        key = 'pa_shared_access:' + user['id']
+        key = self.space_key('access') + ':' + user['id']
         try:
             self.drive.identity(True)
             writable = self.drive.check_folder()
             rows = self.drive.list_cases()
             try:
-                previous = {c['id']: c for c in self.get('pa_shared_catalogue', [])}
+                previous = {c['id']: c for c in self.get(self.space_key('catalogue'), [])}
             except (ValueError, TypeError, KeyError):
                 previous = {}  # Rebuild derived cache; authority stays in Drive.
             cases = []
@@ -198,8 +203,8 @@ class Workspace:
         # client's concurrent commits appear on the next explicit refresh.
         cases.sort(key=lambda c: (c['updated'], c['id']), reverse=True)
         with self.store.atomic_write():
-            self.set('pa_shared_catalogue', cases)
-            self.set('pa_shared_catalogue_stamp', uuid.uuid4().hex)
+            self.set(self.space_key('catalogue'), cases)
+            self.set(self.space_key('catalogue_stamp'), uuid.uuid4().hex)
             self.set(key, dict(granted=True, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None)))
         self.store._pa_shared_cache_error = None
         return dict(count=len(cases), status=self.status())
@@ -208,12 +213,12 @@ class Workspace:
         status = self.status()
         if not status['connected'] or not status['cached']:
             return []
-        stamp = self.get('pa_shared_catalogue_stamp')
+        stamp = self.get(self.space_key('catalogue_stamp'))
         cached = getattr(self.store, '_pa_shared_catalogue_cache', None)
-        if stamp and cached and cached[0] == stamp:
-            return cached[1]
+        if stamp and cached and len(cached) == 3 and cached[:2] == (FOLDER, stamp):
+            return cached[2]
         try:
-            result = self.get('pa_shared_catalogue', [])
+            result = self.get(self.space_key('catalogue'), [])
             if not isinstance(result, list) or any(not isinstance(c, dict) or
                     not {'id', 'contributor', 'term_ids', 'images', 'updated', 'data_kind'} <= c.keys() for c in result):
                 raise ValueError('公共目录缓存无效')
@@ -221,7 +226,7 @@ class Workspace:
             self.store._pa_shared_cache_error = '公共目录缓存无法读取，请联网刷新；私密草稿仍可使用。'
             return []
         self.store._pa_shared_cache_error = None
-        self.store._pa_shared_catalogue_cache = (stamp, result)
+        self.store._pa_shared_catalogue_cache = (FOLDER, stamp, result)
         return result
 
     def search(self, query='', filters=None, offset=0):
@@ -287,7 +292,7 @@ class Workspace:
                     if (source.width != image['width'] or source.height != image['height']
                             or Image.MIME.get(source.format) != image['mime']):
                         raise ValueError('原图尺寸或格式与案例不符，未展示试炼画面')
-        path = self.store.root / 'pa_growth' / 'shared_cache' / identifier(image['id'])
+        path = self.store.root / 'pa_growth' / 'shared_cache' / FOLDER / identifier(image['id'])
         if path.exists():
             if path.stat().st_size == image['bytes']:
                 data = path.read_bytes()
@@ -321,7 +326,7 @@ class Workspace:
         except ValueError:
             raise ValueError('试炼设置损坏，请先重新设置；原私密案例仍在') from None
         snapshot = checksum(encoded(dict(value, assets=[dict(i) for i in case['images']], trial_setup=setup)))
-        key = f'pa_publish:{_owner(self.store)}:{case_id}'
+        key = f'pa_publish:{FOLDER}:{_owner(self.store)}:{case_id}'
         journal = self.get(key)
         if journal and (journal['user'] != user['id'] or journal['snapshot'] != snapshot):
             raise ValueError('这个案例已有不同的发布快照或贡献账号；请保留原提交，另存案例后再提交')
