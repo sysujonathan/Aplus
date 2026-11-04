@@ -21,7 +21,7 @@ from .theme import (
 )
 
 
-_LAYOUT_SHAPES = {1: (1, 1), 4: (2, 2), 6: (2, 3), 9: (3, 3)}
+from workbench.workspace_layouts import SHAPES as _LAYOUT_SHAPES
 
 
 def layout_shape(count):
@@ -31,7 +31,7 @@ def layout_shape(count):
 
 def page_start_for(index, count):
     """让指定候选落在其所在整页，避免逐股切换时整组不停抖动。"""
-    count = int(count) if int(count) in _LAYOUT_SHAPES else 4
+    count = int(count) if 1 <= int(count) <= 9 else 4
     return max(0, int(index) // count * count)
 
 
@@ -208,7 +208,10 @@ class ChartPanel(native_ttk.Frame):
             if self._embedded is None:
                 self._embedded = EmbeddedChartHost(self.chart_frame, self.store, self._embedded_error,
                     on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate,
-                    on_history_result=self._history_refresh_result)
+                    on_history_result=self._history_refresh_result,
+                    workspace=getattr(self, '_workspace_descriptor', None),
+                    on_workspace_state=getattr(self, '_on_workspace_state', None))
+            self._embedded.workspace = getattr(self, '_workspace_descriptor', None)
             self.readout_frame.grid()
             self.readout.set('正在切换图表…')
             self._embedded.show(context)
@@ -256,7 +259,7 @@ class ChartPanel(native_ttk.Frame):
         self._tf = tf or "daily"
 
     def set_active(self, active):
-        color = ACCENT if active else CONTROL_BG
+        color = CONTROL_BG
         self.configure(
             style="Active.ChartPanel.TFrame" if active else "ChartPanel.TFrame"
         )
@@ -264,7 +267,7 @@ class ChartPanel(native_ttk.Frame):
         self.title_label.configure(bg=color)
         self._tv_btn.configure(bg=color)
         self._analysis_btn.configure(bg=color)
-        self._accept_intraday(bool(active))
+        self._accept_intraday(bool(active) or getattr(self, '_workspace_live', False))
 
     # ---- live intraday on the active tile --------------------------------
     def _auto_quotes_enabled(self):
@@ -688,6 +691,7 @@ class ChartGrid(ttk.Frame):
         self._auto_quotes = auto_quotes
         self._slot_pool = []
         self._layout_count = layout_count if layout_count in _LAYOUT_SHAPES else 4
+        self._shape = layout_shape(self._layout_count)
         self._on_page_state = on_page_state
         self._on_active_item = on_active_item
         self._on_layout_request = on_layout_request
@@ -698,12 +702,43 @@ class ChartGrid(ttk.Frame):
         self._render_token = 0
         self._image_cache = {}
         self._slots = []
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=0 if interactive else 1)
+        self.rowconfigure(1 if interactive else 0, weight=1)
+        self.columnconfigure(1 if interactive else 0, weight=1)
         _configure_chart_styles()
+        self.controls = None
+        if interactive:
+            from .workspace_controls import WorkspaceControls
+            self.controls = WorkspaceControls(self)
         self.host = native_ttk.Frame(self, style="ChartHost.TFrame")
-        self.host.grid(row=0, column=0, sticky=tk.NSEW)
+        self.host.grid(row=1 if interactive else 0, column=1 if interactive else 0, sticky=tk.NSEW)
         self._build_slots()
+
+    def restore_saved_layout(self):
+        if self.controls:
+            self.controls.restore_saved_layout()
+
+    def command(self, kind, value=None):
+        return self.controls.command(kind, value) if self.controls else False
+
+    def compare(self, code):
+        from tkinter import messagebox
+        from .data import latest_market_dataset
+        from workbench.market import load_dataset
+        from .chart_bridge import _bars, _resample
+        item = self.current_item()
+        if not item or not self.controls:
+            return False
+        try:
+            record = latest_market_dataset(self.store, code, timeframe='daily', source=item.source)
+            if not record:
+                raise ValueError('本地没有该标的同来源日线；请先更新或打开该标的')
+            frame, record = load_dataset(self.store, record['id'])
+            return self.command('compare', dict(symbol=code, source=record['source'], adjustment=record['adjustment'],
+                series={'daily':_bars(frame), 'weekly':_bars(_resample(frame,'W-FRI')), 'monthly':_bars(_resample(frame,'ME'))}))
+        except Exception as exc:
+            messagebox.showinfo('暂不能比较',str(exc),parent=self)
+            return False
 
     @property
     def layout_count(self):
@@ -725,14 +760,22 @@ class ChartGrid(ttk.Frame):
 
     def set_layout(self, count):
         count = int(count)
-        if count not in _LAYOUT_SHAPES or count == self._layout_count:
+        if count not in _LAYOUT_SHAPES or _LAYOUT_SHAPES[count] == self._shape:
             return
+        self.set_grid(*_LAYOUT_SHAPES[count])
+
+    def set_grid(self, rows, columns, *, render=True):
+        if not 1 <= rows <= 3 or not 1 <= columns <= 4 or rows * columns > 9:
+            raise ValueError('布局最多九格')
         active_index = self._page_start + self._active_slot
+        count = rows * columns
+        self._shape = (rows, columns)
         self._layout_count = count
-        self._page_start = page_start_for(active_index, count)
+        self._page_start = active_index // count * count
         self._active_slot = max(0, active_index - self._page_start)
         self._build_slots()
-        self._render_page()
+        if render:
+            self._render_page()
 
     def page(self, delta):
         if not self._items:
@@ -781,7 +824,16 @@ class ChartGrid(ttk.Frame):
             self._display_items.append(None)
         self._display_items[slot_index] = item
         self._active_slot = slot_index
+        self._slots[slot_index]._workspace_restore = None
         self._show_item(self._slots[slot_index], item)
+        if self.controls and self.controls.sync['symbol'].get():
+            for index, slot in enumerate(self._slots):
+                if index != slot_index:
+                    self._display_items[index] = item
+                    slot._workspace_restore = None
+                    self._show_item(slot, item)
+        if self.controls:
+            self.controls.schedule_save()
         self._refresh_active_styles()
         if notify_active and self._on_active_item:
             self._on_active_item(('watch:' + item.code) if item.manual else item.observation_id)
@@ -837,10 +889,10 @@ class ChartGrid(ttk.Frame):
             if index >= self._layout_count:
                 child.suspend_interactive()
         self._slots = []
-        rows, columns = layout_shape(self._layout_count)
+        rows, columns = self._shape
         for row in range(3):
             self.host.rowconfigure(row, weight=1 if row < rows else 0)
-        for column in range(3):
+        for column in range(4):
             self.host.columnconfigure(column, weight=1 if column < columns else 0)
         for index in range(self._layout_count):
             row, column = divmod(index, columns)
@@ -854,6 +906,12 @@ class ChartGrid(ttk.Frame):
                     auto_quotes=self._auto_quotes)
                 self._slot_pool.append(slot)
             slot.grid(row=row, column=column, sticky=tk.NSEW, padx=3, pady=3)
+            if self.controls:
+                slot._workspace_descriptor = self.controls.descriptor(index)
+                slot._on_workspace_state = lambda state, i=index: self.controls.state_changed(i, state)
+                if slot._embedded:
+                    slot._embedded.workspace = slot._workspace_descriptor
+                    slot._embedded.on_workspace_state = slot._on_workspace_state
             self._slots.append(slot)
 
     def embedded_hosts(self):
@@ -879,6 +937,8 @@ class ChartGrid(ttk.Frame):
                 )
         self._refresh_active_styles()
         self._notify_page_state()
+        if self.controls:
+            self.controls.schedule_save()
 
     def _render_slot(self, index, item, token):
         if token != self._render_token or not self.winfo_exists():
@@ -905,6 +965,11 @@ class ChartGrid(ttk.Frame):
             return
         self._active_slot = index
         self._refresh_active_styles()
+        if self.controls:
+            state = self.controls.states.get(index, {})
+            from .workspace_controls import PERIOD_LABELS
+            self.controls.period.set(PERIOD_LABELS.get(state.get('timeframe'), '日线'))
+            self.controls.schedule_save()
         item = self.current_item()
         # Every pointerdown inside the embedded WebView reports its active tile.
         # Re-selecting the already active sidebar row would steal native focus

@@ -9,8 +9,8 @@ GRID = "#26313D"
 
 TEXT = "#E6EDF3"
 MUTED = "#9BA7B4"
-ACCENT = "#2F81F7"
-ACCENT_HOVER = "#58A6FF"
+ACCENT = "#1F5EBC"
+ACCENT_HOVER = "#286AC7"
 SELECTION = "#253247"
 HOVER = "#202A36"
 
@@ -23,3 +23,7 @@ STOP = "#A9B6C6"
 TARGET = "#CBD5E1"
 REPEAT = "#E3B341"
 DROP_TARGET = "#9A6700"
+
+# Chart candle colours are independent of A-share profit/loss text colours.
+CANDLE_UP = '#FFFFFF'
+CANDLE_DOWN = '#2962FF'

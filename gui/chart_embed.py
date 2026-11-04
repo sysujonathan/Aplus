@@ -232,12 +232,17 @@ class NativeChild:
 class EmbeddedChartHost:
     """Tk-side controller. Starting WebView never blocks Tk's first paint."""
     def __init__(self, parent, store, on_error=None, on_layout=None, on_ready=None, on_active=None,
-                 on_history_result=None):
+                 on_history_result=None, workspace=None, on_workspace_state=None):
         self.parent, self.store, self.on_error = parent, store, on_error
         self.on_layout = on_layout
         self.on_ready = on_ready
         self.on_active = on_active
         self.on_history_result = on_history_result
+        self.workspace = workspace
+        self.on_workspace_state = on_workspace_state
+        self.commands = []
+        self._command_number = 0
+        self._last_workspace_state = None
         self._ready_token = None
         self.process = None
         self.token = 0
@@ -269,12 +274,15 @@ class EmbeddedChartHost:
         if self.closing and not self.closed():
             self._queued_context = context
             return
+        if context and self.workspace:
+            context = {**context, 'workspace': self.workspace}
         boot = workspace_boot(self.store, context) if context else None
         self._history_identity = boot['identity'] if boot else None
         if boot:
             boot['embedded'] = True
             boot['layoutSupported'] = self.on_layout is not None
         self.token += 1
+        self.commands = []
         request = dict(token=self.token, boot=boot)
         atomic_json(self.control, request)
         self._started = time.monotonic()
@@ -291,6 +299,16 @@ class EmbeddedChartHost:
             self._timer = self.parent.after(100, self._poll)
         elif self._timer is None:
             self._timer = self.parent.after(100, self._poll)
+
+    def command(self, kind, value=None):
+        if self.closed() or self.closing or not self.ready():
+            return False
+        if len(self.commands) >= 128:
+            return False
+        self._command_number += 1
+        self.commands.append(dict(sequence=self._command_number, kind=kind, value=value))
+        atomic_json(self.session.with_suffix('.commands.json'), dict(token=self.token, commands=self.commands))
+        return True
 
     def navigate(self, day=None):
         """A UI-only command scoped to this exact displayed symbol request."""
@@ -338,6 +356,14 @@ class EmbeddedChartHost:
         if not self.parent.winfo_exists():
             return
         try:
+            state = read_notification(self.session.with_suffix('.workspace.json'))
+            if state and state.get('token') == self.token:
+                ack = state.get('ack', 0)
+                self.commands = [cmd for cmd in self.commands if cmd['sequence'] > ack]
+                if state != self._last_workspace_state:
+                    self._last_workspace_state = state
+                    if self.on_workspace_state:
+                        self.on_workspace_state(state)
             history = read_notification(self.history_status)
             if (history and history.get('token') == self.token
                     and history.get('id') == self._history_request_id
@@ -413,7 +439,8 @@ class EmbeddedChartHost:
             self._timer = None
         if self.closed():
             for path in (self.control, self.status, self.actions, self.navigation,
-                         self.live, self.history, self.history_status, self.focus, self.session):
+                         self.live, self.history, self.history_status, self.focus, self.session,
+                         self.session.with_suffix('.commands.json'), self.session.with_suffix('.workspace.json')):
                 path.unlink(missing_ok=True)
 
 
@@ -429,6 +456,10 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
     last_navigation = None
     last_live = None
     last_history = None
+    last_command = 0
+    last_workspace = 0
+    last_workspace_value = None
+    last_document_read = 0
     while native.fit():
         try:
             modified = control.stat().st_mtime_ns
@@ -446,6 +477,40 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
                 else:
                     bridge.pending = request
         pending = bridge.pending or {}
+        if not bridge.busy and window.events.loaded.is_set() and getattr(bridge, 'current', None) and bridge.current.boot.get('workspace'):
+            request = read_notification(session.with_suffix('.commands.json'))
+            if request and request.get('token') == bridge.active_token:
+                for command in request.get('commands', [])[:128]:
+                    if command.get('sequence', 0) <= last_command:
+                        continue
+                    result = window.evaluate_js('window.aplusWorkspaceCommand?.(' + json.dumps(command, ensure_ascii=False) + ')')
+                    # A rejection is terminal and visible, never an unbounded eval retry.
+                    last_command = command['sequence']
+                    if result is not True:
+                        window.evaluate_js("showToast('该操作暂不可用：请等待图表就绪或补齐对应周期行情')")
+            if time.monotonic() - last_workspace > .1:
+                last_workspace = time.monotonic()
+                state = window.evaluate_js('window.aplusWorkspaceState?.()')
+                if isinstance(state, dict):
+                    value = dict(token=bridge.active_token, ack=last_command, **state)
+                    if value != last_workspace_value:
+                        atomic_json(session.with_suffix('.workspace.json'), value)
+                        last_workspace_value = value
+            if time.monotonic() - last_document_read > .7:
+                last_document_read = time.monotonic()
+                current = bridge.current
+                with current._write_lock:
+                    document = bridge.store.chart_document(current.identity)
+                    if document['revision'] != current.revision:
+                        from .chart_bridge import drawing_to_frontend, _edit_fields
+                        from workbench.workspace_layouts import drawing_visible
+                        import pandas as pd
+                        dates = [pd.Timestamp(row['date']) for row in current.rows]
+                        objects = [drawing_to_frontend(obj, dates, current.boot['timeframe']) for obj in document['drawings']
+                                   if drawing_visible(obj, current.boot.get('workspace'))]
+                        if window.evaluate_js('window.aplusWorkspaceDrawings?.(' + json.dumps(objects, ensure_ascii=False) + ',' + str(document['revision']) + ')'):
+                            current.revision = document['revision']
+                            current._baseline = _edit_fields(document)
         if (pending.get('token') != bridge.active_token and pending
             and pending.get('token') != bridge.failed_token and not bridge.busy
             and window.events.loaded.is_set()):

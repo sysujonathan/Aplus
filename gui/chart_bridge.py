@@ -218,12 +218,16 @@ def workspace_boot(store, context):
     adjustment = str((context.get("record") or {}).get("adjustment") or "unknown")
     key = identity(str(context["code"]), source, adjustment)
     document = store.chart_document(key)
+    workspace = context.get('workspace')
+    from workbench.workspace_layouts import drawing_visible
+    visible = [obj for obj in document['drawings'] if drawing_visible(obj, workspace)]
     dates = [pd.Timestamp(row["date"]) for row in rows]
     settings = document["settings"]
-    saved = settings.get("web_state") or {}
+    pane_key = workspace['layout'] + ':' + workspace['pane'] if workspace else None
+    saved = (settings.get('pane_states') or {}).get(pane_key, {}) if workspace else settings.get("web_state") or {}
     timeframe = str(context.get("timeframe") or "daily")
     state = {
-        "objects": [drawing_to_frontend(obj, dates, timeframe) for obj in document["drawings"]],
+        "objects": [drawing_to_frontend(obj, dates, timeframe) for obj in visible],
         "toolbar": deepcopy(saved.get("toolbar") or {}),
         "view": deepcopy(saved.get("view") or {}),
         "indicators": deepcopy(saved.get("indicators") or {}),
@@ -293,6 +297,7 @@ def workspace_boot(store, context):
         "contextKind": context_kind, "contextTitle": title,
         "strategyType": str(context.get("strategy_type") or ""), "evidence": payload,
         "strategyEvidence": _native(vectors),
+        "workspace": deepcopy(workspace),
         "holdingLevels": _holding_levels(context.get("holding_levels") or ()),
         "tradeEvents": _native(context.get("replay_events") or ()),
         "latest": latest,
@@ -305,8 +310,12 @@ def refresh_workspace_boot(store, boot):
     value = deepcopy(boot)
     document = store.chart_document(value['identity'])
     dates = [pd.Timestamp(row['date']) for row in value['bars']]
-    value['drawings'] = [drawing_to_frontend(obj, dates, value['timeframe']) for obj in document['drawings']]
-    saved = document['settings'].get('web_state') or {}
+    from workbench.workspace_layouts import drawing_visible
+    value['drawings'] = [drawing_to_frontend(obj, dates, value['timeframe']) for obj in document['drawings']
+                         if drawing_visible(obj, value.get('workspace'))]
+    workspace = value.get('workspace')
+    pane_key = workspace['layout'] + ':' + workspace['pane'] if workspace else None
+    saved = (document['settings'].get('pane_states') or {}).get(pane_key, {}) if workspace else document['settings'].get('web_state') or {}
     value.update(revision=document['revision'], settings=_native(document['settings']),
                  alerts=_native(document['alerts']), editBaseline=_native(_edit_fields(document)))
     value['state'] = dict(objects=value['drawings'], toolbar=deepcopy(saved.get('toolbar') or {}),
@@ -345,8 +354,18 @@ class ChartBridge:
         rows = (self.boot.get("series") or {}).get(str(state.get("timeframe"))) or self.rows
         drawings = [drawing_from_frontend(item, rows) for item in (state.get("objects") or [])]
 
+        if self.boot.get('workspace'):
+            return self._save_workspace_state(state, drawings, expected_revision)
+
+        from workbench.workspace_layouts import drawing_visible
+        if any(not drawing_visible(drawing, None) for drawing in drawings):
+            raise ValueError('独立图表不能写入布局私有图形')
+
         def edit(document):
-            document["drawings"] = drawings
+            # Detached holding/closed charts edit global analysis only. Hidden
+            # pane/layout drawings must survive ordinary saves in those views.
+            document["drawings"] = drawings + [drawing for drawing in document['drawings']
+                                               if not drawing_visible(drawing, None)]
             document["settings"]["web_state"] = {
                 "toolbar": _native(state.get("toolbar") or {}),
                 "view": _native(state.get("view") or {}),
@@ -360,6 +379,32 @@ class ChartBridge:
                 if key in (state.get('indicators') or {}):
                     document['settings'][key] = state['indicators'][key]
         return self._commit(edit, expected_revision)
+
+    def _save_workspace_state(self, state, drawings, expected_revision):
+        from workbench.workspace_layouts import merge_drawings
+        with self._write_lock:
+            if expected_revision is not None and int(expected_revision) != self.revision:
+                raise ValueError('本图保存版本已变化；修改仍保留')
+            baseline = deepcopy(self._baseline or {})
+            for _ in range(3):
+                current = self.store.chart_document(self.identity)
+                updated = deepcopy(current)
+                updated['drawings'] = merge_drawings(baseline.get('drawings', []), current['drawings'],
+                    drawings, self.boot['workspace'])
+                # Each pane owns its viewport/settings; alerts remain the shared
+                # identity's real monitor state and are never copied by sync.
+                pane_key = self.boot['workspace']['layout'] + ':' + self.boot['workspace']['pane']
+                updated['settings'].setdefault('pane_states', {})[pane_key] = _native({key:value for key,value in state.items() if key != 'objects'})
+                updated = validate_document(updated)
+                try:
+                    revision = self.store.save_chart_document(self.identity, updated, current['revision'])
+                except ValueError:
+                    continue
+                self.revision = revision
+                self.boot['revision'] = revision
+                self._baseline = _edit_fields(updated)
+                return {'ok': True, 'revision': revision, 'alerts': _native(updated['alerts'])}
+            raise ValueError('图表正在其他窗口保存，请重试；本图修改仍保留')
 
     def _commit(self, edit, expected_revision=None):
         """Rebase alert-only writes, retaining Store's atomic revision check."""

@@ -113,22 +113,35 @@ class StockNameLookup:
 
 
 def code_names(store):
-    """复刻 workbench/dashboard.py 的命名：代码 -> 名称。失败返回空字典。"""
+    """Display names are independent of eligibility for market scans."""
+    result = {}
+    def add_file(path):
+        frame = pd.read_csv(path, dtype=str).fillna('')
+        result.update((code, name) for code, name in zip(frame.code, frame.code_name) if name.strip())
     try:
         meta = store.rows("SELECT value FROM meta WHERE key='universe_date'")
-        result = {}
         if meta:
             path = store.root / f"directories/{meta[0]['value']}-basics.csv"
             if path.exists():
-                basic = pd.read_csv(path, dtype=str).fillna("")
-                if "code_name" in basic:
-                    result.update(zip(basic.code, basic.code_name))
-        from workbench.sources import directory_file
-        frame = pd.read_csv(directory_file(store, market_source(store)), dtype=str)
-        result.update(zip(frame.code, frame.code_name))
-        return result
+                add_file(path)
     except Exception:
-        return {}
+        pass  # One unavailable catalog must not discard another valid catalog.
+    try:
+        from workbench.sources import directory_file
+        add_file(directory_file(store, market_source(store)))
+    except Exception:
+        pass
+    # Previously confirmed fund names remain available even without a stock
+    # directory entry. No new trade or market record is created by this read.
+    for query in ("SELECT code,name FROM positions WHERE name<>'' UNION SELECT code,name FROM closed_trades WHERE name<>''",
+                  "SELECT substr(key,12) AS code,value AS name FROM meta WHERE key LIKE 'watch_name:%'"):
+        try:
+            for row in store.rows(query):
+                if row.get('name', '').strip():
+                    result.setdefault(row['code'], row['name'])
+        except Exception:
+            pass
+    return result
 
 
 def load_candidates(store, timeframe="daily", source=None, asof_filter=None):

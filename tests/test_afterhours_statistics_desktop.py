@@ -29,10 +29,13 @@ def set_test_geometry(window, size):
 
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
 @pytest.mark.native_process
-def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h2_bars, h2_spec):
+@pytest.mark.parametrize('dpi', [96, None], ids=['96-dpi', 'native-dpi'])
+def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h2_bars, h2_spec, dpi):
     store = Store(tmp_path/'isolated')
     window = create_window(lambda: ttk.Window(themename='darkly'))
     try:
+        if dpi is not None:
+            window.tk.call('tk', 'scaling', dpi / 72)
         # Reproduce the CI work-area ceiling locally, rather than assuming a
         # geometry request guarantees a 1600x1000 window on every desktop.
         window.maxsize(1008, 749)

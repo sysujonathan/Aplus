@@ -65,6 +65,7 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             assert slot._image is None and '移到 K 线' in slot.readout.get()
         window._switch_section('afterhours')
         page = window.afterhours
+        assert page.host.master is page._research_body, 'scroll content must be a real child, not covered siblings'
         for size in ('2560x1440', '1600x1000', '1280x760'):
             window.geometry(size)
             window.update()
@@ -228,6 +229,7 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             experiment=service.submit('backtest',dict(execution_model=STOP_MODEL,source_job=baseline))
             assert wait_for(store,experiment)['status']=='completed'
             iteration=window.strategy_iteration
+            assert iteration.samples.winfo_toplevel() is window
             iteration.service=service
             window._switch_section('strategy')
             window.update()

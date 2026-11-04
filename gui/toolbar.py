@@ -358,7 +358,7 @@ class ToolBar(ttk.Frame):
         self.ai_var = tk.BooleanVar(value=False)
         self.chk_ai = ttk.Checkbutton(actions, text="AI 复核", variable=self.ai_var,
                                      bootstyle="round-toggle", command=self._explain_ai)
-        self.chk_ai.pack(side=tk.LEFT, padx=(12, 0))
+        # No live AI review exists yet; do not present it as an executable action.
 
         # 日期栏同时包含行情日和扫描日；启动仍定位最近一次有效扫描结果。
         self.date_label = ttk.Label(filters, text="交易日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
