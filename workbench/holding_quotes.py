@@ -163,10 +163,18 @@ def saved_quotes(store, codes):
         rows = store.rows("SELECT * FROM datasets WHERE timeframe='daily' AND code=? AND source=? "
                           "ORDER BY end DESC, CASE WHEN adjustment IN ('不复权','none','3') "
                           "THEN 0 ELSE 1 END,created DESC,rowid DESC LIMIT 1", (code,market_source(store)))
-        if not rows:
-            continue
         try:
-            frame, record = load_dataset(reader, rows[0]["id"])
+            if rows:
+                frame, record = load_dataset(reader, rows[0]["id"])
+            else:
+                # A trade-only fund need not enter the stock scanning universe.
+                # Reuse its verified on-demand daily cache, without fetching or
+                # registering it as a scan snapshot.
+                from .watch_history import cached_history, chart_source
+                cached = cached_history(store, code, chart_source(store, code))
+                if cached is None:
+                    continue
+                frame, record = cached
             if frame.empty:
                 continue
             unadjusted = record["adjustment"] in ("不复权", "none", "3")
@@ -174,7 +182,7 @@ def saved_quotes(store, codes):
                             "previous_close": float(frame.iloc[-2]["close"]) if len(frame) > 1 else None,
                             "date": str(frame.iloc[-1]["date"])[:10], "source": "history",
                             "adjusted": not unadjusted}
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, TypeError):
             continue
     return prices
 

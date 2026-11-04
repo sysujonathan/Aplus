@@ -23,6 +23,7 @@ from .chart_annotations import (
 )
 from .theme import (
     ANNOTATION, AVERAGE, BORDER, CHART_BG, CONTROL_BG, DOWN, GRID, MUTED, STOP, TARGET, TEXT, UP,
+    CANDLE_UP, CANDLE_DOWN,
 )
 
 
@@ -47,8 +48,8 @@ def render_chart(frame, payload, title, meta, *, strategy=None, strategy_type=""
     options = dict(display_options or {})
     show_volume = options.get('volume', True)
     colors = mpf.make_marketcolors(
-        up=options.get('up', UP),
-        down=options.get('down', DOWN),
+        up=options.get('up', CANDLE_UP),
+        down=options.get('down', CANDLE_DOWN),
         edge="inherit",
         wick="inherit",
         volume="in",

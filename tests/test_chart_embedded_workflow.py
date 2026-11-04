@@ -215,7 +215,7 @@ def test_hidden_layout_tiles_are_suspended_instead_of_kept_polling():
     from gui.chart_panel import ChartGrid
     visible, hidden = Mock(), Mock()
     grid = SimpleNamespace(_slot_pool=[visible, hidden], _layout_count=1, _slots=[],
-                           host=Mock())
+                           host=Mock(), _shape=(1, 1), controls=None)
     ChartGrid._build_slots(grid)
     visible.suspend_interactive.assert_not_called()
     hidden.suspend_interactive.assert_called_once_with()
@@ -228,6 +228,7 @@ def test_embedded_pointer_activity_does_not_reselect_the_active_sidebar_row():
     from gui.chart_panel import ChartGrid
     callback = Mock()
     grid = ChartGrid.__new__(ChartGrid)
+    grid.controls = None
     grid._active_slot = 0
     grid._display_items = [
         ChartItem('sz.000001', '一号', 11, 'baostock', 'candidate'),
@@ -269,6 +270,7 @@ def test_drop_replacement_syncs_sidebar_before_same_tile_click_is_ignored():
     from gui.chart_panel import ChartGrid
     callback = Mock()
     grid = ChartGrid.__new__(ChartGrid)
+    grid.controls = None
     grid._active_slot = 1
     grid._display_items = [
         ChartItem('sz.000001', '一号', 11, 'baostock', 'candidate'),
@@ -363,7 +365,7 @@ def test_slot_asset_urls_change_with_content_but_not_symbol(tmp_path, monkeypatc
         'prototype.css', 'historical-bars-v2.js', 'prototype.js',
         'chart-coordinates.js', 'chart-indicators.js', 'chart-position.js',
         'drawing-settings.js', 'drawing-quickbar.js', 'prototype-interactions.js',
-        'production-controls.js', 'chart-palette.js',
+        'production-controls.js', 'chart-palette.js', 'workspace-controls.js',
     }
 
     def asset_urls(page):

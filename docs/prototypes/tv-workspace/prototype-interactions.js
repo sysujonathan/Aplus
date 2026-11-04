@@ -181,6 +181,7 @@ function savePrototypeState(flushOnly = false) {
       if(!bridgeSaveFailed)return bridgeSaveChain;
     }
     window.flushChartInlineEditor?.(true,false);
+    window.aplusWorkspaceBeforeSave?.();
     userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
     const toolbar = document.querySelector('#favoriteTools');
     const persistentView = replayActive && typeof preReplayView !== 'undefined' && preReplayView ? preReplayView :
@@ -197,6 +198,7 @@ function savePrototypeState(flushOnly = false) {
       {...structuredClone(indicatorSettings), magnet:magnetEnabled, drawings_visible:drawingsVisible};
     try { localStorage.setItem(tvStateKey, JSON.stringify(state)); } catch (_) { /* Store remains authoritative. */ }
     if (chartBoot.production && window.pywebview?.api?.save_state) {
+      window.aplusWorkspaceSaveStarted?.();
       document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>正在保存到本机…';
       const sessionToken = chartBoot.sessionToken;
       bridgeSaveChain = bridgeSaveChain.then(() => {
@@ -207,11 +209,13 @@ function savePrototypeState(flushOnly = false) {
         return window.pywebview.api.save_state(...saveArgs);
       })
         .then(result => {
+          window.aplusWorkspaceSaveFinished?.();
           bridgeRevision = Number(result.revision);
           if (Array.isArray(result.alerts)) { chartAlerts = result.alerts; updateObjectTree(); }
           bridgeSaveFailed = false;
           document.querySelector('.save-state').innerHTML = '<span class="saved-dot"></span>所有更改已保存到本机';
         }).catch(error => {
+          window.aplusWorkspaceSaveFinished?.();
           bridgeSaveFailed = true;
           document.querySelector('.save-state').textContent = `尚未保存：${error.message || error}`;
         });
@@ -1689,6 +1693,7 @@ function closeObjectSettings(revert = false) {
 
 function deleteSelectedDrawing() {
   if (!selectedId) return;
+  if (window.aplusWorkspaceConfirmDelete?.(userObjects.filter(item=>item.id===selectedId)) === false) return;
   rememberObjects();
   userObjects = userObjects.filter(item => item.id !== selectedId);
   selectedId = null; selected = false;
@@ -1984,13 +1989,13 @@ function openDrawingTemplateMenu(anchor) {
 document.querySelector('#objectTemplate').addEventListener('click', event=>openDrawingTemplateMenu(event.currentTarget));
 document.querySelectorAll('[data-template-action]').forEach(button => button.addEventListener('click', () => {
   const object = objectAtSelection();if(!object)return;
-  const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked','arrow_marker_version','path_version','priceBasis']);
+  const excluded = new Set(['id','type','name','a','b','c','points','stop','createdAtIndex','createdAtDate','visible','locked','arrow_marker_version','path_version','priceBasis','shareScope']);
   if (button.dataset.templateAction === 'save') {
     drawingTemplates[object.type] = structuredClone(Object.fromEntries(Object.entries(object).filter(([key])=>!excluded.has(key))));
     savePrototypeState();showToast('绘图模板已保存到本机');
   } else if(drawingTemplates[object.type]) {
     rememberObjects();
-    const versions={arrow_marker_version:object.arrow_marker_version,path_version:object.path_version};
+    const versions={arrow_marker_version:object.arrow_marker_version,path_version:object.path_version,shareScope:object.shareScope};
     Object.assign(object,structuredClone(drawingTemplates[object.type]));
     for(const [key,value] of Object.entries(versions)){if(value===undefined)delete object[key];else object[key]=value;}
     if(document.querySelector('#objectModal').classList.contains('show')){
@@ -2110,6 +2115,8 @@ document.querySelector('#togglePanel').addEventListener('click', () => {
 });
 function removeChartObjects(scope) {
   if(!['drawings','indicators','all'].includes(scope))return;
+  if(scope!=='indicators' && window.aplusWorkspaceConfirmDelete?.(userObjects.filter(object=>
+      indicatorSettings.remove_locked || !(object.locked||indicatorSettings.lock_drawings))) === false)return;
   rememberObjects();
   if(scope!=='indicators')userObjects=userObjects.filter(object=>!indicatorSettings.remove_locked&&
     (object.locked||indicatorSettings.lock_drawings));

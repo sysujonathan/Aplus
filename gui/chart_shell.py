@@ -131,7 +131,7 @@ window.aplusFlushAndClose=()=>window.pywebview.api.finish_close();</script>''', 
         return page, target
     for name in ("prototype.css", "historical-bars-v2.js", "prototype.js",
                  "chart-coordinates.js", "chart-indicators.js", "chart-position.js", "drawing-settings.js", "drawing-quickbar.js",
-                 "prototype-interactions.js", "production-controls.js", "chart-palette.js"):
+                 "prototype-interactions.js", "production-controls.js", "chart-palette.js", "workspace-controls.js"):
         shutil.copyfile(ASSETS / name, target / name)
     chart_script = (target / "prototype.js").read_text(encoding="utf-8")
     chart_script = chart_script.replace("const bars = [", "const demoBars = [", 1)
@@ -150,6 +150,10 @@ window.aplusFlushAndClose=()=>window.pywebview.api.finish_close();</script>''', 
         f"<script>window.tvPrototypeV2 = true;window.APLUS_CHART_BOOT={encoded};</script>",
     )
     html = html.replace("A+ 图表工作台高保真原型", "A++ 图表工作区")
+    html = html.replace('</body>', '<script src="workspace-controls.js"></script></body>')
+    from workbench.branding import application_icon
+    shutil.copyfile(application_icon(), target / 'app.ico')
+    html = html.replace('<div class="chart-watermark">A+</div>', '<div class="chart-watermark"><img src="app.ico" alt="APLUS" width="34" height="34"></div>')
     if boot.get('embedded'):
         html = html.replace('<body>', '<body class="embedded">')
     # The same slot reloads after switching symbols. Give changed assets new
@@ -229,6 +233,7 @@ def run_session(session_path):
                     run_embedded_close_recovery(window, bridge, session)
         from workbench.branding import application_icon
         webview.start(start_embedded if embedded else None, gui="edgechromium", debug=False, private_mode=True,
+                      storage_path=str(session.with_suffix('.webview')),
                       icon=str(application_icon()))
     except Exception as exc:
         _write_json(status, {'scope': 'process', 'token': token, "ready": False, "error": str(exc)})
