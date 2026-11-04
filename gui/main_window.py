@@ -100,6 +100,7 @@ class AplusMainWindow(ttk.Window):
         self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
         self._build_ui()
         self._load_strategies()
+        self.after_idle(self.chart.restore_saved_layout)
         import sys
         if getattr(sys, 'frozen', False):
             from .installed_update import InstalledVersionController as VersionController
@@ -187,8 +188,8 @@ class AplusMainWindow(ttk.Window):
         self.list_pane.grid(row=0, column=1, sticky=tk.NSEW)
         self.list_pane.columnconfigure(0, weight=1)
         # 高频关注列表通常比当日策略结果更长：上方 1/3、下方 2/3。
-        self.list_pane.rowconfigure(0, weight=1)
-        self.list_pane.rowconfigure(2, weight=2)
+        self.list_pane.rowconfigure(0, weight=1, uniform='lists')
+        self.list_pane.rowconfigure(2, weight=2, uniform='lists')
         self.list_pane.configure(width=round(360*self._display_scale))
         self.list_pane.grid_propagate(False)
         self.candidates = CandidateTabs(
@@ -210,8 +211,18 @@ class AplusMainWindow(ttk.Window):
             on_drop=self._on_watch_drop,
             on_drag_end=self.chart.clear_drop_highlight,
             on_page_request=self._on_chart_page,
+            on_alert=self._watch_alert,
+            on_compare=self._watch_compare,
+            auto_quotes=lambda:bool(self.auto_quote_var.get()),
         )
         self.watch.grid(row=2, column=0, sticky=tk.NSEW)
+        self._sidebar_width = self.watch.views.data.get('sidebarWidth')
+        self._list_grip = tk.Frame(body, width=6, bg=CONTROL_BG, cursor='sb_h_double_arrow')
+        self._list_grip.place(x=0, y=0, height=1)
+        self.list_pane.bind('<Configure>', lambda e:self._list_grip.place(
+            x=max(0, self.list_pane.winfo_x()-7), y=0, width=6, height=self.body.winfo_height()), add='+')
+        self._list_grip.bind('<B1-Motion>', self._resize_sidebar)
+        self._list_grip.bind('<ButtonRelease-1>', self._save_sidebar)
 
         status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
@@ -221,6 +232,26 @@ class AplusMainWindow(ttk.Window):
 
         self._switch_section("premarket")
         self.bind("<Configure>", self._resize_layout)
+
+    def _watch_alert(self, code):
+        self.on_watch_selected(code, next((row['observation_id'] for row in self.watch.rows() if row['code']==code), None))
+        # The existing alert form validates actual source/period data before save.
+        index = self.chart._active_slot
+        def open_when_ready(attempt=0):
+            item = self.chart.current_item()
+            if index != self.chart._active_slot or not item or item.code != code:
+                return
+            host = self.chart._slots[index]._embedded
+            if host and host.ready():
+                self.chart.command('action','alert')
+            elif attempt < 50:
+                self.after(200, lambda:open_when_ready(attempt+1))
+            elif self.chart.controls:
+                self.chart.controls.caption.set('图表尚未加载完成，请稍后再点提醒')
+        self.after(200, open_when_ready)
+
+    def _watch_compare(self, code):
+        self.chart.compare(code)
 
     def _placeholder_page(self, title, subtitle, boundary):
         page = ttk.Frame(self.page_host, padding=(46, 42))
@@ -475,7 +506,18 @@ class AplusMainWindow(ttk.Window):
         if event.widget is not self:
             return
         # 两个列表共用右栏，宽度约为旧关注栏的 1.5 倍。
-        self.list_pane.configure(width=right_list_width(event.width,self._display_scale))
+        requested = float(self._sidebar_width) * self._display_scale if self._sidebar_width else right_list_width(event.width,self._display_scale)
+        self.list_pane.configure(width=max(round(260*self._display_scale), min(round(event.width*.45),round(requested))))
+
+    def _resize_sidebar(self, event):
+        width = self.body.winfo_rootx() + self.body.winfo_width() - event.x_root
+        width = max(260*self._display_scale, min(self.body.winfo_width()*.45,width))
+        self._sidebar_width = width/self._display_scale
+        self.list_pane.configure(width=round(width))
+
+    def _save_sidebar(self, _event=None):
+        self.watch.views.data['sidebarWidth'] = self._sidebar_width
+        self.watch._save_view()
 
     # ---- 周期切换：重读候选（保留当前日期筛选）----
     def _on_timeframe(self, tf):

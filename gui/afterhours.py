@@ -79,6 +79,8 @@ class AfterhoursPage(ttk.Frame):
         self.posthoc = tk.BooleanVar(value=False)
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)
+        from .research_surface import attach_research_surface
+        attach_research_surface(self, sticky_rows=3)
         self._build()
         self._poll_id = self.after(350, self._poll)
         self.bind('<Destroy>', self._destroyed, add='+')
@@ -182,11 +184,15 @@ class AfterhoursPage(ttk.Frame):
     def _resize_research(self, event):
         if event.widget is not self:
             return
-        compact = event.height < 1100
-        rows = 2 if event.height < 850 else 3 if compact else 5
+        dpi = self.winfo_fpixels('1i') / 96
+        logical_height = max(event.height / dpi, getattr(self, '_research_minimum', (0, 0))[1])
+        # Keep the original 96-DPI breakpoints. The toolbar, statistics and
+        # preview controls still need their space inside the scroll surface.
+        compact = logical_height < 1100
+        rows = 2 if logical_height < 850 else 3 if compact else 5
         if (compact, rows) != self._compact_analysis:
             self._compact_analysis = (compact, rows)
-            self._compact_auxiliary = event.height < 850
+            self._compact_auxiliary = logical_height < 850
             for key, value in self.aux_labels.items():
                 title = self.aux_captions[key]
                 title.pack_forget()
@@ -198,21 +204,22 @@ class AfterhoursPage(ttk.Frame):
                 widget.configure(height=rows)
             self.histogram.configure(height=96 if compact else 178)
             self.holding_histogram.configure(height=96 if compact else 178)
-        scale = 1.25 if event.width >= 2000 else 1
+        scale = dpi
         if scale == self._ui_scale:
             return
         self._ui_scale = scale
         for widget, font in self._font_widgets:
             if widget.winfo_exists():
-                widget.configure(font=(font[0], round(int(font[1])*scale), *font[2:]))
+                widget.configure(font=(font[0], max(9, round(abs(int(font[1])) * .75)), *font[2:]))
         style = ttk.Style()
-        style.configure('ResearchList.Treeview', rowheight=round(32*scale), font=('Microsoft YaHei UI', -round(17*scale)))
-        style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', -round(17*scale), 'bold'))
-        style.configure('ResearchBoundary.Treeview', rowheight=round(25*scale), font=('Microsoft YaHei UI', -round(15*scale)))
-        style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', -round(14*scale), 'bold'))
+        style.configure('ResearchList.Treeview', rowheight=round(32*scale), font=('Microsoft YaHei UI', 11))
+        style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', 11, 'bold'))
+        style.configure('ResearchBoundary.Treeview', rowheight=round(25*scale), font=('Microsoft YaHei UI', 10))
+        style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', 10, 'bold'))
         style.configure('Holding.Toolbutton', font=('Microsoft YaHei UI', -round(13*scale)), padding=(3, 2))
         for name in ('ResearchAction.TButton', 'ResearchRun.TButton', 'ResearchScope.TMenubutton'):
-            style.configure(name, font=('Microsoft YaHei UI', -round(17*scale)))
+            style.configure(name, font=('Microsoft YaHei UI', 11))
+        self._reflow_toolbar(None)
         self.history_host.configure(width=round(270*scale))
         self.timeline_host.configure(width=round(300*scale))
         self._render_history()

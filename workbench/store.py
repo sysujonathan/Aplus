@@ -557,6 +557,49 @@ class Store:
         self.event(None, "保存人工计划", self.path, plan_id=pid, state=state)
         return pid
 
+    def load_ui_preferences(self, namespace):
+        """Versioned view configuration; never a second trading-state store."""
+        if namespace not in ('watch_views', 'chart_layouts'):
+            raise ValueError('未知界面设置')
+        rows = self.rows('SELECT value FROM meta WHERE key=?', ('ui:' + namespace,))
+        if not rows:
+            return {'revision': 0, 'data': {}}
+        document = json.loads(rows[0]['value'])
+        if (not isinstance(document, dict) or not isinstance(document.get('data'), dict)
+                or type(document.get('revision')) is not int or document['revision'] < 0):
+            raise ValueError('界面设置损坏；原数据未改动')
+        return document
+
+    def save_ui_preferences(self, namespace, data, expected_revision, *, layout_copy=None):
+        if namespace not in ('watch_views', 'chart_layouts') or not isinstance(data, dict):
+            raise ValueError('未知界面设置')
+        encoded = dumps(data)
+        if len(encoded.encode('utf-8')) > 1024 * 1024:
+            raise ValueError('界面设置过大')
+        with self.atomic_write():
+            self.execute('BEGIN IMMEDIATE')
+            current = self.load_ui_preferences(namespace)
+            if current['revision'] != expected_revision:
+                raise ValueError('界面设置已在另一窗口更改，请刷新后重试')
+            if layout_copy is not None:
+                if namespace != 'chart_layouts':
+                    raise ValueError('只能复制图表布局')
+                from .workspace_layouts import copy_layout_document
+                origin, target, identities = layout_copy
+                if not any(v.get('id') == target for v in data.get('layouts', [])):
+                    raise ValueError('目标布局不存在')
+                for identity in set(identities):
+                    value = self.chart_document(identity)
+                    copied = copy_layout_document(value, origin, target)
+                    if copied != value:
+                        copied['revision'] = value['revision'] + 1
+                        self.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                                     ('chart_workspace:' + identity, dumps(copied)))
+            document = {'revision': expected_revision + 1, 'data': data}
+            self.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                         ('ui:' + namespace, dumps(document)))
+        return document
+
     def watch(self, observation_id):
         rows = self.rows('SELECT code FROM observations WHERE id=?', (observation_id,))
         if not rows:
@@ -591,6 +634,28 @@ class Store:
                              ('watch_name:' + code, name.strip()))
             self.event(None, '手动加入关注', code=code)
         return code
+
+    def import_manual_watches(self, codes, view_data, expected_revision):
+        """CSV codes and view membership commit together; preserve existing notes/plans."""
+        from .market import code_of
+        from .watch_views import WatchViews
+        codes = list(dict.fromkeys(code_of(code) for code in codes))
+        if len(codes) > 5000:
+            raise ValueError('一次最多导入 5000 个标的')
+        WatchViews._validate(view_data)
+        with self.atomic_write():
+            self.execute('BEGIN IMMEDIATE')
+            current = self.load_ui_preferences('watch_views')
+            if current['revision'] != expected_revision:
+                raise ValueError('自选表已在另一窗口更改，未导入任何代码')
+            for code in codes:
+                self.execute('INSERT INTO watchlist VALUES(?,?,?,1,?,?) ON CONFLICT(code) DO UPDATE SET '
+                             'active=1,updated=excluded.updated', (code, '', '', now(), now()))
+            saved = {'revision': expected_revision+1, 'data': view_data}
+            self.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                         ('ui:watch_views', dumps(saved)))
+            self.event(None, '导入手动关注', count=len(codes))
+        return saved
 
     def list_accounts(self, active_only=True):
         sql = "SELECT * FROM accounts"

@@ -21,6 +21,11 @@
 }
 
 * { box-sizing: border-box; }
+.shared-workspace .topbar, .shared-workspace .leftbar,
+.shared-workspace #favoriteTools, .shared-workspace .rangebar { display:none !important; }
+.shared-workspace .workspace { height:100vh !important; }
+.shared-workspace .chart-watermark { opacity:.35; }
+.shared-workspace .selected-object { max-width:calc(100% - 12px); overflow-x:auto; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: var(--text); }
 button, input { font: inherit; }
 button { color: inherit; }

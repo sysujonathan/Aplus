@@ -332,7 +332,7 @@ assert.ok(context.arrowMarkerPoints(10,10,10,10).flat().every(Number.isFinite));
 // Bulk removal protects locked analysis by default; explicit inclusion is a
 // persisted preference, and the whole mutation keeps one undo snapshot.
 const removalHistory=[];
-const removal=vm.createContext({structuredClone,userObjects:[{id:'free'},{id:'locked',locked:true}],
+const removal=vm.createContext({structuredClone,window:{},userObjects:[{id:'free'},{id:'locked',locked:true}],
   indicatorSettings:{ema:true,lock_drawings:false},selectedId:'free',
   document:{querySelector:()=>({classList:{remove(){}}})},
   rememberObjects(){removalHistory.push(structuredClone(removal.userObjects));},

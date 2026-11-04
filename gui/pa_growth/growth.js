@@ -249,7 +249,8 @@
   }
   function contextBanner() {
     if (!S.context?.code && !S.context?.symbol) return '';
-    const label = [S.context.name || S.context.code || S.context.symbol,S.context.timeframe].filter(Boolean).join(' · ');
+    const period={daily:'日线',weekly:'周线',monthly:'月线','5m':'5分钟',m5:'5分钟','1h':'1小时','4h':'4小时'}[S.context.timeframe]||S.context.timeframe;
+    const label = [S.context.name || S.context.code || S.context.symbol,period].filter(Boolean).join(' · ');
     return `<div class="context-banner"><span>${icon('layers')} 当前行情 · ${esc(label)}</span><button class="btn small" data-action="return-chart">返回行情</button></div>`;
   }
   function searchBox(value, id = 'search-input') {

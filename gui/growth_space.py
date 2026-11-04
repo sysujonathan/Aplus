@@ -16,11 +16,12 @@ from .theme import APP_BG, MUTED
 
 class GrowthHost:
     def __init__(self, parent, store, context=None, on_error=None, on_closed=None, on_return=None,
-                 on_compare=None):
+                 on_compare=None, on_ready=None):
         self.parent, self.store = parent, store
         self.on_error, self.on_closed = on_error, on_closed
         self.on_return = on_return
         self.on_compare = on_compare
+        self.on_ready = on_ready
         self.process = None
         self.closing = False
         self.session = store.root / 'pa_sessions' / (uuid.uuid4().hex + '.json')
@@ -59,6 +60,9 @@ class GrowthHost:
             self._restart_after_close = False
         if result.get('ready'):
             self._started = None
+            if self.on_ready:
+                callback, self.on_ready = self.on_ready, None
+                callback()
         error = result.get('error')
         if self.closed():
             if self.closing:
@@ -108,13 +112,17 @@ class GrowthHost:
 
 class GrowthSpacePage(ttk.Frame):
     def __init__(self, parent, store):
-        super().__init__(parent)
+        super().__init__(parent, width=640, height=480)
         self.store, self.host = store, None
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
         self._status = tk.StringVar(value='正在打开 PA 成长空间…')
-        ttk.Label(self, textvariable=self._status, foreground=MUTED).pack(pady=40)
-        self._retry = ttk.Button(self, text='重新打开', command=self.retry)
-        self.canvas = tk.Frame(self, background=APP_BG)
-        self.canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.canvas = tk.Frame(self, background=APP_BG, width=640, height=480)
+        self.canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        self._loading = ttk.Frame(self, padding=24)
+        self._loading.place(relx=.5, rely=.5, anchor=tk.CENTER)
+        ttk.Label(self._loading, textvariable=self._status, foreground=MUTED).pack(pady=12)
+        self._retry = ttk.Button(self._loading, text='重新打开', command=self.retry)
 
     def start(self):
         if self.host and not self.host.closed():
@@ -122,8 +130,12 @@ class GrowthSpacePage(ttk.Frame):
         if self.host:
             self.host.cleanup()
         try:
-            self.host = GrowthHost(self.canvas, self.store, on_error=self._failed)
-            self.canvas.lift()
+            self._status.set('正在打开 PA 成长空间…')
+            self._retry.pack_forget()
+            self._loading.place(relx=.5, rely=.5, anchor=tk.CENTER)
+            self._loading.lift()
+            self.host = GrowthHost(self.canvas, self.store, on_error=self._failed,
+                                   on_ready=self._loading.place_forget)
         except Exception as exc:
             self._failed(str(exc))
 
@@ -136,7 +148,8 @@ class GrowthSpacePage(ttk.Frame):
             self.start()
 
     def _failed(self, error):
-        self.canvas.lower()
+        self._loading.place(relx=.5, rely=.5, anchor=tk.CENTER)
+        self._loading.lift()
         self._status.set(error)
         self._retry.pack(pady=10)
 

@@ -146,7 +146,7 @@ class CandidateTabs(ttk.Frame):
         for col in range(len(strategies)):
             self.sidebar.columnconfigure(col, weight=1, uniform="strategy")
         for key, label in strategies:
-            button = tk.Label(
+            button = tk.Button(
                 self.sidebar,
                 text=f"{short_strategy_label(label)}\n0",
                 font=("Microsoft YaHei UI", 8, "bold"),
@@ -159,9 +159,18 @@ class CandidateTabs(ttk.Frame):
                 pady=3,
                 relief=tk.FLAT,
                 highlightbackground=CONTROL_BG,
+                highlightcolor=TEXT,
                 highlightthickness=1,
+                takefocus=True,
+                command=lambda k=key: self._choose(k),
+                activebackground=HOVER,
+                activeforeground=TEXT,
             )
-            button.bind("<Button-1>", lambda _event, k=key: self._choose(k))
+            button.bind('<Return>', lambda _event, k=key: self._choose(k))
+            button.bind('<FocusIn>', lambda _event, b=button: b.configure(highlightbackground=TEXT))
+            button.bind('<FocusOut>', lambda _event, b=button: b.configure(highlightbackground=CONTROL_BG))
+            from ttkbootstrap.widgets import ToolTip
+            ToolTip(button, text=label)
             self._buttons[key] = button
         self._selected = next(iter(self._labels), None)
         self._refresh_strategy_bar()
