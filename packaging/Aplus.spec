@@ -2,10 +2,15 @@
 from pathlib import Path
 import json
 import os
+import sys
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 root = Path(SPECPATH).parent
+sys.path.insert(0, str(root))
+from workbench.pa_oauth_config import read_client, resource_path
+read_client(resource_path(root))  # Direct spec builds also fail closed.
 datas = []
+datas.append((str(resource_path(root)), 'resources'))
 datas.append((os.environ['APLUS_BUILD_METADATA'], '.'))
 for name in ('docs', 'workbench/evidence', 'gui/pa_growth'):
     datas.append((str(root/name), name))

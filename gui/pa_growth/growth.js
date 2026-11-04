@@ -244,7 +244,7 @@
     return data;
   }
   function navigation() {
-    const account=$('#shared-account');if(account){const a=S.boot.shared_status;account.innerHTML=a?.connected?`<span class="micro">${esc(a.user.name)}</span><button class="quiet-button" data-action="refresh-shared">刷新公共案例</button><button class="quiet-button" data-action="disconnect-google">断开连接</button>`:'<button class="quiet-button" data-action="connect-google">连接 Google Drive</button>'; }
+    const account=$('#shared-account');if(account){const a=S.boot.shared_status;account.innerHTML=a?.connected?`<span class="micro">${esc(a.user.name)}</span><button class="quiet-button" data-action="connect-google">${a.reconnect_required?'重新授权':'切换账号'}</button><button class="quiet-button" data-action="refresh-shared">刷新公共案例</button><button class="quiet-button" data-action="disconnect-google">断开连接</button>`:'<button class="quiet-button" data-action="connect-google">连接 Google 账号</button>'; }
     $('#navigation').innerHTML = navItems.map(([id,label]) => `<button class="${S.page === id || (S.page === 'study' && id === 'library') ? 'active' : ''}" data-action="navigate" data-page="${id}" title="${label}">${icon(id)}<span>${label}</span></button>`).join('');
   }
   function contextBanner() {
@@ -258,7 +258,7 @@
   }
   function sharedBanner() {
     const a=S.boot.shared_status;
-    return `${a?.directory_shared===false?'<div class="alert-line">目录尚未配置团队共享，请由负责人在 Google Drive 中添加成员。</div>':''}${a?.cache_error?`<div class="alert-line">${esc(a.cache_error)}</div>`:''}${S.boot.personal_error?`<div class="alert-line">${esc(S.boot.personal_error)}</div>`:''}<div class="shared-banner"><div class="button-group"><button class="btn small ${S.scope==='public'?'primary':''}" data-action="set-scope" data-scope="public">公共案例</button><button class="btn small ${S.scope==='private'?'primary':''}" data-action="set-scope" data-scope="private">私密草稿</button></div><span class="micro">${S.scope==='private'?'仅本机可见':a?.cached?`缓存于 ${esc(date(a.refreshed))}`:'连接后查看共享知识空间'}</span><button class="btn small" data-action="${a?.connected?'refresh-shared':'connect-google'}">${a?.connected?'刷新':'连接 Google Drive'}</button></div>`;
+    return `${a?.directory_shared===false?'<div class="alert-line">目录尚未配置团队共享，请由负责人在 Google Drive 中添加成员。</div>':''}${a?.cache_error?`<div class="alert-line">${esc(a.cache_error)}</div>`:''}${S.boot.personal_error?`<div class="alert-line">${esc(S.boot.personal_error)}</div>`:''}<div class="shared-banner"><div class="button-group"><button class="btn small ${S.scope==='public'?'primary':''}" data-action="set-scope" data-scope="public">公共案例</button><button class="btn small ${S.scope==='private'?'primary':''}" data-action="set-scope" data-scope="private">私密草稿</button></div><span class="micro">${S.scope==='private'?'仅本机可见':a?.cached?`缓存于 ${esc(date(a.refreshed))}`:'连接后查看共享知识空间'}</span><button class="btn small" data-action="${a?.connected?'refresh-shared':'connect-google'}">${a?.connected?'刷新':'连接 Google 账号'}</button></div>`;
   }
   function termColors(c) {
     return `<span class="term-colors">${[...new Set((c.term_ids||c.topic_ids||[]).map(id=>S.terms.find(t=>t.id===id)?.color).filter(Boolean))].map(color=>`<i style="background:${color}"></i>`).join('')}</span>`;
@@ -844,7 +844,7 @@
       await refreshData();
       if(S.page==='library')await search(false); else render();
       if(result.refresh_error){toast('账号已连接，公共案例尚未刷新：'+result.refresh_error,true);return;}
-      toast(method==='refresh_shared'?'公共案例已刷新':method==='connect_google'?'Google Drive 已连接':'已断开连接');
+      toast(method==='refresh_shared'?'公共案例已刷新':method==='connect_google'?'Google 账号已连接':'已断开连接');
     } catch(e){toast(e.message,true);try{await refreshData();if(!S.boot.shared_status?.cached&&S.scope==='public'){cancelSearch();S.caseSeq++;S.case=null;S.trialCase=null;S.original=null;S.topicCases=[];S.page='home';clearThumbnails();originalCache.clear();originalCacheBytes=0;closeOverlay(true);render();}}catch(_){} }finally{S.saving--;}
   }
   function publishPreview() {

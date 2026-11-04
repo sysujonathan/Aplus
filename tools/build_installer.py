@@ -47,6 +47,8 @@ def main(argv=None):
     parser.add_argument('--certificate-thumbprint')
     parser.add_argument('--skip-freeze',action='store_true',help='Recompile setup around an already-built payload')
     args=parser.parse_args(argv)
+    from workbench.pa_oauth_config import read_client, resource_path
+    oauth_client=read_client(resource_path(ROOT))
     release=json.loads((ROOT/'packaging/release.json').read_text(encoding='utf-8'))
     if args.version:release['version']=args.version
     if args.sequence:release['sequence']=args.sequence
@@ -81,9 +83,15 @@ def main(argv=None):
     # Never wrap payload from a different build in a new release identity.
     if json.loads((app/'_internal/installed-release.json').read_text())!=release:
         raise SystemExit('Payload release identity does not match this build')
+    if read_client(resource_path(app/'_internal')) != oauth_client:
+        raise SystemExit('Payload Google Desktop client does not match this build')
+    from tools.verify_oauth_resources import audit_payload
+    audit_payload(app, oauth_client)
     report=ROOT/'build'/'self-test.json'
     run([app/'AplusApp.exe','--self-test',report],timeout=60)
-    if not json.loads(report.read_text())['chart_assets']:raise SystemExit('Chart assets missing')
+    self_test=json.loads(report.read_text())
+    if not self_test['chart_assets']:raise SystemExit('Chart assets missing')
+    if not self_test.get('google_oauth_config'):raise SystemExit('Google Desktop client resource missing')
     # A working desktop alone cannot prove that its real windowed EXE can
     # launch a provider child and exchange pipe messages. Probe offline before
     # wrapping any installer; never contact a supplier during this build gate.
@@ -111,6 +119,7 @@ def main(argv=None):
         raise SystemExit('Compatibility bootstrap identity mismatch')
     sign(bridge/'AplusApp.exe')
     shutil.copytree(app,bridge/'primary')
+    audit_payload(bridge/'primary', oauth_client)
     write_inventory(bridge)
     run([bridge/'AplusApp.exe','--bridge-self-test',ROOT/'build'/'bridge-self-test.json'],timeout=120)
     release=dict(bridge_release,upgrade=dict(protocol=1,from_schema=8,to_schema=9,

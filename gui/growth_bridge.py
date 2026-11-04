@@ -262,12 +262,9 @@ class GrowthBridge:
 
     @guarded
     def connect_google(self):
-        import webview
-        paths = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=False,
-            file_types=('Google Desktop OAuth (*.json)',))
-        if not paths:
-            return {'cancelled': True}
-        user = self._drive.session.login(paths[0])
+        user = self._drive.session.login()
+        if self._window is not None:
+            self._window.show()  # Bring PA back after consent in the system browser.
         try:
             return {'user': user, **self._public('refresh')}
         except (OSError, ValueError) as exc:

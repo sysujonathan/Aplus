@@ -26,6 +26,8 @@ def main():
         from workbench.strategies import verify_frozen, catalog
         from gui.chart_shell import ASSETS, webview_available
         from workbench.acceleration_profile import ReadOnlyState
+        from workbench.pa_oauth_config import load_client
+        load_client()  # Validate the packaged resource; never print its values.
         specs=catalog(ReadOnlyState())
         paths=[Path(item.file).resolve() for item in specs.values()]
         # Entry scripts live at the bundle root. Actual detector classes must
@@ -37,6 +39,7 @@ def main():
         if any(name!='VerifiedSourceLoader' for name in loaders):
             raise RuntimeError('冻结策略未通过已校验源码加载器执行')
         report = dict(frozen=verify_frozen(), strategies=len(specs),
+                      google_oauth_config=True,
                       actual_strategy_files=[str(path) for path in paths],
                       actual_strategy_loaders=loaders,
                       chart_assets=(ASSETS/'index.html').exists(), webview=webview_available(),

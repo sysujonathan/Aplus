@@ -92,7 +92,7 @@ def run(folder):
                 wait(window, "document.querySelectorAll('.case-card').length===0 && !document.querySelector('.study-image img') && !document.querySelector('#original-image')")
             drives[0].session.logout()
             for window in windows:
-                wait(window, "document.querySelector('#shared-account').innerText.includes('连接 Google Drive')")
+                wait(window, "document.querySelector('#shared-account').innerText.includes('连接 Google 账号')")
             (folder / 'result.json').write_text(json.dumps(dict(ok=True, real_webviews=2,
                 real_dpapi=True, real_google=False, synthetic=True, checks=[
                     'external_account_switch_clears_both_windows_private_records',

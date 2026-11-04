@@ -62,7 +62,7 @@ def network_operation(method):
             if exc.status in (401, 403, 404):
                 # Target the initiating account, even if another window changed
                 # the active login while this network request was pending.
-                self.set(key, dict(granted=False, epoch=uuid.uuid4().hex))
+                self.set(key, dict(granted=False, epoch=uuid.uuid4().hex, auth_required=exc.status == 401))
             raise
     return call
 
@@ -187,6 +187,7 @@ class Workspace:
                     refreshed=access.get('refreshed'), writable=access.get('writable', False),
                     directory_shared=access.get('shared'),
                     access_epoch=access.get('epoch'),
+                    reconnect_required=bool(access.get('auth_required')),
                     cache_error=getattr(self.store, '_pa_shared_cache_error', None))
 
     @network_operation

@@ -228,15 +228,17 @@ class GoogleSession:
                     raise SessionChanged()
         return value['access_token']
 
-    def login(self, client_path, *, consent_timeout=180):
+    def login(self, client_path=None, *, consent_timeout=180):
         with self.locked():
             _, revision = self._read()
-        path = Path(client_path)
-        if path.stat().st_size > 128 * 1024:
-            raise ValueError('OAuth 客户端文件无效')
-        config = json.loads(path.read_text(encoding='utf-8-sig')).get('installed', {})
-        if not config.get('client_id', '').endswith('.apps.googleusercontent.com') or not config.get('client_secret'):
-            raise ValueError('请选择 Google Cloud 下载的桌面应用 OAuth JSON')
+        from .pa_oauth_config import load_client, read_client
+        if client_path is not None:
+            import sys
+            if getattr(sys, 'frozen', False):
+                raise ValueError('正式安装版仅使用内置 Google 登录配置')
+            config = read_client(client_path, desktop_export=True)
+        else:
+            config = load_client()
         state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
         outcome = {}
