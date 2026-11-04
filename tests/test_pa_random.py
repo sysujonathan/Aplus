@@ -17,7 +17,9 @@ def test_random_qualified_only_and_recent_survives_restart(tmp_path):
     other = GrowthBridge(Store(tmp_path))
     other._drive = bridge._drive
     assert other.random_trial('private')['case_id'] == chosen[0]
-    assert bridge.random_trial('public') == {'ok': True, 'case_id': None, 'eligible': 0}
+    empty = bridge.random_trial('public')
+    assert {key: empty[key] for key in ('ok', 'case_id', 'eligible')} == {'ok': True, 'case_id': None, 'eligible': 0}
+    assert empty['security'] == bridge.security_state()['security']
     assert not bridge.random_trial('other')['ok']
 
 

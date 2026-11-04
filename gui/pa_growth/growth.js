@@ -42,17 +42,52 @@
   const ORIGINAL_CACHE_BYTES = 64 * 1024 * 1024;
   let originalCacheBytes = 0, imageWanted = null, imageWorker = false;
   let bridgeResolve;
+  let security=null, securitySeq=0, securityReload=false, securityPolling=false;
   const bridgeReady = new Promise(resolve => { bridgeResolve = resolve; });
   function resolveBridge() { if (window.pywebview?.api) bridgeResolve(); }
   window.addEventListener('pywebviewready', resolveBridge);
   resolveBridge();
   async function api(method, ...args) {
     await bridgeReady;
+    const seq=securitySeq;
     const fn = window.pywebview.api[method];
     if (typeof fn !== 'function') throw new Error('当前窗口未能连接此操作，请重新打开成长空间。');
-    const response = await fn(...args);
+    const response = typeof window.pywebview.api.call_scoped==='function' && method!=='security_state'
+      ? await window.pywebview.api.call_scoped(method,args,security) : await fn(...args);
+    if(seq!==securitySeq) {const error=new Error('账号或访问权限已改变，请重新操作');error.kind='security';throw error;}
+    if(response?.security!==undefined) {
+      const changed=security!==null&&security!==response.security;
+      if(changed||response.error_kind==='security') {
+        invalidateSecurity(response.security);
+        if(!['bootstrap','connect_google','disconnect_google','refresh_shared'].includes(method)||response.ok===false) {
+          reloadSecurity();const error=new Error(response.error||'账号或公共访问权限已改变，已关闭原内容');error.kind='security';throw error;
+        }
+      } else security=response.security;
+    }
     if (!response || response.ok === false) {const error=new Error(response?.error || '操作未完成，请重试。');error.kind=response?.error_kind;throw error;}
     return response;
+  }
+  function invalidateSecurity(value) {
+    security=value;securitySeq++;
+    // Preserve pending local screenshots, but never carry another account's
+    // research text, original images, async replies or rendered content forward.
+    if(S.overlay==='capture')captureMetadata();
+    cancelSearch();S.caseSeq++;S.topicSeq++;clearThumbnails();
+    originalCache.clear();originalCacheBytes=0;imageWanted=null;
+    Object.assign(S,{case:null,trialCase:null,trialRecord:null,original:null,cases:[],topicCases:[],topicId:null,
+      topicParent:null,topicLoading:false,trials:[],records:[],draftText:{},stats:{},boot:{},graph:{nodes:[],edges:[]},
+      query:'',filters:{},trialThought:'',trialReview:{},marks:[],judgment:'',setupCase:null,setupDraft:null,
+      dirtyMetadata:false,page:'home',composing:false});
+    closeOverlay(true);render();
+  }
+  function reloadSecurity() {
+    if(securityReload)return;securityReload=true;
+    setTimeout(async()=>{try{await boot();}finally{securityReload=false;}},0);
+  }
+  async function pollSecurity() {
+    if(securityPolling||!S.ready)return;securityPolling=true;
+    try{await api('security_state');}catch(error){if(error.kind!=='security')return;}
+    finally{securityPolling=false;}
   }
   function toast(message, error = false) {
     const node = document.createElement('div');
@@ -1001,4 +1036,6 @@
   },12000);
   bridgeReady.then(() => clearTimeout(bridgeTimeout));
   boot();
+  setInterval(pollSecurity,1000);
+  document.addEventListener('visibilitychange',pollSecurity);
 })();

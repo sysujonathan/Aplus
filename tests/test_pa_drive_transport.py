@@ -72,7 +72,8 @@ def test_independent_runtime_profiles_do_not_share_active_google_session(tmp_pat
 
 def test_revoked_refresh_requires_reconnection_without_rewriting_credentials(tmp_path, monkeypatch):
     session = GoogleSession(tmp_path)
-    session.value = dict(expires=0, client_id='fake', client_secret='fake', refresh_token='fake')
+    session.path = tmp_path / 'credential.dpapi'
+    session.save(dict(expires=0, client_id='fake', client_secret='fake', refresh_token='fake'))
     monkeypatch.setattr(pa_auth, 'request', lambda *a, **k: (_ for _ in ()).throw(DriveError(400)))
     with pytest.raises(DriveError, match='重新连接') as error:
         session.access_token()

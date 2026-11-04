@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from functools import wraps
 import io
 import json
 from pathlib import Path
@@ -29,9 +30,10 @@ def run(folder, reopen=False):
     image_reads = []
 
     class ObservedBridge(GrowthBridge):
-        def get_image(self, case_id, asset_id, thumbnail=False):
+        @wraps(GrowthBridge.get_image)
+        def get_image(self, case_id, asset_id, thumbnail=False, cache_only=False):
             image_reads.append((case_id, asset_id, thumbnail))
-            return super().get_image(case_id, asset_id, thumbnail)
+            return super().get_image(case_id, asset_id, thumbnail, cache_only)
 
     bridge = ObservedBridge(store)
     window = webview.create_window('PA 真实闭环验收 · 隔离测试', (ASSETS / 'index.html').as_uri(),

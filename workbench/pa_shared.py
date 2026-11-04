@@ -6,6 +6,8 @@ the commit marker: incomplete original uploads never appear as public cases.
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
+from functools import wraps
 import hashlib
 import io
 import json
@@ -16,7 +18,7 @@ from urllib.parse import urlencode, urlparse
 
 from PIL import Image
 
-from .pa_auth import GoogleSession, DriveError, request, protect, atomic_secret
+from .pa_auth import GoogleSession, DriveError, SessionChanged, request, protect, atomic_secret
 from .pa_growth import now, metadata, image_info, _owner, MAX_CASE_BYTES, MAX_IMAGE_BYTES
 from .pa_terms import IDS, selected, matching
 from .pa_trial import validate as validate_trial
@@ -40,6 +42,29 @@ def encoded(value):
 
 def checksum(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def network_operation(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        user = self.drive.identity()
+        session = getattr(self.drive, 'session', None)
+        scope = session.operation() if isinstance(session, GoogleSession) else nullcontext()
+        key = self.space_key('access') + ':' + user['id']
+        epoch = self.get(key, {}).get('epoch')
+        try:
+            with scope:
+                result = method(self, *args, **kwargs)
+                if self.get(key, {}).get('epoch') != epoch:
+                    raise ValueError('公共访问权限已改变，请重新刷新')
+                return result
+        except DriveError as exc:
+            if exc.status in (401, 403, 404):
+                # Target the initiating account, even if another window changed
+                # the active login while this network request was pending.
+                self.set(key, dict(granted=False, epoch=uuid.uuid4().hex))
+            raise
+    return call
 
 
 class GoogleDrive:
@@ -161,11 +186,14 @@ class Workspace:
         return dict(connected=True, user=user, folder_id=FOLDER, cached=bool(access.get('granted')),
                     refreshed=access.get('refreshed'), writable=access.get('writable', False),
                     directory_shared=access.get('shared'),
+                    access_epoch=access.get('epoch'),
                     cache_error=getattr(self.store, '_pa_shared_cache_error', None))
 
+    @network_operation
     def refresh(self):
         user = self.drive.identity()
         key = self.space_key('access') + ':' + user['id']
+        epoch = self.get(key, {}).get('epoch')
         try:
             self.drive.identity(True)
             writable = self.drive.check_folder()
@@ -196,16 +224,16 @@ class Workspace:
             if len(encoded(cases)) > 32 * 1024 * 1024:
                 raise ValueError('公共案例目录超过本版缓存上限；未替换原缓存')
         except DriveError as exc:
-            if exc.status in (401, 403, 404):
-                self.set(key, {'granted': False})
             raise
         # Replace snapshot only after the entire catalogue validates. Another
         # client's concurrent commits appear on the next explicit refresh.
         cases.sort(key=lambda c: (c['updated'], c['id']), reverse=True)
         with self.store.atomic_write():
+            if self.get(key, {}).get('epoch') != epoch:
+                raise ValueError('访问权限已在其他请求中失效，请重新刷新')
             self.set(self.space_key('catalogue'), cases)
             self.set(self.space_key('catalogue_stamp'), uuid.uuid4().hex)
-            self.set(key, dict(granted=True, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None)))
+            self.set(key, dict(granted=True, epoch=epoch, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None)))
         self.store._pa_shared_cache_error = None
         return dict(count=len(cases), status=self.status())
 
@@ -277,6 +305,7 @@ class Workspace:
         return dict(value, notes=[v for v in records['notes'] if v['case_id'] == case_id],
                     trials=[v for v in records['trials'] if v['case_id'] == case_id])
 
+    @network_operation
     def image(self, case_id, image_id, thumbnail=False, cache_only=False):
         case = next((c for c in self.catalogue() if c['id'] == case_id), None)
         if case is None:
@@ -308,9 +337,12 @@ class Workspace:
             raise ValueError('云端原图校验失败，已保留原记录')
         image_info(data)
         verify_dimensions(data)
+        if not self.status()['cached']:
+            raise ValueError('公共缓存访问权限已失效，请重新连接后刷新')
         atomic_secret(path, data)
         return data
 
+    @network_operation
     def publish(self, case_id):
         user = self.drive.identity(True)
         if not self.drive.check_folder():
@@ -429,6 +461,8 @@ class Workspace:
         # Serialize read-modify-write across independent windows too.
         with self.store.atomic_write():
             records = self.personal()
+            if records['owner'] != user['id']:
+                raise SessionChanged()
             records[kind].append(item)
             if kind == 'visited':
                 records[kind] = records[kind][-100:]
@@ -472,6 +506,8 @@ class Workspace:
         with self.store.atomic_write():
             try:
                 records = self.personal()
+            except SessionChanged:
+                raise
             except ValueError:
                 # Explicit recovery from a validated own-account backup may
                 # replace unreadable active bytes, while retaining them intact.
@@ -482,6 +518,8 @@ class Workspace:
                         ('pa_personal_issue:' + user['id'] + ':' + uuid.uuid4().hex, rows[0]['value']))
                 records = dict(owner=user['id'], **{kind: [] for kind in kinds})
                 isolated = True
+            if records['owner'] != user['id']:
+                raise SessionChanged()
             added = 0
             for kind in kinds:
                 known = {r['id']: r for r in records[kind]}
@@ -553,4 +591,6 @@ def dispatch(store, operation, *args, drive=None):
     if operation not in ('status', 'refresh', 'catalogue', 'search', 'case', 'image', 'publish', 'personal', 'record',
                          'export_learning', 'restore_learning'):
         raise ValueError('未知共享操作')
-    return getattr(workspace, operation)(*args)
+    session = getattr(workspace.drive, 'session', None)
+    with session.operation() if isinstance(session, GoogleSession) else nullcontext():
+        return getattr(workspace, operation)(*args)

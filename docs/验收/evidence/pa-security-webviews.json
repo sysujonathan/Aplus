@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "real_webviews": 2,
+  "real_dpapi": true,
+  "real_google": false,
+  "synthetic": true,
+  "checks": [
+    "external_account_switch_clears_both_windows_private_records",
+    "image_403_revokes_shared_cache_and_clears_both_windows",
+    "external_logout_invalidates_both_windows"
+  ],
+  "test": "test_external_account_and_permission_changes_clear_both_real_webviews",
+  "passed": 1,
+  "seconds": 11.69
+}

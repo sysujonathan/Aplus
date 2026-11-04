@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 import json
 import hashlib
 from functools import wraps
@@ -12,6 +13,7 @@ import uuid
 
 from PIL import Image, ImageGrab
 from workbench.pa_terms import TERMS, IDS as TERM_IDS, graph, selected
+from workbench.pa_auth import GoogleSession, SessionChanged
 
 
 TOPICS = [
@@ -45,12 +47,14 @@ def guarded(method):
             try:
                 if getattr(self, '_closing', False):
                     raise ValueError('成长空间正在关闭，请重新打开后操作')
-                return {'ok': True, **method(self, *args, **kwargs)}
+                return self._invoke(method, args, kwargs)
             except Exception as exc:
                 result = {'ok': False, 'error': str(exc) or '操作失败，请重试'}
                 if isinstance(exc, ConnectionError):
                     result['error_kind'] = 'offline'
+                self._security_error(result, exc)
                 return result
+    call._growth_api = True
     return call
 
 
@@ -62,16 +66,18 @@ def image_read(method):
             with self._lock:
                 if getattr(self, '_closing', False):
                     raise ValueError('成长空间正在关闭')
-            value = method(self, *args, **kwargs)
+            value = self._invoke(method, args, kwargs)
             with self._lock:
                 if getattr(self, '_closing', False):
                     raise ValueError('成长空间正在关闭')
-            return {'ok': True, **value}
+            return value
         except Exception as exc:
             result = {'ok': False, 'error': str(exc) or '图片读取失败'}
             if isinstance(exc, ConnectionError):
                 result['error_kind'] = 'offline'
+            self._security_error(result, exc)
             return result
+    call._growth_api = True
     return call
 
 
@@ -184,6 +190,72 @@ class GrowthBridge:
         self._window = None
         from workbench.pa_shared import GoogleDrive
         self._drive = GoogleDrive(profile=store.root)
+        self._seen_security = None
+        self._request_security = threading.local()
+
+    def call_scoped(self, method, args, expected):
+        """Bind UI mutations to the account/permission epoch the trader saw."""
+        target = getattr(self, method, None) if isinstance(method, str) and not method.startswith('_') else None
+        if not getattr(target, '_growth_api', False) or not isinstance(args, list):
+            return {'ok': False, 'error': '未知成长空间操作'}
+        if expected is not None and (not isinstance(expected, str) or len(expected) > 100):
+            return {'ok': False, 'error': '账号状态无效'}
+        self._request_security.expected = expected
+        try:
+            return target(*args)
+        finally:
+            del self._request_security.expected
+
+    def _security(self):
+        status = self._public('status')
+        session = getattr(self._drive, 'session', None)
+        generation = GoogleSession.generation(session.load()) if isinstance(session, GoogleSession) else None
+        if not status.get('connected'):
+            return 'anonymous'
+        return hashlib.sha256(json.dumps([generation, status['user']['id'], status['cached'],
+                                          status.get('access_epoch')]).encode()).hexdigest()
+
+    def _invoke(self, method, args, kwargs):
+        before = self._security()
+        allowed = method.__name__ in ('bootstrap', 'security_state', 'connect_google', 'disconnect_google')
+        if self._seen_security is None:
+            self._seen_security = before
+        expected = getattr(self._request_security, 'expected', None)
+        if expected is not None and before != expected and method.__name__ != 'bootstrap':
+            raise SessionChanged()
+        if not allowed and before != self._seen_security:
+            raise SessionChanged()
+        session = getattr(self._drive, 'session', None)
+        scope = session.operation() if isinstance(session, GoogleSession) and method.__name__ not in ('connect_google', 'disconnect_google') else nullcontext()
+        with scope:
+            value = method(self, *args, **kwargs)
+        after = self._security()
+        # Refresh is allowed to grant access; other in-flight responses must
+        # never rehydrate old personal content after a different window changes it.
+        if before != after and method.__name__ not in ('connect_google', 'disconnect_google', 'refresh_shared'):
+            raise SessionChanged()
+        if method.__name__ != 'security_state':
+            self._seen_security = after
+        return {'ok': True, **value, **({'security': after} if after != 'anonymous' or before != after else {})}
+
+    def _security_error(self, result, exc):
+        try:
+            current = self._security()
+            if isinstance(exc, SessionChanged) or (self._seen_security is not None and current != self._seen_security):
+                self._thumbnails.clear()
+                self._thumbnail_size = 0
+                result.update(error_kind='security', security=current)
+        except (ValueError, OSError):
+            result.update(error_kind='security', security='unavailable')
+
+    def security_state(self):
+        # Local credential/meta check only: polling never contacts Google.
+        # It also bypasses a long-running network mutation in this window.
+        try:
+            return {'ok': True, 'security': self._security()}
+        except (ValueError, OSError):
+            return {'ok': False, 'error': '登录记录暂时不可用，请重新连接',
+                    'error_kind': 'security', 'security': 'unavailable'}
 
     def _public(self, operation, *args):
         return self._store.pa_shared(operation, *args, drive=self._drive)
