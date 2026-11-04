@@ -81,6 +81,24 @@ def test_revoked_refresh_requires_reconnection_without_rewriting_credentials(tmp
     assert session.value['expires'] == 0
 
 
+def test_consent_timeout_closes_callback_and_preserves_previous_login(tmp_path, monkeypatch):
+    session = GoogleSession(tmp_path)
+    session.path = tmp_path / 'credential.dpapi'
+    session.save(dict(expires=0, client_id='fake', client_secret='fake', refresh_token='fake'))
+    before = session.path.read_bytes()
+    opened = []
+    monkeypatch.setattr(pa_auth.webbrowser, 'open', lambda url: opened.append(url) or True)
+    monkeypatch.setattr(pa_auth, 'request', lambda *a, **k: pytest.fail('No token exchange after timeout'))
+    with pytest.raises(ValueError, match='重新点击连接'):
+        session.login(consent_timeout=0)
+    assert session.path.read_bytes() == before
+    callback = parse_qs(urlparse(opened[0]).query)['redirect_uri'][0]
+    import socket
+    address = urlparse(callback)
+    with pytest.raises(ConnectionRefusedError):
+        socket.create_connection((address.hostname, address.port), timeout=5)
+
+
 def test_drive_idempotent_upload_never_patches_existing_or_follows_external_location(monkeypatch):
     drive = GoogleDrive(Session())
     calls = []

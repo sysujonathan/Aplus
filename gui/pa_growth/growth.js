@@ -836,6 +836,7 @@
   async function cloudAction(method) {
     if(S.saving) return;
     S.saving++;
+    if(method==='connect_google')$$('[data-action="connect-google"]').forEach(button=>{button.disabled=true;button.textContent='等待浏览器授权…';});
     try {
       if(method==='refresh_shared')clearThumbnails();
       const result=await api(method);
@@ -845,7 +846,7 @@
       if(S.page==='library')await search(false); else render();
       if(result.refresh_error){toast('账号已连接，公共案例尚未刷新：'+result.refresh_error,true);return;}
       toast(method==='refresh_shared'?'公共案例已刷新':method==='connect_google'?'Google 账号已连接':'已断开连接');
-    } catch(e){toast(e.message,true);try{await refreshData();if(!S.boot.shared_status?.cached&&S.scope==='public'){cancelSearch();S.caseSeq++;S.case=null;S.trialCase=null;S.original=null;S.topicCases=[];S.page='home';clearThumbnails();originalCache.clear();originalCacheBytes=0;closeOverlay(true);render();}}catch(_){} }finally{S.saving--;}
+    } catch(e){toast(e.message,true);try{await refreshData();if(!S.boot.shared_status?.cached&&S.scope==='public'){cancelSearch();S.caseSeq++;S.case=null;S.trialCase=null;S.original=null;S.topicCases=[];S.page='home';clearThumbnails();originalCache.clear();originalCacheBytes=0;closeOverlay(true);render();}}catch(_){} }finally{S.saving--;if(method==='connect_google')$$('[data-action="connect-google"]').forEach(button=>{button.disabled=false;const a=S.boot.shared_status;button.textContent=a?.connected?(a.reconnect_required?'重新授权':'切换账号'):'连接 Google 账号';});}
   }
   function publishPreview() {
     const c=S.case;

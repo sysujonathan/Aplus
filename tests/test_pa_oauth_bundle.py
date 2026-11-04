@@ -78,6 +78,20 @@ def test_connect_uses_embedded_client_without_file_dialog_and_returns_to_window(
     bridge._window.create_file_dialog.assert_not_called()
 
 
+def test_failed_consent_returns_to_pa_with_retry_error_and_keeps_current_login(tmp_path):
+    bridge = GrowthBridge(Store(tmp_path))
+    drive = Drive(Cloud(), 'a')
+    drive.session = Mock()
+    drive.session.login.side_effect = ValueError('Google 授权已超时，请在成长空间重新点击连接')
+    bridge._drive = drive
+    bridge._window = Mock()
+    result = bridge.connect_google()
+    assert not result['ok'] and '重新点击连接' in result['error']
+    bridge._window.show.assert_called_once_with()
+    drive.session.logout.assert_not_called()
+    bridge._window.create_file_dialog.assert_not_called()
+
+
 def test_build_fails_before_any_compiler_when_public_resource_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(build_installer, 'ROOT', tmp_path)
     compiler = Mock(side_effect=AssertionError('Compiler must not run'))

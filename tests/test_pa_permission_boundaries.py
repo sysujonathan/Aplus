@@ -46,6 +46,8 @@ def test_confirmed_denial_revokes_all_windows_but_preserves_private_originals(tm
         result = bridges[0].get_image(public, image, operation == 'thumbnail')
     assert not result['ok'] and result['error_kind'] == 'security'
     assert not w.status()['cached'] and not other.status()['cached']
+    assert w.status()['reconnect_required'] is (status == 401)
+    assert other.status()['reconnect_required'] is (status == 401)
     assert w.catalogue() == other.catalogue() == []
     with pytest.raises(ValueError):
         other.image(public, image, thumbnail=operation != 'thumbnail', cache_only=True)
@@ -65,6 +67,7 @@ def test_offline_original_failure_does_not_revoke_valid_cover_or_other_window(tm
     assert not denied['ok'] and denied['error_kind'] == 'offline'
     other = Workspace(Store(store.root), drive)
     assert other.status()['cached'] and len(other.catalogue()) == 1
+    assert not other.status()['reconnect_required']
     assert other.image(public, image, True, True) == cover
 
 

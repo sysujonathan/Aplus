@@ -262,9 +262,11 @@ class GrowthBridge:
 
     @guarded
     def connect_google(self):
-        user = self._drive.session.login()
-        if self._window is not None:
-            self._window.show()  # Bring PA back after consent in the system browser.
+        try:
+            user = self._drive.session.login()
+        finally:
+            if self._window is not None:
+                self._window.show()  # Also surface cancellation/timeout in PA.
         try:
             return {'user': user, **self._public('refresh')}
         except (OSError, ValueError) as exc:

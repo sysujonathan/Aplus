@@ -228,7 +228,7 @@ class GoogleSession:
                     raise SessionChanged()
         return value['access_token']
 
-    def login(self, client_path=None, *, consent_timeout=180):
+    def login(self, client_path=None, *, consent_timeout=600):
         with self.locked():
             _, revision = self._read()
         from .pa_oauth_config import load_client, read_client
@@ -275,8 +275,10 @@ class GoogleSession:
             deadline = time.monotonic() + consent_timeout
             while not outcome and time.monotonic() < deadline:
                 server.handle_request()
-        if not outcome.get('code') or outcome.get('error'):
-            raise ValueError('Google 授权已取消或超时')
+        if outcome.get('error'):
+            raise ValueError('Google 授权已取消，请在成长空间重新点击连接')
+        if not outcome.get('code'):
+            raise ValueError('Google 授权已超时，请在成长空间重新点击连接；不要刷新旧回调页')
         raw, _ = request('https://oauth2.googleapis.com/token', data=urlencode({
             'client_id': config['client_id'], 'client_secret': config['client_secret'],
             'code': outcome['code'], 'code_verifier': verifier, 'redirect_uri': redirect,
