@@ -2,6 +2,12 @@
 import sys
 
 
+def scan_command():
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, '--scan-worker']
+    return [sys.executable, '-B', '-u', '-m', 'workbench.scan_worker']
+
+
 def provider_command(vendor):
     if vendor not in ('baostock','tickflow','tencent'):
         raise ValueError('未知行情进程来源')
