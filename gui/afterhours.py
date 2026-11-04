@@ -186,11 +186,13 @@ class AfterhoursPage(ttk.Frame):
             return
         dpi = self.winfo_fpixels('1i') / 96
         logical_height = max(event.height / dpi, getattr(self, '_research_minimum', (0, 0))[1])
-        compact = logical_height < 750
-        rows = 2 if logical_height < 550 else 3 if compact else 5
+        # Keep the original 96-DPI breakpoints. The toolbar, statistics and
+        # preview controls still need their space inside the scroll surface.
+        compact = logical_height < 1100
+        rows = 2 if logical_height < 850 else 3 if compact else 5
         if (compact, rows) != self._compact_analysis:
             self._compact_analysis = (compact, rows)
-            self._compact_auxiliary = logical_height < 550
+            self._compact_auxiliary = logical_height < 850
             for key, value in self.aux_labels.items():
                 title = self.aux_captions[key]
                 title.pack_forget()

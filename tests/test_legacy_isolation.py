@@ -1,8 +1,11 @@
 """工程 A 历史快照必须与新版实时候选保持显式隔离。"""
 
+import os
 from unittest.mock import Mock
 
 import pandas as pd
+import pytest
+import ttkbootstrap as ttk
 
 from gui.data import (
     candidate_dates,
@@ -18,6 +21,7 @@ from gui.data import (
     load_legacy_candidates,
 )
 from gui.watch_panel import WatchPanel
+from tests.native_ui import create_window
 from workbench.market import save_dataset
 from workbench.store import Store, now
 
@@ -129,6 +133,8 @@ def test_legacy_history_never_enters_default_realtime_candidate_query(tmp_path):
     assert latest_observation_date(store) == "2026-09-29"
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Actual Windows watch list')
+@pytest.mark.native_process
 def test_watch_with_legacy_anchor_uses_latest_baostock_market(tmp_path):
     store = Store(tmp_path)
     legacy_frame = pd.DataFrame({
@@ -161,16 +167,27 @@ def test_watch_with_legacy_anchor_uses_latest_baostock_market(tmp_path):
         )
     store.watch("legacy-watch-anchor")
 
-    tree = Mock()
-    tree.get_children.return_value = []
-    tree.insert.return_value = "watch-row"
-    panel = Mock(store=store, tree=tree, _display_rows=[])
-    WatchPanel.reload(panel)
+    window = create_window(lambda: ttk.Window(themename='darkly'))
+    try:
+        # reload now delegates filtering/rendering to bound panel methods.
+        # Exercise those methods and the visible row instead of a Mock that
+        # silently replaces _render_rows with a no-op.
+        panel = WatchPanel(window, store=store, on_select=Mock())
+        panel.pack(fill='both', expand=True)
+        window.update()
+        panel.reload()
 
-    assert len(panel._display_rows) == 1
-    item = panel._display_rows[0]
-    assert item["observation_id"] == "legacy-watch-anchor"
-    assert item["anchor_asof"] == "2026-09-29"
-    assert item["source"] == "baostock"
-    assert item["market_dataset_id"] == official_id
-    assert item["market_asof"] == "2026-09-30"
+        assert len(panel._display_rows) == 1
+        item = panel._display_rows[0]
+        assert item["observation_id"] == "legacy-watch-anchor"
+        assert item["anchor_asof"] == "2026-09-29"
+        assert item["source"] == "baostock"
+        assert item["market_dataset_id"] == official_id
+        assert item["market_asof"] == "2026-09-30"
+        assert list(panel.tree._codes.values()) == ['sz.000001']
+        assert list(panel.tree._obs.values()) == ['legacy-watch-anchor']
+        panel.tree.selection_set(panel.tree.get_children()[0])
+        panel._on_select(None)
+        panel.on_select.assert_called_with('sz.000001', 'legacy-watch-anchor')
+    finally:
+        window.destroy()
