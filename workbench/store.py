@@ -286,6 +286,10 @@ class Store:
         from .pa_shared import dispatch
         return dispatch(self, operation, *args, drive=drive)
 
+    def pa_random_trial(self, scope='public', drive=None):
+        from .pa_random import choose
+        return choose(self, scope, drive)
+
     def pa_restore(self, path):
         from .pa_growth import restore
         return restore(self, path)

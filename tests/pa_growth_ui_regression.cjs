@@ -34,7 +34,7 @@ context.window.__events = events;
 const {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc} = context.window.__test;
 function reset() {
   Object.assign(S,{pending:[{token:'image-1',name:'chart.png',duplicate_cases:[]}],
-    saving:0,staging:0,captureError:'',captureMetadata:{memory:'ETHUSD microDB'},
+    scope:'private',composing:false,graph:{nodes:[],edges:[]},terms:[],saving:0,staging:0,captureError:'',captureMetadata:{memory:'ETHUSD microDB'},
     captureCaseId:null,captureGroup:false,duplicateAllowed:false,page:'library',
     overlay:'capture',draftText:{},dirtyMetadata:false,trialThought:'',trialReview:{},
     judgment:'',trialRecord:null,marks:[],hasMore:false,searchBusy:false,searchSeq:0,
@@ -190,6 +190,7 @@ async function run() {
   assert.equal(S.cases[0].id,'bootstrap-first-page');assert.equal(S.hasMore,true);
 
   reset();S.pending=[];S.page='universe';
+  S.graph={nodes:[{id:'context',name:'context',case_count:1,color:'#abc'},{id:'cont-h2',name:'High 2',case_count:1,color:'#abc'}],edges:[]};
   S.topics=[{id:'context',name:'市场背景',parent_id:null,case_count:1},{id:'continuation',name:'趋势延续',parent_id:null,case_count:1},{id:'cont-h2',name:'H2',parent_id:'continuation',case_count:1}];
   const topicField=element('#topic-note');
   Object.assign(topicField,{dataset:{draft:'topic-note:context'},value:'背景主题原有草稿'});

@@ -277,6 +277,10 @@ class GrowthBridge:
                 'next_offset': offset + min(100, len(page))}
 
     @guarded
+    def random_trial(self, scope='public'):
+        return self._store.pa_random_trial(scope, drive=self._drive)
+
+    @guarded
     def get_case(self, case_id):
         # Images remain metadata until the trader chooses one to inspect.
         if str(case_id).startswith('shared:'):
@@ -287,6 +291,10 @@ class GrowthBridge:
         except (ValueError, json.JSONDecodeError):
             case['trial_setup'] = None
             case['trial_setup_error'] = '试炼设置无法读取，请重新设置；原图仍可查看。'
+        if self._public('status')['connected']:
+            records = self._public('personal')
+            case['notes'] += [r for r in records['notes'] if r['case_id'] == case_id]
+            case['trials'] = [r for r in records['trials'] if r['case_id'] == case_id]
         return {'case': case}
 
     @guarded
@@ -445,13 +453,13 @@ class GrowthBridge:
 
     @guarded
     def add_note(self, case_id, text):
-        if str(case_id).startswith('shared:'):
+        if str(case_id).startswith('shared:') or self._public('status')['connected']:
             return {'note': self._public('record', 'notes', case_id, text)}
         return {'note': self._store.pa_add_note(case_id, text)}
 
     @guarded
     def save_trial(self, case_id, value):
-        if str(case_id).startswith('shared:'):
+        if str(case_id).startswith('shared:') or self._public('status')['connected']:
             return {'trial': self._public('record', 'trials', case_id, value)}
         if (value.get('details') or {}).get('source') == 'progressive-screenshot':
             setup = self._store.pa_trial_setup(case_id)
@@ -481,9 +489,21 @@ class GrowthBridge:
 
     def _growth(self, cases=None):
         data = self._store.pa_growth()
+        status = self._public('status')
+        public = self._public('catalogue')
+        data['stats']['public_cases'] = len(public)
+        data['stats']['contributions'] = sum(c['contributor']['id'] == status.get('user', {}).get('id') for c in public)
+        if status['connected']:
+            personal = self._public('personal')
+            data['notes'] = personal['notes']
+            data['trials'] = personal['trials']
+            data['topic_notes'] = personal['topic_notes']
+            data['stats']['trials'] = len(personal['trials'])
+            data['stats']['researched_topics'] = len({n['topic_id'] for n in personal['topic_notes']})
+            data['stats']['studied_cases'] = len({n['case_id'] for n in personal['studied']})
         if cases is None:
             cases = self._store.pa_case_metadata()
-        case_map = {row['id']: row for row in cases}
+        case_map = {row['id']: row for row in cases + public}
         for row in data.get('trials', []) + data.get('notes', []):
             case = case_map.get(row.get('case_id'), {})
             row['case_title'] = case.get('title') or case.get('memory') or case.get('symbol') or '未命名案例'

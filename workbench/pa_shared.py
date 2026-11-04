@@ -311,6 +311,9 @@ class Workspace:
             raise ValueError('个人学习记录身份不匹配')
         return value
 
+    def record_case(self, case_id):
+        return self.case(case_id) if str(case_id).startswith('shared:') else self.store.pa_case(case_id, touch=False)
+
     def record(self, kind, case_id, value):
         if kind not in ('notes', 'trials', 'topic_notes', 'studied'):
             raise ValueError('学习记录类型无效')
@@ -318,16 +321,26 @@ class Workspace:
         if kind == 'topic_notes':
             selected([case_id], required=True)
         else:
-            self.case(case_id)
+            self.record_case(case_id)
         if kind == 'trials':
-            case = self.case(case_id)
-            setup = case['trial_setup']
+            case = self.record_case(case_id)
+            setup = case.get('trial_setup') if case.get('status') == 'shared' else self.store.pa_trial_setup(case_id)
             if not setup or value.get('details', {}).get('presentation') != setup:
                 raise ValueError('试炼设置已改变，请重新开始')
             if value.get('judgment') not in ('consider', 'wait', 'pass') or value.get('depth') not in ('quick', 'structure', 'deep'):
                 raise ValueError('请先完成基本判断')
             if set(value.get('details', {})) - {'source', 'presentation', 'thought', 'marks', 'image_id'}:
                 raise ValueError('判断记录包含未知字段')
+            details = value.get('details', {})
+            if 'thought' in details and (not isinstance(details['thought'], str) or len(details['thought']) > 20_000):
+                raise ValueError('判断文字无效')
+            marks = details.get('marks', [])
+            if not isinstance(marks, list) or len(marks) > 100:
+                raise ValueError('判断位置无效')
+            for mark in marks:
+                if (not isinstance(mark, dict) or mark.get('image_id') not in setup['image_ids']
+                        or any(type(mark.get(k)) not in (int, float) or not 0 <= mark[k] <= 1 for k in ('x', 'y'))):
+                    raise ValueError('判断位置不属于此试炼')
         elif kind != 'studied' and (not isinstance(value, str) or not value.strip() or len(value) > 20_000):
             raise ValueError('请填写有效研究记录')
         item = dict(id=uuid.uuid4().hex, created=now(), author='我', case_id=case_id)

@@ -75,10 +75,11 @@ class ChartPanel(native_ttk.Frame):
     #: 休市时只做一次首帧读取；失败后隔这么久再试，避免离线时反复打网络。
     CLOSED_RETRY_SECONDS = 300
     def __init__(self, parent, store=None, on_activate=None, image_cache=None, interactive=False, on_layout=None,
-                 minute_fetch=None, hourly_fetch=None, auto_quotes=None):
+                 minute_fetch=None, hourly_fetch=None, auto_quotes=None, on_cases=None):
         _configure_chart_styles()
         super().__init__(parent, style="ChartPanel.TFrame", borderwidth=2, relief=tk.SOLID)
         self.store = store
+        self._on_cases = on_cases
         self._on_activate = on_activate
         self._on_layout = on_layout
         self._image_cache = image_cache if image_cache is not None else {}
@@ -147,6 +148,10 @@ class ChartPanel(native_ttk.Frame):
             borderwidth=0, padx=8, cursor="hand2",
         )
         self._analysis_btn.pack(side=tk.RIGHT, fill=tk.Y)
+        if on_cases is not None:
+            self._cases_btn = tk.Button(self.header, text='案例搜索', command=self._open_cases, state=tk.DISABLED,
+                bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT, borderwidth=0, padx=8, cursor='hand2')
+            self._cases_btn.pack(side=tk.RIGHT, fill=tk.Y)
         self._history_btn = tk.Button(self.header, text='更新K线', command=self._refresh_manual,
                                       bg=CONTROL_BG, fg=TEXT, borderwidth=0, padx=5, cursor='hand2')
 
@@ -415,6 +420,7 @@ class ChartPanel(native_ttk.Frame):
         self._title_var.set(title)
         self.chart_label.configure(image="", text="拖入关注标的或切换候选页")
         self._tv_btn.configure(state=tk.DISABLED)
+        if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.DISABLED)
         self._analysis_btn.configure(state=tk.DISABLED)
         if self._embedded is not None and not self._embedded.closed():
             self._embedded.show(None)
@@ -450,6 +456,7 @@ class ChartPanel(native_ttk.Frame):
             self.readout.set('移到 K 线上查看开、高、低、收')
         self.chart_label.configure(image="", text="正在生成 K 线…")
         self._tv_btn.configure(state=tk.DISABLED)
+        if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.DISABLED)
         self._analysis_btn.configure(state=tk.DISABLED)
         if store is None or observation_id is None:
             self.show_placeholder()
@@ -465,6 +472,7 @@ class ChartPanel(native_ttk.Frame):
             self._image, self._code, self._tf, title = cached
             self._title_var.set(title)
             self._tv_btn.configure(state=tk.NORMAL)
+            if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
             self._analysis_btn.configure(state=tk.NORMAL)
             self._fit_image()
             self._show_interactive()
@@ -555,6 +563,7 @@ class ChartPanel(native_ttk.Frame):
                 if len(cache) > 72:
                     cache.pop(next(iter(cache)))
             self._tv_btn.configure(state=tk.NORMAL)
+            if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
             self._analysis_btn.configure(state=tk.NORMAL)
             self._fit_image()
             self._show_interactive()
@@ -589,9 +598,15 @@ class ChartPanel(native_ttk.Frame):
         self._title_var.set(f'{item.code} {item.name} · 手动关注 · K图准备中…')
         self.chart_label.configure(text='正在读取本地K图；没有缓存时仅获取这一只标的…')
         self._tv_btn.configure(state=tk.NORMAL)
+        if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
         self._history_btn.pack(side=tk.RIGHT, fill=tk.Y)
         from .watch_chart import WatchChartController
         self._manual_controller = WatchChartController(self, item)
+
+    def _open_cases(self):
+        self._activate()
+        if self._code and self._on_cases:
+            self._on_cases()
 
     def _activate(self, _event=None):
         if self._on_activate:
@@ -681,7 +696,7 @@ class ChartGrid(ttk.Frame):
     """TradingView 式活动图格：候选分页，关注点击/拖拽只替换指定格。"""
 
     def __init__(self, parent, store=None, layout_count=4, on_page_state=None,
-                 on_active_item=None, interactive=False, on_layout_request=None, auto_quotes=None):
+                 on_active_item=None, interactive=False, on_layout_request=None, auto_quotes=None, on_cases=None):
         super().__init__(parent)
         self.store = store
         self._interactive = interactive
@@ -689,6 +704,7 @@ class ChartGrid(ttk.Frame):
         self._slot_pool = []
         self._layout_count = layout_count if layout_count in _LAYOUT_SHAPES else 4
         self._on_page_state = on_page_state
+        self._on_cases = on_cases
         self._on_active_item = on_active_item
         self._on_layout_request = on_layout_request
         self._items = []
@@ -851,7 +867,7 @@ class ChartGrid(ttk.Frame):
                     on_activate=lambda i=index: self._activate_slot(i),
                     image_cache=self._image_cache, interactive=self._interactive,
                     on_layout=self._on_layout_request or self.set_layout,
-                    auto_quotes=self._auto_quotes)
+                    auto_quotes=self._auto_quotes, on_cases=self._on_cases)
                 self._slot_pool.append(slot)
             slot.grid(row=row, column=column, sticky=tk.NSEW, padx=3, pady=3)
             self._slots.append(slot)

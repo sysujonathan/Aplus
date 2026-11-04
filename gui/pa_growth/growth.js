@@ -26,7 +26,7 @@
   const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.image}</svg>`;
   const navItems = [['home','首页'],['trial','PA 交易试炼'],['library','案例研究'],['universe','知识宇宙'],['growth','个人成长']];
   const S = {
-    terms:[], graph:{nodes:[],edges:[]}, scope:'public', ready:false, page:'home', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
+    terms:[], graph:{nodes:[],edges:[]}, scope:'public', composing:false, ready:false, page:'home', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
     query:'', filters:{symbol:'',timeframe:'',market:'',data_kind:''}, filterOpen:false,
     searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, hasMore:false, case:null, imageIndex:0,
     studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
@@ -214,7 +214,7 @@
   function home() {
     const hasUse = (S.stats.cases || S.cases.length || 0) > 0 || (S.stats.trials || 0) > 0;
     const recent = S.boot.recent_case || (S.boot.recent_case_id && S.cases.find(c => c.id === S.boot.recent_case_id));
-    return `<section class="page home-page">${contextBanner()}${sharedBanner()}<div class="hero"><div class="hero-copy"><span class="eyebrow">MY TRADING MEMORY</span><h1>${hasUse ? '欢迎回来。' : '我的交易记忆'}</h1>${searchBox(S.query,'home-search')}<div class="hero-shortcuts"><button class="btn ghost small" data-action="navigate" data-page="library">${icon('library')} 全部案例</button><button class="btn ghost small" data-action="navigate" data-page="trial">${icon('trial')} 开始 PA 试炼</button></div>${!hasUse ? '<div class="first-hint">Ctrl+V 收录截图；不填标题也可以保存。</div>' : ''}</div><div class="drop-box" data-action="import" role="button" tabindex="0" aria-label="导入截图"><div class="drop-icon">${icon('paste')}</div><h2>收录截图</h2><p>拖入图片 · 批量导入</p><span class="paste-key">Ctrl + V</span><button class="btn small" data-action="paste">粘贴截图</button></div></div>${recent ? `<div class="resume"><div><h3>继续研究 · ${esc(caseTitle(recent))}</h3><p>${esc(summary(recent))}</p></div><button class="btn" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : ''}<div class="section-head"><h2>${hasUse ? '最近案例' : '案例素材'}</h2>${hasUse ? '<button class="btn ghost small" data-action="navigate" data-page="library">全部案例 →</button>' : ''}</div>${grid(S.cases.slice(0,6))}</section>`;
+    return `<section class="page home-page">${contextBanner()}${sharedBanner()}<div class="hero"><div class="hero-copy"><span class="eyebrow">MY TRADING MEMORY</span><h1>${hasUse ? '欢迎回来。' : '我的交易记忆'}</h1>${searchBox(S.query,'home-search')}<div class="hero-shortcuts"><button class="btn ghost small" data-action="navigate" data-page="library">${icon('library')} 全部案例</button><button class="btn ghost small" data-action="navigate" data-page="trial">${icon('trial')} 开始 PA 试炼</button></div>${!hasUse ? '<div class="first-hint">Ctrl+V 收录截图；不填标题也可以保存。</div>' : ''}</div><div class="drop-box" data-action="import" role="button" tabindex="0" aria-label="导入截图"><div class="drop-icon">${icon('paste')}</div><h2>收录截图</h2><p>拖入图片 · 批量导入</p><span class="paste-key">Ctrl + V</span><button class="btn small" data-action="paste">粘贴截图</button></div></div>${recent ? `<div class="resume"><div><h3>继续研究 · ${esc(caseTitle(recent))}</h3><p>${esc(summary(recent))}</p></div><button class="btn" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : ''}<div class="section-head"><h2>${hasUse ? '最近案例' : '案例素材'}</h2>${hasUse ? '<button class="btn ghost small" data-action="navigate" data-page="library">全部案例 →</button>' : ''}</div><div id="home-results">${grid(S.cases.slice(0,6))}</div></section>`;
   }
   function library() {
     const count = S.cases.length;
@@ -268,11 +268,11 @@
   }
   function trial() {
     const c=S.trialCase;
-    if(!c) return `<section class="page"><span class="eyebrow">PA PRACTICE</span><h1>PA 交易试炼</h1><div class="empty"><strong>从入场时开始判断</strong><p>选择已设置前后截图或入场分界的案例。</p><button class="btn primary" data-action="choose-trial">选择案例</button></div>${S.trials.length?trialHistory():''}</section>`;
+    if(!c) return `<section class="page"><span class="eyebrow">PA PRACTICE</span><h1>PA 交易试炼</h1><div class="empty"><strong>从入场时开始判断</strong><p>随机抽取已设置前后截图或入场分界的案例。</p><button class="btn primary" data-action="choose-trial">随机开始</button></div>${S.trials.length?trialHistory():''}</section>`;
     const image=imageOf(c,S.imageIndex), judged=!!S.trialRecord, cfg=c.trial_setup;
     const steps=cfg?.mode==='sequence'?cfg.image_ids:[];
     const next=judged&&(cfg?.mode==='mask'?S.trialReveal<1:S.trialStep<steps.length-1);
-    return `<section class="page"><div class="between wrap"><div><span class="eyebrow">PA PRACTICE</span><h1>PA 交易试炼</h1></div><button class="btn small" data-action="choose-trial">更换案例</button></div><div class="trial-layout"><section class="photo-panel"><div class="photo-heading"><span>${judged?esc(caseTitle(c)):'入场时 · 先留下判断'}</span><span class="trial-label">${cfg?.mode==='mask'?'截图遮挡练习':`分阶段截图 · ${S.trialStep+1} / ${steps.length}`}${c.data_kind==='test'?' · 测试样本':''}</span></div><div class="trial-image-wrap ${S.marking?'marking':''}" id="trial-image-wrap">${trialMarkup(image)}<div class="mark-layer" id="trial-mark-layer"></div></div><div class="trial-footer"><span>截图原有文字可能包含提示 · 无自动评分</span><div class="button-group">${!judged?`<button class="btn ghost small" data-action="toggle-mark">${icon('pin')} ${S.marking?'完成标记':'标记位置'}</button>`:''}<button class="btn ghost small" data-action="trial-original">${icon('zoom')} 放大当前阶段</button>${next?'<button class="btn primary small" data-action="trial-next">揭示下一阶段 →</button>':''}</div></div></section><aside class="trial-panel"><div class="trial-depth">${[['quick','快速判断'],['structure','结构辨析'],['deep','深度推演']].map(([id,n])=>`<button class="${S.trialDepth===id?'active':''}" data-action="trial-depth" data-depth="${id}" ${judged?'disabled':''}>${n}</button>`).join('')}</div>${!judged?`<h2>此刻你会怎么做？</h2><div class="judgments">${[['consider','考虑计划'],['wait','继续观察'],['pass','主动放弃']].map(([id,n])=>`<button data-action="judgment" data-value="${id}" class="${S.judgment===id?'active':''}">${n}</button>`).join('')}</div><label class="field-label" for="trial-thought">一句判断（可选）</label><textarea id="trial-thought" class="field" placeholder="先留下自己的看法">${esc(S.trialThought)}</textarea><div class="form-actions"><button class="btn primary" data-action="save-judgment" ${!S.judgment||!imageUrl(image)?'disabled':''}>记录判断</button></div>`:`<div class="judgment-record"><b>${esc(judgmentName(S.trialRecord.judgment))}</b><p>${esc(S.trialRecord.details?.thought||'')}</p><p>判断已保存 · ${esc(date(S.trialRecord.created))}</p></div><div class="trial-review"><label class="field-label" for="trial-evidence">后来看到的证据</label><textarea id="trial-evidence" class="field" data-review="evidence">${esc(S.trialReview.evidence||'')}</textarea>${S.trialDepth!=='quick'?`<label class="field-label" for="trial-invalidation">什么会使判断失效？</label><textarea id="trial-invalidation" class="field" data-review="invalidation">${esc(S.trialReview.invalidation||'')}</textarea>`:''}${S.trialDepth==='deep'?`<label class="field-label" for="trial-reflection">后续推演</label><textarea id="trial-reflection" class="field" data-review="reflection">${esc(S.trialReview.reflection||'')}</textarea>`:''}<div class="form-actions"><button class="btn small" data-action="save-trial-review">保存事后研究</button><button class="btn primary small" data-action="finish-trial">完成</button></div></div>`}</aside></div>${S.trials.length?trialHistory():''}</section>`;
+    return `<section class="page"><div class="between wrap"><div><span class="eyebrow">PA PRACTICE</span><h1>PA 交易试炼</h1></div><button class="btn small" data-action="choose-trial">随机下一例</button></div><div class="trial-layout"><section class="photo-panel"><div class="photo-heading"><span>${judged?esc(caseTitle(c)):'入场时 · 先留下判断'}</span><span class="trial-label">${cfg?.mode==='mask'?'截图遮挡练习':`分阶段截图 · ${S.trialStep+1} / ${steps.length}`}${c.data_kind==='test'?' · 测试样本':''}</span></div><div class="trial-image-wrap ${S.marking?'marking':''}" id="trial-image-wrap">${trialMarkup(image)}<div class="mark-layer" id="trial-mark-layer"></div></div><div class="trial-footer"><span>截图原有文字可能包含提示 · 无自动评分</span><div class="button-group">${!judged?`<button class="btn ghost small" data-action="toggle-mark">${icon('pin')} ${S.marking?'完成标记':'标记位置'}</button>`:''}<button class="btn ghost small" data-action="trial-original">${icon('zoom')} 放大当前阶段</button>${next?'<button class="btn primary small" data-action="trial-next">揭示下一阶段 →</button>':''}</div></div></section><aside class="trial-panel"><div class="trial-depth">${[['quick','快速判断'],['structure','结构辨析'],['deep','深度推演']].map(([id,n])=>`<button class="${S.trialDepth===id?'active':''}" data-action="trial-depth" data-depth="${id}" ${judged?'disabled':''}>${n}</button>`).join('')}</div>${!judged?`<h2>此刻你会怎么做？</h2><div class="judgments">${[['consider','考虑计划'],['wait','继续观察'],['pass','主动放弃']].map(([id,n])=>`<button data-action="judgment" data-value="${id}" class="${S.judgment===id?'active':''}">${n}</button>`).join('')}</div><label class="field-label" for="trial-thought">一句判断（可选）</label><textarea id="trial-thought" class="field" placeholder="先留下自己的看法">${esc(S.trialThought)}</textarea><div class="form-actions"><button class="btn primary" data-action="save-judgment" ${!S.judgment||!imageUrl(image)?'disabled':''}>记录判断</button></div>`:`<div class="judgment-record"><b>${esc(judgmentName(S.trialRecord.judgment))}</b><p>${esc(S.trialRecord.details?.thought||'')}</p><p>判断已保存 · ${esc(date(S.trialRecord.created))}</p></div><div class="trial-review"><label class="field-label" for="trial-evidence">后来看到的证据</label><textarea id="trial-evidence" class="field" data-review="evidence">${esc(S.trialReview.evidence||'')}</textarea>${S.trialDepth!=='quick'?`<label class="field-label" for="trial-invalidation">什么会使判断失效？</label><textarea id="trial-invalidation" class="field" data-review="invalidation">${esc(S.trialReview.invalidation||'')}</textarea>`:''}${S.trialDepth==='deep'?`<label class="field-label" for="trial-reflection">后续推演</label><textarea id="trial-reflection" class="field" data-review="reflection">${esc(S.trialReview.reflection||'')}</textarea>`:''}<div class="form-actions"><button class="btn small" data-action="save-trial-review">保存事后研究</button><button class="btn primary small" data-action="finish-trial">完成</button></div></div>`}</aside></div>${S.trials.length?trialHistory():''}</section>`;
   }
   function revealNext() {
     if(!S.trialRecord || S.saving || S.original) return;
@@ -325,7 +325,7 @@
     const stats = S.stats;
     const cases = Number(stats.cases || 0), images = Number(stats.images || stats.assets || 0), topics = Number(stats.researched_topics || stats.topics || 0), trials = Number(stats.trials || 0);
     const records = S.records || [];
-    return `<section class="page"><span class="eyebrow">MY JOURNEY</span><h1>个人成长</h1><div class="growth-grid"><section class="growth-cell"><h3>案例素材积累</h3><strong class="growth-number">${cases}</strong><p>${images} 张原始图片 · 私密草稿${Number(stats.test_cases || 0) ? `<br>含 ${Number(stats.test_cases)} 个测试样本` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="library">查看案例 →</button></section><section class="growth-cell"><h3>已开展的知识研究</h3><strong class="growth-number">${topics}</strong><p>${Number(stats.topic_notes || 0)} 条主题研究记录</p><button class="btn ghost small" data-action="navigate" data-page="universe">进入知识宇宙 →</button></section><section class="growth-cell"><h3>真实判断记录</h3><strong class="growth-number">${trials}</strong><p>截图自主试炼 · 不自动评判盈亏${Number(stats.test_trials || 0) ? `<br>含 ${Number(stats.test_trials)} 条测试样本判断` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="trial">查看判断 →</button></section></div><div class="growth-lower"><section class="growth-panel"><h2>个人研究轨迹</h2>${records.length ? `<div class="timeline">${records.slice(0,12).map(record => `<article class="timeline-item"><b>${esc(record.title || record.case_title || (record.topic_id ? topicName(record.topic_id) : '个人研究'))}</b><p>${esc(record.text || record.content || record.memory || '')}</p><small>${esc(record.author || '我')} · ${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">案例笔记和主题研究保存后，会出现在这里。</div>'}</section><section class="growth-panel"><h2>判断与回看</h2>${S.trials.length ? `<div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}<br>${esc(record.details?.thought || '')}</p><small>${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">回看原图</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">还没有判断记录。</div>'}</section></div></section>`;
+    return `<section class="page"><span class="eyebrow">MY JOURNEY</span><h1>个人成长</h1><div class="growth-grid"><section class="growth-cell"><h3>${S.boot.shared_status?.connected?'我的公共贡献':'本机私密案例'}</h3><strong class="growth-number">${S.boot.shared_status?.connected?Number(stats.contributions||0):cases}</strong><p>${S.boot.shared_status?.connected?`公共库共 ${Number(stats.public_cases||0)} 个案例 · 已研究 ${Number(stats.studied_cases||0)} 个`:`${images} 张原始图片 · 私密草稿`}${Number(stats.test_cases || 0) ? `<br>含 ${Number(stats.test_cases)} 个测试样本` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="library">查看案例 →</button></section><section class="growth-cell"><h3>已开展的知识研究</h3><strong class="growth-number">${topics}</strong><p>${Number(stats.topic_notes || 0)} 条主题研究记录</p><button class="btn ghost small" data-action="navigate" data-page="universe">进入知识宇宙 →</button></section><section class="growth-cell"><h3>真实判断记录</h3><strong class="growth-number">${trials}</strong><p>截图自主试炼 · 不自动评判盈亏${Number(stats.test_trials || 0) ? `<br>含 ${Number(stats.test_trials)} 条测试样本判断` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="trial">查看判断 →</button></section></div><div class="growth-lower"><section class="growth-panel"><h2>个人研究轨迹</h2>${records.length ? `<div class="timeline">${records.slice(0,12).map(record => `<article class="timeline-item"><b>${esc(record.title || record.case_title || (record.topic_id ? topicName(record.topic_id) : '个人研究'))}</b><p>${esc(record.text || record.content || record.memory || '')}</p><small>${esc(record.author || '我')} · ${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">案例笔记和主题研究保存后，会出现在这里。</div>'}</section><section class="growth-panel"><h2>判断与回看</h2>${S.trials.length ? `<div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}<br>${esc(record.details?.thought || '')}</p><small>${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">回看原图</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">还没有判断记录。</div>'}</section></div></section>`;
   }
   function render() {
     navigation();
@@ -348,6 +348,8 @@
   }
   async function search(preserveFocus = true, append = false) {
     if (append && (S.searchBusy || !S.hasMore)) return;
+    if(S.composing)return;
+    const origin=S.page;
     const seq = ++S.searchSeq;
     const query = S.query;
     const filters = {...S.filters,scope:S.scope};
@@ -360,7 +362,7 @@
     if (moreButton) { moreButton.disabled = true; moreButton.textContent = '正在加载…'; }
     try {
       const result = await api('search_cases',query,filters,offset);
-      if (seq !== S.searchSeq || S.page !== 'library' || query !== S.query || JSON.stringify(filters) !== JSON.stringify({...S.filters,scope:S.scope})) return;
+      if (seq !== S.searchSeq || S.page !== origin || !['home','library'].includes(S.page) || S.composing || query !== S.query || JSON.stringify(filters) !== JSON.stringify({...S.filters,scope:S.scope})) return;
       S.cases = append ? [...S.cases,...(result.cases || [])] : result.cases || [];
       S.hasMore = result.has_more === true;
     } catch (error) {
@@ -370,21 +372,13 @@
     } finally {
       if (seq === S.searchSeq) {
         S.searchBusy = false;
-        if (S.page === 'library') {
-          const active = document.activeElement;
-          const focused = preserveFocus && active?.id === 'search-input';
-          const start = focused ? active.selectionStart : null;
-          const end = focused ? active.selectionEnd : null;
-          const filter = preserveFocus && active?.dataset?.filter;
-          const filterSelection = filter ? active.selectionStart : null;
-          const moreFocused = preserveFocus && active?.dataset?.action === 'load-more';
-          render();
-          if (focused) { $('#search-input')?.focus({preventScroll:true}); try { $('#search-input')?.setSelectionRange(start,end); } catch (_) { /* search fields may not expose a selection */ } }
-          if (filter) {
-            const field = $(`[data-filter="${filter}"]`); field?.focus({preventScroll:true});
-            try { field?.setSelectionRange(filterSelection,filterSelection); } catch (_) { /* select fields have no text selection */ }
+        if (!S.composing && S.page===origin && ['home','library'].includes(S.page)) {
+          if(S.page==='home') {const host=$('#home-results');if(host)host.innerHTML=S.searchError?`<div class="save-error">${esc(S.searchError)}</div>`:grid(S.cases.slice(0,6),'没有找到对应案例');}
+          else {
+            const host=$('#search-results'), html=library(), marker='<div id="search-results">';
+            if(host)host.innerHTML=html.slice(html.indexOf(marker)+marker.length,html.lastIndexOf('</div></section>'));
+            const count=$('.results-head > span');if(count)count.textContent=`${S.hasMore?'已显示 ':''}${S.cases.length} 个案例`;
           }
-          if (moreFocused && S.hasMore) $('[data-action="load-more"]')?.focus({preventScroll:true});
         }
       }
     }
@@ -395,9 +389,10 @@
   }
   function scheduleSearch() {
     clearTimeout(S.searchTimer);
+    if(S.composing)return;
+    const origin=S.page;
     S.searchTimer = setTimeout(() => {
-      if (S.page === 'home' && !S.overlay) { S.page = 'library'; render(); $('#search-input')?.focus(); }
-      search();
+      if(S.page===origin && ['home','library'].includes(S.page) && !S.overlay && !S.composing)search();
     },180);
   }
   async function openCase(id, quick = false) {
@@ -629,9 +624,12 @@
     if (S.page === 'study' || S.page === 'trial') render();
   }
   async function chooseTrial() {
-    const result = await api('search_cases','',{});
-    if (!result.cases?.length) { toast('先收录一张自己的截图。'); return; }
-    overlayHTML(dialog('选择试炼案例',`<div class="case-grid">${result.cases.map(c => card(c).replace('data-action="quick-open"','data-action="start-trial"')).join('')}</div>`,null,true),'trial-picker');
+    if(S.saving)return;
+    if((S.trialThought.trim()||Object.values(S.trialReview).some(Boolean))&&!window.confirm('当前试炼有未保存文字，确定更换？'))return;
+    const result=await api('random_trial',S.scope);
+    if(!result.case_id){toast('暂无可用试炼。先为案例设置前后截图或入场分界。');return;}
+    S.trialThought='';S.trialReview={};
+    await startTrial(result.case_id);
   }
   async function startTrial(id) {
     if ((S.trialThought.trim() || Object.values(S.trialReview).some(Boolean)) && !window.confirm('当前试炼还有未保存的文字。更换案例？')) return;
@@ -885,8 +883,8 @@
   document.addEventListener('input', event => {
     const target = event.target;
     if (target.hasAttribute('data-term-search')) {const q=target.value.toLowerCase().replace(/\s/g,'');$$('[data-term-option]',target.parentElement).forEach(n=>{n.hidden=!n.dataset.match.replace(/\s/g,'').includes(q);});}
-    if (target.id === 'search-input') { S.query = target.value; scheduleSearch(); }
-    if (target.id === 'home-search') { S.query = target.value; scheduleSearch(); }
+    if (target.id === 'search-input') { S.query = target.value; if(!event.isComposing&&!S.composing)scheduleSearch(); }
+    if (target.id === 'home-search') { S.query = target.value; if(!event.isComposing&&!S.composing)scheduleSearch(); }
     if (target.dataset.filter) { S.filters[target.dataset.filter] = target.value; scheduleSearch(); }
     if (target.dataset.draft) S.draftText[target.dataset.draft] = target.value;
     if(target.id==='setup-cutoff'){S.setupDraft.cutoff=Number(target.value)/100;$('#setup-line').style.left=target.value+'%';$('#cutoff-value').textContent=target.value+'%';S.dirtyMetadata=true;}
@@ -902,7 +900,10 @@
     if (event.target.id === 'capture-duplicate') S.duplicateAllowed = event.target.checked;
     if (event.target.closest('#metadata-form')) S.dirtyMetadata = true;
   });
+  document.addEventListener('compositionstart', event => {if(['home-search','search-input'].includes(event.target.id)){S.composing=true;cancelSearch();}});
+  document.addEventListener('compositionend', event => {if(['home-search','search-input'].includes(event.target.id)){S.composing=false;S.query=event.target.value;scheduleSearch();}});
   document.addEventListener('keydown', event => {
+    if(event.isComposing || event.keyCode===229 || S.composing)return;
     if (event.key === 'Escape') {
       event.preventDefault();
       if (S.overlay === 'original') closeOriginal(); else if (S.overlay) closeOverlay(); else if (S.page === 'study') backToSearch();
@@ -916,7 +917,7 @@
       else navigate('library').then(() => $('#search-input')?.focus());
     }
     if (event.key === 'Enter' && ['home-search','search-input'].includes(event.target.id)) {
-      event.preventDefault(); const value = event.target.value; S.query = value.trim(); S.page = 'library'; render(); search(false);
+      event.preventDefault(); S.query = event.target.value.trim(); cancelSearch(); search(false);
     }
     if (event.key === 'Enter' && event.target.matches('.drop-box,[role="button"]')) {
       const element = event.target.closest('[data-action]'); if (element) dispatch(element.dataset.action,element,event).catch(error => toast(error.message,true));

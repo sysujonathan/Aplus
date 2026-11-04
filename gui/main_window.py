@@ -145,9 +145,6 @@ class AplusMainWindow(ttk.Window):
             button.pack(side=tk.LEFT, padx=(0, 5), ipady=2)
             self._section_buttons[key] = button
 
-        ttk.Button(self.section_nav, text='历史案例对照', bootstyle='secondary',
-                   command=self._open_case_comparison).pack(side=tk.LEFT, padx=(12, 0), ipady=2)
-
         self.page_host = ttk.Frame(self)
         self.page_host.grid(row=1, column=0, sticky=tk.NSEW)
         self.page_host.columnconfigure(0, weight=1)
@@ -181,6 +178,7 @@ class AplusMainWindow(ttk.Window):
             on_active_item=self._on_chart_item_activated,
             interactive=True,
             on_layout_request=self._on_chart_layout,
+            on_cases=self._open_case_comparison,
             auto_quotes=lambda: bool(self.auto_quote_var.get()),
         )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
