@@ -180,8 +180,8 @@ def test_queued_auto_scan_handoff_rechecks_stop_request():
 
 def test_right_sidebar_reserves_twice_the_height_for_watchlist():
     source = (ROOT / "gui" / "main_window.py").read_text(encoding="utf-8")
-    assert "self.list_pane.rowconfigure(0, weight=1)" in source
-    assert "self.list_pane.rowconfigure(2, weight=2)" in source
+    assert "self.list_pane.rowconfigure(0, weight=1, uniform='lists')" in source
+    assert "self.list_pane.rowconfigure(2, weight=2, uniform='lists')" in source
 
 
 def test_multichart_layouts_and_candidate_pages_are_stable():

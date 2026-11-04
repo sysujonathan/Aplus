@@ -9,7 +9,7 @@ from .theme import ACCENT, BORDER, CHART_BG, CONTROL_BG, DOWN, MUTED, PANEL_BG, 
 
 def label(parent, text='', variable=None, size=17, color=TEXT, bold=False):
     widget = ttk.Label(parent, text=text, textvariable=variable, foreground=color,
-                       font=('Microsoft YaHei UI', -size, 'bold' if bold else 'normal'))
+                       font=('Microsoft YaHei UI', max(9, round(size * .75)), 'bold' if bold else 'normal'))
     if isinstance(parent, ttk.Frame) and parent.cget('style') == 'ResearchPanel.TFrame':
         widget.configure(style='ResearchPanel.TLabel')
     return widget
@@ -43,27 +43,29 @@ def build_workspace(page):
     style.configure('ResearchPanel.TFrame', background=PANEL_BG, borderwidth=1, relief='solid')
     style.configure('ResearchPanel.TLabel', background=PANEL_BG)
     style.configure('ResearchPanelBody.TFrame', background=PANEL_BG)
-    style.configure('ResearchList.Treeview', rowheight=32, font=('Microsoft YaHei UI', -17),
+    dpi = max(1, p.winfo_fpixels('1i') / 96)
+    style.configure('ResearchList.Treeview', rowheight=round(32*dpi), font=('Microsoft YaHei UI', 11),
                     background=PANEL_BG, fieldbackground=PANEL_BG, foreground=TEXT)
-    style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', -17, 'bold'))
-    style.configure('ResearchBoundary.Treeview', rowheight=25, font=('Microsoft YaHei UI', -15),
+    style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', 13, 'bold'))
+    style.configure('ResearchBoundary.Treeview', rowheight=round(25*dpi), font=('Microsoft YaHei UI', 10),
                     background=PANEL_BG, fieldbackground=PANEL_BG, foreground=TEXT)
-    style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', -14, 'bold'))
-    style.configure('Holding.Toolbutton', font=('Microsoft YaHei UI', -13), padding=(3, 2))
+    style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', 10, 'bold'))
+    style.configure('Holding.Toolbutton', font=('Microsoft YaHei UI', 10), padding=(3, 2))
     for name, bg in [('ResearchAction.TButton', CONTROL_BG), ('ResearchRun.TButton', ACCENT)]:
-        style.configure(name, font=('Microsoft YaHei UI', -17), padding=(8, 5), background=bg,
+        style.configure(name, font=('Microsoft YaHei UI', 13), padding=(8, 5), background=bg,
                         foreground=TEXT, bordercolor=BORDER)
         style.map(name, background=[('active', SELECTION)], foreground=[('disabled', MUTED)])
-    style.configure('ResearchScope.TMenubutton', font=('Microsoft YaHei UI', -17), padding=(8, 5),
+    style.configure('ResearchScope.TMenubutton', font=('Microsoft YaHei UI', 13), padding=(8, 5),
                     background=CONTROL_BG, foreground=TEXT, bordercolor=BORDER)
     bar = ttk.Frame(p)
+    bar.pack_propagate(False)
     bar.grid(row=0, column=0, sticky=tk.EW)
     left = ttk.Frame(bar)
     left.pack(side=tk.LEFT)
     label(left, 'GAP H2 · 日线').pack(side=tk.LEFT, padx=(0, 12))
     p.scope_button = ttk.Menubutton(left, style='ResearchScope.TMenubutton')
     p.scope_button.pack(side=tk.LEFT, padx=(0, 12))
-    menu = tk.Menu(p.scope_button, tearoff=False, font=('Microsoft YaHei UI', -17))
+    menu = tk.Menu(p.scope_button, tearoff=False, font=('Microsoft YaHei UI', 13))
     for board in BOARDS:
         menu.add_checkbutton(label=board, variable=p.board_vars[board], command=p._board_changed)
     menu.add_separator()
@@ -72,7 +74,7 @@ def build_workspace(page):
     p._scope_changed()
     for caption, var in [('从', p.start), ('至', p.end)]:
         label(left, caption).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(left, textvariable=var, width=10, font=('Microsoft YaHei UI', -17)).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Entry(left, textvariable=var, width=10, font=('Microsoft YaHei UI', 13)).pack(side=tk.LEFT, padx=(0, 10))
     button(left, '研究条件', p._settings_dialog).pack(side=tk.LEFT)
     actions = ttk.Frame(bar)
     actions.pack(side=tk.RIGHT)
@@ -83,6 +85,17 @@ def build_workspace(page):
     p.stop_button.pack(side=tk.LEFT, padx=6)
     p.run_button = button(actions, '新建回测', p._run, True)
     p.run_button.pack(side=tk.LEFT)
+    def reflow(_event, bar=bar, left=left, actions=actions):
+        narrow = bar.winfo_width() < left.winfo_reqwidth() + actions.winfo_reqwidth() + 16
+        left.pack_configure(side=tk.TOP if narrow else tk.LEFT, anchor=tk.W)
+        actions.pack_configure(side=tk.TOP if narrow else tk.RIGHT, anchor=tk.E)
+        bar.configure(height=(left.winfo_reqheight()+actions.winfo_reqheight() if narrow else
+                              max(left.winfo_reqheight(),actions.winfo_reqheight()))+4)
+    bar.bind('<Configure>', reflow)
+    left.bind('<Configure>', reflow)
+    actions.bind('<Configure>', reflow)
+    p._reflow_toolbar = reflow
+    p.after_idle(lambda:reflow(None))
     receipt = ttk.Frame(p)
     receipt.grid(row=1, column=0, sticky=tk.EW, pady=8)
     p.status_label = label(receipt, variable=p.status, color=MUTED, size=16)
@@ -91,8 +104,8 @@ def build_workspace(page):
     p.progress = ttk.Progressbar(p, maximum=100, mode='determinate')
     p.progress.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
     p.progress.grid_remove()
-    p.host = ttk.Frame(p)
-    p.host.grid(row=3, column=0, sticky=tk.NSEW)
+    p.host = ttk.Frame(p._research_body)
+    p.host.grid(row=0, column=0, sticky=tk.NSEW)
     p.host.columnconfigure(1, weight=1)
     p.host.rowconfigure(0, weight=1)
     p.history_host = history = ttk.Frame(p.host, width=270, padding=(0, 0, 12, 0))
@@ -222,7 +235,7 @@ def build_workspace(page):
     for caption in ['全部', '已结束', '未成交', '持仓未结束']:
         button(filters, caption, lambda c=caption: p._set_category(c)).pack(side=tk.LEFT, padx=3)
     p.filter_box = ttk.Combobox(filters, textvariable=p.filter, values=['全部', *LABELS.values()],
-                               width=12, state='readonly', font=('Microsoft YaHei UI', -16))
+                               width=12, state='readonly', font=('Microsoft YaHei UI', 12))
     p.filter_box.pack(side=tk.LEFT, padx=6)
     p.filter_box.bind('<<ComboboxSelected>>', lambda e: p._fill_rows())
     p.expand_button = button(filters, '展开清单', p._toggle_list)
@@ -269,7 +282,7 @@ def build_workspace(page):
     readout = label(preview, variable=p.preview_readout, color=MUTED, size=14)
     readout.grid(row=1, column=0, sticky=tk.EW, pady=4)
     readout.bind('<Configure>', lambda e: readout.configure(wraplength=max(1, e.width)))
-    p.preview_chart = tk.Label(preview, bg=CHART_BG, fg=TEXT, text='选择清单或 Top 样本', font=('Microsoft YaHei UI', -17))
+    p.preview_chart = tk.Label(preview, bg=CHART_BG, fg=TEXT, text='选择清单或 Top 样本', font=('Microsoft YaHei UI', 13))
     p.preview_chart.configure(bg=CHART_BG, fg=TEXT)
     p.preview_chart.grid(row=2, column=0, sticky=tk.NSEW, pady=6)
     p.preview_chart.bind('<Configure>', p._schedule_preview)
@@ -277,7 +290,7 @@ def build_workspace(page):
     p.preview_navigation = ReplayNavigation(p.preview_chart, p._schedule_preview,
         lambda text: p.preview_readout.set(text or '移到 K 线上查看开、高、低、收'))
     p.preview_event = tk.StringVar()
-    p.preview_event_box = ttk.Combobox(preview, textvariable=p.preview_event, state='readonly', font=('Microsoft YaHei UI', -16))
+    p.preview_event_box = ttk.Combobox(preview, textvariable=p.preview_event, state='readonly', font=('Microsoft YaHei UI', 12))
     p.preview_event_box.grid(row=3, column=0, sticky=tk.EW)
     p.preview_event_box.bind('<<ComboboxSelected>>', p._preview_event_selected)
     label(preview, '滚轮缩放 · 拖动价格轴 · 双击复位', size=14, color=MUTED).grid(row=4, column=0, sticky=tk.W, pady=6)

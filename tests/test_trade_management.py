@@ -123,8 +123,8 @@ def test_desktop_replaces_other_tools_with_single_trade_management_page():
     assert {kw.arg: ast.unparse(kw.value) for kw in calls[0].keywords} == {
         'auto_quote_var': 'self.auto_quote_var'}
     assert '其他工具' not in source
-    assert 'self.rowconfigure(1, weight=1, minsize=210)' in page
-    assert 'self.rowconfigure(2, weight=3, minsize=630)' in page
+    assert 'self._build_scroll_surface()' in page
+    assert 'scrollregion=self._panel_canvas.bbox' in page
     for title in ("持仓管理", "资金账户", "已清仓", "盈亏日历"):
         assert title in page
     assert "拟建仓速算" in page

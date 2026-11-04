@@ -42,8 +42,14 @@ def _money(value):
     return "—" if value is None else f"{float(value or 0):,.0f}"
 
 
-def _price(value):
-    return "—" if value in (None, "") else f"{float(value):.2f}"
+def _price(value, code=None, *, cost=False):
+    if value in (None, ""):
+        return "—"
+    from workbench.prices import instrument_type_of
+    kind = instrument_type_of(code) if code else None
+    # Cost is an average of actual fills, not an exchange order price.
+    decimals = 4 if cost else 3 if kind == 'exchange_fund' else 2 if kind == 'a_share_stock' else 4
+    return f"{float(value):.{decimals}f}"
 
 
 def _pct(value):
@@ -82,9 +88,9 @@ class TradeManagementFrame(ttk.Frame):
         self._quote_view_key = None
         self.columnconfigure(0, weight=3)
         self.columnconfigure(1, weight=2)
-        self.rowconfigure(1, weight=1, minsize=210)
-        self.rowconfigure(2, weight=3, minsize=630)
+        self.rowconfigure(1, weight=1)
         self._build_header()
+        self._build_scroll_surface()
         self._build_panels()
         self.bind_all("<Button-1>", self._clear_position_selection, add="+")
         self.reload()
@@ -116,8 +122,54 @@ class TradeManagementFrame(ttk.Frame):
             side=tk.RIGHT, padx=(0, 12)
         )
 
+    def _build_scroll_surface(self):
+        """Keep account actions reachable at restored-window/high-DPI sizes."""
+        surface = ttk.Frame(self)
+        surface.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW)
+        surface.columnconfigure(0, weight=1)
+        surface.rowconfigure(0, weight=1)
+        self._panel_canvas = tk.Canvas(surface, background=APP_BG, highlightthickness=0)
+        self._panel_canvas.grid(row=0, column=0, sticky=tk.NSEW)
+        scroll = ttk.Scrollbar(surface, command=self._panel_canvas.yview)
+        scroll.grid(row=0, column=1, sticky=tk.NS)
+        self._panel_canvas.configure(yscrollcommand=scroll.set)
+        self._panel_host = ttk.Frame(self._panel_canvas)
+        self._panels = []
+        self._compact_panels = None
+        self._panel_host.columnconfigure(0, weight=3)
+        self._panel_host.columnconfigure(1, weight=2)
+        scale = self.winfo_fpixels('1i') / 96
+        self._panel_host.rowconfigure(1, weight=1, minsize=round(250 * scale))
+        self._panel_host.rowconfigure(2, weight=2, minsize=round(380 * scale))
+        item = self._panel_canvas.create_window(0, 0, anchor=tk.NW, window=self._panel_host)
+        def fit(_event=None):
+            compact = self._panel_canvas.winfo_width() / scale < 1100
+            if len(self._panels) == 4 and compact != self._compact_panels:
+                self._compact_panels = compact
+                for row in range(4):
+                    self._panel_host.rowconfigure(row, weight=0, minsize=0)
+                self._panel_host.columnconfigure(1, weight=0 if compact else 2)
+                if compact:
+                    # Holding → closed fills → funds → calendar. Never compress
+                    # three financial columns into an unreadable narrow sidebar.
+                    for index, panel in enumerate((self._panels[0], self._panels[2], self._panels[1], self._panels[3])):
+                        panel.grid_configure(row=index, column=0, padx=0)
+                        self._panel_host.rowconfigure(index, minsize=round((250, 230, 320, 420)[index]*scale))
+                else:
+                    for panel, (row, column) in zip(self._panels, ((1,0),(1,1),(2,0),(2,1))):
+                        panel.grid_configure(row=row,column=column,padx=(0,6) if column==0 else (6,0))
+                    self._panel_host.rowconfigure(1, weight=1, minsize=round(250*scale))
+                    self._panel_host.rowconfigure(2, weight=2, minsize=round(380*scale))
+            self._panel_canvas.itemconfigure(item, width=max(1, self._panel_canvas.winfo_width()),
+                height=max(self._panel_host.winfo_reqheight(), self._panel_canvas.winfo_height()))
+            self._panel_canvas.configure(scrollregion=self._panel_canvas.bbox('all'))
+        self._panel_canvas.bind('<Configure>', fit)
+        self._panel_host.bind('<Configure>', fit)
+        self._panel_canvas.bind('<MouseWheel>', lambda e: self._panel_canvas.yview_scroll(-1 if e.delta > 0 else 1, 'units'))
+
     def _panel(self, row, column, title, add_command=None):
-        outer = ttk.Frame(self, padding=1, style="secondary.TFrame")
+        outer = ttk.Frame(self._panel_host, padding=1, style="secondary.TFrame")
+        self._panels.append(outer)
         outer.grid(row=row, column=column, sticky=tk.NSEW,
                    padx=(0, 6) if column == 0 else (6, 0), pady=6)
         outer.columnconfigure(0, weight=1)
@@ -166,7 +218,8 @@ class TradeManagementFrame(ttk.Frame):
                          command=lambda c=column, t=tree, k=key: self._sort_tree(t, c, k))
             minimum = max(46, tree._measure_font.measure(label) + 24)
             minimums[column] = minimum
-            tree.column(column, width=width, minwidth=minimum, anchor=tk.CENTER, stretch=True)
+            anchor = tk.W if column == 'name' else tk.CENTER if column in ('number', 'code', 'date', 'action', 'days') else tk.E
+            tree.column(column, width=width, minwidth=minimum, anchor=anchor, stretch=True)
         tree._column_minimums = minimums
         vertical = ttk.Scrollbar(host, orient=tk.VERTICAL, command=tree.yview)
         horizontal = ttk.Scrollbar(host, orient=tk.HORIZONTAL, command=tree.xview)
@@ -634,10 +687,10 @@ class TradeManagementFrame(ttk.Frame):
         return (tag,) if tag else ()
 
     def _position_values(self, row):
-        quote = _price(row["current_price"])
+        quote = _price(row["current_price"], row['code'])
         return (numeric_stock_code(row["code"]), row["name"], _money(row["market_value"]),
-                _money(row["floating_pnl"]), quote, _price(row["diluted_cost"]),
-                _pct(row["allocation_pct"]), row["quantity"], _price(row["stop"]),
+                _money(row["floating_pnl"]), quote, _price(row["diluted_cost"], row['code'], cost=True),
+                _pct(row["allocation_pct"]), row["quantity"], _price(row["stop"], row['code']),
                 _pct(row["distance_stop_pct"]), _pct(row["trade_risk_pct"]),
                 _pct(row["account_risk_pct"]), "")
 
@@ -1271,10 +1324,10 @@ class _BaseDialog:
                                                                  sticky=tk.EW, padx=(0, 12), pady=4)
         return var
 
-    def buttons(self, row, command, span=4):
+    def buttons(self, row, command, span=4, caption='确认'):
         box = ttk.Frame(self.form)
         box.grid(row=row, column=0, columnspan=span, sticky=tk.E, pady=(12, 0))
-        ttk.Button(box, text="确认", bootstyle="primary", command=command).pack(side=tk.LEFT, padx=4)
+        ttk.Button(box, text=caption, bootstyle="primary", command=command).pack(side=tk.LEFT, padx=4)
         ttk.Button(box, text="取消", bootstyle="secondary", command=self.top.destroy).pack(side=tk.LEFT, padx=4)
 
 
@@ -1325,7 +1378,7 @@ class _ClosedFillsDialog(_BaseDialog):
         self.chart_button = ttk.Button(self.form,text='查看 K 线（按需获取）',command=self._view_chart,
                                        bootstyle='primary-outline')
         self.chart_button.grid(row=3,column=0,sticky=tk.W,pady=6)
-        self.buttons(4,self._ok,span=1)
+        self.buttons(4,self._ok,span=1,caption='保存更正')
 
     def _view_chart(self):
         from .closed_trade_chart import open_closed_chart_dialog

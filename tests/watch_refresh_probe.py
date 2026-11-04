@@ -22,6 +22,9 @@ def run(folder):
                             open=1.2,high=1.3,low=1.1,close=1.25,volume=100))
     context=dict(frame=frame,code='sz.159570',timeframe='daily',context_kind='watch',
                  record=dict(source='baostock',adjustment='不复权'))
+    workspace = '--workspace' in sys.argv
+    if workspace:
+        context['workspace']={'layout':'native-test','pane':'0','defaultScope':'pane'}
     boot=workspace_boot(store,context);boot['sessionToken']=1
     session=folder/'session.json';page,_=_materialize_page(session,boot)
     bridge=ChartSessionBridge(store,boot,lambda b:_materialize_page(session,b));bridge.active_token=1
@@ -89,11 +92,35 @@ def run(folder):
             assert wait_receipt('missing-handler')['accepted'] is False
             count=len(evaluations);time.sleep(.35)
             assert len(evaluations)==count and not window.events.closed.is_set()
+            if workspace:
+                # Exercise the actual parent-command transport, not a direct
+                # call to the JS adapter. A stale pane token must do nothing.
+                atomic_json(session.with_suffix('.commands.json'),dict(token=1,commands=[
+                    dict(sequence=1,kind='timeframe',value='weekly')]))
+                wait("activeTimeframeUnit==='weekly'")
+                atomic_json(session.with_suffix('.commands.json'),dict(token=99,commands=[
+                    dict(sequence=2,kind='timeframe',value='m5')]))
+                time.sleep(.3);check("activeTimeframeUnit==='weekly'")
+                atomic_json(session.with_suffix('.commands.json'),dict(token=1,commands=[
+                    dict(sequence=2,kind='timeframe',value='m5')]))
+                wait("activeTimeframeUnit==='m5'")
+                receipt=json.loads(session.with_suffix('.workspace.json').read_text(encoding='utf-8'))
+                assert receipt['token']==1 and receipt['ack']>=1
+                # Another pane's drawing arrives through the real Store poll.
+                from gui.chart_bridge import ChartBridge
+                peer = ChartBridge(store, workspace_boot(store, {**context,
+                    'workspace':{'layout':'native-test','pane':'1'}}))
+                peer.save_state(dict(timeframe='daily',objects=[dict(id='peer',type='trend',
+                    a=dict(date='2026-10-29',value=1.2),b=dict(date='2026-10-30',value=1.25),
+                    shareScope={'kind':'layout','layout':'native-test'})]))
+                wait("userObjects.some(o=>o.id==='peer') && activeTimeframeUnit==='m5'")
             assert not failures,failures
             (folder/'result.json').write_text(json.dumps(dict(ok=True,real_webview=True,
                 real_history_ipc=True,minute_period_preserved=True,view_preserved=True,
                 daily_updated=True,rejected_once=True,missing_handler_reported=True,synthetic=True)),encoding='utf-8')
         except Exception as exc:
+            import traceback
+            (folder/'failure.txt').write_text(traceback.format_exc(),encoding='utf-8')
             failures.append(repr(exc))
         finally:
             done.set()
