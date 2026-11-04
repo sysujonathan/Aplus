@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 import sys
 import time
+import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def run(folder, manual=False):
+def run(folder, manual=False, startup_delay=0):
     import pandas as pd
     import webview
     from gui.chart_bridge import ChartBridge, workspace_boot, refresh_workspace_boot
@@ -36,6 +37,14 @@ def run(folder, manual=False):
     bridge = ChartBridge(store, boot)
     session = folder/'session.json'
     page, _ = _materialize_page(session, boot)
+    if startup_delay:
+        # Test-only fault injection: delay actual DOM load in the real WebView.
+        assert 0 < startup_delay <= 20, 'startup delay must be within 20 seconds'
+        source = page.read_text(encoding='utf-8')
+        delay = json.dumps(startup_delay * 1000)
+        page.write_text(source.replace('<head>', '<head><script>{const start=performance.now();'
+                        +'while(performance.now()-start<'+delay+'){};'
+                        +'window.probeInjectedDelayMs=performance.now()-start;}</script>', 1), encoding='utf-8')
     window = webview.create_window('Aplus isolated minute drawing acceptance', page.as_uri(), js_api=bridge,
                                    width=1280, height=900, hidden=not manual)
     failures = []
@@ -63,8 +72,11 @@ def run(folder, manual=False):
 
     def probe():
         try:
-            assert window.events.loaded.wait(15)
+            # New WebView user-data directories can cold-start slowly on CI.
+            # Wait for the real event; this is a ceiling, not a fixed sleep.
+            assert window.events.loaded.wait(45), 'native WebView page load exceeded 45 seconds'
             wait("typeof placeDrawing==='function' && Boolean(canvas._view) && Boolean(window.pywebview?.api?.save_state)")
+            startup_delay_ms = window.evaluate_js('window.probeInjectedDelayMs || 0')
             check("switchProductionTimeframe('m5',false)")
             window.evaluate_js('magnetEnabled=false;')
             kinds = ['fib', 'long', 'ray', 'trend', 'short', 'rectangle', 'up', 'down', 'arrow', 'path', 'channel']
@@ -78,7 +90,8 @@ def run(folder, manual=False):
                         window.evaluate_js('placeDrawing({index:216,value:10.3,x:360,y:180});')
                 check(f"userObjects.at(-1).type==='{kind}' && drawingVisibleInWorkspace(userObjects.at(-1))")
             saved()
-            assert len(store.chart_document(boot['identity'])['drawings']) == 11
+            stored = store.chart_document(boot['identity'])['drawings']
+            assert len(stored) == 11, f'first saved drawings: expected 11, got {len(stored)}'
             original = window.evaluate_js("JSON.stringify(userObjects.map(o=>({id:o.id,a:[o.a.date,o.a.value],b:[o.b.date,o.b.value],c:o.c&&[o.c.date,o.c.value],points:o.points?.map(p=>[p.date,p.value]),stop:o.stop})))")
             window.evaluate_js('window.probeCoordinates='+json.dumps(original)+';')
             for unit in ('daily', 'weekly', 'monthly', 'm60', 'm240', 'm5'):
@@ -99,7 +112,7 @@ def run(folder, manual=False):
             check("document.querySelector('#drawingBasisNote').hidden")
             # Recreate the real page from the saved document, then switch again.
             refreshed = refresh_workspace_boot(store, boot)
-            assert len(refreshed['drawings']) == 11
+            assert len(refreshed['drawings']) == 11, f"reopened drawings: expected 11, got {len(refreshed['drawings'])}"
             page, _ = _materialize_page(folder/'reopened.json', refreshed)
             source = page.read_text(encoding='utf-8')
             page.write_text(source.replace('<head>', '<head><script>window.probeErrors=[];window.onerror=(...args)=>window.probeErrors.push(String(args[0])+":"+args[2]);</script>'), encoding='utf-8')
@@ -125,13 +138,19 @@ def run(folder, manual=False):
                     time.sleep(.25)
             (folder/'result.json').write_text(json.dumps(dict(ok=True, real_webview=True, real_store=True,
                 all_tools=11, cross_period_undo=True, reopened=True, daily_channel_outside_minutes=True,
-                price_basis_notice=True, synthetic=True)), encoding='utf-8')
+                price_basis_notice=True, synthetic=True, startup_delay_ms=startup_delay_ms)), encoding='utf-8')
         except Exception as exc:
+            diagnostic = dict(error=repr(exc), traceback=traceback.format_exc())
+            failures.append(diagnostic['traceback'])
             try:
-                (folder/'failure.json').write_text(json.dumps(window.evaluate_js("({errors:window.probeErrors, objects:typeof userObjects==='undefined'?'undefined':userObjects.length, boot:window.APLUS_CHART_BOOT?.drawings?.length, text:document.body.innerText.slice(-600)})")), encoding='utf-8')
+                if window.events.loaded.is_set():
+                    diagnostic['page'] = window.evaluate_js("({errors:window.probeErrors, objects:typeof userObjects==='undefined'?'undefined':userObjects.length, boot:window.APLUS_CHART_BOOT?.drawings?.length, text:document.body.innerText.slice(-600)})")
             except Exception:
                 pass
-            failures.append(repr(exc))
+            try:
+                (folder/'failure.json').write_text(json.dumps(diagnostic), encoding='utf-8')
+            except OSError:
+                pass  # The original traceback still reaches the parent's CI log.
         finally:
             window.destroy()
     webview.start(probe, gui='edgechromium', private_mode=True, storage_path=str(folder/'webview'))
@@ -139,4 +158,10 @@ def run(folder, manual=False):
 
 
 if __name__ == '__main__':
-    run(sys.argv[1], '--manual' in sys.argv)
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('folder')
+    parser.add_argument('--manual', action='store_true')
+    parser.add_argument('--startup-delay', type=float, default=0)
+    args = parser.parse_args()
+    run(args.folder, args.manual, args.startup_delay)
