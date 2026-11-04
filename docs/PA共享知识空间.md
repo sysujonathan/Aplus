@@ -4,7 +4,7 @@
 
 公共案例只有一个权威位置：[PA知识库](https://drive.google.com/drive/folders/18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX)。文件夹 ID 固定在客户端，不接受页面传入替代目录。
 
-2026-11-04 用户明确将目标改为截图中的“PA知识库”，已按精确名称及 ID 核实；旧目录不再是活动知识源，不自动搬迁或删除其资料。新目录已读取权限，`shared=false`、只有 owner。当前连接器能访问不代表 Aplus 已获授权，也不代表团队成员能访问。
+2026-11-04 用户明确将目标改为截图中的“PA知识库”，已按精确名称及 ID 核实；旧目录不再是活动知识源，不自动搬迁或删除其资料。新目录已读取权限，`shared=false`、只有 owner。连接器与 Aplus 桌面授权相互独立；本机单账号桌面授权及三组测试案例的真实 Google 验收现已通过，不代表团队成员已能访问。
 
 产品负责人需完成：
 
@@ -64,7 +64,7 @@
 
 ## 验收边界
 
-隔离双身份协议、真实 Windows WebView 和真实 Google 多账号是不同证据。当前真实云端 OAuth/成员共享仍等待负责人配置，不能称团队已上线。2026-11-04 已在隔离样本窗口用 Windows 拼音实际按键确认首页/案例搜索及个人研究笔记输入，归档原图缩放返回、试炼判断前后和成长记录的运行截图；自动 composition 回执与该人工操作证据分别保存，均不代表真实 Google 已验收。
+隔离双身份协议、真实 Windows WebView、真实 Google 单账号和多账号是不同证据。2026-11-04 本人桌面 OAuth 已完成，真实 Google 单账号三组双图样本上传、原字节下载、搜索/术语/图谱/本机笔记隔离和进程重启通过；已归档九张该轮真实运行截图。第二位成员访问、两个真实账号一致性、真实断网及 Google 撤权、长期运行仍未验，不能称团队已上线。先前 Windows 拼音实际按键及自动 composition 回执分别保留，不用模拟结果替代真实 Google 结果。
 
 实现依据：[Brooks 官方术语表](https://www.brookstradingcourse.com/price-action-trading-terms-glossary/)、[Google 桌面 OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)、[Drive 上传协议](https://developers.google.com/workspace/drive/api/guides/manage-uploads)、[预分配 Drive 文件 ID](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/generateIds)。词库只采用精简英文名称和缩写，不复制长篇课程内容。
 

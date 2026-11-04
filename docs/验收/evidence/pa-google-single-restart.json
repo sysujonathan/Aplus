@@ -1,0 +1,31 @@
+{
+  "real_google": true,
+  "accounts": 1,
+  "synthetic_uploaded_cases": true,
+  "folder_id": "18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX",
+  "test_tag": "Google单账号验收-google-single-20261104",
+  "checks": [
+    "real_desktop_pkce_consent_and_folder_read",
+    "three_real_google_immutable_commits_and_contributor",
+    "real_keyword_term_contributor_search_and_cooccurrence",
+    "six_originals_downloaded_from_google_exact_bytes",
+    "personal_note_local_encrypted_not_in_cloud_manifest",
+    "fresh_store_and_session_restore_same_ids_and_private_note",
+    "new_process_reuses_google_login_without_duplicate_uploads"
+  ],
+  "multi_account_verified": false,
+  "real_network_outage_verified": false,
+  "real_revocation_verified": false,
+  "formal_runtime_modified": false,
+  "new_process_reuses_login": true,
+  "state": "single_account_protocol_passed_ui_review_pending",
+  "ok": true,
+  "case_ids": [
+    "shared:1AYiFSQkWEX_MHWWSAUdLrjYTdvnmuE7I",
+    "shared:1mZcGawOwENCBa9uv97esaHBB8P-heRqj",
+    "shared:1IYaVAJTb_DXp7LXW6p0ryy_XnlJo26Hg"
+  ],
+  "restored_judgment_count": 1,
+  "integration_commit": "fcabc19",
+  "image_read_note": "Restart reused validated image cache; first-live receipt records actual Google downloads."
+}

@@ -9,12 +9,13 @@ import json
 from pathlib import Path
 import sys
 import threading
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def run(folder, client):
+def run(folder, client, reuse_login=False):
     import webview
     from gui.growth_bridge import GrowthBridge
     from gui.growth_shell import ASSETS, GrowthCloseGuard
@@ -28,6 +29,9 @@ def run(folder, client):
     if not folder.is_relative_to(ROOT / '.test-pa-growth'):
         raise ValueError('Isolated test directory required')
     folder.mkdir(parents=True, exist_ok=True)
+    previous = json.loads((folder / 'live-result.json').read_text(encoding='utf-8')) if reuse_login else None
+    if reuse_login and (not previous or not previous.get('ok') or len(previous.get('case_ids', [])) != 3):
+        raise ValueError('Restart verification requires a completed first live acceptance')
     samples(folder / 'samples')
     store = Store(folder / 'runtime')
     tag = 'Google单账号验收-' + folder.name
@@ -54,18 +58,19 @@ def run(folder, client):
             (folder / 'live-result.json').write_text(json.dumps(dict(real_google=True, accounts=1,
                 synthetic_uploaded_cases=True, folder_id=FOLDER, test_tag=tag, checks=checks,
                 multi_account_verified=False, real_network_outage_verified=False,
-                real_revocation_verified=False, formal_runtime_modified=False, **extra),
+                real_revocation_verified=False, formal_runtime_modified=False,
+                new_process_reuses_login=reuse_login, **extra),
                 ensure_ascii=False, indent=2), encoding='utf-8')
         try:
             window.events.loaded.wait(30)
-            receipt(state='awaiting_user_consent', ok=False)
+            receipt(state='restoring_existing_login' if reuse_login else 'awaiting_user_consent', ok=False)
             # System browser opens. The user, not this probe, logs in/consents.
-            user = bridge._drive.session.login(client, consent_timeout=600)
+            user = bridge._drive.identity(True) if reuse_login else bridge._drive.session.login(client, consent_timeout=600)
             workspace = Workspace(store, bridge._drive)
             workspace.refresh()
             checks.append('real_desktop_pkce_consent_and_folder_read')
-            receipt(state='uploading_three_marked_samples', ok=False)
-            ids = [workspace.publish(c['id'])['case_id'] for c in cases]
+            receipt(state='checking_existing_three_samples' if reuse_login else 'uploading_three_marked_samples', ok=False)
+            ids = previous['case_ids'] if reuse_login else [workspace.publish(c['id'])['case_id'] for c in cases]
             workspace.refresh()
             selected = [c for c in workspace.catalogue() if c['id'] in ids]
             assert len(selected) == 3 and len(set(ids)) == 3
@@ -81,8 +86,12 @@ def run(folder, client):
             for case in selected:
                 for index, image in enumerate(case['images'], 1):
                     assert workspace.image(case['id'], image['id']) == (folder / 'samples' / f'sample-{index}.png').read_bytes()
-            checks.append('six_originals_downloaded_from_google_exact_bytes')
-            note = workspace.record('notes', ids[0], '单账号验收私密记录，不应上传')
+            checks.append('six_originals_verified_from_validated_cache_after_restart' if reuse_login
+                          else 'six_originals_downloaded_from_google_exact_bytes')
+            note = next((n for n in workspace.personal()['notes'] if n.get('case_id') == ids[0]
+                         and n.get('text') == '单账号验收私密记录，不应上传'), None)
+            if note is None:
+                note = workspace.record('notes', ids[0], '单账号验收私密记录，不应上传')
             manifest = bridge._drive.read(ids[0].removeprefix('shared:'), 256 * 1024)
             assert note['text'].encode() not in manifest
             checks.append('personal_note_local_encrypted_not_in_cloud_manifest')
@@ -91,8 +100,11 @@ def run(folder, client):
             assert set(ids) <= {c['id'] for c in restarted.catalogue()}
             assert any(n['id'] == note['id'] for n in restarted.personal()['notes'])
             checks.append('fresh_store_and_session_restore_same_ids_and_private_note')
+            if reuse_login:
+                checks.append('new_process_reuses_google_login_without_duplicate_uploads')
             receipt(state='single_account_protocol_passed_ui_review_pending', ok=True,
-                    case_ids=ids, identity_hash=hashlib.sha256(user['id'].encode()).hexdigest())
+                    case_ids=ids, identity_hash=hashlib.sha256(user['id'].encode()).hexdigest(),
+                    restored_judgment_count=len(restarted.personal()['trials']))
             print('Single-account Google checks passed; UI remains open for review.', flush=True)
         except Exception as exc:
             # Production transport errors intentionally contain no response
@@ -101,8 +113,8 @@ def run(folder, client):
             print('Single-account Google checks incomplete: ' + str(exc), flush=True)
 
     webview.start(lambda: threading.Thread(target=probe, daemon=True).start(),
-                  gui='edgechromium', debug=False, private_mode=True, storage_path=str(folder / 'webview'))
+                  gui='edgechromium', debug=False, private_mode=True, storage_path=str(folder / ('webview-' + uuid.uuid4().hex)))
 
 
 if __name__ == '__main__':
-    run(sys.argv[1], sys.argv[2])
+    run(sys.argv[1], sys.argv[2], reuse_login='--reuse-login' in sys.argv[3:])
