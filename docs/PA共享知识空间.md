@@ -20,9 +20,9 @@
 
 ### 发行资源与维护者边界
 
-正式应用内置 `resources/google-desktop-oauth.json`，从已安装程序资源目录定位，不依赖开发电脑路径或工作目录。它仅允许 Google Desktop 公共客户端的 `client_id`、`client_secret` 和可选项目标识；Google 将 Desktop 客户端视为不能保密的公共客户端，这里的 `client_secret` 是随客户端分发的协议参数，不能当作后端机密或用户身份凭据。用户 Access/Refresh Token、登录缓存、账号资料及 Service Account 私钥不得进入发行资源。
+正式发行任务在既有 main 验收门禁通过后，从仓库 Actions 构建输入 `APLUS_GOOGLE_DESKTOP_OAUTH_JSON` 自动生成 `resources/google-desktop-oauth.json` 并打包；本机资源文件被 Git 忽略，不把客户端配置写进源码历史。正式应用从已安装程序资源目录定位，不依赖开发电脑路径或工作目录。它仅允许 Google Desktop 公共客户端的 `client_id`、`client_secret` 和可选项目标识；Google 将 Desktop 客户端视为不能保密的公共客户端，这里的 `client_secret` 是随客户端分发的协议参数，不能当作后端机密或用户身份凭据。用户 Access/Refresh Token、登录缓存、账号资料及 Service Account 私钥不得进入发行资源。
 
-构建脚本及独立 PyInstaller spec 均验证配置；缺失、损坏、混入其他字段时停止构建。实际 payload 的 JSON、私钥头和用户缓存文件另做审计，既有文件清单及更新恢复门禁保持。安装资源损坏时明确报错，不恢复手动选择 JSON。授权等待最长十分钟，期间显示等待状态；取消或超时返回 PA 并提示重新点击连接，不要求刷新旧回调页。更新携带同一资源，个人登录仍保存在独立 Windows 用户目录。
+`tools/prepare_oauth_resource.py` 只接收 Desktop 公共配置并剔除导出元数据，不输出内容；缺失、损坏或混入用户/服务账号材料时停止，保留原有效资源。该构建输入已配置到本仓库，不需要最终用户处理。构建脚本及独立 PyInstaller spec 均验证配置；缺失、损坏、混入其他字段时停止构建。实际 payload 的 JSON、私钥头和用户缓存文件另做审计，既有文件清单及更新恢复门禁保持。安装资源损坏时明确报错，不恢复手动选择 JSON。授权等待最长十分钟，期间显示等待状态；取消或超时返回 PA 并提示重新点击连接，不要求刷新旧回调页。更新携带同一资源，个人登录仍保存在独立 Windows 用户目录。
 
 源码开发或自动化测试可用 `APLUS_GOOGLE_DESKTOP_CLIENT` 指定独立桌面配置，或在 Python 测试中显式传入路径；冻结安装版忽略该环境变量并拒绝显式路径。维护者继续负责在同一 Google 项目启用 Drive API、维护受众/测试用户及应用审核；普通用户不承担这些设置。内置公共配置不会缩小完整 Drive scope，也不能代替 Google 审核。
 

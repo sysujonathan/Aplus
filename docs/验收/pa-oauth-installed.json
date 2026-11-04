@@ -73,6 +73,11 @@
       "commit": "9f55ecebbfa4c3b06c6f3a44baafbfcf46d29c77",
       "preview": true,
       "sha256": "a34ed40aeb63422db9775dd83983270526b83b6a19be28f99df961f7d2170833"
+    },
+    "clean_checkout_build_input_and_release_gates": {
+      "passed": 224,
+      "seconds": 22.48,
+      "live_oauth_json_absent_during_test": true
     }
   },
   "installed_upgrade": {
@@ -142,5 +147,23 @@
   ],
   "not_in_scope": [
     "personal learning cross-computer synchronization"
-  ]
+  ],
+  "build_configuration": {
+    "repository": "sysujonathan/Aplus",
+    "name": "APLUS_GOOGLE_DESKTOP_OAUTH_JSON",
+    "configured": true,
+    "updated_at": "2026-11-04T23:55:14Z",
+    "public_desktop_configuration_only": true,
+    "user_tokens": false,
+    "private_keys": false,
+    "unpublished_history_cleaned": true,
+    "push_protection_bypassed": false,
+    "force_push": false
+  },
+  "historical_build_commit_mapping": {
+    "276601126eab2c1fd3ebb24d51fe6e036ea42ee0": "bf155cdaff227aeaf8ab31be45b2b2b00e6d7c0a",
+    "d56dda3c3fa7bc12db59d74d2e273aa2ca0348b4": "0b9313eae525aeb66049a8b657676e40b79c1c77",
+    "9f55ecebbfa4c3b06c6f3a44baafbfcf46d29c77": "4e43ce6224abbddb3da152464a48fa36afef0a5d",
+    "c18ce8fcc551019fd58995c647a545346222fdf4": "31b9fed1a8ab3c37d5a2df8631cce1f5f97764e9"
+  }
 }

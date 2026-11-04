@@ -89,8 +89,11 @@ def test_consent_timeout_closes_callback_and_preserves_previous_login(tmp_path, 
     opened = []
     monkeypatch.setattr(pa_auth.webbrowser, 'open', lambda url: opened.append(url) or True)
     monkeypatch.setattr(pa_auth, 'request', lambda *a, **k: pytest.fail('No token exchange after timeout'))
+    client = tmp_path / 'client.json'
+    client.write_text(json.dumps({'installed': {'client_id': 'test.apps.googleusercontent.com',
+                                              'client_secret': 'public-test-value'}}), encoding='utf-8')
     with pytest.raises(ValueError, match='重新点击连接'):
-        session.login(consent_timeout=0)
+        session.login(client, consent_timeout=0)
     assert session.path.read_bytes() == before
     callback = parse_qs(urlparse(opened[0]).query)['redirect_uri'][0]
     import socket
