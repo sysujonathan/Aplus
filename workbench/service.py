@@ -492,9 +492,12 @@ class Service:
         from .scan_reads import ScanReads
         previous = getattr(self.store, '_scan_reads', None)
         self.store._scan_reads = ScanReads()
+        self._scan_compute_pools = []
         try:
             return self._scan_flow(job, spec)
         finally:
+            for pool in self._scan_compute_pools:
+                pool.close()
             self.store._scan_reads = previous
 
     def _scan_flow(self, job,spec):
@@ -697,7 +700,9 @@ class Service:
         prefetched_signals = {} if spec.get('force') else cached_answers(self.store, lookup_keys)
         del lookup_keys  # Keep only rows that actually exist, not every candidate key.
         metadata_batch_failed = False
-        for did, (keys, legacy, bridged) in zip(spec['datasets'], lookups):
+        computations = None
+        parallel_checked = False
+        for stock_index, (did, (keys, legacy, bridged)) in enumerate(zip(spec['datasets'], lookups)):
             self.check_stop(job)
             event_rows, cache_rows, observation_rows = [], [], []
 
@@ -751,7 +756,21 @@ class Service:
                 cached_signals = {}
             prepared = None
             prepare_error = None
-            if eligible and any(keys[strategy.id] not in cached_signals for strategy in strategies):
+            if eligible and not all_cached and not parallel_checked:
+                from .scan_parallel import open_computations
+                parallel_checked = True
+                computations = open_computations(self.store, dict(spec, asof=asof), strategies,
+                    prefetched_records, lookups, prefetched_signals, self.cancel_flags[job],
+                    accelerated=bool(mtr_fast or three_k_fast or gap_family_fast))
+                if computations is not None:
+                    self._scan_compute_pools.append(computations)
+                    report['execution'] = dict(mode='processes', workers=computations.workers)
+            remote = computations.take(stock_index, eligible and not all_cached) if computations else None
+            if computations and computations.failure:
+                report['execution']['fallback'] = computations.failure
+            if remote is not None:
+                prepare_error = remote.get('prepare_error')
+            elif eligible and any(keys[strategy.id] not in cached_signals for strategy in strategies):
                 # TSP's most useful pattern for Aplus: one stock is enriched
                 # once, then each unchanged detector receives its own copy.
                 try:
@@ -883,7 +902,13 @@ class Service:
                         else:
                             queue_event('调用策略',strategy.file,strategy=strategy.id,
                                         code=record['code'],dataset=did)
-                            signal = signal_at_end(strategy,data,prepared=prepared)
+                            if remote is not None:
+                                answer = remote['answers'][strategy.id]
+                                if 'error' in answer:
+                                    raise ValueError(answer['error'])
+                                signal = answer['signal']
+                            else:
+                                signal = signal_at_end(strategy,data,prepared=prepared)
                         report['calculated'] += 1
                     if signal:
                         identity = digest(f"{did}|{strategy.id}|{strategy.version}|{timeframe}|{signal['asof']}".encode())
@@ -965,6 +990,8 @@ class Service:
                 and not any(controller.fused for controller in gap_family_fast.values())):
             report['checkpoints'] = {timeframe:dict(identity=checkpoint,signals=report['signals'],
                                                   observation_ids=report['observation_ids'])}
+        if computations is not None:
+            computations.close()
         return report
 
     def _backtest(self, job,spec):

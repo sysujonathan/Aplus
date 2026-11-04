@@ -1,0 +1,20 @@
+{
+  "scope": "Offline preview windowed EXE; generated 130-bar H2 pending setup; no supplier or production data access",
+  "python": "3.12.13",
+  "numpy": "2.5.3",
+  "pandas": "2.3.3",
+  "source_sha256": {
+    "workbench/scan_parallel.py": "08b68720bed92957703650f536b5dfe4822ef609f2d8333536aa44786a712fc4",
+    "workbench/scan_worker.py": "74d6efcd162c28e1127d51b1c75ee11768d4c45dcb49b3716bfdbf32154b6fa7"
+  },
+  "proof": {
+    "windowed_exe_ipc": true,
+    "h2_pending_payload_equal": true,
+    "utf8_errors": true,
+    "source_database_unchanged": true,
+    "child_terminated": true,
+    "parallel_exe_processes": 2,
+    "no_network": true
+  },
+  "frozen_release_sha256": "185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c"
+}

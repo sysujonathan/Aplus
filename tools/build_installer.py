@@ -96,6 +96,7 @@ def main(argv=None):
     # launch a provider child and exchange pipe messages. Probe offline before
     # wrapping any installer; never contact a supplier during this build gate.
     run([sys.executable,ROOT/'tools/test_installed_providers.py',app/'AplusApp.exe'],timeout=120)
+    run([sys.executable,ROOT/'tools/test_installed_scan.py',app/'AplusApp.exe'],timeout=120)
     run([sys.executable,ROOT/'tools/test_schema_migration.py',app/'AplusApp.exe'],timeout=150)
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     run([compiler,'/nologo','/target:winexe','/reference:System.Windows.Forms.dll','/reference:System.Web.Extensions.dll',
