@@ -10,6 +10,11 @@ def main():
     sys.dont_write_bytecode=True  # Installed payloads stay immutable between releases.
     from workbench.installed_imports import install
     install()
+    if len(sys.argv) == 2 and sys.argv[1] == '--scan-worker':
+        from workbench.process_entry import restore_worker_stdio
+        restore_worker_stdio()
+        from workbench.scan_worker import main as scan
+        return scan()
     if len(sys.argv) == 3 and sys.argv[1] == '--provider-worker':
         from workbench.process_entry import provider_command, restore_worker_stdio
         provider_command(sys.argv[2])  # Validate before restoring private IPC.

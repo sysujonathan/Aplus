@@ -1,0 +1,29 @@
+{
+  "scope": "Reference only: fixed copies of real TickFlow bytes; full scan Service excluding market preflight and network update",
+  "source_access_in_final_run": "isolated earlier copy only; no production runtime or supplier access",
+  "data_completeness_certified": false,
+  "production_end_to_end_acceptance": false,
+  "count": 192,
+  "asof": "2026-11-03",
+  "rounds": 3,
+  "median_history_rows": 504,
+  "judgments_per_run": 1152,
+  "cache_state": "empty judgment cache; OS file cache not cleared",
+  "serial_seconds": 28.36987,
+  "parallel_seconds": 7.912086,
+  "speedup": 3.585637213751215,
+  "reduction_pct": 72.11095433288908,
+  "signals_per_run": 0,
+  "business_digest": "31733ec48fd34ef2b992b60e836f1e7c84eb7f9ea85f8429717f475689c94b6a",
+  "business_digest_equal_all_runs": true,
+  "worker_fallbacks": 0,
+  "results": [
+    {"round": 0, "workers": 1, "seconds": 34.973475},
+    {"round": 0, "workers": 8, "seconds": 7.861143},
+    {"round": 1, "workers": 8, "seconds": 7.912086},
+    {"round": 1, "workers": 1, "seconds": 28.36987},
+    {"round": 2, "workers": 1, "seconds": 28.142388},
+    {"round": 2, "workers": 8, "seconds": 11.199738}
+  ],
+  "positive_signal_evidence": "separate generated real-detector H2 Service identity/payload tests and dual windowed EXE probes"
+}
