@@ -20,6 +20,56 @@ INSTALL = ('tests/test_installer_shortcut_icons.py', 'tests/test_brand_runtime_i
            'tests/test_auto_installed_release.py', 'tests/test_update_review_safety.py')
 CI_CONTRACTS = ('tests/test_legacy_update_bridge.py', 'tests/test_version_update.py',
                 'tests/test_installed_schema_bridge.py')
+# Exact reviewed surfaces, not directory or test-name prefixes. Authentication,
+# schema, shared chart transport, strategy/data and release changes stay full.
+MODULE_TESTS = {
+    'help': ('tests/test_changelog_layout.py', 'tests/test_update_notice_help.py'),
+    'intraday': ('tests/test_intraday_drawings.py', 'tests/test_chart_exit_recovery.py',
+                 'tests/test_chart_switch_transport.py', 'tests/test_tv_workspace_prototype.py'),
+    'pa': (
+        'tests/test_pa_growth_store.py', 'tests/test_pa_growth_bridge.py',
+        'tests/test_pa_growth_lifecycle.py', 'tests/test_pa_growth_distribution.py',
+        'tests/test_pa_growth_gui.py', 'tests/test_pa_growth_comparison.py',
+        'tests/test_pa_growth_storage_review.py', 'tests/test_pa_growth_bridge_review.py',
+        'tests/test_pa_growth_native_review.py', 'tests/test_pa_growth_progressive.py',
+        'tests/test_pa_growth_progressive_gui.py', 'tests/test_pa_backup_optional_setup.py',
+        'tests/test_pa_review_finish.py', 'tests/test_pa_oauth_bundle.py',
+        'tests/test_pa_terms.py', 'tests/test_pa_shared.py', 'tests/test_pa_drive_transport.py',
+        'tests/test_pa_session_boundaries.py', 'tests/test_pa_permission_boundaries.py',
+        'tests/test_pa_security_ui.py', 'tests/test_pa_random.py', 'tests/test_pa_ime.py',
+        'tests/test_pa_shared_gui.py', 'tests/test_pa_navigation_race.py',
+        'tests/test_desktop_layout.py', 'tests/test_chart_exit_recovery.py',
+        'tests/test_chart_switch_transport.py'),
+    # Reviewed PR110 contract: selected by an exact test change, or for any PA
+    # scope once the integration commit contains it (independent of merge order).
+    'pa-collaboration': ('tests/test_pa_collaboration.py',),
+}
+MODULE_PATHS = {
+    'help': {'gui/usage_help.py'},
+    # Shared production chart JS affects more than minute drawing geometry and
+    # intentionally remains full; this first mapping covers the test/probe seam.
+    'intraday': {'tests/intraday_drawing_probe.py', 'tests/chart_intraday_drawings.cjs'},
+    'pa': {
+        'gui/growth_bridge.py', 'gui/growth_space.py', 'gui/growth_shell.py',
+        'gui/pa_growth/index.html', 'gui/pa_growth/growth.js', 'gui/pa_growth/growth.css',
+        'workbench/pa_growth.py', 'workbench/pa_trial.py', 'workbench/pa_terms.py',
+        'workbench/pa_random.py', 'workbench/pa_shared.py',
+        'tests/pa_growth_webview_probe.py', 'tests/pa_growth_comparison_probe.py',
+        'tests/pa_growth_progressive_probe.py', 'tests/pa_shared_native_probe.py',
+        'tests/pa_security_native_probe.py', 'tests/pa_growth_ui_regression.cjs',
+        'tests/pa_growth_scope_regression.cjs', 'tests/pa_security_regression.cjs',
+        'tests/pa_ime_regression.cjs', 'tests/pa_navigation_regression.cjs',
+    },
+    'pa-collaboration': {'tests/pa_collaboration_ui.cjs'},
+}
+for module, tests in MODULE_TESTS.items():
+    # Adjacent contracts need not grant admission to the module's fast lane.
+    MODULE_PATHS[module].update(p for p in tests if
+        (module == 'help' and p == 'tests/test_changelog_layout.py') or
+        (module == 'intraday' and p == 'tests/test_intraday_drawings.py') or
+        (module.startswith('pa') and PurePosixPath(p).name.startswith('test_pa_')))
+
+
 ICON_INCLUDE = '#include "ShortcutIcons.iss"\n\n'
 ICON_HOOK = """    Refreshed := RefreshExistingShortcutIcons(ExpandConstant('{userdesktop}'),
       ExpandConstant('{app}\\Aplus.exe'),
@@ -41,7 +91,9 @@ def installer_without_icon_hook(content):
 
 def documentation(path):
     name = PurePosixPath(path)
-    return path == 'README.md' or (name.parts[0] == 'docs' and name.suffix == '.md')
+    return (path in {'README.md', 'AGENTS.md'} or
+            (name.parts[0] == 'docs' and name.suffix == '.md') or
+            (path.startswith('docs/images/') and name.suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp'}))
 
 
 def classify(changes, read_before, read_after):
@@ -50,7 +102,8 @@ def classify(changes, read_before, read_after):
     if not changes:
         return 'full', 'No provable changed-file set'
     for status, path in changes:
-        if not path or '\\' in path or '..' in PurePosixPath(path).parts:
+        if (not path or '\\' in path or '..' in PurePosixPath(path).parts or
+                PurePosixPath(path).is_absolute() or str(PurePosixPath(path)) != path):
             return 'full', 'Invalid changed path'
         if documentation(path) and status in {'A', 'M', 'D'}:
             continue
@@ -60,6 +113,10 @@ def classify(changes, read_before, read_after):
             kinds.add('ci')
         elif path in SHORTCUT:
             kinds.add('shortcut')
+        elif any(path in paths for paths in MODULE_PATHS.values()):
+            kinds.update(module for module, paths in MODULE_PATHS.items() if path in paths)
+            if 'pa-collaboration' in kinds:
+                kinds.add('pa')
         elif path == 'packaging/Aplus.iss':
             try:
                 if installer_without_icon_hook(read_before(path)) != installer_without_icon_hook(read_after(path)):
@@ -69,11 +126,9 @@ def classify(changes, read_before, read_after):
             kinds.add('shortcut')
         else:
             return 'full', 'Unmapped or high-risk path: ' + path
-    if 'ci' in kinds:
-        return 'ci', 'CI policy contracts plus all shortcut and release-admission contracts'
-    if 'shortcut' in kinds:
-        return 'shortcut', 'Isolated desktop icon change plus installation/release contracts'
-    return 'docs', 'Markdown documentation only'
+    lane = '+'.join(sorted(kinds)) if kinds else 'docs'
+    return lane, ('Reviewed scopes: ' + lane + '; changed paths: ' +
+                  ', '.join(path for _, path in changes))
 
 
 def plan(event_name, event, root=ROOT):
@@ -93,8 +148,20 @@ def plan(event_name, event, root=ROOT):
         if fields[-1] != '' or (len(fields)-1) % 2:
             raise ValueError('Invalid Git path evidence')
         changes = list(zip(fields[:-1:2], fields[1:-1:2]))
-        return classify(changes, lambda p: git(root, 'show', ancestor+':'+p),
-                        lambda p: git(root, 'show', head+':'+p))
+        lane, reason = classify(changes, lambda p: git(root, 'show', ancestor+':'+p),
+                                lambda p: git(root, 'show', head+':'+p))
+        kinds = set(lane.split('+'))
+        if 'pa' in kinds and 'pa-collaboration' not in kinds:
+            test = MODULE_TESTS['pa-collaboration'][0]
+            # HEAD is the tested integration snapshot; the PR head may predate
+            # a separately merged contract. Do not admit untracked local files.
+            tracked = git(root, 'ls-tree', '--name-only', '-z', 'HEAD', '--', test)
+            if tracked not in (b'', test.encode('utf-8') + b'\0'):
+                raise ValueError('Invalid integration contract evidence')
+            if tracked:
+                lane = '+'.join(sorted(kinds | {'pa-collaboration'}))
+                reason += '; integration snapshot contract: ' + test
+        return lane, reason
     except (KeyError, TypeError, ValueError, OSError, UnicodeError, subprocess.SubprocessError):
         return 'full', 'Cannot prove PR scope from event and complete Git history'
 
@@ -102,11 +169,35 @@ def plan(event_name, event, root=ROOT):
 def commands(lane):
     if lane == 'full':
         return [[sys.executable, '-m', 'pytest', '-q', 'tests/test_legacy_update_bridge.py', '-x', '--durations=10'],
-                [sys.executable, '-m', 'pytest', '-q', '--durations=30']]
-    if lane not in {'docs', 'shortcut', 'ci'}:
+                [sys.executable, '-m', 'pytest', '-q',
+                 '--ignore=tests/test_legacy_update_bridge.py', '--durations=30']]
+    kinds = set(lane.split('+'))
+    if (not kinds <= {'docs', 'shortcut', 'ci', *MODULE_TESTS} or
+            ('docs' in kinds and len(kinds) != 1) or
+            ('pa-collaboration' in kinds and 'pa' not in kinds)):
         raise ValueError('Unknown CI lane; refusing an empty check')
-    tests = COMMON + (INSTALL if lane != 'docs' else ()) + (CI_CONTRACTS if lane == 'ci' else ())
-    return [[sys.executable, '-m', 'pytest', '-q', *tests, '--durations=10']]
+    tests = list(COMMON)
+    if kinds & {'shortcut', 'ci'}:
+        tests.extend(INSTALL)
+    if 'ci' in kinds:
+        tests.extend(CI_CONTRACTS)
+    for module in sorted(kinds & MODULE_TESTS.keys()):
+        tests.extend(MODULE_TESTS[module])
+    # Stable union: a shared contract runs once, even for mixed module PRs.
+    selected = [[sys.executable, '-m', 'pytest', '-q', *dict.fromkeys(tests), '--durations=10']]
+    if kinds & {'pa', 'intraday'}:
+        # Existing wrappers run production Node regressions. Require Node before
+        # pytest so a missing runtime cannot turn those checks into green skips.
+        selected.insert(0, ['node', '--version'])
+    if 'pa' in kinds:
+        # This account/local-scope regression has no pytest wrapper.
+        selected.append(['node', 'tests/pa_growth_scope_regression.cjs'])
+    return selected
+
+
+def needs_inno(lane):
+    selected = commands(lane)
+    return lane == 'full' or any('tests/test_installer_shortcut_icons.py' in c for c in selected)
 
 
 def main():
@@ -127,7 +218,7 @@ def main():
     else:
         if os.environ.get('GITHUB_OUTPUT'):
             with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-                output.write('lane='+lane+'\n')
+                output.write('lane='+lane+'\nneeds_inno='+str(needs_inno(lane)).lower()+'\n')
         if os.environ.get('GITHUB_STEP_SUMMARY'):
             with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
                 output.write('### Acceptance scope\n\n```json\n'+json.dumps(
