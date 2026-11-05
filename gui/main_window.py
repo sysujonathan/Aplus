@@ -181,6 +181,8 @@ class AplusMainWindow(ttk.Window):
             on_cases=self._open_case_comparison,
             on_symbol=self._open_chart_symbol,
             on_grid_changed=self._apply_list_layout,
+            on_fullscreen=self._set_chart_fullscreen,
+            on_trade=lambda:self._switch_section('other'),
             auto_quotes=lambda: bool(self.auto_quote_var.get()),
         )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
@@ -236,7 +238,7 @@ class AplusMainWindow(ttk.Window):
         self._lists_override=None
         self._apply_list_layout(self.chart.layout_count)
 
-        status_bar = ttk.Frame(premarket, padding=(12, 6))
+        self.premarket_status = status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
         self._status_text = self.toolbar._status
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
@@ -244,6 +246,29 @@ class AplusMainWindow(ttk.Window):
 
         self._switch_section("premarket")
         self.bind("<Configure>", self._resize_layout)
+        for key, action in [
+            ('<Control-k>', self.chart.controls.open_quick_search),
+            ('<F11>', self.chart.controls.toggle_fullscreen),
+            ('<Escape>', lambda:self.chart.controls.set_fullscreen(False)),
+            ('<Control-Alt-s>', lambda:self.chart.command('action','snapshotSave')),
+            ('<Control-Shift-S>', lambda:self.chart.command('action','snapshot')),
+            ('<Alt-s>', lambda:self.chart.command('action','snapshotLink')),
+        ]:
+            self.bind(key,lambda event,a=action:self._chart_shortcut(event,a),add='+')
+
+    def _chart_shortcut(self, event, action):
+        if self.chart.winfo_ismapped() and not isinstance(event.widget,(tk.Entry,tk.Text,ttk.Entry,ttk.Combobox)):
+            if event.keysym == 'Escape' and not self.chart.controls.fullscreen:
+                return
+            action()
+            return 'break'
+
+    def _set_chart_fullscreen(self, enabled):
+        for widget in (self.section_nav,self.toolbar,self.premarket_status):
+            if enabled:
+                widget.grid_remove()
+            else:
+                widget.grid()
 
     def _watch_alert(self, code):
         self.on_watch_selected(code, next((row['observation_id'] for row in self.watch.rows() if row['code']==code), None))
@@ -327,6 +352,8 @@ class AplusMainWindow(ttk.Window):
         return self._section('other')
 
     def _switch_section(self, key):
+        if key != 'premarket' and self.chart.controls.fullscreen:
+            self.chart.controls.set_fullscreen(False)
         self._section(key)
         if key == "other":
             # Mask before raising the page, not after revealing the old frame.
@@ -342,6 +369,11 @@ class AplusMainWindow(ttk.Window):
                 page.grid_remove()
         self._pages[key].grid(row=0, column=0, sticky=tk.NSEW)
         self._pages[key].tkraise()
+        trade_button = self._section_buttons['other']
+        if key == 'premarket':
+            trade_button.pack_forget()
+        elif not trade_button.winfo_manager():
+            trade_button.pack(side=tk.LEFT,padx=(0,5),ipady=2,before=self._section_buttons['growth'])
         if key == 'growth':
             self.after_idle(self._pages[key].start)
         for name, button in self._section_buttons.items():

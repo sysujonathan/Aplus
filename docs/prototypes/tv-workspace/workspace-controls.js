@@ -113,11 +113,25 @@
       if (value==='snapshotSave') {
         downloadChartSnapshot();return true;
       }
+      if (value==='snapshotLink' || value==='snapshotOpen') {
+        if (!window.pywebview?.api?.local_snapshot) return false;
+        localChartSnapshot(value==='snapshotLink'?'link':'open');return true;
+      }
       if(value==='settings') {
+        if (document.querySelector('#workspaceChartSettings')) return false;
         const dialog=document.createElement('dialog');dialog.style.cssText='background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:20px';
-        dialog.innerHTML='<h3>图表样式</h3><p>仅调整当前图格，不改策略和行情。</p><button data-type="candles">蜡烛图</button> <button data-type="line">折线图</button><p><button data-volume>显示／隐藏成交量</button></p><button data-close>关闭</button>';
-        dialog.querySelectorAll('[data-type]').forEach(button=>button.onclick=()=>{setChartType(button.dataset.type);dialog.close();});
-        dialog.querySelector('[data-volume]').onclick=()=>{rememberObjects();indicatorSettings.volume=!indicatorSettings.volume;savePrototypeState();renderWorkspace();};
+        dialog.id='workspaceChartSettings';
+        dialog.innerHTML='<h3>活动图设置</h3><p><label><input type="checkbox" data-grid="horizontal_grid"> 横向网格线</label></p><p><label><input type="checkbox" data-grid="vertical_grid"> 纵向网格线</label></p><button data-close>关闭</button>';
+        dialog.querySelectorAll('[data-grid]').forEach(input=>{
+          const key=input.dataset.grid;
+          input.checked=indicatorSettings[key]!==false;
+          input.onchange=()=>{
+            rememberObjects();
+            indicatorSettings[key]=input.checked;
+            savePrototypeState();
+            renderWorkspace();
+          };
+        });
         dialog.querySelector('[data-close]').onclick=()=>dialog.close();dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();return true;
       }
       const element = value==='indicators' ? document.querySelector('[title="技术指标"]') :

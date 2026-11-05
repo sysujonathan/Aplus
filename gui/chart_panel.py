@@ -215,7 +215,8 @@ class ChartPanel(native_ttk.Frame):
                     on_layout=self._on_layout, on_ready=self._interactive_ready, on_active=self._activate,
                     on_history_result=self._history_refresh_result,
                     workspace=getattr(self, '_workspace_descriptor', None),
-                    on_workspace_state=getattr(self, '_on_workspace_state', None))
+                    on_workspace_state=getattr(self, '_on_workspace_state', None),
+                    on_workspace_shortcut=getattr(self, '_on_workspace_shortcut', None))
             self._embedded.workspace = getattr(self, '_workspace_descriptor', None)
             self.header.grid()
             self.readout_frame.grid()
@@ -714,7 +715,7 @@ class ChartGrid(ttk.Frame):
 
     def __init__(self, parent, store=None, layout_count=4, on_page_state=None,
                  on_active_item=None, interactive=False, on_layout_request=None, auto_quotes=None, on_cases=None,
-                 on_symbol=None,on_grid_changed=None):
+                 on_symbol=None,on_grid_changed=None,on_fullscreen=None,on_trade=None):
         super().__init__(parent)
         self.store = store
         self._interactive = interactive
@@ -728,6 +729,8 @@ class ChartGrid(ttk.Frame):
         self._on_layout_request = on_layout_request
         self._on_symbol = on_symbol
         self._on_grid_changed = on_grid_changed
+        self.on_fullscreen = on_fullscreen
+        self.on_trade = on_trade
         self._items = []
         self._display_items = []
         self._page_start = 0
@@ -956,10 +959,21 @@ class ChartGrid(ttk.Frame):
                 slot._update_tile_header()
                 slot._workspace_descriptor = self.controls.descriptor(index)
                 slot._on_workspace_state = lambda state, i=index: self.controls.state_changed(i, state)
+                slot._on_workspace_shortcut = lambda action, i=index: self._workspace_shortcut(i, action)
                 if slot._embedded:
                     slot._embedded.workspace = slot._workspace_descriptor
                     slot._embedded.on_workspace_state = slot._on_workspace_state
             self._slots.append(slot)
+
+    def _workspace_shortcut(self, index, action):
+        if index != self._active_slot or not self.winfo_ismapped():
+            return
+        if action == 'search':
+            self.controls.open_quick_search()
+        elif action == 'fullscreen':
+            self.controls.toggle_fullscreen()
+        elif action == 'leaveFullscreen':
+            self.controls.set_fullscreen(False)
 
     def embedded_hosts(self):
         return [slot._embedded for slot in self._slot_pool if slot._embedded is not None]

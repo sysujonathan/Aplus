@@ -5,7 +5,7 @@ import struct
 from PIL import Image
 import pytest
 
-from gui.chart_snapshot import png_dib, save_chart_png
+from gui.chart_snapshot import copy_snapshot_link, local_chart_png, png_dib, save_chart_png
 
 
 def test_chart_png_is_a_dib_with_original_dimensions_and_no_file_header():
@@ -36,3 +36,17 @@ def test_png_export_writes_only_to_the_path_selected_in_the_dialog(tmp_path):
         return (str(path),)
     assert save_chart_png(payload,'../invalid.png',choose)=={'ok':True}
     assert path.read_bytes()==output.getvalue()
+
+
+def test_local_snapshot_link_points_to_the_generated_png(tmp_path,monkeypatch):
+    output = io.BytesIO()
+    Image.new('RGB', (8, 8), '#2962ff').save(output, format='PNG')
+    payload = 'data:image/png;base64,'+base64.b64encode(output.getvalue()).decode()
+    uri = local_chart_png(payload,tmp_path)
+    [path] = (tmp_path/'chart_snapshots').glob('*.png')
+    assert uri==path.as_uri() and path.read_bytes()==output.getvalue()
+    from gui import chart_snapshot
+    calls = []
+    monkeypatch.setattr(chart_snapshot,'_set_clipboard',lambda *args:calls.append(args))
+    copy_snapshot_link(uri,42)
+    assert calls==[(42,13,(uri+'\0').encode('utf-16-le'))]

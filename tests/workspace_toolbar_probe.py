@@ -23,6 +23,8 @@ INSPECT="""(() => ({tool:activeDrawingTool||'cross',count:userObjects.length,
  iconPicker:document.querySelector('#modalBackdrop').classList.contains('show') &&
    document.querySelector('#chartControlModal').classList.contains('show') &&
    document.querySelector('#chartControlTitle').textContent==='选择图标',
+ settingsOpen:Boolean(document.querySelector('#workspaceChartSettings[open]')),
+ horizontalGrid:indicatorSettings.horizontal_grid,
  state:window.aplusWorkspaceState()}))()"""
 
 
@@ -52,7 +54,9 @@ def capture_own_client(root, path):
 
 
 def child(session):
-    from gui import chart_embed, chart_shell
+    from gui import chart_embed, chart_shell, chart_snapshot
+    chart_snapshot.copy_snapshot_link = lambda uri, _owner: {'ok':uri.startswith('file:')}
+    chart_snapshot.open_snapshot_in_browser = lambda uri: uri.startswith('file:')
     original=chart_embed.run_embedded_transport
     session=Path(session)
 
@@ -104,6 +108,18 @@ def child(session):
                           placeDrawing({index,value:bars[index].close,x:100,y:150});
                           const object=userObjects.at(-1);
                           return object?.type==='text' && object.text==='★';
+                        })()""")
+                    elif operation=='key':
+                        key = json.dumps(request['key'])
+                        window.evaluate_js(
+                            f"canvas.dispatchEvent(new KeyboardEvent('keydown',{{key:{key},bubbles:true,cancelable:true}}));"
+                        )
+                    elif operation=='toggle-grid':
+                        assert window.evaluate_js("""(() => {
+                          const dialog=document.querySelector('#workspaceChartSettings[open]');
+                          dialog.querySelector('[data-grid="horizontal_grid"]').click();
+                          dialog.close();
+                          return indicatorSettings.horizontal_grid===false;
                         })()""")
                     elif operation!='inspect':raise AssertionError('unknown probe operation')
                     data=window.evaluate_js(INSPECT)
@@ -178,7 +194,8 @@ def run(folder):
             wait(lambda:all(h.ready() and (h._last_workspace_state or {}).get('token')==h.token for h in grid.embedded_hosts()),'all real renderers ready',60)
             tools=grid.controls.drawing_tools;tools.refresh()
             assert tools.ready and tools.favorites.winfo_ismapped()
-            assert tools.favorites.winfo_manager()==('place' if count==1 else 'pack')
+            assert tools.favorites.winfo_manager()=='place'
+            assert tools.favorites.place_info()['in'] is grid.host
             assert all(bool(slot.header.winfo_ismapped())==(count==1) for slot in grid._slots)
             host=grid._slots[0]._embedded
             wait(lambda:(host._last_workspace_state or {}).get('tool')=='cross','first active state')
@@ -231,6 +248,30 @@ def run(folder):
                 ask(host,'place-icon')
                 wait(lambda:any(d.get('kind')=='text' and d.get('text')=='★'
                                 for d in store.chart_document(identity)['drawings']),'picked symbol saved in Store')
+                ask(host,'key',key='F11')
+                wait(lambda:grid.controls.fullscreen,'F11 forwarded from active WebView')
+                ask(host,'key',key='Escape')
+                wait(lambda:not grid.controls.fullscreen,'Escape forwarded from active WebView')
+                grid.controls.settings_button.invoke()
+                wait(lambda:ask(host)['settingsOpen'],'right toolbar opens the activity chart settings')
+                ask(host,'toggle-grid')
+                pane_key = grid.controls.current['id']+':0'
+                wait(lambda:(store.chart_document(identity)['settings'].get('pane_states',{})
+                             .get(pane_key,{}).get('indicators',{}).get('horizontal_grid') is False),
+                     'active chart grid preference saved')
+                assert ask(grid._slots[-1]._embedded)['horizontalGrid'] is True
+                handle = tools.favorite_handle
+                x,y = handle.winfo_rootx()+3,handle.winfo_rooty()+3
+                before = tools.position
+                handle.event_generate('<ButtonPress-1>',rootx=x,rooty=y)
+                handle.event_generate('<B1-Motion>',rootx=x+70,rooty=y+55,state=256)
+                handle.event_generate('<ButtonRelease-1>',rootx=x+70,rooty=y+55)
+                assert tools.position!=before and tools.favorites.place_info()['in'] is grid.host
+                menu=grid.nametowidget(grid.controls.snapshot_button.cget('menu'))
+                for index in (2,3):
+                    menu.invoke(index)
+                    wait(lambda:len(list((folder/'runtime/chart_snapshots').glob('*.png')))==index-1,
+                         'snapshot command writes local PNG')
             ask(host,'select')
             root.update()
             widths=[s.winfo_width() for s in grid._slots]
@@ -247,7 +288,7 @@ def run(folder):
                 real_quickbar_edit=True,undo_redo=True,real_store_reopened=True,
                 old_selected_bar_hidden=count>1,equal_columns=True,only_shared_controls=True,
                 direct_period_buttons=True,graphical_layout_picker=True,active_chart_style=True,
-                favorites_at_bottom=count>1,captured_own_client=captured))
+                floating_favorites=True,captured_own_client=captured))
         (folder/'result.json').write_text(json.dumps(dict(ok=True,synthetic=True,rounds=records),indent=2),encoding='utf-8')
         if '--hold' in sys.argv:
             (folder/'ready.json').write_text(json.dumps(dict(ready=True,panes=9,synthetic=True)),encoding='utf-8')

@@ -181,6 +181,16 @@ class ChartSessionBridge:
         callback(count)
         return {'ok': True}
 
+    def request_workspace_shortcut(self, action, session_token=None):
+        self._check_token(session_token)
+        if action not in ('search','fullscreen','leaveFullscreen'):
+            raise ValueError('工作区快捷键无效')
+        callback = getattr(self, '_request_workspace_shortcut', None)
+        if callback is None:
+            return False
+        callback(action, session_token)
+        return True
+
     def cancel_close(self):
         if self._cancel_close:
             self._cancel_close()
@@ -232,7 +242,7 @@ class NativeChild:
 class EmbeddedChartHost:
     """Tk-side controller. Starting WebView never blocks Tk's first paint."""
     def __init__(self, parent, store, on_error=None, on_layout=None, on_ready=None, on_active=None,
-                 on_history_result=None, workspace=None, on_workspace_state=None):
+                 on_history_result=None, workspace=None, on_workspace_state=None, on_workspace_shortcut=None):
         self.parent, self.store, self.on_error = parent, store, on_error
         self.on_layout = on_layout
         self.on_ready = on_ready
@@ -240,6 +250,7 @@ class EmbeddedChartHost:
         self.on_history_result = on_history_result
         self.workspace = workspace
         self.on_workspace_state = on_workspace_state
+        self.on_workspace_shortcut = on_workspace_shortcut
         self.commands = []
         self._command_number = 0
         self._last_workspace_state = None
@@ -351,6 +362,10 @@ class EmbeddedChartHost:
         return (getattr(self, '_ready_token', None) == self.token
                 and not self.closed() and not self.closing and not getattr(self, 'error', None))
 
+    def _run_workspace_shortcut(self, action, token):
+        if token == self.token and not self.closing and self.ready():
+            self.on_workspace_shortcut(action)
+
     def _poll(self):
         self._timer = None
         if not self.parent.winfo_exists():
@@ -383,6 +398,10 @@ class EmbeddedChartHost:
                     self._last_action = action.get('id')
                     if self.on_layout and action.get('layout') in (1, 4, 6, 9) and not self.closing:
                         self.on_layout(action['layout'])
+                    shortcut = action.get('shortcut')
+                    if (shortcut in ('search','fullscreen','leaveFullscreen')
+                            and self.on_workspace_shortcut and action.get('token') == self.token and not self.closing):
+                        self.parent.after_idle(self._run_workspace_shortcut, shortcut, self.token)
             result = read_notification(self.status)
             if result is not None:
                 owns_page = result.get('token') == self.token
@@ -450,6 +469,8 @@ def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
     control = session.with_suffix('.control.json')
     bridge._request_layout = lambda count: atomic_json(session.with_suffix('.actions.json'),
         dict(id=uuid.uuid4().hex, layout=count))
+    bridge._request_workspace_shortcut = lambda action, token: atomic_json(session.with_suffix('.actions.json'),
+        dict(id=uuid.uuid4().hex, shortcut=action, token=token))
     bridge._notify_active = lambda token: atomic_json(session.with_suffix('.focus.json'),
         dict(id=uuid.uuid4().hex, token=token))
     last_mtime = None

@@ -13,6 +13,7 @@ from .workspace_icons import icon
 PERIOD_LABELS = {'daily':'日线', 'weekly':'周线', 'monthly':'月线', 'm5':'5分钟', 'm60':'1小时', 'm240':'4小时'}
 QUICK_PERIODS=(('m5','5分'),('m60','1小时'),('daily','天'),('weekly','周'),('monthly','月'))
 RANGE_PRESETS=('1天','5天','1个月','3个月','6个月','YTD','1年','5年','全部')
+MAX_FAVORITE_LAYOUTS = 4
 
 
 class WorkspaceControls:
@@ -49,6 +50,18 @@ class WorkspaceControls:
         self._layout_icons={}
         self._layout_popup=None
         self._top_actions=[]
+        self.fullscreen = False
+        self.top.columnconfigure(0,weight=1)
+        self.left_actions = tk.Frame(self.top,autostyle=False,background=APP_BG)
+        self.left_actions.grid(row=0,column=0,sticky=tk.W)
+        self.right = tk.Frame(self.top,autostyle=False,background=APP_BG)
+        self.right.grid(row=0,column=1,sticky=tk.E)
+        saved_favorites = saved['data'].get('toolbar', {})
+        favorite_ids = saved_favorites.get('favoriteLayouts', []) if isinstance(saved_favorites, dict) else []
+        known_ids = {layout['id'] for layout in self.layouts}
+        self.favorite_layouts = list(dict.fromkeys(
+            value for value in favorite_ids if isinstance(value, str) and value in known_ids
+        ))[:MAX_FAVORITE_LAYOUTS] if isinstance(favorite_ids, list) else []
         self.symbol = self._top_button(None,'查找标的',lambda:self._ask_symbol(False),text='标的',requires_chart=False)
         self.compare_button = self._top_button('compare','添加比较标的',lambda:self._ask_symbol(True))
         self._separator()
@@ -61,12 +74,14 @@ class WorkspaceControls:
         self._separator()
         for action,label in [('alert','提醒'),('replay','回放'),('undo','撤销'),('redo','重做')]:
             self._top_button(action,label,lambda a=action:self.command('action',a))
-        self._separator()
-        self.layout_button=self._top_button(None,'图表布局：选择行列',self._open_layout_picker,requires_chart=False)
+        self.layout_button=self._top_button(None,'图表布局：选择行列',self._open_layout_picker,
+                                           parent=self.right,requires_chart=False)
         self.layout_button.bind('<ButtonPress-1>',self._dismiss_layout_on_press,add='+')
-        self.layout_manager=self._menu_button(self.top,text='默认布局')
+        self.layout_manager=self._menu_button(self.right,text='默认布局')
         ToolTip(self.layout_manager,text='管理已保存布局',delay=650)
-        self.sync_button=self._menu_button(self.top,text='联动 ⌄')
+        self.layout_shortcuts = tk.Frame(self.right,autostyle=False,background=APP_BG)
+        self.layout_shortcuts.pack(side=tk.LEFT)
+        self.sync_button=self._menu_button(self.right,text='联动 ⌄')
         sync_menu = self._menu(self.sync_button)
         for key, label in zip(SYNC_KEYS, ('标的','周期','十字线','时间位置','可见日期范围')):
             sync_menu.add_checkbutton(label=label, variable=self.sync[key], command=self.preferences_changed)
@@ -76,24 +91,42 @@ class WorkspaceControls:
             scope_menu.add_radiobutton(label=label, variable=self.scope, value=key, command=self.preferences_changed)
         sync_menu.add_cascade(label='新绘图默认范围', menu=scope_menu)
         self.sync_button.configure(menu=sync_menu)
-        self._separator()
-        more=self._menu_button(self.top,text='⋯')
+        self._separator(self.right)
+        self.quick_search_button = self._top_button('search','快捷搜索（Ctrl+K）',self.open_quick_search,
+                                                    parent=self.right,requires_chart=False)
+        self.settings_button = self._top_button('settings','活动图设置',lambda:self.command('action','settings'),
+                                                 parent=self.right)
+        self.fullscreen_button = self._top_button('fullscreen','全屏／退出全屏（F11）',self.toggle_fullscreen,
+                                                   parent=self.right,requires_chart=False)
+        self.snapshot_button=self._menu_button(self.right,image=self._layout_image('camera',22))
+        snapshot=self._menu(self.snapshot_button)
+        for label, action, shortcut in [
+            ('下载图片','snapshotSave','Ctrl+Alt+S'),
+            ('复制图片','snapshot','Ctrl+Shift+S'),
+            ('复制本地图片链接','snapshotLink','Alt+S'),
+            ('在浏览器新标签页打开','snapshotOpen',''),
+        ]:
+            snapshot.add_command(label=label,accelerator=shortcut,command=lambda a=action:self.command('action',a))
+        snapshot.add_separator()
+        snapshot.add_command(label='Post image  #',state=tk.DISABLED)
+        self.snapshot_button.configure(menu=snapshot)
+        ToolTip(self.snapshot_button,text='活动图快照',delay=650)
+        self._top_actions.append(self.snapshot_button)
+        idea=self._top_button('idea','发布想法：功能暂未接入',None,parent=self.right,requires_chart=False)
+        idea.configure(text='#',compound=tk.RIGHT,state=tk.DISABLED)
+        if grid.on_trade:
+            self.trade_button = self._top_button(None,'打开交易管理',grid.on_trade,text='交易',
+                                                 parent=self.right,requires_chart=False)
+        more=self._menu_button(self.left_actions,text='⋯')
         menu=self._menu(more)
-        for label, value in [('图表设置','settings'),('对象树','objects')]:
-            menu.add_command(label=label, command=lambda v=value:self.command('action',v))
+        menu.add_command(label='对象树', command=lambda:self.command('action','objects'))
         menu.add_separator()
         for label,method,widget in [('在 TradingView 打开','_open_tv','_tv_btn'),
                                     ('更新活动标的 K 线','_refresh_manual','_history_btn'),
                                     ('搜索活动标的案例','_open_cases','_cases_btn')]:
             menu.add_command(label=label,command=lambda m=method,b=widget:self._active_tile_action(m,b))
         more.configure(menu=menu)
-        self.snapshot_button=self._menu_button(self.top,image=self._layout_image('camera',22))
-        snapshot=self._menu(self.snapshot_button)
-        for label,action in [('保存活动图图片','snapshotSave'),('复制活动图图片','snapshot')]:
-            snapshot.add_command(label=label,command=lambda a=action:self.command('action',a))
-        self.snapshot_button.configure(menu=snapshot)
-        ToolTip(self.snapshot_button,text='图表快照',delay=650)
-        self._top_actions.extend([more,self.snapshot_button])
+        self._top_actions.append(more)
         self.bottom=tk.Frame(grid,autostyle=False,background=APP_BG)
         self.bottom.grid(row=2,column=1,sticky=tk.EW,padx=2)
         self.ranges=tk.Frame(self.bottom,autostyle=False,background=APP_BG)
@@ -126,17 +159,64 @@ class WorkspaceControls:
                     all(isinstance(v,(int,float)) and 0<=v<=1 for v in position)):
                 self.drawing_tools.position=tuple(position)
             favorites=toolbar.get('favorites')
-            if isinstance(favorites,list) and all(isinstance(v,str) and v in self.drawing_tools.favorite_selection for v in favorites):
+            if isinstance(favorites,list) and all(isinstance(v,str) and v in self.drawing_tools.favorite_buttons for v in favorites):
                 self.drawing_tools.favorite_selection=set(favorites)
                 self.drawing_tools.rebuild_favorites()
         self.grid.after_idle(self.drawing_tools.place_favorites)
+        for frame in (self.top,self.left_actions,self.right):
+            frame.bind('<Configure>',self._fit_header,add='+')
         self._layout_menu()
 
-    def _separator(self):
-        tk.Frame(self.top,autostyle=False,background='#424242',width=1).pack(side=tk.LEFT,fill=tk.Y,padx=5,pady=4)
+    def _separator(self,parent=None):
+        tk.Frame(parent or self.left_actions,autostyle=False,background='#424242',width=1).pack(side=tk.LEFT,fill=tk.Y,padx=5,pady=4)
+
+    def _fit_header(self,_event=None):
+        width = self.left_actions.winfo_reqwidth() + self.right.winfo_reqwidth() + 10
+        compact = self.top.winfo_width() < width
+        if compact != getattr(self,'_compact_header',None):
+            self._compact_header = compact
+            self.right.grid_configure(row=1 if compact else 0,column=0 if compact else 1,
+                                      columnspan=2 if compact else 1)
+
+    def open_quick_search(self):
+        if getattr(self,'_search_open',False):
+            return
+        from .workspace_toolbar import WorkspaceQuickSearch, FAVORITE_CHOICES
+        commands = [('查找标的',lambda:self._ask_symbol(False)),
+                    ('选择图表布局',self._open_layout_picker),
+                    ('全屏／退出全屏',self.toggle_fullscreen)]
+        commands.extend((f'布局 · {layout["name"]}',lambda key=layout['id']:self.open_layout(key))
+                        for layout in self.layouts)
+        if self.drawing_tools.ready:
+            for label, value in [('图表设置','settings'),('指标','indicators'),('价格提醒','alert'),
+                                 ('回放','replay'),('对象树','objects'),('下载图片','snapshotSave'),
+                                 ('复制图片','snapshot')]:
+                commands.append((label,lambda v=value:self.command('action',v)))
+            for tool, label in FAVORITE_CHOICES:
+                commands.append((label,lambda t=tool:self.command('tool',t)))
+        self._search_open = True
+        try:
+            dialog = WorkspaceQuickSearch(self.grid.winfo_toplevel(),commands)
+        finally:
+            self._search_open = False
+        if dialog.result:
+            self.grid.after_idle(dialog.result)
+
+    def toggle_fullscreen(self):
+        self.set_fullscreen(not self.fullscreen)
+
+    def set_fullscreen(self, enabled):
+        if enabled == self.fullscreen:
+            return
+        self.fullscreen = enabled
+        self.grid.winfo_toplevel().attributes('-fullscreen',enabled)
+        if self.grid.on_fullscreen:
+            self.grid.on_fullscreen(enabled)
+        self.fullscreen_button.configure(image=self._layout_image('restore' if enabled else 'fullscreen',22),
+                                         background=CONTROL_BG if enabled else APP_BG)
 
     def _top_button(self,glyph,title,action,*,text='',parent=None,requires_chart=True):
-        button=tk.Button(parent or self.top,autostyle=False,text=text,background=APP_BG,foreground=TEXT,
+        button=tk.Button(parent or self.left_actions,autostyle=False,text=text,background=APP_BG,foreground=TEXT,
             activebackground=CONTROL_BG,activeforeground=TEXT,disabledforeground='#686D76',
             borderwidth=0,font=('Microsoft YaHei UI',10),padx=5,pady=4,command=action)
         if glyph:button.configure(image=self._layout_image(glyph,22))
@@ -183,10 +263,7 @@ class WorkspaceControls:
         else:self.caption.set('活动图暂不支持此操作')
 
     def _fit_ranges(self,_event=None):
-        favorites=getattr(self,'drawing_tools',None)
-        docked=favorites and favorites.visible and favorites.favorite_selection and self.grid.layout_count>1
         required=sum(button.winfo_reqwidth()+2 for button in self.range_buttons)
-        if docked:required+=favorites.favorites.winfo_reqwidth()+12
         compact=self.bottom.winfo_width()<required
         if compact==getattr(self,'_compact_ranges',None):return
         self._compact_ranges=compact
@@ -198,7 +275,7 @@ class WorkspaceControls:
             for button in self.range_buttons:button.pack(side=tk.LEFT,padx=1)
 
     def _build_period_strip(self):
-        strip=tk.Frame(self.top,autostyle=False,background=APP_BG)
+        strip=tk.Frame(self.left_actions,autostyle=False,background=APP_BG)
         strip.pack(side=tk.LEFT,padx=(0,5))
         self.period_buttons={}
         for period,label in QUICK_PERIODS:
@@ -366,7 +443,7 @@ class WorkspaceControls:
     def toolbar_preferences(self):
         toolbar=getattr(self,'drawing_tools',None)
         return {'favoritesVisible':toolbar.visible,'position':list(toolbar.position),
-                'favorites':sorted(toolbar.favorite_selection)} if toolbar else {}
+                'favorites':sorted(toolbar.favorite_selection),'favoriteLayouts':self.favorite_layouts} if toolbar else {}
 
     def restore_saved_layout(self):
         self._enabled = True
@@ -431,16 +508,55 @@ class WorkspaceControls:
     def _layout_menu(self):
         menu = self._menu(self.layout_manager)
         for layout in self.layouts:
-            menu.add_command(label=layout['name'], command=lambda i=layout['id']:self.open_layout(i))
+            star = '★  ' if layout['id'] in self.favorite_layouts else ''
+            menu.add_command(label=star+layout['name'], command=lambda i=layout['id']:self.open_layout(i))
         menu.add_separator()
         menu.add_command(label='新建布局…', command=lambda:self.new(False))
         menu.add_command(label='复制当前布局…', command=lambda:self.new(True))
         menu.add_command(label='重命名…', command=self.rename)
         menu.add_command(label='保存布局', command=self.save)
+        favorite = self.current['id'] in self.favorite_layouts
+        menu.add_command(label='从常用布局移除' if favorite else '设为常用布局',
+                         command=self._toggle_favorite_layout)
         menu.add_command(label='归档当前布局（保留画线）…', command=self.delete)
         name=self.current['name']
         self.layout_manager.configure(menu=menu,text=(name if len(name)<=8 else name[:7]+'…')+' ⌄')
+        previous = getattr(self,'_saved_layout_menu',None)
+        if previous is not None:
+            previous.destroy()
+        self._saved_layout_menu = menu
+        self._refresh_layout_shortcuts()
         self._show_layout_shape()
+
+    def _toggle_favorite_layout(self):
+        identity = self.current['id']
+        if identity in self.favorite_layouts:
+            self.favorite_layouts.remove(identity)
+        elif len(self.favorite_layouts) < MAX_FAVORITE_LAYOUTS:
+            self.favorite_layouts.append(identity)
+        else:
+            self.caption.set('常用布局最多 4 个，请先从布局菜单移除一个')
+            return
+        self._layout_menu()
+        self.schedule_save()
+
+    def _refresh_layout_shortcuts(self):
+        for child in self.layout_shortcuts.winfo_children():
+            child.destroy()
+        by_id = {layout['id']:layout for layout in self.layouts}
+        for identity in self.favorite_layouts:
+            layout = by_id[identity]
+            active = identity == self.current['id']
+            label = layout['name'][:1]
+            button = self._top_button(None,layout['name'],lambda key=identity:self._open_favorite_layout(key),
+                                      text=label,parent=self.layout_shortcuts,requires_chart=False)
+            button.configure(image=self._layout_image('activeBadge' if active else 'badge',24),
+                             compound=tk.CENTER,padx=1,
+                             foreground='#161616' if active else TEXT)
+
+    def _open_favorite_layout(self, identity):
+        if identity != self.current['id']:
+            self.open_layout(identity)
 
     def custom_grid(self):
         value = simpledialog.askstring('自定义布局', '输入行 × 列，例如 3x2；最多九格、三行四列', parent=self.grid)
@@ -502,10 +618,12 @@ class WorkspaceControls:
             self.open_layout(next(v['id'] for v in self.layouts if v is not deleted))
             # Keep a recoverable layout instead of orphaning pane-scoped drawings.
             deleted['name']='已归档 · '+deleted['name'][:32]
+            if deleted['id'] in self.favorite_layouts:
+                self.favorite_layouts.remove(deleted['id'])
             self.save();self._layout_menu()
 
     def open_layout(self, identity, save_previous=True):
-        if save_previous and not (self.current['id'] == identity):
+        if save_previous and self.current['id'] != identity:
             self.save()
         layout = next(v for v in self.layouts if v['id']==identity)
         self._restoring = True

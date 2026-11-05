@@ -1,5 +1,6 @@
 """One native drawing rail and favorites bar, bound to the active renderer."""
 import tkinter as tk
+from tkinter import simpledialog, ttk
 from ttkbootstrap.widgets import ToolTip
 
 from .workspace_icons import icon
@@ -12,6 +13,8 @@ FAVORITES = (
     ('trend','趋势线'), ('ray','水平射线'), ('up','向上箭头'), ('down','向下箭头'),
     ('rectangle','矩形'), ('channel','平行通道'), ('arrow','箭头标记'), ('path','路径'),
 )
+FAVORITE_CHOICES = (*FAVORITES, ('text','文字'), ('smile','图标'), ('ruler','测量'),
+                    ('zoom','框选放大'), ('zoomOut','框选缩小'))
 GROUPS = {
     'cross': [('十字光标','cross'),('点状光标',None),('箭头光标',None)],
     'trend': [('线',),('趋势线','trend'),('射线',None),('信息线',None),('延长线',None),('趋势角度',None),
@@ -34,6 +37,60 @@ GROUPS = {
     'smile': [('图标','smile')],
     'zoom': [('放大','zoom'),('缩小','zoomOut')],
 }
+
+
+class WorkspaceQuickSearch(simpledialog.Dialog):
+    """Search commands available in the current workspace."""
+
+    def __init__(self, parent, commands):
+        self.commands = commands
+        super().__init__(parent, '快捷搜索')
+
+    def body(self, parent):
+        self.query = tk.StringVar()
+        entry = ttk.Entry(parent, textvariable=self.query, width=38)
+        entry.pack(fill=tk.X, padx=6, pady=6)
+        self.results = tk.Listbox(parent, autostyle=False, height=9, exportselection=False, activestyle='none',
+                                  background=CONTROL_BG, foreground=TEXT, selectbackground='#3D4758',
+                                  highlightthickness=0)
+        self.results.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+        self.results.bind('<Double-Button-1>', self.ok)
+        entry.bind('<Down>', self.move_down)
+        entry.bind('<Up>', self.move_up)
+        self.query.trace_add('write', self.refresh_results)
+        self.refresh_results()
+        return entry
+
+    def refresh_results(self, *_args):
+        words = self.query.get().casefold().split()
+        self.matches = [(label, action) for label, action in self.commands
+                        if all(word in label.casefold() for word in words)]
+        self.results.delete(0, tk.END)
+        for label, _action in self.matches:
+            self.results.insert(tk.END, label)
+        if self.matches:
+            self.results.selection_set(0)
+
+    def move_down(self, _event):
+        return self.move_selection(1)
+
+    def move_up(self, _event):
+        return self.move_selection(-1)
+
+    def move_selection(self, step):
+        selected = self.results.curselection()
+        if selected:
+            index = min(len(self.matches)-1, max(0, selected[0]+step))
+            self.results.selection_clear(0, tk.END)
+            self.results.selection_set(index)
+            self.results.see(index)
+        return 'break'
+
+    def validate(self):
+        return bool(self.results.curselection())
+
+    def apply(self):
+        self.result = self.matches[self.results.curselection()[0]][1]
 
 
 class SharedDrawingTools:
@@ -86,15 +143,16 @@ class SharedDrawingTools:
                                   highlightthickness=1,padx=5,pady=3)
         handle = tk.Canvas(self.favorites,autostyle=False,width=round(11*self.scale),height=round(18*self.scale),
                            background='#181818',highlightthickness=0,cursor='fleur')
+        self.favorite_handle = handle
         for x in (3,8):
             for y in (4,9,14):
                 handle.create_oval(*[v*self.scale for v in (x-1,y-1,x+1,y+1)],fill='#686B71',outline='')
-        handle.pack(side=tk.LEFT,padx=(0,4))
+        handle.grid(row=0,column=0,padx=(0,4))
+        ToolTip(handle,text='拖动收藏工具栏',delay=650)
         handle.bind('<ButtonPress-1>',self._drag_start)
         handle.bind('<B1-Motion>',self._drag)
         handle.bind('<ButtonRelease-1>',lambda _e:self.controls.schedule_save())
-        for tool,title in FAVORITES:
-            self._button(self.favorites,tool,title).pack(side=tk.LEFT,padx=1)
+        self.favorite_buttons = {tool:self._button(self.favorites,tool,title) for tool,title in FAVORITE_CHOICES}
         self.grid.bind('<Configure>',lambda _e:self.place_favorites(),add='+')
         self.grid.bind('<Destroy>',self._destroy,add='+')
         self._timer=self.grid.after(100,self._poll)
@@ -207,7 +265,7 @@ class SharedDrawingTools:
                 ToolTip(marker,text='功能暂未实现',delay=400)
                 ToolTip(button,text='功能暂未实现',delay=400)
             popup._entries.append((name,action,button))
-            if kind=='tool' and value in dict(FAVORITES):
+            if kind=='tool' and value in self.favorite_buttons:
                 favorite=tk.Button(row,autostyle=False,text='★' if value in self.favorite_selection else '☆',
                     foreground='#B8BBC2',background='#16181C',activebackground='#30343B',
                     borderwidth=0,font=('Segoe UI',12),command=lambda t=value:self.toggle_favorite(t))
@@ -245,12 +303,23 @@ class SharedDrawingTools:
         self.close_menu();self.controls.schedule_save()
 
     def rebuild_favorites(self):
-        for tool,_ in FAVORITES:
-            for button in self.buttons.get(tool,[]):
-                if button.master is self.favorites:
-                    button.pack_forget()
-                    if tool in self.favorite_selection:button.pack(side=tk.LEFT,padx=1)
+        self._arrange_favorites(self.grid.host.winfo_width() if hasattr(self.grid,'host') else 10000)
         self.place_favorites()
+
+    def _arrange_favorites(self, width):
+        tools = [tool for tool in self.favorite_buttons if tool in self.favorite_selection]
+        cell = max(button.winfo_reqwidth()+2 for button in self.favorite_buttons.values())
+        columns = max(1, (width-self.favorite_handle.winfo_reqwidth()-16)//cell)
+        arrangement = (tools,columns)
+        if arrangement == getattr(self,'_favorite_arrangement',None):
+            return
+        self._favorite_arrangement = arrangement
+        for button in self.favorite_buttons.values():
+            button.grid_forget()
+        for index, tool in enumerate(tools):
+            row, column = divmod(index,columns)
+            self.favorite_buttons[tool].grid(row=row,column=column+1,padx=1)
+        self.favorites.update_idletasks()
 
     def toggle_favorites(self):
         self.visible=not self.visible
@@ -260,23 +329,14 @@ class SharedDrawingTools:
     def place_favorites(self):
         if not hasattr(self.grid,'host') or not self.visible or not self.favorite_selection:
             self.favorites.place_forget()
-            self.favorites.pack_forget()
-            self.controls._fit_ranges()
             return
-        if self.grid.layout_count>1:
-            self.favorites.place_forget()
-            self.favorites.pack(in_=self.controls.bottom,side=tk.LEFT,padx=(6,0))
-            self.controls._fit_ranges()
-            return
-        self.favorites.pack_forget()
         host=self.grid.host
-        self.favorites.update_idletasks()
+        self._arrange_favorites(host.winfo_width())
         width=self.favorites.winfo_reqwidth()
         x=max(0,min(round(host.winfo_width()*self.position[0]-width/2),host.winfo_width()-width))
         y=max(0,min(round(host.winfo_height()*self.position[1]),host.winfo_height()-self.favorites.winfo_reqheight()))
         self.favorites.place(in_=host,x=x,y=y)
         self.favorites.lift()
-        self.controls._fit_ranges()
 
     def _drag_start(self,event):
         host=self.grid.host
@@ -284,7 +344,6 @@ class SharedDrawingTools:
             self.favorites.winfo_rootx()-host.winfo_rootx(),self.favorites.winfo_rooty()-host.winfo_rooty())
 
     def _drag(self,event):
-        if self.grid.layout_count>1:return
         ox,oy,x,y=self._drag_origin
         host=self.grid.host
         fx=x+event.x_root-ox+self.favorites.winfo_width()/2

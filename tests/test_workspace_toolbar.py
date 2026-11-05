@@ -12,8 +12,9 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
     import tkinter as tk
     import ttkbootstrap as ttk
     from gui.chart_panel import ChartGrid
-    from gui.workspace_toolbar import FAVORITES
+    from gui.workspace_toolbar import FAVORITES, WorkspaceQuickSearch
     from workbench.store import Store
+    from workbench.workspace_layouts import new_layout
 
     class Host:
         def __init__(self,index):
@@ -55,10 +56,21 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
             root.update()
             tools=controls.drawing_tools
             tools.refresh();tools.place_favorites()
+            if count==1:
+                def choose_settings():
+                    dialog = next(child for child in root.winfo_children()
+                                  if isinstance(child,WorkspaceQuickSearch))
+                    dialog.query.set('图表设置')
+                    dialog.ok()
+                root.after(30,choose_settings)
+                controls.quick_search_button.invoke()
+                root.update()
+                assert grid._slots[0]._embedded.calls[-1]==('action','settings')
             assert len(FAVORITES)==11
             assert sum(len(v) for k,v in tools.buttons.items() if k in dict(FAVORITES))>=11
             assert tools.favorites.winfo_ismapped()
-            assert tools.favorites.winfo_manager()==('place' if count==1 else 'pack')
+            assert tools.favorites.winfo_manager()=='place'
+            assert tools.favorites.place_info()['in'] is grid.host
             assert all(button.winfo_ismapped() for button in (controls.symbol,controls.compare_button,controls.layout_button))
             assert tools.buttons['trend'][-1].cget('image')
             assert controls.period_buttons['m5'].cget('state')=='disabled'
@@ -111,12 +123,46 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
         assert store.load_ui_preferences('chart_layouts')['data']['toolbar']['favoritesVisible'] is False
         tools.toggle_favorites();root.update()
         assert tools.favorites.winfo_ismapped()
+        controls._toggle_favorite_layout()
+        first = controls.current['id']
+        six = new_layout('六股T+0',2,3)
+        controls.layouts.append(six)
+        controls.open_layout(six['id'])
+        controls._toggle_favorite_layout()
+        assert [b.cget('text') for b in controls.layout_shortcuts.winfo_children()]==['默','六']
+        controls.layout_shortcuts.winfo_children()[0].invoke()
+        assert controls.current['id']==first
+        controls.layout_shortcuts.winfo_children()[1].invoke()
+        assert controls.current['id']==six['id'] and grid._shape==(2,3)
+        root.update()
+        tools.toggle_favorite('text')
+        root.update()
+        handle = tools.favorite_handle
+        x, y = handle.winfo_rootx()+3, handle.winfo_rooty()+3
+        before = tools.favorites.winfo_rootx(), tools.favorites.winfo_rooty()
+        handle.event_generate('<ButtonPress-1>',rootx=x,rooty=y)
+        handle.event_generate('<B1-Motion>',rootx=x+80,rooty=y+60,state=256)
+        handle.event_generate('<ButtonRelease-1>',rootx=x+80,rooty=y+60)
+        root.update()
+        assert tools.favorites.winfo_rootx()>before[0] and tools.favorites.winfo_rooty()>before[1]
+        saved_position = tools.position
+        assert tools.favorite_buttons['text'].winfo_ismapped()
+        controls.save()
+        assert store.load_ui_preferences('chart_layouts')['data']['toolbar']['favorites']==sorted(tools.favorite_selection)
+        narrow = max(controls.left_actions.winfo_reqwidth(),controls.right.winfo_reqwidth())+20
+        root.geometry(f'{narrow}x760')
+        root.update()
+        assert controls.right.grid_info()['row']==1
+        assert controls.period_buttons['weekly'].winfo_ismapped() and controls.snapshot_button.winfo_ismapped()
         for tool, _ in FAVORITES:
             tools.toggle_favorite(tool)
+        tools.toggle_favorite('text')
         controls.save()
         grid.destroy()
         grid=ChartGrid(root,store,interactive=True)
         restored=grid.controls.drawing_tools
+        assert grid.controls.favorite_layouts==[first,six['id']]
+        assert restored.position==saved_position
         assert not restored.favorite_selection
         assert not any(button.master is restored.favorites and button.winfo_manager()
                        for buttons in restored.buttons.values() for button in buttons)

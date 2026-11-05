@@ -131,6 +131,7 @@ function sizeCanvas(target, width, height, ratio) {
 }
 const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offset:0, ema_width:1.5, ema_alpha:1,
   ema_color:'#ff9800', chart_type:'candles', magnet:true, strategy_visible:true, drawings_visible:true,
+  horizontal_grid:true, vertical_grid:true,
   ema_daily:true, ema_weekly:true, ema_monthly:true, indicators_visible:true,
   lock_drawings:false, hide_scope:'drawings', favorites_visible:true, sidebar_open:false,
   ema_smoothing:'none', ema_smooth_length:14, ema_bb_deviation:2, ema_smooth_color:'#fdd835',
@@ -497,12 +498,16 @@ function renderWorkspace(mode = 'all') {
   const priceStep = (stepRatio <= 1 ? 1 : stepRatio <= 2 ? 2 : stepRatio <= 5 ? 5 : 10) * magnitude;
   for (let value = Math.ceil(low / priceStep) * priceStep; value <= high; value += priceStep) {
     const py = Math.round(y(value)) + .5;
-    ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
+    if (indicatorSettings.horizontal_grid !== false) {
+      ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
+    }
     ctx.fillText(chartPrice(value), width - right + 8, py + 4);
   }
   timeAxisTicks(canvas._view).forEach(mark => {
     const px = Math.round(mark.x) + .5;
-    ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, height - bottom); ctx.stroke();
+    if (indicatorSettings.vertical_grid !== false) {
+      ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, height - bottom); ctx.stroke();
+    }
     ctx.fillText(mark.label, px + 5, height - (compact ? 33 : 52));
   });
 
@@ -2365,6 +2370,16 @@ async function copyCurrentChartSnapshot() {
   }
 }
 document.querySelector('#snapshot').addEventListener('click', copyCurrentChartSnapshot);
+async function localChartSnapshot(action) {
+  if (!bars.length || !window.pywebview?.api?.local_snapshot) return;
+  try {
+    const result=await window.pywebview.api.local_snapshot(
+      cleanSnapshotCanvas().toDataURL('image/png'), action, chartBoot.sessionToken ?? null
+    );
+    if (!result?.ok) throw new Error('snapshot action failed');
+    showToast(action==='link' ? '已复制本地图片链接，仅本机可打开' : '已在浏览器打开活动图图片');
+  } catch (_) { showToast('快照操作失败，请重试或下载图片'); }
+}
 async function downloadChartSnapshot(preview) {
   if (!bars.length) return;
   const day=replayActive?replayCutoffDate||bars[replayIndex].date:bars.at(-1).date;
@@ -2510,12 +2525,27 @@ function applyProductionContext() {
 
 window.addEventListener('keydown', event => {
   const editingText=event.target.matches?.('input,textarea,select,[contenteditable="true"]');
-  const modalOpen=document.querySelector('#modalBackdrop').classList.contains('show');
+  const modalOpen=document.querySelector('#modalBackdrop').classList.contains('show') || Boolean(document.querySelector('dialog[open]'));
   if(!editingText&&!modalOpen){
     const control=event.ctrlKey||event.metaKey;
+    if(chartBoot.workspace && window.pywebview?.api?.request_workspace_shortcut){
+      const shortcut = control && event.key.toLowerCase()==='k' ? 'search' :
+        event.key==='F11' ? 'fullscreen' :
+        event.key==='Escape' && !activeDrawingTool && !gesture && !document.querySelector('.chart-context-menu.show')
+          ? 'leaveFullscreen' : null;
+      if(shortcut){
+        window.pywebview.api.request_workspace_shortcut(shortcut,chartBoot.sessionToken).catch(()=>{});
+        if(shortcut!=='leaveFullscreen'){event.preventDefault();return;}
+      }
+    }
     if(event.altKey&&event.key.toLowerCase()==='r'){event.preventDefault();resetChartView();return;}
     if(event.altKey&&event.key.toLowerCase()==='a'){event.preventDefault();document.querySelector('#openAlert').click();return;}
     if(control&&event.shiftKey&&event.key.toLowerCase()==='s'){event.preventDefault();document.querySelector('#snapshot').click();return;}
+    if(chartBoot.workspace && event.altKey && event.key.toLowerCase()==='s'){
+      event.preventDefault();
+      if(control)downloadChartSnapshot();else localChartSnapshot('link');
+      return;
+    }
     if(replayActive&&event.shiftKey&&event.key==='ArrowDown'){event.preventDefault();replayPlaying?stopReplayTimer():startReplayTimer();return;}
     if(replayActive&&event.shiftKey&&event.key==='ArrowRight'){event.preventDefault();stopReplayTimer();stepReplay();return;}
     if(control&&['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();zoomAround(event.key==='ArrowUp'?.8:1.25,1);return;}
@@ -2523,7 +2553,7 @@ window.addEventListener('keydown', event => {
       event.preventDefault();panChart((event.key==='ArrowLeft'?1:-1)*(control?Math.max(1,Math.round(viewCount*.12)):1));return;
     }
   }
-  if((event.ctrlKey||event.metaKey)&&!editingText&&!document.querySelector('#modalBackdrop').classList.contains('show')){
+  if((event.ctrlKey||event.metaKey)&&!editingText&&!modalOpen){
     if(event.key.toLowerCase()==='z'){event.preventDefault();document.querySelector(event.shiftKey?'#redoAction':'#undoAction').click();return;}
     if(event.key.toLowerCase()==='y'){event.preventDefault();document.querySelector('#redoAction').click();return;}
   }
