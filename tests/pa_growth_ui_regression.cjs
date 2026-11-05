@@ -25,7 +25,7 @@ vm.runInContext(source.slice(0, cut) + `
   refreshData = async () => {};
   search = async () => {};
   toast = (message,error=false) => window.__events.push({message,error});
-  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,backupAction,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,home,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
+  window.__test = {S,saveCapture,canLeaveDraft,studyPane,imageUrl,esc,backupAction,search:productionSearch,library,boot,universe,selectTopic,openTopic,dispatch,study,gallery,trial,openCase,startTrial,openOriginal,closeOriginal,closeOverlay,requestVisibleImage,rememberOriginal,
     imageBusy:()=>imageWorker,cacheStats:()=>({count:originalCache.size,bytes:originalCacheBytes}),
     clearImages:()=>{originalCache.clear();originalCacheBytes=0;imageWanted=null;},
     setRender:fn=>{render=fn;},setRefresh:fn=>{refreshData=fn;}};
@@ -182,7 +182,7 @@ async function run() {
   assert.deepEqual(Array.from(S.cases,item=>item.id),['new-query-result']);
   assert.equal(S.hasMore,false);assert.equal(S.searchBusy,false);
 
-  reset();S.pending=[];S.page='home';
+  reset();S.pending=[];S.page='library';
   bridge.bootstrap=async()=>({ok:true,cases:[{id:'bootstrap-first-page'}],has_more:true,topics:[],stats:{},trials:[],context:{symbol:'ETHUSD',timeframe:'daily'}});
   await production.boot();
   assert.equal(S.page,'library','chart comparison opens directly into case search');
@@ -250,7 +250,7 @@ async function run() {
   reset();S.pending=[];production.setRender(()=>{});
   S.cases=Array.from({length:100},(_,i)=>({id:'newer-'+i}));
   S.boot={recent_case_id:'older-research',recent_case:{id:'older-research',memory:'旧图仍能继续研究'}};
-  const resumed=production.home();
+  const resumed=production.library();
   assert.match(resumed,/data-action="study-open" data-id="older-research"/);
   assert.match(resumed,/继续研究 · 旧图仍能继续研究/,'recent research does not depend on the first search page');
 

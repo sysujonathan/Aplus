@@ -79,10 +79,10 @@ def run(folder, reopen=False):
             click('[data-action=set-scope][data-scope=private]')
             wait("Boolean(document.querySelector('#search-input'))")
             if reopen:
-                click('[data-page=home]')
+                click('[data-page=library]')
                 wait("Boolean(document.querySelector('.resume'))")
                 wait("Boolean(document.querySelector('.case-card'))")
-                assert not evaluate("Boolean(document.querySelector('.first-hint'))")
+                assert not evaluate("Boolean(document.querySelector('#search-results .empty'))")
                 assert len(store.pa_search(limit=1000)) == 104
                 assert store.pa_growth()['stats'] == dict(cases=104, images=106, notes=1, trials=1, topics=1)
                 older_id = store.pa_search('microDB')[0]['id']
@@ -95,9 +95,10 @@ def run(folder, reopen=False):
                     original_notes_and_trials=True, no_repeated_hint=True, recent_case_outside_first_page=True,
                     one_original_on_resume=True)), encoding='utf-8')
                 return
-            click('[data-page=home]')
-            wait("Boolean(document.querySelector('.home-page'))")
-            assert evaluate("Boolean(document.querySelector('.first-hint'))")
+            click('[data-page=library]')
+            wait("Boolean(document.querySelector('.library-header'))")
+            assert evaluate("document.querySelectorAll('#search-input').length === 1 && !document.querySelector('[data-page=home]')")
+            assert evaluate("document.querySelector('#search-results .empty')?.innerText.includes('Ctrl+V')")
             stage([1], paste=True)
             field('[data-meta=memory]', 'microDB 结构回踩测试样本')
             field('[data-meta=keywords]', 'microDB,ETHUSD,锦和商业')
@@ -122,7 +123,7 @@ def run(folder, reopen=False):
             click('[data-action=save-capture]')
             wait("!document.querySelector('#capture-save') && !window.aplusGrowthBusy()")
             assert len(store.pa_search()) == 3
-            assert not evaluate("Boolean(document.querySelector('.first-hint'))")
+            assert not evaluate("Boolean(document.querySelector('#search-results .empty'))")
             checks.append('batch_drop_independent_cases')
             # Duplicate warning never merges or silently overwrites.
             stage([1])
@@ -239,7 +240,7 @@ def run(folder, reopen=False):
                     {'memory': f'分页隔离测试样本 {index}', 'data_kind': 'test'}, allow_duplicate=True)
             store.pa_case(case_id)
             assert case_id not in {item['id'] for item in store.pa_search()}
-            click('[data-action=navigate][data-page=home]')
+            click('[data-action=navigate][data-page=library]')
             wait("document.querySelector('.resume [data-action=study-open]')?.dataset.id === " + json.dumps(case_id))
             checks.append('recent_case_outside_first_page')
             (folder / 'result.json').write_text(json.dumps(dict(ok=True, real_webview=True, real_store=True,

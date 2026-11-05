@@ -89,12 +89,13 @@ def run(folder, visual=False):
             c = store.pa_save_case([dict(name=f'sample-{i}.png', data=(folder / 'samples' / f'sample-{i}.png').read_bytes()) for i in (1, 2, 3)],
                                    dict(memory='测试样本 · 标题中的后续信息不能先显示', data_kind='test'))['case']
             original = [store.pa_image(i['id']) for i in c['images']]
-            click('[data-page=home]'); click('[data-page=universe]')
+            click('[data-page=library]'); click('[data-page=universe]')
             wait("!!document.querySelector('.origin-point')")
             assert js("document.querySelectorAll('.term-node').length") == 0
             checks.append('private_case_does_not_enter_shared_graph')
             store.pa_update_case(c['id'], dict(topic_ids=['brooks-high-2']))
-            click('[data-page=home]'); click('[data-page=universe]')
+            click('[data-page=library]'); click('[data-page=universe]')
+            wait("!!document.querySelector('#atlas-world')")
             before = js("document.querySelector('#atlas-world').getAttribute('transform')")
             click('[data-action=atlas-in]')
             assert js("document.querySelector('#atlas-world').getAttribute('transform')") != before
@@ -102,7 +103,7 @@ def run(folder, visual=False):
             assert js("document.querySelector('#atlas-world').getAttribute('transform')") == before
             checks.append('shared_graph_pan_zoom_controls_keep_private_data_out')
             checkpoint('02-graph')
-            click('[data-page=home]')
+            click('[data-page=library]')
             click('[data-action=set-scope][data-scope=private]')
             wait("!!document.querySelector('.case-card')")
             click('.case-card')

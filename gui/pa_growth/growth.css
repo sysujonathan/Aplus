@@ -35,3 +35,5 @@
 .shared-banner{display:flex;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}.shared-banner>.micro{flex:1}.side-bottom #shared-account{display:flex;flex-direction:column;gap:8px}.side-bottom button{text-align:left}
 
 .mini-thumb{display:block;flex:0 0 64px;min-height:38px}.mini-thumb img{display:block;width:64px;height:40px;object-fit:contain}
+
+.study-side .tabs{flex-wrap:wrap}.study-side .form-actions{flex-wrap:wrap;justify-content:flex-start}

@@ -15,7 +15,7 @@ window.__navigation={S,scheduleSearch,navigate,openCase};})();`,context);
 context.window.__searched=()=>searches++;
 const production=context.window.__navigation;
 async function run(){
-  for(const destination of ['home','universe','study']){
+  for(const destination of ['growth','universe','study']){
     Object.assign(production.S,{page:'library',overlay:null,saving:0,searchBusy:false});
     timers.clear();searches=0;
     production.scheduleSearch();

@@ -60,10 +60,13 @@ class Drive:
         return data
 
     def list_cases(self):
+        return self.list_records('case-v1')
+
+    def list_records(self, kind):
         self.check()
         with self.cloud.lock:
             return [dict(id=k, parents=[self.folder], owners=[dict(permissionId=v['owner'])])
-                    for k, v in self.cloud.files.items() if v['kind'] == 'case-v1']
+                    for k, v in self.cloud.files.items() if v['kind'] == kind]
 
     def put_once(self, file_id, name, data, mime, kind):
         self.check()
