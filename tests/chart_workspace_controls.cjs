@@ -33,6 +33,7 @@ assert.equal(context.userObjects[0].shareScope.kind,'global','legacy scope is pr
 assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'channel'}),true);
 assert.equal(context.lastTool,'channel');
 assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'unknown'}),false);
+assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'smile'}),false,'a picker that did not open must not report success');
 api.aplusWorkspaceSaveStarted();
 assert.equal(api.aplusWorkspaceState().dirty,true);
 assert.equal(api.aplusWorkspaceCommand({kind:'sync',value:{timeframe:'weekly'}}),false);

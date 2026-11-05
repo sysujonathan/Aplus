@@ -20,6 +20,9 @@ INSPECT="""(() => ({tool:activeDrawingTool||'cross',count:userObjects.length,
  selected:getComputedStyle(document.querySelector('#selectedObject')).display,
  reference:document.querySelector('#referenceQuote').textContent,
  bidAsk:getComputedStyle(document.querySelector('.quote-buttons')).display,
+ iconPicker:document.querySelector('#modalBackdrop').classList.contains('show') &&
+   document.querySelector('#chartControlModal').classList.contains('show') &&
+   document.querySelector('#chartControlTitle').textContent==='选择图标',
  state:window.aplusWorkspaceState()}))()"""
 
 
@@ -91,6 +94,17 @@ def child(session):
                             time.sleep(.05)
                     elif operation=='select':
                         window.evaluate_js('selectedId=userObjects.at(-1)?.id;renderWorkspace();')
+                    elif operation=='place-icon':
+                        assert window.evaluate_js("""(() => {
+                          const star=[...document.querySelectorAll('#chartControlBody button')].find(button=>button.textContent==='★');
+                          if (!star || !star.getClientRects().length) return false;
+                          star.click();
+                          if (activeDrawingTool!=='text') return false;
+                          const index=bars.length-40;
+                          placeDrawing({index,value:bars[index].close,x:100,y:150});
+                          const object=userObjects.at(-1);
+                          return object?.type==='text' && object.text==='★';
+                        })()""")
                     elif operation!='inspect':raise AssertionError('unknown probe operation')
                     data=window.evaluate_js(INSPECT)
                     chart_embed.atomic_json(session.with_suffix('.probe-reply.json'),dict(id=last,data=data))
@@ -211,6 +225,12 @@ def run(folder):
                 assert ask(grid._slots[-1]._embedded)['count']==0,'drawings crossed identities'
                 wait(lambda:ask(host)['selected']=='none','old object toolbar hidden')
                 grid._activate_slot(0);tools.refresh()
+            if count==6:
+                tools.buttons['smile'][0].invoke()
+                wait(lambda:ask(host)['iconPicker'],'native icon opens the real WebView picker')
+                ask(host,'place-icon')
+                wait(lambda:any(d.get('kind')=='text' and d.get('text')=='★'
+                                for d in store.chart_document(identity)['drawings']),'picked symbol saved in Store')
             ask(host,'select')
             root.update()
             widths=[s.winfo_width() for s in grid._slots]

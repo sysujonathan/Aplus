@@ -132,6 +132,7 @@ class SharedDrawingTools:
         arrow=tk.Button(row,autostyle=False,text='›',font=('Segoe UI',10),background=APP_BG,foreground=MUTED,
             activebackground=CONTROL_BG,borderwidth=0,padx=0,width=1,command=lambda:self.menu(tool))
         arrow.pack(side=tk.RIGHT,fill=tk.Y)
+        arrow.bind('<ButtonPress-1>',lambda _e:self._dismiss_open_group(tool),add='+')
         ToolTip(arrow,text=title+'：展开子菜单',delay=650)
         self.arrows[tool]=arrow
         if not hasattr(self,'entries'):self.entries={}
@@ -150,9 +151,17 @@ class SharedDrawingTools:
             except tk.TclError:pass
             self.popup=None
 
+    def _dismiss_open_group(self,group):
+        if self.popup is not None and self.popup.tool_group==group:
+            self.close_menu()
+            return 'break'
+
     def menu(self,group):
+        if self._dismiss_open_group(group):
+            return
         self.close_menu()
         popup=self.popup=tk.Toplevel(self.grid)
+        popup.tool_group=group
         popup.withdraw();popup.overrideredirect(True)
         popup.configure(background='#33363B')
         surface=tk.Frame(popup,autostyle=False,background='#16181C')
@@ -218,11 +227,13 @@ class SharedDrawingTools:
         popup.geometry(f'{surface.winfo_reqwidth()}x{height}+{x}+{y}')
         popup.deiconify();popup.lift();popup.focus_force()
         popup.bind('<Escape>',lambda _e:self.close_menu())
-        popup.bind('<FocusOut>',lambda _e:self.grid.after_idle(self._menu_focus))
+        popup.bind('<FocusOut>',lambda _e:self.grid.after_idle(self._menu_focus,popup))
 
-    def _menu_focus(self):
-        if self.popup and not str(self.grid.focus_get() or '').startswith(str(self.popup)):
-            self.close_menu()
+    def _menu_focus(self,popup):
+        if self.popup is popup:
+            focus=self.grid.focus_get()
+            if focus is None or focus.winfo_toplevel() is not popup:
+                self.close_menu()
 
     def _choose(self,kind,value):
         self.close_menu();self.send(kind,value)

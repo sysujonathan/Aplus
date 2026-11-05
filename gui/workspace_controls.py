@@ -63,6 +63,7 @@ class WorkspaceControls:
             self._top_button(action,label,lambda a=action:self.command('action',a))
         self._separator()
         self.layout_button=self._top_button(None,'图表布局：选择行列',self._open_layout_picker,requires_chart=False)
+        self.layout_button.bind('<ButtonPress-1>',self._dismiss_layout_on_press,add='+')
         self.layout_manager=self._menu_button(self.top,text='默认布局')
         ToolTip(self.layout_manager,text='管理已保存布局',delay=650)
         self.sync_button=self._menu_button(self.top,text='联动 ⌄')
@@ -127,7 +128,7 @@ class WorkspaceControls:
             favorites=toolbar.get('favorites')
             if isinstance(favorites,list) and all(isinstance(v,str) and v in self.drawing_tools.favorite_selection for v in favorites):
                 self.drawing_tools.favorite_selection=set(favorites)
-                self.grid.after_idle(self.drawing_tools.rebuild_favorites)
+                self.drawing_tools.rebuild_favorites()
         self.grid.after_idle(self.drawing_tools.place_favorites)
         self._layout_menu()
 
@@ -389,6 +390,11 @@ class WorkspaceControls:
             self._layout_popup.destroy()
             self._layout_popup=None
 
+    def _dismiss_layout_on_press(self,_event):
+        if self._layout_popup is not None:
+            self._close_layout_picker()
+            return 'break'
+
     def _open_layout_picker(self):
         if self._layout_popup is not None:
             self._close_layout_picker();return
@@ -411,11 +417,13 @@ class WorkspaceControls:
         y=self.layout_button.winfo_rooty()+self.layout_button.winfo_height()+4
         popup.geometry(f'+{max(0,x)}+{max(0,y)}');popup.deiconify();popup.lift();popup.focus_force()
         popup.bind('<Escape>',lambda _e:self._close_layout_picker())
-        popup.bind('<FocusOut>',lambda _e:self.grid.after_idle(self._check_layout_focus))
+        popup.bind('<FocusOut>',lambda _e:self.grid.after_idle(self._check_layout_focus,popup))
 
-    def _check_layout_focus(self):
-        if self._layout_popup and not str(self.grid.focus_get() or '').startswith(str(self._layout_popup)):
-            self._close_layout_picker()
+    def _check_layout_focus(self,popup):
+        if self._layout_popup is popup:
+            focus=self.grid.focus_get()
+            if focus is None or focus.winfo_toplevel() is not popup:
+                self._close_layout_picker()
 
     def _select_layout_shape(self,count):
         self._close_layout_picker();self.grid.set_layout(count);self._show_layout_shape()

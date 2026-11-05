@@ -79,7 +79,8 @@
       comparison=value;comparisonLabel.hidden=false;renderWorkspace();return true;
     }
     if (kind==='tool') {
-      if (!['cross','zoom','zoomOut','magnet','lock','text','smile',...Object.keys(toolNames)].includes(value)) return false;
+      if (value==='smile') return startTool(value) === true;
+      if (!['cross','zoom','zoomOut','magnet','lock','text',...Object.keys(toolNames)].includes(value)) return false;
       startTool(value, document.querySelector(`[data-tool="${value}"]`) || document.querySelector(`[data-favorite="${value}"]`)); return true;
     }
     if(kind==='visibility') {

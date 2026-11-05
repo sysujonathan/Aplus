@@ -993,7 +993,10 @@ function objectAtSelection() { return userObjects.find(item => item.id === selec
 
 function startTool(type, button) {
   if (type === 'smile') {
-    exitDrawingMode(); window.openChartIconPicker?.(); return;
+    if (typeof window.openChartIconPicker !== 'function') return false;
+    exitDrawingMode();
+    window.openChartIconPicker();
+    return true;
   }
   if (type === 'magnet') {
     magnetEnabled = !magnetEnabled;

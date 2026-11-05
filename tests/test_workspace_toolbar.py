@@ -37,6 +37,12 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
         controls=grid.controls
         root.update()
         controls.layout_button.invoke()
+        assert controls._layout_popup is not None
+        controls.layout_button.event_generate('<ButtonPress-1>')
+        controls.layout_button.event_generate('<ButtonRelease-1>')
+        root.update()
+        assert controls._layout_popup is None
+        controls.layout_button.invoke()
         assert set(controls._layout_popup.choices)=={1,4,6,8,9}
         controls._layout_popup.choices[8].invoke()
         assert grid._shape==(2,4) and controls._layout_popup is None
@@ -81,6 +87,15 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
             entries=tools.popup._entries
             assert entries[0][0]=='斐波那契回撤' and entries[0][1]=='fib'
             assert all(button.cget('state')=='disabled' for _,action,button in entries if action is None)
+            tools.arrows['fib'].event_generate('<ButtonPress-1>')
+            tools.arrows['fib'].event_generate('<ButtonRelease-1>')
+            root.update()
+            assert tools.popup is None
+            tools.arrows['smile'].invoke()
+            name, action, button = tools.popup._entries[0]
+            assert (name,action,button.cget('state'))==('图标','smile','normal')
+            button.invoke()
+            assert grid._slots[grid._active_slot]._embedded.calls[-1]==('tool','smile')
             # An implemented command is disabled during loading, not marked unimplemented.
             host=grid._slots[grid._active_slot]._embedded
             host.loaded=False;tools.refresh()
@@ -96,6 +111,22 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
         assert store.load_ui_preferences('chart_layouts')['data']['toolbar']['favoritesVisible'] is False
         tools.toggle_favorites();root.update()
         assert tools.favorites.winfo_ismapped()
+        for tool, _ in FAVORITES:
+            tools.toggle_favorite(tool)
+        controls.save()
+        grid.destroy()
+        grid=ChartGrid(root,store,interactive=True)
+        restored=grid.controls.drawing_tools
+        assert not restored.favorite_selection
+        assert not any(button.master is restored.favorites and button.winfo_manager()
+                       for buttons in restored.buttons.values() for button in buttons)
+        grid.pack(fill=tk.BOTH,expand=True)
+        root.update()
+        assert not restored.favorites.winfo_ismapped()
+        restored.toggle_favorite('trend')
+        root.update()
+        assert restored.favorites.winfo_ismapped()
+        assert restored.buttons['trend'][-1].winfo_ismapped()
     finally:
         for slot in grid._slot_pool:slot._embedded=None
         root.destroy()
