@@ -3,7 +3,7 @@ import base64
 import hashlib
 import json
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 from urllib.error import HTTPError
 
 import pytest
@@ -25,6 +25,7 @@ def test_desktop_login_pins_google_pkce_state_and_keeps_secrets_encrypted(tmp_pa
         import threading
         def reply():
             callback = params['redirect_uri'][0]
+            urlopen = build_opener(ProxyHandler({})).open
             try:
                 urlopen(callback + '?state=wrong&code=bad', timeout=5)
             except HTTPError as exc:
@@ -48,7 +49,7 @@ def test_desktop_login_pins_google_pkce_state_and_keeps_secrets_encrypted(tmp_pa
     monkeypatch.setattr(pa_auth, 'request', remote)
     session = GoogleSession()
     session.path = tmp_path / 'credential.dpapi'
-    assert session.login(client)['id'] == 'stable-drive-user'
+    assert session.login(client, consent_timeout=5)['id'] == 'stable-drive-user'
     assert b'test-refresh' not in session.path.read_bytes()
     restored = GoogleSession()
     restored.path = session.path

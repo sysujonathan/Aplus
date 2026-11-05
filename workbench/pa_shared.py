@@ -314,7 +314,7 @@ class Workspace:
         image = next((i for i in case['images'] if i['id'] == image_id), None)
         if not image:
             raise ValueError('原图不属于当前公共案例')
-        if thumbnail and case.get('cover'):
+        if thumbnail and image_id == case['images'][0]['id'] and case.get('cover'):
             image = case['cover']
         def verify_dimensions(data):
             if not thumbnail:
@@ -333,7 +333,15 @@ class Workspace:
             # the canonical hash. Offline failures leave the old file intact.
         if cache_only:
             raise ConnectionError('此图片尚未缓存，请连接后刷新')
-        data = self.drive.read(image['id'], MAX_IMAGE_BYTES)
+        try:
+            data = self.drive.read(image['id'], MAX_IMAGE_BYTES)
+        except DriveError as exc:
+            if exc.status != 404:
+                raise
+            # A missing file is not proof that the whole directory was revoked.
+            # Propagate confirmed directory denial to network_operation instead.
+            self.drive.check_folder()
+            raise ValueError('该图片在云端不存在或不可访问，其他公共案例仍可使用') from None
         if len(data) != image['bytes'] or checksum(data) != image['sha256']:
             raise ValueError('云端原图校验失败，已保留原记录')
         image_info(data)

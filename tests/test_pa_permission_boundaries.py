@@ -43,6 +43,8 @@ def test_confirmed_denial_revokes_all_windows_but_preserves_private_originals(tm
         result = bridges[0].refresh_shared()
     else:
         monkeypatch.setattr(drive, 'read', denied)
+        if status == 404:
+            monkeypatch.setattr(drive, 'check_folder', denied)
         result = bridges[0].get_image(public, image, operation == 'thumbnail')
     assert not result['ok'] and result['error_kind'] == 'security'
     assert not w.status()['cached'] and not other.status()['cached']

@@ -616,6 +616,7 @@ class GrowthBridge:
             data['notes'] = personal['notes']
             data['trials'] = personal['trials']
             data['topic_notes'] = personal['topic_notes']
+            data['stats']['notes'] = len(personal['notes'])
             data['stats']['trials'] = len(personal['trials'])
             data['stats']['researched_topics'] = len({n['topic_id'] for n in personal['topic_notes']})
             data['stats']['studied_cases'] = len({n['case_id'] for n in personal['studied']})

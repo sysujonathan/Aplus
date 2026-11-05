@@ -176,10 +176,12 @@ class GoogleSession:
             self.value = value
         return value
 
-    def save(self, value, expected=_UNSET):
+    def save(self, value, expected=_UNSET, *, expected_generation=_UNSET):
         with self.locked():
             current, revision = self._read()
             if expected is not _UNSET and revision != expected:
+                raise SessionChanged()
+            if expected_generation is not _UNSET and self.generation(current) != expected_generation:
                 raise SessionChanged()
             self._check(current)
             if expected is _UNSET:
@@ -230,7 +232,8 @@ class GoogleSession:
 
     def login(self, client_path=None, *, consent_timeout=600):
         with self.locked():
-            _, revision = self._read()
+            previous, _ = self._read()
+            generation = self.generation(previous)
         from .pa_oauth_config import load_client, read_client
         if client_path is not None:
             import sys
@@ -297,5 +300,6 @@ class GoogleSession:
             raise ValueError('无法确认 Google 用户身份')
         value['user'] = {'id': user['permissionId'], 'name': user.get('displayName', 'Google user')}
         value['session_id'] = secrets.token_hex(24)
-        self.save(value, expected=revision)
+        # Token renewal preserves this generation; a switch/logout does not.
+        self.save(value, expected_generation=generation)
         return value['user']
