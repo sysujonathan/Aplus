@@ -83,6 +83,7 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .session { color: #ffb74d; font-weight: 700; }
 .ohlc { color: #b8bbc2; flex-shrink:0; }
 .ohlc b { color: #d8d9dd; }
+#readoutDate { color:#b8c9df; margin-right:6px; }
 .replay-mode-badge { display: none; height: 26px; padding: 0 9px; border: 1px solid #3d3d3d; border-radius: 5px; background: #252525; color: #d6d7da; }
 .replay-mode-badge.visible { display: block; }
 .positive { color: #31a982 !important; }
@@ -555,3 +556,7 @@ body.embedded .rangebar nav {flex-shrink:0}
   body.embedded .leftbar>.tool {height:28px;min-height:28px}
 }
 .drawing-basis-note:not([hidden]) { position: absolute; bottom: 70px; left: 80px; right: 75px; z-index: 4; pointer-events: none; color: #e7c16d; background: #171b22e8; border-radius: 4px; padding: 5px 9px; font-size: 12px; width: fit-content; max-width: calc(100% - 155px); }
+/* Source/reference time and the crosshair's OHLC belong to separate rows. */
+body.chart-production .instrument-row { height:auto; min-height:54px; flex-basis:auto; flex-wrap:wrap; gap:4px 8px; padding-top:4px; padding-bottom:4px; }
+body.chart-production .instrument-title { flex:1 1 0; }
+body.chart-production .ohlc { order:2; flex:1 1 100%; white-space:normal; line-height:18px; }

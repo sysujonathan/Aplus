@@ -891,9 +891,11 @@ class ChartGrid(ttk.Frame):
         self._slots = []
         rows, columns = self._shape
         for row in range(3):
-            self.host.rowconfigure(row, weight=1 if row < rows else 0)
+            self.host.rowconfigure(row, weight=1 if row < rows else 0,
+                                   uniform='chart-rows' if row < rows else '')
         for column in range(4):
-            self.host.columnconfigure(column, weight=1 if column < columns else 0)
+            self.host.columnconfigure(column, weight=1 if column < columns else 0,
+                                      uniform='chart-columns' if column < columns else '')
         for index in range(self._layout_count):
             row, column = divmod(index, columns)
             if index < len(self._slot_pool):

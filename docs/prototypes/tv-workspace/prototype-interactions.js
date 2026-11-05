@@ -586,7 +586,7 @@ function renderWorkspace(mode = 'all') {
   });
   topContext.restore();
   drawAxisPriceTags(topContext,canvas._view);
-  drawLastPrice(topContext, rows.at(-1).close, y, width, right);
+  drawLastPrice(topContext, rows.at(-1).close, y, width, right, false);
   const legendIndex = Math.min(replayIndex, bars.length - 1) - Number(indicatorSettings.ema_offset);
   const emaValue = legendIndex <= replayIndex ? ema[legendIndex] : undefined;
   document.querySelector('.ema-value').textContent = Number.isFinite(emaValue) ? chartPrice(emaValue,indicatorSettings.ema_precision) : '—';
@@ -1773,7 +1773,7 @@ function refreshSeriesTitle(unit = activeTimeframeUnit) {
     chartBoot.latest?.date || rows.at(-1)?.date;
   const lag = minute && chartBoot.live?.stale ? ' · 数据待刷新' : '';
   const blocked = !minute && chartBoot.dailyReferenceStatus?.includes('未核对') ? ' · 实时口径待核对' : '';
-  const label = minute ? '分钟数据末柱标签' : reference ? '报价时间' : '历史截至';
+  const label = minute ? '分钟数据末柱标签' : reference ? '最新参考报价时间' : '历史截至';
   const quoteTime = minute && chartBoot.live?.quote?.quote_time ? ` · 报价 ${chartBoot.live.quote.quote_time}` : '';
   const title = document.querySelector('.instrument-title b');
   title.textContent =
@@ -2402,6 +2402,7 @@ document.querySelector('#redoAction').addEventListener('click', () => {
 
 function applyProductionContext() {
   if (!chartBoot.production) return;
+  document.body.classList.add('chart-production');
   const latest = chartBoot.latest || bars.at(-1);
   const display = chartBoot.displaySymbol || chartBoot.symbol;
   const market = String(chartBoot.symbol || '').startsWith('sh.') ? '沪' : '深';
@@ -2420,6 +2421,7 @@ function applyProductionContext() {
   document.querySelector('.quote.buy b').textContent = chartPrice(latest.close);
   document.querySelectorAll('.quote span').forEach(label => label.textContent = '收盘参考');
   document.querySelector('.quote-buttons small').textContent = '非买卖盘报价';
+  updateReadout(bars[Math.min(replayIndex, bars.length - 1)]);
   document.querySelector('.panel-context span').textContent = `${chartBoot.contextTitle} · ${String(latest.date).slice(0, 10)}`;
   document.querySelector('.panel-tabs [data-panel="strategy"]').textContent = chartBoot.contextTitle;
   document.querySelector('.candidate-list').innerHTML = `<button class="candidate active"><span class="badge ${market === '沪' ? 'sh' : 'sz'}">${market}</span><span class="candidate-name"><b></b><small></small></span><span class="candidate-price"><b></b><small></small></span></button>`;

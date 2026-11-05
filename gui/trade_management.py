@@ -139,15 +139,29 @@ class TradeManagementFrame(ttk.Frame):
         self._panel_host.columnconfigure(0, weight=3)
         self._panel_host.columnconfigure(1, weight=2)
         scale = self.winfo_fpixels('1i') / 96
-        self._panel_host.rowconfigure(1, weight=1, minsize=round(250 * scale))
-        self._panel_host.rowconfigure(2, weight=2, minsize=round(380 * scale))
+        self._panel_host.rowconfigure(1, weight=0, minsize=round(250 * scale))
+        self._panel_host.rowconfigure(2, weight=1, minsize=round(380 * scale))
         item = self._panel_canvas.create_window(0, 0, anchor=tk.NW, window=self._panel_host)
+        pending = None
+        def fit_height():
+            nonlocal pending
+            self._panel_canvas.itemconfigure(item,
+                height=max(self._panel_host.winfo_reqheight(), self._panel_canvas.winfo_height()))
+            self._panel_canvas.configure(scrollregion=self._panel_canvas.bbox('all'))
+            pending = self.after_idle(settle_height)
+        def settle_height():
+            nonlocal pending
+            pending = None
+            desired = max(self._panel_host.winfo_reqheight(), self._panel_canvas.winfo_height())
+            if desired != int(float(self._panel_canvas.itemcget(item, 'height'))):
+                fit_height()
         def fit(_event=None):
+            nonlocal pending
             compact = self._panel_canvas.winfo_width() / scale < 1100
             if len(self._panels) == 4 and compact != self._compact_panels:
                 self._compact_panels = compact
                 for row in range(4):
-                    self._panel_host.rowconfigure(row, weight=0, minsize=0)
+                    self._panel_host.rowconfigure(row, weight=0, minsize=0, uniform='')
                 self._panel_host.columnconfigure(1, weight=0 if compact else 2)
                 if compact:
                     # Holding → closed fills → funds → calendar. Never compress
@@ -158,16 +172,24 @@ class TradeManagementFrame(ttk.Frame):
                 else:
                     for panel, (row, column) in zip(self._panels, ((1,0),(1,1),(2,0),(2,1))):
                         panel.grid_configure(row=row,column=column,padx=(0,6) if column==0 else (6,0))
-                    self._panel_host.rowconfigure(1, weight=1, minsize=round(250*scale))
-                    self._panel_host.rowconfigure(2, weight=2, minsize=round(380*scale))
-            self._panel_canvas.itemconfigure(item, width=max(1, self._panel_canvas.winfo_width()),
-                height=max(self._panel_host.winfo_reqheight(), self._panel_canvas.winfo_height()))
-            self._panel_canvas.configure(scrollregion=self._panel_canvas.bbox('all'))
+                    self._panel_host.rowconfigure(1, weight=0, minsize=round(250*scale))
+                    self._panel_host.rowconfigure(2, weight=1, minsize=round(380*scale))
+            if self._compact_panels is False:
+                # Aim for 1:3; content minimums protect account actions and
+                # occupied positions. All remaining space belongs to history.
+                self._panel_host.rowconfigure(1, minsize=max(round(250*scale),
+                    round(self._panel_canvas.winfo_height() / 4)))
+            self._panel_canvas.itemconfigure(item, width=max(1, self._panel_canvas.winfo_width()))
+            # Width/layout changes alter requested height on Tk's next idle pass.
+            # Reading it immediately can lock in the old, oversized surface.
+            if pending is not None:
+                self.after_cancel(pending)
+            pending = self.after_idle(fit_height)
         self._panel_canvas.bind('<Configure>', fit)
         self._panel_host.bind('<Configure>', fit)
         self._panel_canvas.bind('<MouseWheel>', lambda e: self._panel_canvas.yview_scroll(-1 if e.delta > 0 else 1, 'units'))
 
-    def _panel(self, row, column, title, add_command=None):
+    def _panel(self, row, column, title, add_command=None, help_command=None):
         outer = ttk.Frame(self._panel_host, padding=1, style="secondary.TFrame")
         self._panels.append(outer)
         outer.grid(row=row, column=column, sticky=tk.NSEW,
@@ -178,6 +200,13 @@ class TradeManagementFrame(ttk.Frame):
         head.grid(row=0, column=0, sticky=tk.EW)
         ttk.Label(head, text=title, font=("Microsoft YaHei", 11, "bold"),
                   foreground=TEXT).pack(side=tk.LEFT)
+        if help_command:
+            self.duration_help_button = ttk.Button(head, text='ⓘ', width=2,
+                bootstyle='secondary-link', command=help_command)
+            self.duration_help_button.pack(side=tk.LEFT, padx=4)
+            from ttkbootstrap.widgets import ToolTip
+            ToolTip(self.duration_help_button, text='持有天数：自然日／交易日，例如 8/6。点击查看完整规则。',
+                    wraplength=260)
         if add_command:
             ttk.Button(head, text="＋", width=3, bootstyle="primary-outline",
                        command=add_command).pack(side=tk.RIGHT)
@@ -206,7 +235,7 @@ class TradeManagementFrame(ttk.Frame):
                 padding=(4, 0, 4, 2),
             )
         tree = ttk.Treeview(host, columns=tuple(item[0] for item in columns),
-                            show="headings", style=style_name)
+                            show="headings", style=style_name, height=1 if key == 'positions' else 8)
         tree._column_specs = columns
         tree._measure_font = tkfont.Font(
             root=tree, family="Microsoft YaHei UI",
@@ -326,7 +355,9 @@ class TradeManagementFrame(ttk.Frame):
         self._summary_separator = ttk.Separator(self.position_tree, orient=tk.HORIZONTAL)
 
         funds = self._panel(1, 1, "资金账户")
-        funds.rowconfigure(2, weight=1)
+        funds.rowconfigure(1, weight=0)
+        funds.rowconfigure(2, weight=0)
+        funds.rowconfigure(4, weight=1)
         account_bar = ttk.Frame(funds)
         account_bar.grid(row=0, column=0, sticky=tk.EW, pady=(0, 5))
         ttk.Label(account_bar, text="资金账号：", foreground=MUTED).pack(side=tk.LEFT)
@@ -355,11 +386,11 @@ class TradeManagementFrame(ttk.Frame):
                       row=1, column=0, sticky=tk.W, pady=(0, 5))
 
         metrics = ttk.Frame(funds)
-        metrics.grid(row=2, column=0, sticky=tk.NSEW)
+        metrics.grid(row=2, column=0, sticky='new')
         for column in range(3):
             metrics.columnconfigure(column, weight=1)
         for row in range(2):
-            metrics.rowconfigure(row, weight=1)
+            metrics.rowconfigure(row, weight=0)
         self.fund_metrics = {}
         for index, (key, label) in enumerate((
             ("market_value", "证券市值"), ("floating_pnl", "持仓盈亏"),
@@ -367,7 +398,7 @@ class TradeManagementFrame(ttk.Frame):
             ("available_cash", "可用"), ("asset_pnl", "资产盈亏"),
         )):
             cell = ttk.Frame(metrics)
-            cell.grid(row=index // 3, column=index % 3, sticky=tk.NSEW, padx=(0, 8), pady=2)
+            cell.grid(row=index // 3, column=index % 3, sticky='new', padx=(0, 8), pady=(4, 8))
             ttk.Label(cell, text=label, foreground=MUTED).pack(anchor=tk.W)
             variable = tk.StringVar(value="—")
             value_label = ttk.Label(cell, textvariable=variable,
@@ -386,7 +417,8 @@ class TradeManagementFrame(ttk.Frame):
                 "当前行情与扫描来源切换不改变对账基准。\n"
                 "显示 — 时，请在账户设置确认券商快照日期及同日估值依据。")
 
-        closed = self._panel(2, 0, "已清仓", self._show_closed_add_menu)
+        closed = self._panel(2, 0, "已清仓", self._show_closed_add_menu,
+                             help_command=self._show_duration_help)
         closed.rowconfigure(0, weight=1)
         closed.rowconfigure(1, weight=0)
         self.closed_tree = self._tree(closed, (
@@ -396,15 +428,18 @@ class TradeManagementFrame(ttk.Frame):
         ), "closed", grid_row=0)
         self.closed_tree.bind("<Button-3>", self._closed_menu)
         self.closed_tree.bind("<Double-1>", lambda _e: self._edit_closed())
-        ToolTip(self.closed_tree, text="持有天数按 自然日/交易日 显示，例如 8/6。\n"
-                "自然日保留原有口径；交易日从首次买入到清仓，包含买卖当天，扣除周末和交易所休市日。\n"
-                "同日买卖为 0/1。无准确买入日期或日历未覆盖时，交易日显示 —，不按工作日猜算。\n"
-                "点击本列表的持有天数表头，按自然日数量排序。")
 
         calendar_body = self._panel(2, 1, "盈亏日历")
         self.return_calendar = _ReturnCalendar(calendar_body, self._import_daily_returns,
                                                calendar_provider=self._quote_calendar)
         self.return_calendar.set_hidden(True)
+
+    def _show_duration_help(self):
+        messagebox.showinfo('持有天数计算规则',
+            '持有天数按“自然日／交易日”显示，例如 8/6。\n\n'
+            '自然日保留原有口径；交易日从首次买入到清仓，包含买卖当天，扣除周末和交易所休市日。\n'
+            '同日买卖为 0/1。无准确买入日期或日历未覆盖时，交易日显示 —，不按工作日猜算。\n\n'
+            '点击持有天数表头，按自然日数量排序。', parent=self)
 
     def _build_quick_calculator(self, body):
         quick = ttk.Labelframe(body, text="拟建仓速算", padding=(8, 5))
@@ -504,6 +539,7 @@ class TradeManagementFrame(ttk.Frame):
         self.account_var.set(selected)
         if self._report:
             self._fill_funds()
+            self._refresh_closed_values()
 
     def _show_fund_menu(self):
         menu = tk.Menu(self, tearoff=0)
@@ -702,6 +738,7 @@ class TradeManagementFrame(ttk.Frame):
                 "—", "—", "—", _pct(s["risk_pct"]), "")
 
     def _fill_positions(self):
+        self.position_tree.configure(height=3 if self._report['positions'] else 1)
         for row in self._report["positions"]:
             iid = self.position_tree.insert("", tk.END, values=self._position_values(row),
                                             tags=self._position_tags(row))
@@ -760,14 +797,27 @@ class TradeManagementFrame(ttk.Frame):
 
     def _fill_closed(self):
         for number, row in enumerate(self._report["closed"], 1):
-            tag = "profit" if row["pnl"] > 0 else ("loss" if row["pnl"] < 0 else "")
             iid = self.closed_tree.insert("", tk.END, values=(
                 number, numeric_stock_code(row["code"]), row["name"], row["close_date"],
                 f"{row['holding_days']}/{row['holding_trading_days'] if row.get('holding_trading_days') is not None else '—'}",
-                _money(row["pnl"]), _pct(row["return_pct"]),
-            ), tags=(tag,) if tag else ())
+                '', '',
+            ))
             self._closed_ids[iid] = row["id"]
+        self._refresh_closed_values()
         self.after_idle(self._refit_tree, self.closed_tree)
+
+    def _refresh_closed_values(self):
+        """Mask in place, keeping selection/order and the underlying ledger intact."""
+        rows = {row['id']: row for row in self._report['closed']}
+        for iid, identity in self._closed_ids.items():
+            row = rows.get(identity)
+            if row is None or not self.closed_tree.exists(iid):
+                continue
+            hidden = not self._show_fund_values
+            self.closed_tree.set(iid, 'pnl', '••••••' if hidden else _money(row['pnl']))
+            self.closed_tree.set(iid, 'return', '••••••' if hidden else _pct(row['return_pct']))
+            tag = '' if hidden else 'profit' if row['pnl'] > 0 else 'loss' if row['pnl'] < 0 else ''
+            self.closed_tree.item(iid, tags=(tag,) if tag else ())
 
     def _fill_funds(self, update_calendar=True):
         summary = self._report["summary"]

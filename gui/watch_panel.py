@@ -15,13 +15,14 @@ import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog
+from tkinter import font as tkfont
 import ttkbootstrap as ttk
 
 from .theme import APP_BG, PANEL_BG, TEXT
 from workbench.watch_views import WatchViews, FLAGS, COLUMNS, import_codes, export_rows
 from .tree_scroll import (
     attach_vertical_scrollbar,
-    bind_identity_column_autofit,
+    AutoHideScrollbar,
     numeric_stock_code,
 )
 
@@ -105,9 +106,10 @@ class WatchPanel(ttk.Frame):
                 stretch=col == 'name',
             )
         self.vscroll = attach_vertical_scrollbar(self.tree_host, self.tree)
-        horizontal = ttk.Scrollbar(self.tree_host, orient=tk.HORIZONTAL, command=self.tree.xview)
+        horizontal = AutoHideScrollbar(self.tree_host, orient=tk.HORIZONTAL, command=self.tree.xview)
         horizontal.grid(row=1, column=0, sticky=tk.EW)
         self.tree.configure(xscrollcommand=horizontal.set)
+        self.tree.bind('<Configure>', self._fit_columns, add='+')
         self.tree.tag_configure("row_even", background=PANEL_BG)
         self.tree.tag_configure("row_odd", background=APP_BG)
         self.tree._obs = {}    # iid -> observation_id
@@ -248,6 +250,29 @@ class WatchPanel(ttk.Frame):
             self.tree._obs[iid], self.tree._codes[iid] = row['observation_id'], code
         if selected:
             self.select_code(selected)
+        self._fit_columns()
+
+    def _fit_columns(self, _event=None):
+        """Reserve readable compact fields; give the name all remaining space."""
+        style = ttk.Style()
+        body = tkfont.Font(root=self.tree, font=style.lookup('Treeview', 'font') or 'TkDefaultFont')
+        heading = tkfont.Font(root=self.tree, font=style.lookup('Treeview.Heading', 'font') or 'TkDefaultFont')
+        state = max({str(row.get('state') or '关注') for row in self._display_rows},
+                    key=body.measure, default='关注')
+        samples = dict(flag='●', number='9999', code='000000', state=state,
+                       notes='✎', strategy='手动关注', date='2026-11-04', price='999.999',
+                       change='+99.999', percent='+99.99%', asof='11-04 15:00:00')
+        widths = {}
+        for column in self.tree['displaycolumns']:
+            if column == 'name':
+                continue
+            width = max(heading.measure(self.tree.heading(column, 'text')),
+                        body.measure(samples.get(column, ''))) + 16
+            widths[column] = width
+            self.tree.column(column, width=width, minwidth=width, stretch=False)
+        minimum = body.measure('证券名称名称') + 16
+        available = max(minimum, self.tree.winfo_width() - 4 - sum(widths.values()))
+        self.tree.column('name', width=available, minwidth=minimum, stretch=True)
 
     def _sort_key(self, row, column):
         quote = self._quotes.get(row['code'], {})
@@ -442,6 +467,7 @@ class WatchPanel(ttk.Frame):
         self.views.data['columns'] = ['code', 'name'] + [c for c, var in self._column_vars.items() if var.get()]
         if self._save_view():
             self.tree.configure(displaycolumns=self.views.columns())
+            self._fit_columns()
             self._request_quotes()
 
     def _quick_add(self, _event=None):
