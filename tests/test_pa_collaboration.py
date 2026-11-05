@@ -1,6 +1,7 @@
 """Only new shared collaboration boundaries; synthetic Drive and isolated Stores."""
 from concurrent.futures import ThreadPoolExecutor
 import copy
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ import pytest
 
 from tests.test_pa_shared import Cloud, Drive, make_case
 from workbench.store import Store
-from workbench.pa_shared import Workspace, encoded, DriveError
+from workbench.pa_shared import Workspace, encoded, DriveError, compose_case, resolve_events
 from workbench.pa_terms import graph
 from gui.growth_bridge import GrowthBridge
 
@@ -100,7 +101,7 @@ def test_simultaneous_revisions_are_visible_conflicts_and_reload_can_resolve(tea
 def test_public_comments_survive_revisions_without_exposing_personal_notes(team):
     cloud, a, b, case_id, _, _ = team
     a.record('notes', case_id, 'PRIVATE_ACCOUNT_NOTE')
-    b.collaborate(case_id, 'comment', None, '<script>plain text</script>')
+    b.collaborate(case_id, 'comment', 'comment-request', '<script>plain text</script>')
     revise(b, case_id, 'Updated')
     a.refresh()
     c = a.case(case_id)
@@ -111,7 +112,7 @@ def test_public_comments_survive_revisions_without_exposing_personal_notes(team)
     serialized = repr(cloud.files)
     assert 'PRIVATE_ACCOUNT_NOTE' not in serialized and '不许上传的私密笔记' not in serialized
     with pytest.raises(ValueError, match='纯文本留言'):
-        b.collaborate(case_id, 'comment', None, '  ')
+        b.collaborate(case_id, 'comment', 'comment-request', '  ')
     # A stale list entry is not evidence that the whole folder was revoked.
     event_id = c['comments'][0]['id']
     read = a.drive.read
@@ -127,7 +128,7 @@ def test_public_comments_survive_revisions_without_exposing_personal_notes(team)
 
 def test_only_owner_hides_and_restores_without_deleting_assets_or_comments(team):
     cloud, a, b, case_id, _, image = team
-    b.collaborate(case_id, 'comment', None, 'Keep this comment')
+    b.collaborate(case_id, 'comment', 'comment-request', 'Keep this comment')
     originals = copy.deepcopy(cloud.files)
     version = a.case(case_id)['visibility_version']
     with pytest.raises(ValueError, match='所有者'):
@@ -167,3 +168,106 @@ def test_collaboration_ui_render():
     result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs'))],
                             capture_output=True, text=True, encoding='utf-8', timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_criss_cross_resolutions_keep_only_undisputed_metadata():
+    original = dict(id='shared:case', title='Original', memory='Undisputed', keywords=['original'],
+                    term_ids=['brooks-high-2'], updated='2026-11-05')
+    def event(name, parents):
+        return dict(id=name, type='revision', case_id=original['id'], created=name, parents=parents,
+                    values=dict(title=name, memory=name, keywords=[name], term_ids=['brooks-pullback']))
+    events = [event('A', []), event('B', []), event('C', ['A', 'B']), event('D', ['A', 'B'])]
+    assert resolve_events(events) == (['C', 'D'], None)
+    result = compose_case(original, events)
+    assert result['revision_conflict'] and len(result['history']) == 4
+    assert all(result[k] == original[k] for k in ('title', 'memory', 'keywords', 'term_ids'))
+    # A single explicit resolution is authoritative; no arbitrary fallback.
+    assert compose_case(original, events[:-1])['title'] == 'C'
+    assert compose_case(original, events + [event('E', ['C', 'D'])])['title'] == 'E'
+    # If there is a known shared version, retain it rather than the original.
+    with_prior = [event('P', [])] + [dict(e, parents=['P']) if e['id'] in ('A', 'B') else e for e in events]
+    assert resolve_events(with_prior) == (['C', 'D'], 'P')
+
+
+def test_comment_upload_ack_loss_reuses_file_and_allows_new_identical_comment(team):
+    cloud, a, b, case_id, _, _ = team
+    bridge = GrowthBridge(a.store)
+    bridge._drive = a.drive
+    put_once = a.drive.put_once
+    lost = False
+    def upload_then_lose_ack(*args):
+        nonlocal lost
+        put_once(*args)
+        if args[-1] == 'collaboration-v1' and not lost:
+            lost = True
+            raise ConnectionError('simulated lost acknowledgement after upload')
+    a.drive.put_once = upload_then_lose_ack
+    first = bridge.comment_public_case(case_id, 'Same public text', 'pending-1')
+    assert not first['ok'] and lost
+    committed = {k: v.copy() for k, v in cloud.files.items() if v['kind'] == 'collaboration-v1'}
+    assert len(committed) == 1
+    # Recreate the bridge/Store to prove the reservation is durable.
+    retry = GrowthBridge(Store(a.store.root))
+    retry._drive = a.drive
+    assert retry.comment_public_case(case_id, 'Same public text', 'pending-1')['ok']
+    assert retry.comment_public_case(case_id, 'Same public text', 'pending-1')['ok']
+    assert {k: v for k, v in cloud.files.items() if v['kind'] == 'collaboration-v1'} == committed
+    assert retry.comment_public_case(case_id, 'Same public text', 'new-intent-2')['ok']
+    b.refresh()
+    assert [c['text'] for c in b.case(case_id)['comments']] == ['Same public text'] * 2
+    assert not b.case(case_id)['notes'] and '不许上传的私密笔记' not in repr(cloud.files)
+    node = shutil.which('node')
+    assert node, 'Node required for the actual comment retry handler'
+    result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs')), '--comment-retry'],
+                            capture_output=True, text=True, encoding='utf-8', timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_unchanged_collaboration_cache_revalidates_identity_and_downloads_only_when_needed(team):
+    cloud, a, b, case_id, _, _ = team
+    b.collaborate(case_id, 'comment', 'cache-comment', 'Cache me')
+    a.collaborate(case_id, 'visibility', a.case(case_id)['visibility_version'], False)
+    list_records, read = a.drive.list_records, a.drive.read
+    mode = None
+    downloads = []
+    def rows(kind):
+        result = list_records(kind)
+        for row in result:
+            row.update(trashed=False, md5Checksum=hashlib.md5(cloud.files[row['id']]['data']).hexdigest())
+            if kind == 'collaboration-v1' and cloud.files[row['id']]['owner'] == 'member':
+                if mode == 'missing-info':
+                    del row['trashed']
+                elif mode == 'wrong-owner':
+                    row['owners'] = [dict(permissionId='impostor')]
+                elif mode == 'wrong-folder':
+                    row['parents'] = ['other-folder']
+                elif mode == 'changed-md5':
+                    row['md5Checksum'] = 'changed'
+        return result
+    def track(file_id, limit):
+        if cloud.files[file_id]['kind'] == 'collaboration-v1':
+            downloads.append(file_id)
+        return read(file_id, limit)
+    a.drive.list_records, a.drive.read = rows, track
+    a.refresh()  # Warm MD5 cache.
+    downloads.clear()
+    a.refresh()
+    assert not downloads
+    mode = 'missing-info'
+    a.refresh()
+    assert len(downloads) == 1  # Full validation remains the conservative fallback.
+    downloads.clear()
+    for mode in ('wrong-owner', 'wrong-folder', 'changed-md5'):
+        with pytest.raises(ValueError):
+            a.refresh()
+        assert a.status()['cached'] and not downloads
+    mode = None
+    check_folder = a.drive.check_folder
+    def no_longer_owner():
+        result = check_folder()
+        a.drive.folder_owners = []
+        return result
+    a.drive.check_folder = no_longer_owner
+    with pytest.raises(ValueError, match='所有者身份'):
+        a.refresh()
+    assert not downloads  # Unchanged bytes do not bypass live admin validation.

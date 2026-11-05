@@ -28,7 +28,7 @@
     terms:[], graph:{nodes:[],edges:[]}, scope:'public', composing:false, ready:false, page:'library', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
     query:'', filters:{symbol:'',timeframe:'',market:'',data_kind:''}, filterOpen:false,
     searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, hasMore:false, case:null, imageIndex:0,
-    studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
+    commentRequests:{}, studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
     captureCaseId:null, captureMetadata:{}, captureGroup:false, captureError:'', duplicateAllowed:false,
     saving:0, staging:0, draftText:{}, original:null, topicId:null, topicParent:null, topicCases:[], topicSeq:0, topicLoading:false,
     trialCase:null, trialDepth:'quick', judgment:'', trialThought:'', marks:[], marking:false,
@@ -74,7 +74,7 @@
     cancelSearch();S.caseSeq++;S.topicSeq++;clearThumbnails();
     originalCache.clear();originalCacheBytes=0;imageWanted=null;
     Object.assign(S,{case:null,trialCase:null,trialRecord:null,original:null,cases:[],topicCases:[],topicId:null,
-      topicParent:null,topicLoading:false,trials:[],records:[],draftText:{},stats:{},boot:{},graph:{nodes:[],edges:[]},
+      topicParent:null,topicLoading:false,trials:[],records:[],draftText:{},commentRequests:{},stats:{},boot:{},graph:{nodes:[],edges:[]},
       query:'',filters:{},trialThought:'',trialReview:{},marks:[],judgment:'',setupCase:null,setupDraft:null,
       dirtyMetadata:false,page:'library',composing:false});
     closeOverlay(true);render();
@@ -651,9 +651,13 @@
   async function saveComment() {
     const text=$('#public-comment')?.value.trim();
     if(!text||S.saving)return;
+    const pending=S.commentRequests[S.case.id];
+    if(!pending||pending.text!==text)S.commentRequests[S.case.id]={id:crypto.randomUUID(),text};
+    const request=S.commentRequests[S.case.id];
     S.saving++;
     try {
-      const result=await api('comment_public_case',S.case.id,text);
+      const result=await api('comment_public_case',S.case.id,text,request.id);
+      delete S.commentRequests[S.case.id];
       S.case=result.case;S.sharedChanged=true;S.draftText['public-comment:'+S.case.id]='';render();toast('公共留言已发表');
     } catch(e){toast(e.message,true);} finally{S.saving--;}
   }
@@ -876,7 +880,7 @@
       if(method==='refresh_shared')clearThumbnails();
       const result=await api(method);
       if(result.cancelled)return;
-      if(['disconnect_google','connect_google'].includes(method)) {clearThumbnails();cancelSearch();S.caseSeq++;originalCache.clear();originalCacheBytes=0;imageWanted=null;S.case=null;S.trialCase=null;S.trialRecord=null;S.original=null;S.draftText={};S.trials=[];S.records=[];S.topicCases=[];S.topicId=null;S.topicSeq++;S.page='library';closeOverlay(true);}
+      if(['disconnect_google','connect_google'].includes(method)) {clearThumbnails();cancelSearch();S.caseSeq++;originalCache.clear();originalCacheBytes=0;imageWanted=null;S.case=null;S.trialCase=null;S.trialRecord=null;S.original=null;S.draftText={};S.commentRequests={};S.trials=[];S.records=[];S.topicCases=[];S.topicId=null;S.topicSeq++;S.page='library';closeOverlay(true);}
       await refreshData();
       if(method==='refresh_shared'&&S.page==='study'&&S.case?.status==='shared') {
         try{S.case=(await api('get_case',S.case.id)).case;}catch(e){S.case=null;S.page='library';toast(e.message,true);}

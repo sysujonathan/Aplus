@@ -558,8 +558,8 @@ class GrowthBridge:
         return self._public('collaborate', case_id, 'revision', expected, metadata)
 
     @guarded
-    def comment_public_case(self, case_id, text):
-        return self._public('collaborate', case_id, 'comment', None, text)
+    def comment_public_case(self, case_id, text, request_id):
+        return self._public('collaborate', case_id, 'comment', request_id, text)
 
     @guarded
     def set_public_visibility(self, case_id, expected, hidden):

@@ -234,8 +234,14 @@ class Workspace:
             old_events = {e['id']: e for e in self.get(self.space_key('collaboration'), [])}
             for row in self.drive.list_records('collaboration-v1'):
                 old = old_events.get(row['id'])
-                if old and old.get('cloud_md5') and old['cloud_md5'] != row.get('md5Checksum'):
-                    raise ValueError('公共协作记录被改写，未替换有效缓存')
+                if old and old.get('cloud_md5') and row.get('md5Checksum'):
+                    if old['cloud_md5'] != row['md5Checksum']:
+                        raise ValueError('公共协作记录被改写，未替换有效缓存')
+                    if {'parents', 'owners', 'trashed'} <= row.keys():
+                        # Same bytes still need current folder/author checks,
+                        # including the folder owner for visibility records.
+                        events.append(validate_event(old, row, owners))
+                        continue
                 try:
                     raw = self.drive.read(row['id'], MAX_MANIFEST)
                 except DriveError as exc:
@@ -407,9 +413,24 @@ class Workspace:
         else:
             event.update(parents=case[stream + '_heads'])
             event['values' if kind == 'revision' else 'hidden'] = value
-        file_id = self.drive.allocate(1)[0]
+        comment_key = None
+        if kind == 'comment':
+            comment_key = f'pa_comment:{FOLDER}:{status["user"]["id"]}:{case_id}:{identifier(expected)}'
+            reserved = self.get(comment_key)
+        else:
+            reserved = None
+        file_id = reserved['id'] if reserved else self.drive.allocate(1)[0]
         event = validate_event(event, dict(id=file_id, parents=[FOLDER], owners=[dict(permissionId=status['user']['id'])]),
                                [status['user']['id']] if status.get('admin') else [])
+        if comment_key:
+            # Reserve the exact event before upload, so a lost acknowledgement
+            # retries the same ID and bytes, also across windows/processes.
+            self.store.execute('INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)', (comment_key, dumps(event)))
+            reserved = self.get(comment_key)
+            if (reserved['text'] != event['text'] or reserved['case_id'] != case_id
+                    or reserved['author']['id'] != status['user']['id']):
+                raise ValueError('待完成留言的内容已改变，请使用新的提交身份')
+            event, file_id = reserved, reserved['id']
         raw = encoded({k: v for k, v in event.items() if k not in ('id', 'cloud_md5')})
         if len(raw) > MAX_MANIFEST:
             raise ValueError('协作记录超过共享上限，尚未提交')
@@ -676,7 +697,16 @@ def resolve_events(events):
             del pending[event['id']]
     heads = sorted(set(ancestors) - {p for e in events for p in e['parents']})
     common = set.intersection(*(ancestors[h] for h in heads)) if heads else set()
-    current = max(common, key=lambda i: (len(ancestors[i]), i)) if common else None
+    # A criss-cross merge can have multiple incomparable common ancestors.
+    # They are still disputed: recurse to their shared past instead of choosing
+    # one by ID. A single explicit resolution head remains authoritative.
+    current = None
+    while common:
+        latest = common - set().union(*(ancestors[i] - {i} for i in common))
+        if len(latest) == 1:
+            current = next(iter(latest))
+            break
+        common = set.intersection(*(ancestors[i] for i in latest))
     return heads, current
 
 

@@ -2,9 +2,11 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const elements=new Map();
 const el=k=>{if(!elements.has(k))elements.set(k,{innerHTML:''});return elements.get(k);};
-const ctx=vm.createContext({window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener(){}},console});
+let requestSerial=0;
+const ctx=vm.createContext({crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener(){}},console});
 const source=fs.readFileSync(require('node:path').join(__dirname,'../gui/pa_growth/growth.js'),'utf8');
-vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane};})();',ctx);
+vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,saveComment,setApi:fn=>api=fn,setEffects:()=>{render=()=>{};toast=()=>{}}};})();',ctx);
+if (!process.argv.includes('--comment-retry')) {
 const {S,navigation,library,study,studyPane}=ctx.window.test;
 assert.equal(S.page,'library');navigation();
 const nav=el('#navigation').innerHTML;
@@ -22,3 +24,22 @@ S.studyPane='comments';html=studyPane(c,[]);assert(html.includes('&lt;script&gt;
 S.studyPane='notes';html=studyPane(c,[]);assert(html.includes('仅本人可见')&&!html.includes('bad'));
 S.studyPane='history';assert(studyPane(c,[]).includes('Contributor'));
 console.log('PA collaboration UI: default navigation, single search, resume, roles and escaped comments passed');
+
+} else {
+const {S,saveComment,setApi,setEffects}=ctx.window.test;
+setEffects();
+el('#public-comment').value='Same public text';
+S.case={id:'shared:case'};
+const calls=[];
+setApi(async(...args)=>{calls.push(args);if(calls.length===1)throw Error('lost ack');return {case:{id:'shared:case'}};});
+(async()=>{
+  await saveComment();await saveComment();
+  assert.equal(calls[0][0],'comment_public_case');
+  assert.equal(calls[0][3],calls[1][3],'one pending submission keeps its request identity');
+  assert.equal(S.draftText['public-comment:shared:case'],'');
+  await saveComment();
+  assert.notEqual(calls[1][3],calls[2][3],'a new successful intent may repeat the same text');
+  console.log('public comment lost-ack retry: stable request, then fresh intent');
+})().catch(e=>{console.error(e);process.exitCode=1;});
+
+}
