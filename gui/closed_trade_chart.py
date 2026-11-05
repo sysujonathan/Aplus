@@ -10,6 +10,7 @@ from PIL import ImageTk
 
 from workbench.closed_chart import load_closed_chart
 from workbench.holding_quotes import china_now, session_status
+from workbench.prices import instrument_type_of
 from .chart_renderer import render_chart
 from .replay_navigation import ReplayNavigation
 from .theme import APP_BG, CHART_BG, MUTED, TEXT
@@ -55,6 +56,7 @@ def render_closed_chart(data, *, size=None, viewport=(None, 0, 1.0)):
     return render_chart(
         data["frame"], {}, f'{data["code"]} {data["name"]} · {caption}', {},
         replay_events=marks, size=size, code=data["code"],
+        instrument_type=instrument_type_of(data["code"]),
         view_bars=bars or 120, view_offset=offset, price_scale=price_scale,
         replay_label_scale=closed_label_scale(size),
         holding_levels=levels,
@@ -204,6 +206,7 @@ class ClosedTradeChartDialog:
         return dict(frame=self.data['frame'],
             record={**self.data.get('dataset', {}), 'timeframe': 'daily'},
             code=self.data['code'], name=self.data['name'], timeframe='daily',
+            instrument_type=instrument_type_of(self.data['code']),
             holding_levels=self.data.get('levels', ()), replay_events=self.data.get('events', ()),
             context_kind='holding' if self.data.get('holding') else 'closed')
 

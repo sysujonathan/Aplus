@@ -361,6 +361,24 @@ def test_missing_etf_history_is_fetched_for_chart_without_touching_market_store(
                                         provider_factory=lambda: provider)
     assert again['frame'].equals(data['frame'])
     provider.fetch_unadjusted.assert_called_once()  # same-session cache, no repeated request
+    from gui.chart_bridge import workspace_boot
+    from gui.closed_trade_chart import HoldingTradeChartDialog, render_closed_chart
+    chart = HoldingTradeChartDialog.__new__(HoldingTradeChartDialog)
+    chart._hourly = Mock()
+    chart._hourly.history.return_value = None
+    chart.data = {**data, 'minute_series': pd.DataFrame({
+        'date': ['2026-10-12 11:20', '2026-10-12 11:25'],
+        'open': [2.141, 2.142], 'high': [2.143, 2.142],
+        'low': [2.139, 2.138], 'close': [2.142, 2.139],
+        'volume': [1000, 1200],
+    })}
+    boot = workspace_boot(store, chart._workspace_context())
+    assert boot['priceStep'] == 0.001
+    assert [(bar['open'], bar['high'], bar['low'], bar['close']) for bar in boot['series']['m5']] == [
+        (2.141, 2.143, 2.139, 2.142),
+        (2.142, 2.142, 2.138, 2.139),
+    ]
+    assert render_closed_chart(data, size=(1000, 550)).width > 0
     assert database(store) == before
     assert store.rows('SELECT id FROM positions WHERE id=?', (pid,))
 
