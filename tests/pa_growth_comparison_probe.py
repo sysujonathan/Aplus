@@ -180,7 +180,9 @@ def run(folder):
                 assert window._pages['premarket'].winfo_ismapped()
                 assert not window._pages['growth'].winfo_ismapped()
                 checks.append('growth_navigation_returns_same_chart_process_and_context')
-                window._open_case_comparison()
+                assert not any(getattr(child, 'cget', lambda _: '')('text') == '历史案例对照' for child in window.section_nav.winfo_children())
+                slot._cases_btn.configure(state='normal')
+                slot._cases_btn.invoke()
                 assert len(window._case_comparisons) == 1
                 comparison = window._case_comparisons[0]
                 comparison_payload = json.loads(comparison.session.read_text(encoding='utf-8'))

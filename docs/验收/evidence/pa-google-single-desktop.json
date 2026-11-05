@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-04",
+  "real_google": true,
+  "real_webview": true,
+  "accounts": 1,
+  "images_are_marked_test_samples": true,
+  "folder_id": "18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX",
+  "checks": [
+    "UI refresh shows three live Google cases with two images each",
+    "microDB search shows three results and description hit reason",
+    "original zoom 100 to 125 to 100, second image and return retain microDB results",
+    "High 2 node links three actual Google cases",
+    "random judgment saves at stage 1 of 2, explicit reveal shows stage 2",
+    "first live process exits normally with code 0",
+    "new process reuses login and same three cloud IDs without publishing again",
+    "home resumes recent research after restart",
+    "after restart: contribution 3, public 3, studied 0, topic research 0, judgments 1; private test note retained"
+  ],
+  "screenshots_folder": "../images/pa-google-single",
+  "screenshots_count": 9,
+  "integration_tests": {"passed": 74, "seconds": 93.83},
+  "integration_main": "ac74a542aadb402f6bb1e39ae986734febefc500",
+  "multi_account_verified": false,
+  "real_network_outage_verified": false,
+  "real_google_revocation_verified": false,
+  "formal_runtime_modified": false,
+  "new_exe_released": false,
+  "ci_verified": false,
+  "merged": false
+}

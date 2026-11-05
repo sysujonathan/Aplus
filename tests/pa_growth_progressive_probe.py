@@ -43,7 +43,7 @@ def run(folder, visual=False):
         raise AssertionError(condition)
 
     def click(selector):
-        assert js(f"!!document.querySelector({json.dumps(selector)})"), selector
+        wait(f"!!document.querySelector({json.dumps(selector)})")
         js(f"document.querySelector({json.dumps(selector)}).dispatchEvent(new MouseEvent('click',{{bubbles:true,cancelable:true}}))")
 
     def field(selector, value, event='change'):
@@ -90,32 +90,24 @@ def run(folder, visual=False):
                                    dict(memory='测试样本 · 标题中的后续信息不能先显示', data_kind='test'))['case']
             original = [store.pa_image(i['id']) for i in c['images']]
             click('[data-page=home]'); click('[data-page=universe]')
-            wait("document.querySelectorAll('.case-star').length===1")
-            assert js("document.querySelectorAll('.topic-node').length") == 0
-            checks.append('unclassified_case_grows_one_real_star')
-            store.pa_update_case(c['id'], dict(topic_ids=['cont-h2']))
+            wait("!!document.querySelector('.origin-point')")
+            assert js("document.querySelectorAll('.term-node').length") == 0
+            checks.append('private_case_does_not_enter_shared_graph')
+            store.pa_update_case(c['id'], dict(topic_ids=['brooks-high-2']))
             click('[data-page=home]'); click('[data-page=universe]')
-            wait("!!document.querySelector('[data-action=select-topic][data-id=continuation]')")
-            assert not js("!!document.querySelector('[data-action=select-topic][data-id=discipline]')")
             before = js("document.querySelector('#atlas-world').getAttribute('transform')")
             click('[data-action=atlas-in]')
             assert js("document.querySelector('#atlas-world').getAttribute('transform')") != before
             click('[data-action=atlas-reset]')
-            click('[data-action=select-topic][data-id=continuation]')
-            wait("!!document.querySelector('[data-action=universe-enter]')")
-            click('[data-action=universe-enter]')
-            wait("!!document.querySelector('[data-action=select-topic][data-id=cont-h2]')")
-            click('[data-action=universe-back]')
-            wait("!!document.querySelector('[data-action=select-topic][data-id=continuation]')")
-            assert not js("!!document.querySelector('[data-action=select-topic][data-id=cont-h2]')")
-            click('[data-action=select-topic][data-id=continuation]')
-            click('[data-action=universe-enter]')
-            wait("!!document.querySelector('[data-action=select-topic][data-id=cont-h2]')")
-            checks.append('case_backed_galaxy_drilldown_zoom_and_return')
-            checkpoint('02-galaxy')
-            click('[data-action=select-topic][data-id=cont-h2]')
-            wait("!!document.querySelector('.topic-case')")
-            click('.topic-case')
+            assert js("document.querySelector('#atlas-world').getAttribute('transform')") == before
+            checks.append('shared_graph_pan_zoom_controls_keep_private_data_out')
+            checkpoint('02-graph')
+            click('[data-page=home]')
+            click('[data-action=set-scope][data-scope=private]')
+            wait("!!document.querySelector('.case-card')")
+            click('.case-card')
+            wait("!!document.querySelector('[data-action=quick-study]')")
+            click('[data-action=quick-study]')
             wait("!!document.querySelector('[data-action=configure-trial]')")
             click('[data-action=configure-trial]')
             field('#setup-mode', 'mask')

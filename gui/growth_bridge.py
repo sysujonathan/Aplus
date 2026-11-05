@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import nullcontext
 import json
 import hashlib
 from functools import wraps
@@ -11,6 +12,8 @@ import threading
 import uuid
 
 from PIL import Image, ImageGrab
+from workbench.pa_terms import TERMS, IDS as TERM_IDS, graph, selected
+from workbench.pa_auth import GoogleSession, SessionChanged
 
 
 TOPICS = [
@@ -44,9 +47,37 @@ def guarded(method):
             try:
                 if getattr(self, '_closing', False):
                     raise ValueError('成长空间正在关闭，请重新打开后操作')
-                return {'ok': True, **method(self, *args, **kwargs)}
+                return self._invoke(method, args, kwargs)
             except Exception as exc:
-                return {'ok': False, 'error': str(exc) or '操作失败，请重试'}
+                result = {'ok': False, 'error': str(exc) or '操作失败，请重试'}
+                if isinstance(exc, ConnectionError):
+                    result['error_kind'] = 'offline'
+                self._security_error(result, exc)
+                return result
+    call._growth_api = True
+    return call
+
+
+def image_read(method):
+    """Image/network reads must not hold the mutation/close acknowledgement lock."""
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        try:
+            with self._lock:
+                if getattr(self, '_closing', False):
+                    raise ValueError('成长空间正在关闭')
+            value = self._invoke(method, args, kwargs)
+            with self._lock:
+                if getattr(self, '_closing', False):
+                    raise ValueError('成长空间正在关闭')
+            return value
+        except Exception as exc:
+            result = {'ok': False, 'error': str(exc) or '图片读取失败'}
+            if isinstance(exc, ConnectionError):
+                result['error_kind'] = 'offline'
+            self._security_error(result, exc)
+            return result
+    call._growth_api = True
     return call
 
 
@@ -157,6 +188,112 @@ class GrowthBridge:
         self._thumbnail_size = 0
         self._lock = threading.RLock()
         self._window = None
+        from workbench.pa_shared import GoogleDrive
+        self._drive = GoogleDrive(profile=store.root)
+        self._seen_security = None
+        self._request_security = threading.local()
+
+    def call_scoped(self, method, args, expected):
+        """Bind UI mutations to the account/permission epoch the trader saw."""
+        target = getattr(self, method, None) if isinstance(method, str) and not method.startswith('_') else None
+        if not getattr(target, '_growth_api', False) or not isinstance(args, list):
+            return {'ok': False, 'error': '未知成长空间操作'}
+        if expected is not None and (not isinstance(expected, str) or len(expected) > 100):
+            return {'ok': False, 'error': '账号状态无效'}
+        self._request_security.expected = expected
+        try:
+            return target(*args)
+        finally:
+            del self._request_security.expected
+
+    def _security(self):
+        status = self._public('status')
+        session = getattr(self._drive, 'session', None)
+        generation = GoogleSession.generation(session.load()) if isinstance(session, GoogleSession) else None
+        if not status.get('connected'):
+            return 'anonymous'
+        return hashlib.sha256(json.dumps([generation, status['user']['id'], status['cached'],
+                                          status.get('access_epoch')]).encode()).hexdigest()
+
+    def _invoke(self, method, args, kwargs):
+        before = self._security()
+        allowed = method.__name__ in ('bootstrap', 'security_state', 'connect_google', 'disconnect_google')
+        if self._seen_security is None:
+            self._seen_security = before
+        expected = getattr(self._request_security, 'expected', None)
+        if expected is not None and before != expected and method.__name__ != 'bootstrap':
+            raise SessionChanged()
+        if not allowed and before != self._seen_security:
+            raise SessionChanged()
+        session = getattr(self._drive, 'session', None)
+        scope = session.operation() if isinstance(session, GoogleSession) and method.__name__ not in ('connect_google', 'disconnect_google') else nullcontext()
+        with scope:
+            value = method(self, *args, **kwargs)
+        after = self._security()
+        # Refresh is allowed to grant access; other in-flight responses must
+        # never rehydrate old personal content after a different window changes it.
+        if before != after and method.__name__ not in ('connect_google', 'disconnect_google', 'refresh_shared'):
+            raise SessionChanged()
+        if method.__name__ != 'security_state':
+            self._seen_security = after
+        return {'ok': True, **value, **({'security': after} if after != 'anonymous' or before != after else {})}
+
+    def _security_error(self, result, exc):
+        try:
+            current = self._security()
+            if isinstance(exc, SessionChanged) or (self._seen_security is not None and current != self._seen_security):
+                self._thumbnails.clear()
+                self._thumbnail_size = 0
+                result.update(error_kind='security', security=current)
+        except (ValueError, OSError):
+            result.update(error_kind='security', security='unavailable')
+
+    def security_state(self):
+        # Local credential/meta check only: polling never contacts Google.
+        # It also bypasses a long-running network mutation in this window.
+        try:
+            return {'ok': True, 'security': self._security()}
+        except (ValueError, OSError):
+            return {'ok': False, 'error': '登录记录暂时不可用，请重新连接',
+                    'error_kind': 'security', 'security': 'unavailable'}
+
+    def _public(self, operation, *args):
+        return self._store.pa_shared(operation, *args, drive=self._drive)
+
+    @guarded
+    def connect_google(self):
+        try:
+            user = self._drive.session.login()
+        finally:
+            if self._window is not None:
+                self._window.show()  # Also surface cancellation/timeout in PA.
+        try:
+            return {'user': user, **self._public('refresh')}
+        except (OSError, ValueError) as exc:
+            # Login has already switched identity. The page must clear the
+            # previous user's in-memory research even if Drive is unavailable.
+            return {'user': user, 'status': self._public('status'), 'refresh_error': str(exc)}
+
+    @guarded
+    def disconnect_google(self):
+        self._drive.session.logout()
+        self._thumbnails.clear()
+        self._thumbnail_size = 0
+        return {}
+
+    @guarded
+    def refresh_shared(self):
+        self._thumbnails.clear()
+        self._thumbnail_size = 0
+        return self._public('refresh')
+
+    @guarded
+    def publish_case(self, case_id):
+        return self._public('publish', case_id)
+
+    @guarded
+    def mark_studied(self, case_id):
+        return {'record': self._public('record', 'studied', case_id, None)}
 
     def _summaries(self, rows):
         result = []
@@ -164,10 +301,17 @@ class GrowthBridge:
             row = dict(source)
             images = row.get('images') or row.get('assets') or []
             asset_id = row.get('thumbnail_id') or row.get('cover_id') or (images[0]['id'] if images else None)
+            if row.get('status') == 'shared':
+                # Network thumbnails are requested independently by the page.
+                # A cold/offline cover must not block text search or capture.
+                row['thumbnail_pending'] = True
+                result.append(row)
+                continue
             if asset_id:
                 try:
                     if asset_id not in self._thumbnails:
-                        url = image_url(self._store.pa_image(asset_id), thumbnail=True)
+                        data = self._public('image', row['id'], asset_id, True) if row.get('status') == 'shared' else self._store.pa_image(asset_id)
+                        url = image_url(data, thumbnail=True)
                         while self._thumbnails and self._thumbnail_size + len(url) > 32 * 1024 * 1024:
                             oldest = next(iter(self._thumbnails))
                             self._thumbnail_size -= len(self._thumbnails.pop(oldest))
@@ -204,7 +348,9 @@ class GrowthBridge:
         growth['recent_case_id'] = (growth.get('recent') or [{}])[0].get('id')
         growth['recent_case'] = (growth.get('recent') or [None])[0]
         cases = self._store.pa_search(limit=101)
-        return dict(cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
+        shared = self._public('catalogue')
+        return dict(shared_status=self._public('status'), public_cases=self._summaries(shared[:100]),
+                    terms=list(TERMS), graph=graph(shared), public_count=len(shared), cases=self._summaries(cases[:100]), atlas_cases=metadata, has_more=len(cases) > 100,
                     next_offset=min(100, len(cases)), topics=self._topics(metadata),
                     context=self._context, **growth)
 
@@ -212,6 +358,11 @@ class GrowthBridge:
     def search_cases(self, query='', filters=None, offset=0):
         if type(offset) is not int or offset < 0:
             raise ValueError('结果分页无效')
+        if filters and filters.get('scope') == 'public':
+            result = self._public('search', query, {k:v for k,v in filters.items() if k != 'scope'}, offset)
+            result['cases'] = self._summaries(result['cases'])
+            return result
+        filters = {k:v for k,v in (filters or {}).items() if k not in ('scope', 'contributor')}
         if filters and filters.get('topic_id'):
             family = self._topic_family(filters['topic_id'])
             if len(family) > 1:
@@ -232,29 +383,50 @@ class GrowthBridge:
                 'next_offset': offset + min(100, len(page))}
 
     @guarded
+    def random_trial(self, scope='public'):
+        return self._store.pa_random_trial(scope, drive=self._drive)
+
+    @guarded
     def get_case(self, case_id):
         # Images remain metadata until the trader chooses one to inspect.
+        if str(case_id).startswith('shared:'):
+            try:
+                self._public('record', 'visited', case_id, None)
+            except ValueError:
+                pass  # Optional visit history must not hide intact originals.
+            return {'case': self._public('case', case_id)}
         case = self._store.pa_case(case_id)
         try:
             case['trial_setup'] = self._store.pa_trial_setup(case_id)
         except (ValueError, json.JSONDecodeError):
             case['trial_setup'] = None
             case['trial_setup_error'] = '试炼设置无法读取，请重新设置；原图仍可查看。'
+        if self._public('status')['connected']:
+            try:
+                self._public('record', 'visited', case_id, None)
+                records = self._public('personal')
+                case['notes'] += [r for r in records['notes'] if r['case_id'] == case_id]
+                case['trials'] = [r for r in records['trials'] if r['case_id'] == case_id]
+            except ValueError:
+                case['personal_error'] = '账号个人学习记录无法读取；本机原案例仍可查看。'
         return {'case': case}
 
     @guarded
     def set_trial_setup(self, case_id, value):
+        if str(case_id).startswith('shared:'):
+            raise ValueError('公共案例保留原提交设置，请另存私密案例后修改')
         return {'setup': self._store.pa_trial_setup(case_id, value)}
 
-    @guarded
-    def get_image(self, case_id, asset_id, thumbnail=False):
-        if type(thumbnail) is not bool:
+    @image_read
+    def get_image(self, case_id, asset_id, thumbnail=False, cache_only=False):
+        if type(thumbnail) is not bool or type(cache_only) is not bool:
             raise ValueError('图片读取方式无效')
-        case = self._store.pa_case(case_id, touch=False)
+        shared = str(case_id).startswith('shared:')
+        case = self._public('case', case_id) if shared else self._store.pa_case(case_id, touch=False)
         item = next((image for image in case.get('images', []) if image['id'] == asset_id), None)
         if item is None:
             raise ValueError('图片不存在或不属于此案例')
-        return {'image': dict(item, data_url=image_url(self._store.pa_image(asset_id), thumbnail=thumbnail))}
+        return {'image': dict(item, data_url=image_url(self._public('image', case_id, asset_id, thumbnail, cache_only) if shared else self._store.pa_image(asset_id), thumbnail=thumbnail))}
 
     def _stage(self, images):
         total = sum(len(item['data']) for item in self._pending.values())
@@ -332,7 +504,10 @@ class GrowthBridge:
 
     @guarded
     def compare_case(self, case_id):
-        self._store.pa_case(case_id, touch=False)
+        if str(case_id).startswith('shared:'):
+            self._public('case', case_id)
+        else:
+            self._store.pa_case(case_id, touch=False)
         callback = getattr(self, '_compare_case', None)
         if callback is None:
             if self._context.get('comparison'):
@@ -344,6 +519,8 @@ class GrowthBridge:
     @guarded
     def save_capture(self, tokens, metadata=None, options=None):
         options = options or {}
+        if options.get('formal'):
+            selected([i for i in (metadata or {}).get('topic_ids', []) if i in TERM_IDS], required=True)
         if not tokens or any(token not in self._pending for token in tokens):
             raise ValueError('待保存图片已失效，请重新导入')
         images = [self._pending[token] for token in tokens]
@@ -378,6 +555,8 @@ class GrowthBridge:
 
     @guarded
     def update_case(self, case_id, metadata):
+        if str(case_id).startswith('shared:'):
+            raise ValueError('公共案例保留原始提交；个人研究请保存为笔记')
         case = self._store.pa_update_case(case_id, metadata)
         try:
             case['trial_setup'] = self._store.pa_trial_setup(case_id)
@@ -388,10 +567,14 @@ class GrowthBridge:
 
     @guarded
     def add_note(self, case_id, text):
+        if str(case_id).startswith('shared:') or self._public('status')['connected']:
+            return {'note': self._public('record', 'notes', case_id, text)}
         return {'note': self._store.pa_add_note(case_id, text)}
 
     @guarded
     def save_trial(self, case_id, value):
+        if str(case_id).startswith('shared:') or self._public('status')['connected']:
+            return {'trial': self._public('record', 'trials', case_id, value)}
         if (value.get('details') or {}).get('source') == 'progressive-screenshot':
             setup = self._store.pa_trial_setup(case_id)
             if not setup:
@@ -404,8 +587,10 @@ class GrowthBridge:
 
     @guarded
     def add_topic_note(self, topic_id, text):
-        if topic_id not in {item[0] for item in TOPICS}:
+        if topic_id not in {item[0] for item in TOPICS} | TERM_IDS:
             raise ValueError('知识主题不存在')
+        if topic_id in TERM_IDS and self._public('status')['connected']:
+            return {'note': self._public('record', 'topic_notes', topic_id, text)}
         return {'note': self._store.pa_topic_note(topic_id, text)}
 
     @guarded
@@ -418,14 +603,37 @@ class GrowthBridge:
 
     def _growth(self, cases=None):
         data = self._store.pa_growth()
+        status = self._public('status')
+        public = self._public('catalogue')
+        data['stats']['public_cases'] = len(public)
+        data['stats']['contributions'] = sum(c['contributor']['id'] == status.get('user', {}).get('id') for c in public)
+        if status['connected']:
+            try:
+                personal = self._public('personal')
+            except ValueError:
+                data['personal_error'] = '个人学习记录暂时无法读取，原记录已保留；请从个人学习备份恢复。'
+                personal = dict(notes=[], trials=[], topic_notes=[], studied=[], visited=[])
+            data['notes'] = personal['notes']
+            data['trials'] = personal['trials']
+            data['topic_notes'] = personal['topic_notes']
+            data['stats']['notes'] = len(personal['notes'])
+            data['stats']['trials'] = len(personal['trials'])
+            data['stats']['researched_topics'] = len({n['topic_id'] for n in personal['topic_notes']})
+            data['stats']['studied_cases'] = len({n['case_id'] for n in personal['studied']})
         if cases is None:
             cases = self._store.pa_case_metadata()
-        case_map = {row['id']: row for row in cases}
+        case_map = {row['id']: row for row in cases + public}
         for row in data.get('trials', []) + data.get('notes', []):
             case = case_map.get(row.get('case_id'), {})
             row['case_title'] = case.get('title') or case.get('memory') or case.get('symbol') or '未命名案例'
             row['data_kind'] = case.get('data_kind', 'imported')
-        data['stats']['test_cases'] = sum(row['data_kind'] == 'test' for row in cases)
+        if status['connected']:
+            recent = sorted(personal.get('visited', []), key=lambda r: r['created'], reverse=True)
+            found = next((case_map[r['case_id']] for r in recent if r['case_id'] in case_map), None)
+            if found:
+                data['recent'] = [found]
+        data['stats']['test_cases'] = (sum(row['data_kind'] == 'test' and row['contributor']['id'] == status['user']['id'] for row in public)
+                                      if status['connected'] else sum(row['data_kind'] == 'test' for row in cases))
         data['stats']['test_trials'] = sum(row.get('data_kind') == 'test' for row in data.get('trials', []))
         data['stats']['topic_notes'] = len(data.get('topic_notes', []))
         data['records'] = sorted(data.get('notes', []) + data.get('topic_notes', []),
@@ -440,6 +648,19 @@ class GrowthBridge:
         if not paths:
             return {'cancelled': True}
         return {'result': self._store.pa_backup(paths[0])}
+
+    @guarded
+    def learning_backup(self, restore=False):
+        import webview
+        if type(restore) is not bool:
+            raise ValueError('备份操作无效')
+        self._drive.identity()
+        paths = self._window.create_file_dialog(webview.FileDialog.OPEN if restore else webview.FileDialog.SAVE,
+            **({'allow_multiple': False} if restore else {'save_filename': 'Aplus-个人学习.palearn'}),
+            file_types=('个人学习 (*.palearn)',))
+        if not paths:
+            return {'cancelled': True}
+        return {'result': self._public('restore_learning' if restore else 'export_learning', paths[0])}
 
     @guarded
     def restore_backup(self):

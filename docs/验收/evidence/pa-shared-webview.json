@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "real_webview": true,
+  "synthetic": true,
+  "real_google": false,
+  "real_ime_keyboard": false,
+  "checks": [
+    "five_shared_cases_real_cooccurrence_and_high2_case_links",
+    "public_original_exact_bytes_zoom_and_return",
+    "random_qualified_sequence_judgment_before_explicit_reveal",
+    "personal_contributions_research_and_trial_are_distinct",
+    "account_switch_clears_previous_personal_ui_and_history",
+    "real_webview_composition_and_chinese_results_keep_same_input",
+    "offline_refresh_keeps_validated_cache_without_false_success"
+  ]
+}

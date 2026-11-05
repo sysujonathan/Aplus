@@ -102,6 +102,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python tools/release_preflight.py --output "$env:GITHUB_OUTPUT"
+      - name: Prepare packaged Google Desktop public client
+        if: steps.gate.outputs.build == 'true'
+        env:
+          APLUS_GOOGLE_DESKTOP_OAUTH_JSON: ${{ secrets.APLUS_GOOGLE_DESKTOP_OAUTH_JSON }}
+        run: python tools/prepare_oauth_resource.py
       - if: steps.gate.outputs.build == 'true'
         run: python -m pip install -r requirements-lock.txt -r packaging/requirements-build.txt
       - name: Install verified compiler

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from functools import wraps
 import io
 import json
 from pathlib import Path
@@ -29,9 +30,10 @@ def run(folder, reopen=False):
     image_reads = []
 
     class ObservedBridge(GrowthBridge):
-        def get_image(self, case_id, asset_id, thumbnail=False):
+        @wraps(GrowthBridge.get_image)
+        def get_image(self, case_id, asset_id, thumbnail=False, cache_only=False):
             image_reads.append((case_id, asset_id, thumbnail))
-            return super().get_image(case_id, asset_id, thumbnail)
+            return super().get_image(case_id, asset_id, thumbnail, cache_only)
 
     bridge = ObservedBridge(store)
     window = webview.create_window('PA 真实闭环验收 · 隔离测试', (ASSETS / 'index.html').as_uri(),
@@ -68,12 +70,17 @@ def run(folder, reopen=False):
         script = script.replace('EVENT', "new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true})" if paste else "new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true})")
         evaluate(script)
         wait("document.querySelector('#capture-save') && !window.aplusGrowthBusy()")
+        evaluate("document.querySelector('[data-topic-select=brooks-high-2]').checked=true")
 
     def probe():
         try:
             assert window.events.loaded.wait(20)
             wait("document.querySelector('[data-action=import]') && !document.querySelector('.failure-screen')")
+            click('[data-action=set-scope][data-scope=private]')
+            wait("Boolean(document.querySelector('#search-input'))")
             if reopen:
+                click('[data-page=home]')
+                wait("Boolean(document.querySelector('.resume'))")
                 wait("Boolean(document.querySelector('.case-card'))")
                 assert not evaluate("Boolean(document.querySelector('.first-hint'))")
                 assert len(store.pa_search(limit=1000)) == 104
@@ -88,12 +95,14 @@ def run(folder, reopen=False):
                     original_notes_and_trials=True, no_repeated_hint=True, recent_case_outside_first_page=True,
                     one_original_on_resume=True)), encoding='utf-8')
                 return
+            click('[data-page=home]')
+            wait("Boolean(document.querySelector('.home-page'))")
             assert evaluate("Boolean(document.querySelector('.first-hint'))")
             stage([1], paste=True)
             field('[data-meta=memory]', 'microDB 结构回踩测试样本')
             field('[data-meta=keywords]', 'microDB,ETHUSD,锦和商业')
             field('[data-meta=data_kind]', 'test')
-            evaluate("document.querySelector('[data-topic-select=\"cont-h2\"]').checked=true")
+            evaluate("document.querySelector('[data-topic-select=\"brooks-high-2\"]').checked=true")
             # A failed Store commit must keep staged image and entered memory.
             original = store.pa_save_case
             store.pa_save_case = lambda *a, **k: (_ for _ in ()).throw(OSError('验收注入：保存失败'))
@@ -183,16 +192,9 @@ def run(folder, reopen=False):
             checks.extend(['append_only_research_note', 'minimal_judgment_then_evidence_no_score',
                            'trial_original_respects_judgment_boundary'])
             click('[data-action=navigate][data-page=universe]')
-            wait("Boolean(document.querySelector('[data-action=select-topic]'))")
-            click('[data-action=select-topic][data-id=continuation]')
-            wait("Boolean(document.querySelector('[data-action=universe-enter]'))")
-            click('[data-action=universe-enter]')
-            wait("Boolean(document.querySelector('[data-action=select-topic][data-id=cont-h2]'))")
-            click('[data-action=select-topic][data-id=cont-h2]')
-            wait("document.querySelector('#topic-note')?.dataset.draft === 'topic-note:cont-h2'")
-            field('#topic-note', '测试认识：先确认背景，再看信号K线')
-            click('[data-action=save-topic-note]')
-            wait("!window.aplusGrowthBusy() && document.querySelector('#topic-note').value==='' ")
+            wait("!!document.querySelector('.origin-point')")
+            assert evaluate("document.querySelectorAll('.term-node').length") == 0, 'private cases never enter public graph'
+            assert bridge.add_topic_note('brooks-high-2', '测试认识：先确认背景，再看信号K线')['ok']
             click('[data-action=navigate][data-page=growth]')
             wait("document.body.innerText.includes('测试样本判断')")
             assert store.pa_growth()['stats']['topics'] == 1

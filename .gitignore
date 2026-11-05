@@ -34,3 +34,6 @@ Thumbs.db
 .idea/
 .vscode/
 .workbuddy/
+
+# Desktop public client is injected from the admitted release build configuration.
+/resources/google-desktop-oauth.json
