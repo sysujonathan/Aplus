@@ -693,9 +693,12 @@ def test_page_entry_hides_account_calendar_before_raise_and_quotes_do_not_reveal
             assert page._show_fund_values and not page.return_calendar.hidden
             assert page.fund_total.get() != "••••••"
             # Exercise the real section routing, asserting masking before tkraise.
+            trade_nav = Mock()
+            trade_nav.winfo_manager.return_value = ""
             main = SimpleNamespace(trade_management=page,
+                chart=SimpleNamespace(controls=SimpleNamespace(fullscreen=False)),
                 _pages={"premarket": Mock(), "other": page},
-                _section_buttons={"premarket": Mock(), "other": Mock()})
+                _section_buttons={"premarket": Mock(), "other": trade_nav, "growth": Mock()})
             # Bind the real lazy-page resolver; keep all masking assertions.
             main._section = lambda key: AplusMainWindow._section(main, key)
             AplusMainWindow._switch_section(main, "premarket")

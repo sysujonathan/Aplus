@@ -204,9 +204,10 @@ def test_failed_embedded_context_releases_cover_only_through_save_acknowledgemen
     from gui.chart_panel import ChartPanel
     host=Mock()
     host.closed.return_value=False
-    panel=SimpleNamespace(readout_frame=Mock(),readout=Mock(),_embedded=host,
+    panel=SimpleNamespace(header=Mock(),readout_frame=Mock(),readout=Mock(),_embedded=host,
                           _image=object(),_workspace_context=None)
     ChartPanel._embedded_error(panel,'unsupported annotation')
     host.request_close.assert_called_once_with()
+    panel.header.grid.assert_called_once_with()
     panel.readout_frame.grid.assert_called_once_with()
     assert 'unsupported annotation' in panel.readout.set.call_args.args[0]

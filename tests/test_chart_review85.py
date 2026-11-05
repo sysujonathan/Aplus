@@ -132,7 +132,7 @@ def test_status_producers_distinguish_page_receipts_and_process_failure(tmp_path
     session=tmp_path/'session.json'
     embed.atomic_json(session,dict(runtime_root=str(tmp_path/'isolated-runtime'),boot=None,parent_hwnd=1,token=7))
     window=SimpleNamespace(events=SimpleNamespace(closing=Hook(),loaded=Hook(),closed=SimpleNamespace(is_set=lambda:True)),
-        native=SimpleNamespace(Handle=SimpleNamespace(ToInt64=lambda:1)),show=Mock(),destroy=Mock())
+        native=SimpleNamespace(Handle=SimpleNamespace(ToInt64=lambda:1)),show=Mock(),destroy=Mock(),expose=Mock())
     def create(*args,**kwargs):window.bridge=kwargs['js_api'];return window
     def start(callback,**kwargs):
         if event=='startup-fatal':raise RuntimeError('startup failed')
