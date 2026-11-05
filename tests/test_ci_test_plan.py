@@ -286,3 +286,81 @@ def test_successful_full_run_executes_preflight_once_then_all_other_tests(monkey
     assert 'tests/test_legacy_update_bridge.py' in called[0]
     assert '--ignore=tests/test_legacy_update_bridge.py' in called[1]
     assert not any(arg in called[1][3:] for arg in ('-k', '-m', '--ignore=tests'))
+
+
+def add_pa_baseline(root, git, collaboration=False):
+    for path in ('workbench/pa_shared.py', 'gui/growth_bridge.py', 'gui/pa_growth/growth.js'):
+        target = root/path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('baseline\n')
+    if collaboration:
+        target = root/'tests/test_pa_collaboration.py'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('def test_collaboration(): pass\n')
+    git('add', '.'); git('commit', '-m', 'PA baseline')
+    return git('rev-parse', 'HEAD')
+
+
+@pytest.mark.parametrize('path', [
+    'workbench/pa_shared.py', 'gui/growth_bridge.py', 'gui/pa_growth/growth.js',
+])
+def test_integrated_pa_collaboration_contracts_cover_production_only_pr(repository, path):
+    root, git, _ = repository
+    base = add_pa_baseline(root, git, collaboration=True)
+    (root/path).write_text('production change only\n')
+    git('commit', '-am', 'PA production edit')
+    payload = event(base, git('rev-parse', 'HEAD'))
+    lane, reason = ci.plan('pull_request', payload, root)
+    assert lane == 'pa+pa-collaboration'
+    command = next(c for c in ci.commands(lane) if '-m' in c)
+    assert command.count('tests/test_pa_collaboration.py') == 1
+    assert set(ci.MODULE_TESTS['pa']).issubset(command)
+    assert 'integration' in reason.lower()
+    assert not ci.needs_inno(lane)
+    assert ci.plan('push', payload, root)[0] == 'full'
+
+
+def test_collaboration_contract_uses_merged_snapshot_when_pr_head_predates_test(repository):
+    root, git, _ = repository
+    base = add_pa_baseline(root, git)
+    git('switch', '-c', 'topic')
+    (root/'workbench/pa_shared.py').write_text('production edit\n')
+    git('commit', '-am', 'PA edit'); head = git('rev-parse', 'HEAD')
+    git('switch', 'main')
+    (root/'tests').mkdir()
+    (root/'tests/test_pa_collaboration.py').write_text('def test_collaboration(): pass\n')
+    git('add', '.'); git('commit', '-m', 'collaboration merged separately')
+    base = git('rev-parse', 'HEAD')
+    git('merge', '--no-ff', 'topic', '-m', 'integration snapshot')
+    assert git('ls-tree', '--name-only', head, '--', 'tests/test_pa_collaboration.py') == ''
+    lane, _ = ci.plan('pull_request', event(base, head), root)
+    assert lane == 'pa+pa-collaboration'
+    assert 'tests/test_pa_collaboration.py' in ci.commands(lane)[1]
+
+
+def test_unmerged_or_untracked_collaboration_test_is_not_required(repository):
+    root, git, _ = repository
+    base = add_pa_baseline(root, git)
+    (root/'workbench/pa_shared.py').write_text('PA edit\n')
+    git('commit', '-am', 'PA edit'); head = git('rev-parse', 'HEAD')
+    for untracked in (False, True):
+        if untracked:
+            (root/'tests').mkdir()
+            (root/'tests/test_pa_collaboration.py').write_text('untracked scratch file\n')
+        lane, _ = ci.plan('pull_request', event(base, head), root)
+        assert lane == 'pa'
+        assert 'tests/test_pa_collaboration.py' not in ci.commands(lane)[1]
+
+
+def test_unreadable_integration_contract_evidence_falls_back_to_full(repository, monkeypatch):
+    root, git, base = repository
+    (root/'workbench').mkdir()
+    (root/'workbench/pa_shared.py').write_text('PA edit\n')
+    git('add', '.'); git('commit', '-m', 'PA edit'); head = git('rev-parse', 'HEAD')
+    real_git = ci.git
+    def unreadable(root, *args):
+        if args[0] == 'ls-tree':
+            raise subprocess.CalledProcessError(128, ['git', *args])
+        return real_git(root, *args)
+    monkeypatch.setattr(ci, 'git', unreadable)
+    assert ci.plan('pull_request', event(base, head), root)[0] == 'full'

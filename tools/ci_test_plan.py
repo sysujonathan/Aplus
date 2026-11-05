@@ -40,8 +40,8 @@ MODULE_TESTS = {
         'tests/test_pa_shared_gui.py', 'tests/test_pa_navigation_race.py',
         'tests/test_desktop_layout.py', 'tests/test_chart_exit_recovery.py',
         'tests/test_chart_switch_transport.py'),
-    # Reviewed pending PR110 test: selected only when that exact file changes.
-    # Keeping it separate avoids requiring an unmerged test for current PA PRs.
+    # Reviewed PR110 contract: selected by an exact test change, or for any PA
+    # scope once the integration commit contains it (independent of merge order).
     'pa-collaboration': ('tests/test_pa_collaboration.py',),
 }
 MODULE_PATHS = {
@@ -148,8 +148,20 @@ def plan(event_name, event, root=ROOT):
         if fields[-1] != '' or (len(fields)-1) % 2:
             raise ValueError('Invalid Git path evidence')
         changes = list(zip(fields[:-1:2], fields[1:-1:2]))
-        return classify(changes, lambda p: git(root, 'show', ancestor+':'+p),
-                        lambda p: git(root, 'show', head+':'+p))
+        lane, reason = classify(changes, lambda p: git(root, 'show', ancestor+':'+p),
+                                lambda p: git(root, 'show', head+':'+p))
+        kinds = set(lane.split('+'))
+        if 'pa' in kinds and 'pa-collaboration' not in kinds:
+            test = MODULE_TESTS['pa-collaboration'][0]
+            # HEAD is the tested integration snapshot; the PR head may predate
+            # a separately merged contract. Do not admit untracked local files.
+            tracked = git(root, 'ls-tree', '--name-only', '-z', 'HEAD', '--', test)
+            if tracked not in (b'', test.encode('utf-8') + b'\0'):
+                raise ValueError('Invalid integration contract evidence')
+            if tracked:
+                lane = '+'.join(sorted(kinds | {'pa-collaboration'}))
+                reason += '; integration snapshot contract: ' + test
+        return lane, reason
     except (KeyError, TypeError, ValueError, OSError, UnicodeError, subprocess.SubprocessError):
         return 'full', 'Cannot prove PR scope from event and complete Git history'
 
