@@ -196,16 +196,8 @@ def test_multichart_layouts_and_candidate_pages_are_stable():
     assert page_start_for(17, 1) == 17
 
 
-def test_single_chart_toolbar_option_and_wider_right_list_pane():
+def test_candidate_paging_and_wider_right_list_pane():
     toolbar = Mock()
-    toolbar.layout_var.get.return_value = "1×1"
-    ToolBar._fire_layout(toolbar)
-    toolbar._on_chart_layout.assert_called_once_with(1)
-
-    toolbar.layout_var.get.return_value = "1✖1"
-    ToolBar._fire_layout(toolbar)
-    assert toolbar._on_chart_layout.call_args.args == (1,)
-
     ToolBar.set_chart_page_status(toolbar, 10, 10, 53)
     toolbar.chart_page_var.set.assert_not_called()
 
@@ -219,7 +211,7 @@ def test_single_chart_toolbar_option_and_wider_right_list_pane():
     source = (ROOT / "gui" / "main_window.py").read_text(encoding="utf-8")
     toolbar_source = (ROOT / "gui" / "toolbar.py").read_text(encoding="utf-8")
     assert "layout_count=1" in source
-    assert 'tk.StringVar(value="1×1")' in toolbar_source
+    assert 'layout_combo' not in toolbar_source
 
 
 def test_list_mousewheel_scrolls_only_the_hovered_tree():

@@ -103,7 +103,7 @@
         <div class="instrument-row">
           <div class="instrument-title"><span class="exchange-dot">深</span><b>升达林业 · 1天 · SZSE</b></div>
           <span class="status-dot"></span><span class="session">D</span>
-          <div class="ohlc">开=<b id="openValue">4.99</b>&nbsp; 高=<b id="highValue">5.19</b>&nbsp; 低=<b id="lowValue">4.88</b>&nbsp; 收=<b id="closeValue">5.01</b>&nbsp; <b class="positive">+0.12 (+2.45%)</b></div>
+          <div class="ohlc"><span id="readoutDate"></span> 开=<b id="openValue">4.99</b>&nbsp; 高=<b id="highValue">5.19</b>&nbsp; 低=<b id="lowValue">4.88</b>&nbsp; 收=<b id="closeValue">5.01</b>&nbsp; <b class="positive">+0.12 (+2.45%)</b></div>
           <button class="replay-mode-badge" id="replayModeBadge">回放模式</button>
           <div class="currency">CNY⌄</div>
         </div>
@@ -118,6 +118,7 @@
             <small>0.01</small>
             <div class="quote buy"><b>5.01</b><span>买入</span></div>
           </div>
+          <div id="referenceQuote" class="reference-quote" hidden></div>
           <div class="indicator-legend">
             <div><span>EMA 20 close</span><b class="ema-value">4.32</b><button>⋮</button></div>
             <div class="disabled-indicator"><span>Bar Count Normal 2</span><span class="hint">5分钟行情接入后可用</span><button>◉̸</button></div>

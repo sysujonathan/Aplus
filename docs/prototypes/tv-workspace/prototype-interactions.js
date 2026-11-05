@@ -23,7 +23,7 @@ const focusIndex = index => {
 const toolNames = {
   fib: '斐波那契回撤', long: '多头仓位', ray: '水平射线', trend: '趋势线',
   short: '空头仓位', rectangle: '矩形', up: '向上箭头', down: '向下箭头',
-  arrow: '箭头标记', path: '多段折线', channel: '平行通道', text: '文字', ruler: '价格范围'
+  arrow: '箭头标记', path: '路径', channel: '平行通道', text: '文字', ruler: '价格范围'
 };
 const onePointTools = new Set(['ray', 'up', 'down', 'text']);
 const fibLevelDefaults = [
@@ -131,6 +131,7 @@ function sizeCanvas(target, width, height, ratio) {
 }
 const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offset:0, ema_width:1.5, ema_alpha:1,
   ema_color:'#ff9800', chart_type:'candles', magnet:true, strategy_visible:true, drawings_visible:true,
+  horizontal_grid:true, vertical_grid:true,
   ema_daily:true, ema_weekly:true, ema_monthly:true, indicators_visible:true,
   lock_drawings:false, hide_scope:'drawings', favorites_visible:true, sidebar_open:false,
   ema_smoothing:'none', ema_smooth_length:14, ema_bb_deviation:2, ema_smooth_color:'#fdd835',
@@ -497,12 +498,16 @@ function renderWorkspace(mode = 'all') {
   const priceStep = (stepRatio <= 1 ? 1 : stepRatio <= 2 ? 2 : stepRatio <= 5 ? 5 : 10) * magnitude;
   for (let value = Math.ceil(low / priceStep) * priceStep; value <= high; value += priceStep) {
     const py = Math.round(y(value)) + .5;
-    ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
+    if (indicatorSettings.horizontal_grid !== false) {
+      ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
+    }
     ctx.fillText(chartPrice(value), width - right + 8, py + 4);
   }
   timeAxisTicks(canvas._view).forEach(mark => {
     const px = Math.round(mark.x) + .5;
-    ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, height - bottom); ctx.stroke();
+    if (indicatorSettings.vertical_grid !== false) {
+      ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, height - bottom); ctx.stroke();
+    }
     ctx.fillText(mark.label, px + 5, height - (compact ? 33 : 52));
   });
 
@@ -586,7 +591,7 @@ function renderWorkspace(mode = 'all') {
   });
   topContext.restore();
   drawAxisPriceTags(topContext,canvas._view);
-  drawLastPrice(topContext, rows.at(-1).close, y, width, right);
+  drawLastPrice(topContext, rows.at(-1).close, y, width, right, false);
   const legendIndex = Math.min(replayIndex, bars.length - 1) - Number(indicatorSettings.ema_offset);
   const emaValue = legendIndex <= replayIndex ? ema[legendIndex] : undefined;
   document.querySelector('.ema-value').textContent = Number.isFinite(emaValue) ? chartPrice(emaValue,indicatorSettings.ema_precision) : '—';
@@ -993,7 +998,10 @@ function objectAtSelection() { return userObjects.find(item => item.id === selec
 
 function startTool(type, button) {
   if (type === 'smile') {
-    exitDrawingMode(); window.openChartIconPicker?.(); return;
+    if (typeof window.openChartIconPicker !== 'function') return false;
+    exitDrawingMode();
+    window.openChartIconPicker();
+    return true;
   }
   if (type === 'magnet') {
     magnetEnabled = !magnetEnabled;
@@ -1773,7 +1781,7 @@ function refreshSeriesTitle(unit = activeTimeframeUnit) {
     chartBoot.latest?.date || rows.at(-1)?.date;
   const lag = minute && chartBoot.live?.stale ? ' · 数据待刷新' : '';
   const blocked = !minute && chartBoot.dailyReferenceStatus?.includes('未核对') ? ' · 实时口径待核对' : '';
-  const label = minute ? '分钟数据末柱标签' : reference ? '报价时间' : '历史截至';
+  const label = minute ? '分钟数据末柱标签' : reference ? '最新参考报价时间' : '历史截至';
   const quoteTime = minute && chartBoot.live?.quote?.quote_time ? ` · 报价 ${chartBoot.live.quote.quote_time}` : '';
   const title = document.querySelector('.instrument-title b');
   title.textContent =
@@ -2362,9 +2370,32 @@ async function copyCurrentChartSnapshot() {
   }
 }
 document.querySelector('#snapshot').addEventListener('click', copyCurrentChartSnapshot);
-document.querySelector('#downloadSnapshot').addEventListener('click', () => {
+async function localChartSnapshot(action) {
+  if (!bars.length || !window.pywebview?.api?.local_snapshot) return;
+  try {
+    const result=await window.pywebview.api.local_snapshot(
+      cleanSnapshotCanvas().toDataURL('image/png'), action, chartBoot.sessionToken ?? null
+    );
+    if (!result?.ok) throw new Error('snapshot action failed');
+    showToast(action==='link' ? '已复制本地图片链接，仅本机可打开' : '已在浏览器打开活动图图片');
+  } catch (_) { showToast('快照操作失败，请重试或下载图片'); }
+}
+async function downloadChartSnapshot(preview) {
+  if (!bars.length) return;
   const day=replayActive?replayCutoffDate||bars[replayIndex].date:bars.at(-1).date;
-  const link = document.createElement('a'); link.download = `Aplus-${chartBoot.displaySymbol || '002259'}-${String(day).slice(0, 10)}.png`; link.href = document.querySelector('#snapshotImage').src; link.click(); closeWorkspaceModal();
+  const filename=`Aplus-${chartBoot.displaySymbol || 'chart'}-${String(day).slice(0,10)}.png`;
+  const png=preview || cleanSnapshotCanvas().toDataURL('image/png');
+  if (chartBoot.production && window.pywebview?.api?.save_snapshot) {
+    try {
+      const result=await window.pywebview.api.save_snapshot(png,filename,chartBoot.sessionToken ?? null);
+      if (result?.ok) showToast('活动图 PNG 已保存');
+    } catch (_) { showToast('图表快照未能保存，请选择可写目录重试'); }
+    return;
+  }
+  const link=document.createElement('a');link.download=filename;link.href=png;link.click();
+}
+document.querySelector('#downloadSnapshot').addEventListener('click', () => {
+  downloadChartSnapshot(document.querySelector('#snapshotImage').src);closeWorkspaceModal();
 });
 document.querySelectorAll('.candidate').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.candidate').forEach(item => item.classList.remove('active')); button.classList.add('active'); if (!button.textContent.includes('升达林业')) showToast('静态原型仅嵌入 002259 真实日线');
@@ -2400,8 +2431,23 @@ document.querySelector('#redoAction').addEventListener('click', () => {
   document.querySelector('#selectedObject').classList.remove('visible'); savePrototypeState(); updateUndoButtons(); updateObjectTree(); renderWorkspace(); showToast('已重做图形操作');
 });
 
+function updateReferenceReadout() {
+  if (!chartBoot.production) return;
+  const node=document.querySelector('#referenceQuote');
+  if (!node) return;
+  const latest=bars[Math.min(replayIndex,bars.length-1)];
+  const minute=/^m\d+$/.test(activeTimeframeUnit);
+  const reference=!replayActive&&!minute&&chartBoot.dailyReference;
+  const label=replayActive?'回放收盘参考':reference?'最新参考价':minute?'末柱收盘参考':'收盘参考';
+  const asof=reference?chartBoot.dailyReference.quote_time:latest.date;
+  node.textContent=`${label} ${chartPrice(latest.close)} · ${asof}`;
+  node.title=`${node.textContent}；只读参考，不是买卖盘报价`;
+  node.hidden=false;
+}
+
 function applyProductionContext() {
   if (!chartBoot.production) return;
+  document.body.classList.add('chart-production');
   const latest = chartBoot.latest || bars.at(-1);
   const display = chartBoot.displaySymbol || chartBoot.symbol;
   const market = String(chartBoot.symbol || '').startsWith('sh.') ? '沪' : '深';
@@ -2420,6 +2466,9 @@ function applyProductionContext() {
   document.querySelector('.quote.buy b').textContent = chartPrice(latest.close);
   document.querySelectorAll('.quote span').forEach(label => label.textContent = '收盘参考');
   document.querySelector('.quote-buttons small').textContent = '非买卖盘报价';
+  document.querySelector('.quote-buttons').hidden=true;
+  updateReferenceReadout();
+  updateReadout(bars[Math.min(replayIndex, bars.length - 1)]);
   document.querySelector('.panel-context span').textContent = `${chartBoot.contextTitle} · ${String(latest.date).slice(0, 10)}`;
   document.querySelector('.panel-tabs [data-panel="strategy"]').textContent = chartBoot.contextTitle;
   document.querySelector('.candidate-list').innerHTML = `<button class="candidate active"><span class="badge ${market === '沪' ? 'sh' : 'sz'}">${market}</span><span class="candidate-name"><b></b><small></small></span><span class="candidate-price"><b></b><small></small></span></button>`;
@@ -2476,12 +2525,27 @@ function applyProductionContext() {
 
 window.addEventListener('keydown', event => {
   const editingText=event.target.matches?.('input,textarea,select,[contenteditable="true"]');
-  const modalOpen=document.querySelector('#modalBackdrop').classList.contains('show');
+  const modalOpen=document.querySelector('#modalBackdrop').classList.contains('show') || Boolean(document.querySelector('dialog[open]'));
   if(!editingText&&!modalOpen){
     const control=event.ctrlKey||event.metaKey;
+    if(chartBoot.workspace && window.pywebview?.api?.request_workspace_shortcut){
+      const shortcut = control && event.key.toLowerCase()==='k' ? 'search' :
+        event.key==='F11' ? 'fullscreen' :
+        event.key==='Escape' && !activeDrawingTool && !gesture && !document.querySelector('.chart-context-menu.show')
+          ? 'leaveFullscreen' : null;
+      if(shortcut){
+        window.pywebview.api.request_workspace_shortcut(shortcut,chartBoot.sessionToken).catch(()=>{});
+        if(shortcut!=='leaveFullscreen'){event.preventDefault();return;}
+      }
+    }
     if(event.altKey&&event.key.toLowerCase()==='r'){event.preventDefault();resetChartView();return;}
     if(event.altKey&&event.key.toLowerCase()==='a'){event.preventDefault();document.querySelector('#openAlert').click();return;}
     if(control&&event.shiftKey&&event.key.toLowerCase()==='s'){event.preventDefault();document.querySelector('#snapshot').click();return;}
+    if(chartBoot.workspace && event.altKey && event.key.toLowerCase()==='s'){
+      event.preventDefault();
+      if(control)downloadChartSnapshot();else localChartSnapshot('link');
+      return;
+    }
     if(replayActive&&event.shiftKey&&event.key==='ArrowDown'){event.preventDefault();replayPlaying?stopReplayTimer():startReplayTimer();return;}
     if(replayActive&&event.shiftKey&&event.key==='ArrowRight'){event.preventDefault();stopReplayTimer();stepReplay();return;}
     if(control&&['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();zoomAround(event.key==='ArrowUp'?.8:1.25,1);return;}
@@ -2489,7 +2553,7 @@ window.addEventListener('keydown', event => {
       event.preventDefault();panChart((event.key==='ArrowLeft'?1:-1)*(control?Math.max(1,Math.round(viewCount*.12)):1));return;
     }
   }
-  if((event.ctrlKey||event.metaKey)&&!editingText&&!document.querySelector('#modalBackdrop').classList.contains('show')){
+  if((event.ctrlKey||event.metaKey)&&!editingText&&!modalOpen){
     if(event.key.toLowerCase()==='z'){event.preventDefault();document.querySelector(event.shiftKey?'#redoAction':'#undoAction').click();return;}
     if(event.key.toLowerCase()==='y'){event.preventDefault();document.querySelector('#redoAction').click();return;}
   }

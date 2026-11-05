@@ -1,0 +1,13 @@
+{
+  "base_commit": "ad35a1cb9d1fa689cac9a7fd200c5253a9115fe2",
+  "environment": "Windows 11, Python 3.12.13; isolated synthetic runtime only",
+  "suites_overlap_do_not_add_counts": true,
+  "related_regression": {"tests": 241, "failures": 0, "errors": 0, "skipped": 0, "seconds": 152.609},
+  "final_trade_and_workspace_regression": {"tests": 105, "failures": 0, "errors": 0, "skipped": 0, "seconds": 120.161},
+  "final_new_display_contracts": {"tests": 4, "failures": 0, "errors": 0, "skipped": 0, "seconds": 11.39},
+  "frozen_digest": "185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c",
+  "formal_runtime_opened": false,
+  "market_network_requested": false,
+  "installed_exe_rebuilt": false,
+  "github_ci_claimed_passed": false
+}

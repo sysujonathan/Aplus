@@ -31,17 +31,32 @@ function drawingPriceInput(value) {
   // Keep canonical prices intact; strip only binary floating-point display noise.
   return Number(Number(value).toFixed(8));
 }
+function layoutAxisPriceTags(tags, top, bottom) {
+  const gap = 22, half = 10;
+  // Preserve the last price and EMA first when a very small axis is crowded.
+  const capacity = Math.max(0, Math.floor((bottom - top) / gap));
+  const result = tags.slice(0, capacity).map(tag => ({...tag})).sort((a,b) => a.py - b.py);
+  result.forEach((tag,index) => {
+    tag.labelY = Math.max(top + half, tag.py, index ? result[index-1].labelY + gap : top + half);
+  });
+  for (let index=result.length-1; index>=0; index--) {
+    result[index].labelY = Math.min(result[index].labelY,
+      index===result.length-1 ? bottom-half : result[index+1].labelY-gap);
+  }
+  return result;
+}
 function drawAxisPriceTags(ctx,view) {
+  const tags = [];
   const tag=(value,color)=>{
     if(!Number.isFinite(value)||value<view.low||value>view.high)return;
-    priceTag(ctx,chartPrice(value),view.y(value),color,view.width,view.right);
+    tags.push({value,color,py:view.y(value)});
   };
+  tag(view.rows.at(-1).close, '#f3f3f3');
   if(indicatorSettings.ema && indicatorSettings.indicators_visible!==false && indicatorSettings['ema_'+activeTimeframeUnit]!==false && indicatorSettings.ema_price_labels!==false){
     const index=Math.min(replayIndex,bars.length-1)-Number(indicatorSettings.ema_offset);
     if(index<=replayIndex)tag(ema[index],indicatorSettings.ema_color);
   }
-  if(!drawingsVisible)return;
-  userObjects.filter(object=>object.visible!==false&&objectVisibleAtTimeframe(object)&&
+  if(drawingsVisible)userObjects.filter(object=>object.visible!==false&&objectVisibleAtTimeframe(object)&&
     (!replayActive||(object.createdAtDate||bars[object.createdAtIndex??bars.length-1]?.date)<=
       (replayCutoffDate||bars[replayIndex].date))).forEach(object=>{
     if(object.type==='ray'&&object.showPrice!==false)tag(object.a.value,object.color);
@@ -49,6 +64,14 @@ function drawAxisPriceTags(ctx,view) {
     if(['long','short'].includes(object.type)&&object.priceLabels!==false){
       tag(object.a.value,object.color);tag(object.b.value,object.targetColor||'#089981');tag(object.stop,object.stopColor||'#f23645');
     }
+  });
+  layoutAxisPriceTags(tags,view.top,view.height-view.bottom).forEach(item => {
+    if (Math.abs(item.labelY-item.py)>1) {
+      ctx.save();ctx.strokeStyle=item.color;ctx.lineWidth=1;ctx.setLineDash([]);
+      ctx.beginPath();ctx.moveTo(view.width-view.right,item.py);
+      ctx.lineTo(view.width-view.right+5,item.labelY);ctx.stroke();ctx.restore();
+    }
+    priceTag(ctx,chartPrice(item.value),item.labelY,item.color,view.width,view.right);
   });
 }
 function configureDrawingTabs(object) {

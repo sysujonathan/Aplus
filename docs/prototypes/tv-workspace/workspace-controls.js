@@ -3,6 +3,8 @@
   const workspace = chartBoot.workspace;
   if (!workspace) return;
   document.body.classList.add('shared-workspace');
+  document.body.classList.toggle('workspace-multi',workspace.multi === true);
+  document.body.classList.toggle('workspace-inactive',workspace.active === false);
   let pending = 0, pointer = null, applying = false;
   window.aplusWorkspaceSaveStarted = () => { pending++; };
   window.aplusWorkspaceSaveFinished = () => { pending = Math.max(0, pending - 1); };
@@ -68,25 +70,68 @@
   window.aplusWorkspaceCommand = command => {
     if (closingWorkspace) return false;
     const {kind,value}=command;
+    if (kind==='active') {
+      document.body.classList.toggle('workspace-inactive',value!==true);
+      return true;
+    }
     if(kind==='compare') {
       if(!value?.series || value.source!==chartBoot.source || value.adjustment!==chartBoot.adjustment)return false;
       comparison=value;comparisonLabel.hidden=false;renderWorkspace();return true;
     }
     if (kind==='tool') {
+      if (value==='smile') return startTool(value) === true;
       if (!['cross','zoom','zoomOut','magnet','lock','text',...Object.keys(toolNames)].includes(value)) return false;
-      startTool(value, document.querySelector(`[data-tool="${value}"]`)); return true;
+      startTool(value, document.querySelector(`[data-tool="${value}"]`) || document.querySelector(`[data-favorite="${value}"]`)); return true;
+    }
+    if(kind==='visibility') {
+      if(value!=null && !['drawings','indicators','strategy','all'].includes(value))return false;
+      toggleChartVisibility(value ?? indicatorSettings.hide_scope);return true;
+    }
+    if(kind==='magnetMode') {
+      if(!['weak','off'].includes(value))return false;
+      if(magnetEnabled!==(value==='weak'))startTool('magnet',document.querySelector('[data-tool="magnet"]'));
+      return true;
+    }
+    if(kind==='removeLocked') {
+      if(typeof value!=='boolean')return false;
+      indicatorSettings.remove_locked=value;savePrototypeState();return true;
+    }
+    if(kind==='remove') {
+      if(!['drawings','indicators','all'].includes(value))return false;
+      removeChartObjects(value);return true;
     }
     if (kind==='timeframe') {
       if (activeTimeframeUnit===value) return true;
       return switchProductionTimeframe(value);
     }
+    if (kind==='chartType') {
+      if (!['candles','line'].includes(value)) return false;
+      setChartType(value);return true;
+    }
     if (kind==='defaultScope') { if (!['pane','layout','global'].includes(value)) return false; workspace.defaultScope=value; return true; }
     if (kind==='action') {
+      if (value==='snapshotSave') {
+        downloadChartSnapshot();return true;
+      }
+      if (value==='snapshotLink' || value==='snapshotOpen') {
+        if (!window.pywebview?.api?.local_snapshot) return false;
+        localChartSnapshot(value==='snapshotLink'?'link':'open');return true;
+      }
       if(value==='settings') {
+        if (document.querySelector('#workspaceChartSettings')) return false;
         const dialog=document.createElement('dialog');dialog.style.cssText='background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:20px';
-        dialog.innerHTML='<h3>图表样式</h3><p>仅调整当前图格，不改策略和行情。</p><button data-type="candles">蜡烛图</button> <button data-type="line">折线图</button><p><button data-volume>显示／隐藏成交量</button></p><button data-close>关闭</button>';
-        dialog.querySelectorAll('[data-type]').forEach(button=>button.onclick=()=>{setChartType(button.dataset.type);dialog.close();});
-        dialog.querySelector('[data-volume]').onclick=()=>{rememberObjects();indicatorSettings.volume=!indicatorSettings.volume;savePrototypeState();renderWorkspace();};
+        dialog.id='workspaceChartSettings';
+        dialog.innerHTML='<h3>活动图设置</h3><p><label><input type="checkbox" data-grid="horizontal_grid"> 横向网格线</label></p><p><label><input type="checkbox" data-grid="vertical_grid"> 纵向网格线</label></p><button data-close>关闭</button>';
+        dialog.querySelectorAll('[data-grid]').forEach(input=>{
+          const key=input.dataset.grid;
+          input.checked=indicatorSettings[key]!==false;
+          input.onchange=()=>{
+            rememberObjects();
+            indicatorSettings[key]=input.checked;
+            savePrototypeState();
+            renderWorkspace();
+          };
+        });
         dialog.querySelector('[data-close]').onclick=()=>dialog.close();dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();return true;
       }
       const element = value==='indicators' ? document.querySelector('[title="技术指标"]') :
@@ -140,7 +185,16 @@
   canvas.addEventListener('mouseleave',()=>{pointer=null;});
   window.aplusWorkspaceState = () => {
     const end=Math.max(0,bars.length-1-viewOffset), begin=Math.max(0,end-viewCount+1);
+    const scope=indicatorSettings.hide_scope;
+    const key=({drawings:'drawings_visible',indicators:'indicators_visible',strategy:'strategy_visible'})[scope];
+    const hidden=scope==='all'?!drawingsVisible&&indicatorSettings.indicators_visible===false&&indicatorSettings.strategy_visible===false:
+      indicatorSettings[key]===false;
     return {identity:chartBoot.identity,symbol:chartBoot.symbol,timeframe:activeTimeframeUnit,
+      chartType:indicatorSettings.chart_type==='line'?'line':'candles',
+      asof:bars.at(-1)?.date,tool:activeDrawingTool||'cross',magnet:magnetEnabled,
+      locked:Boolean(indicatorSettings.lock_drawings),hidden,
+      removeLocked:Boolean(indicatorSettings.remove_locked),
+      drawingCount:userObjects.length,indicatorCount:indicatorSettings.ema?1:0,
       available:Object.keys(chartBoot.series||{}),
       time:bars[Math.min(end,bars.length-1)]?.date,range:[bars[begin]?.date,bars[Math.min(end,bars.length-1)]?.date],
       crosshair:pointer,dirty:pending>0||bridgeSaveFailed,replay:replayActive,

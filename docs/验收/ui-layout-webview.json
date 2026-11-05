@@ -1,0 +1,48 @@
+{
+  "wide": {
+    "selected": "选中K线 2026-06-15",
+    "selectedClose": "16.54",
+    "latest": "末根K线 2026-11-04",
+    "titleBottom": 72.75,
+    "ohlcTop": 81.5,
+    "ohlcBottom": 99.5,
+    "headerBottom": 104.5,
+    "tags": [
+      {
+        "text": "17.40",
+        "y": 217.5907395024394,
+        "color": "#f3f3f3"
+      },
+      {
+        "text": "17.32",
+        "y": 239.5907395024394,
+        "color": "#f0a202"
+      }
+    ],
+    "source": "合成标的·界面验收 · 1天 · tickflow历史＋腾讯实时参考 / 前复权 · 最新参考报价时间 2026-11-04T16:14:51+08:00"
+  },
+  "narrow": {
+    "selected": "选中K线 2026-06-15",
+    "selectedClose": "16.54",
+    "latest": "末根K线 2026-11-04",
+    "titleBottom": 72.75,
+    "ohlcTop": 81.5,
+    "ohlcBottom": 99.5,
+    "headerBottom": 104.5,
+    "tags": [
+      {
+        "text": "17.40",
+        "y": 217.5907395024394,
+        "color": "#f3f3f3"
+      },
+      {
+        "text": "17.32",
+        "y": 239.5907395024394,
+        "color": "#f0a202"
+      }
+    ],
+    "source": "合成标的·界面验收 · 1天 · tickflow历史＋腾讯实时参考 / 前复权 · 最新参考报价时间 2026-11-04T16:14:51+08:00"
+  },
+  "ok": true,
+  "failures": []
+}

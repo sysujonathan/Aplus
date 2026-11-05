@@ -209,16 +209,23 @@ function priceTag(ctx, value, py, color, width, right) {
   ctx.fillStyle = light?'#111':'#fff'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(value, width - right / 2, py + 4);
 }
 
-function drawLastPrice(ctx, value, y, width, right) {
+function drawLastPrice(ctx, value, y, width, right, showTag = true) {
   const py = y(value);
   ctx.save(); ctx.strokeStyle = '#e6e6e6'; ctx.globalAlpha = .85; ctx.setLineDash([2, 4]);
   ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(width - right, py); ctx.stroke(); ctx.restore();
+  if (!showTag) return;
   const formatted=typeof chartPrice==='function'?chartPrice(value):value.toFixed(2);
   priceTag(ctx, formatted, py, '#f3f3f3', width, right);
   ctx.fillStyle = '#111'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(formatted, width - right / 2, py + 4);
 }
 
 function updateReadout(row) {
+  if (typeof updateReferenceReadout === 'function') updateReferenceReadout();
+  const dateNode = document.querySelector('#readoutDate');
+  if (dateNode) {
+    const last = bars[Math.min(replayIndex, bars.length - 1)];
+    dateNode.textContent = `${row.date === last?.date ? '末根K线' : '选中K线'} ${row.date}`;
+  }
   const format=value=>typeof chartPrice==='function'?chartPrice(value):Number(value).toFixed(2);
   document.querySelector('#openValue').textContent = format(row.open);
   document.querySelector('#highValue').textContent = format(row.high);

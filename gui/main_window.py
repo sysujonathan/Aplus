@@ -162,7 +162,6 @@ class AplusMainWindow(ttk.Window):
             on_date_change=self._on_date_change,
             on_job_finished=self._on_job_finished,
             on_chart_page=self._on_chart_page,
-            on_chart_layout=self._on_chart_layout,
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
@@ -180,6 +179,10 @@ class AplusMainWindow(ttk.Window):
             interactive=True,
             on_layout_request=self._on_chart_layout,
             on_cases=self._open_case_comparison,
+            on_symbol=self._open_chart_symbol,
+            on_grid_changed=self._apply_list_layout,
+            on_fullscreen=self._set_chart_fullscreen,
+            on_trade=lambda:self._switch_section('other'),
             auto_quotes=lambda: bool(self.auto_quote_var.get()),
         )
         self.chart.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 8))
@@ -223,8 +226,19 @@ class AplusMainWindow(ttk.Window):
             x=max(0, self.list_pane.winfo_x()-7), y=0, width=6, height=self.body.winfo_height()), add='+')
         self._list_grip.bind('<B1-Motion>', self._resize_sidebar)
         self._list_grip.bind('<ButtonRelease-1>', self._save_sidebar)
+        self._list_rail=tk.Frame(body,autostyle=False,bg=APP_BG)
+        self._list_rail.grid(row=0,column=2,sticky=tk.NS)
+        from .workspace_icons import icon
+        from ttkbootstrap.widgets import ToolTip
+        self._list_icon=icon(self,'sidebar',round(22*self._display_scale))
+        self._list_button=tk.Button(self._list_rail,autostyle=False,image=self._list_icon,
+            command=self._toggle_lists,background=APP_BG,activebackground=CONTROL_BG,borderwidth=0,padx=4,pady=5)
+        self._list_button.pack()
+        ToolTip(self._list_button,text='显示／隐藏策略结果和关注列表',delay=650)
+        self._lists_override=None
+        self._apply_list_layout(self.chart.layout_count)
 
-        status_bar = ttk.Frame(premarket, padding=(12, 6))
+        self.premarket_status = status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
         self._status_text = self.toolbar._status
         ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
@@ -232,6 +246,29 @@ class AplusMainWindow(ttk.Window):
 
         self._switch_section("premarket")
         self.bind("<Configure>", self._resize_layout)
+        for key, action in [
+            ('<Control-k>', self.chart.controls.open_quick_search),
+            ('<F11>', self.chart.controls.toggle_fullscreen),
+            ('<Escape>', lambda:self.chart.controls.set_fullscreen(False)),
+            ('<Control-Alt-s>', lambda:self.chart.command('action','snapshotSave')),
+            ('<Control-Shift-S>', lambda:self.chart.command('action','snapshot')),
+            ('<Alt-s>', lambda:self.chart.command('action','snapshotLink')),
+        ]:
+            self.bind(key,lambda event,a=action:self._chart_shortcut(event,a),add='+')
+
+    def _chart_shortcut(self, event, action):
+        if self.chart.winfo_ismapped() and not isinstance(event.widget,(tk.Entry,tk.Text,ttk.Entry,ttk.Combobox)):
+            if event.keysym == 'Escape' and not self.chart.controls.fullscreen:
+                return
+            action()
+            return 'break'
+
+    def _set_chart_fullscreen(self, enabled):
+        for widget in (self.section_nav,self.toolbar,self.premarket_status):
+            if enabled:
+                widget.grid_remove()
+            else:
+                widget.grid()
 
     def _watch_alert(self, code):
         self.on_watch_selected(code, next((row['observation_id'] for row in self.watch.rows() if row['code']==code), None))
@@ -315,6 +352,8 @@ class AplusMainWindow(ttk.Window):
         return self._section('other')
 
     def _switch_section(self, key):
+        if key != 'premarket' and self.chart.controls.fullscreen:
+            self.chart.controls.set_fullscreen(False)
         self._section(key)
         if key == "other":
             # Mask before raising the page, not after revealing the old frame.
@@ -330,6 +369,11 @@ class AplusMainWindow(ttk.Window):
                 page.grid_remove()
         self._pages[key].grid(row=0, column=0, sticky=tk.NSEW)
         self._pages[key].tkraise()
+        trade_button = self._section_buttons['other']
+        if key == 'premarket':
+            trade_button.pack_forget()
+        elif not trade_button.winfo_manager():
+            trade_button.pack(side=tk.LEFT,padx=(0,5),ipady=2,before=self._section_buttons['growth'])
         if key == 'growth':
             self.after_idle(self._pages[key].start)
         for name, button in self._section_buttons.items():
@@ -515,6 +559,23 @@ class AplusMainWindow(ttk.Window):
         self._sidebar_width = width/self._display_scale
         self.list_pane.configure(width=round(width))
 
+    def _apply_list_layout(self,count):
+        if not hasattr(self,'_list_button'):
+            return
+        visible=self._lists_override if self._lists_override is not None else count==1
+        if visible:
+            self.list_pane.grid()
+            self.chart.grid_configure(padx=(0,8))
+        else:
+            self.list_pane.grid_remove()
+            self._list_grip.place_forget()
+            self.chart.grid_configure(padx=(0,2))
+        self._list_button.configure(background=CONTROL_BG if visible else APP_BG)
+
+    def _toggle_lists(self):
+        self._lists_override=not bool(self.list_pane.grid_info())
+        self._apply_list_layout(self.chart.layout_count)
+
     def _save_sidebar(self, _event=None):
         self.watch.views.data['sidebarWidth'] = self._sidebar_width
         self.watch._save_view()
@@ -685,8 +746,18 @@ class AplusMainWindow(ttk.Window):
 
     def _on_chart_layout(self, count):
         self.chart.set_layout(count)
-        self.toolbar.layout_var.set({1:'1×1',4:'2×2',6:'2×3',9:'3×3'}[count])
         self._status_text.set(f"K 线布局：{count} 格")
+
+    def _open_chart_symbol(self,code):
+        if self.store is None:return False
+        from .data import code_names
+        from workbench.watch_history import chart_source
+        row=next((r for r in self.watch.rows() if r['code']==code),None)
+        items=chart_items([{**row,'timeframe':self._tf_var.get()}] if row else [],'watch')
+        item=items[0] if items else ChartItem(code=code,name=code_names(self.store).get(code,''),
+            observation_id=None,source=chart_source(self.store,code),mode='watch',
+            timeframe=self._tf_var.get(),manual=True)
+        return self.chart.replace_slot(self.chart._active_slot,item,notify_active=True)
 
     def _on_chart_item_activated(self, observation_id):
         if observation_id is not None:
