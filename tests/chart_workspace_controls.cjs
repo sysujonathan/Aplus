@@ -2,7 +2,7 @@
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),assert=require('node:assert/strict');
 const elements=new Map();
 function element(id) {
-  if(!elements.has(id))elements.set(id,{style:{setProperty(){}},classList:{add(){},remove(){}},
+  if(!elements.has(id))elements.set(id,{style:{setProperty(){}},classList:{add(){},remove(){},toggle(){}},
     listeners:{},children:[],setAttribute(){},append(child){this.children.push(child);},
     addEventListener(key,fn){this.listeners[key]=fn;},click(){this.clicked=true;}});
   return elements.get(id);
@@ -20,6 +20,7 @@ const context=vm.createContext({console,structuredClone,window:{confirm:()=>true
   savePrototypeState(){context.window.aplusWorkspaceBeforeSave();},updateObjectTree(){},renderWorkspace(){},
   toolNames:{trend:'趋势线',channel:'通道'},startTool(value){context.lastTool=value;},
   closingWorkspace:false,replayActive:false,activeDrawingTool:null,activeTimeframeUnit:'daily',
+  magnetEnabled:true,drawingsVisible:true,indicatorSettings:{lock_drawings:false},
   bars:structuredClone(frame),viewOffset:0,viewCount:2,bridgeSaveFailed:false,bridgeRevision:0,
   canvas:Object.assign(element('canvas'),{_view:null}),crosshair:element('crosshair'),
   chartPrice:String,switchProductionTimeframe(period){

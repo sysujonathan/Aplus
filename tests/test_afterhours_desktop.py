@@ -33,6 +33,7 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
     window = AplusMainWindow(store=store)
     try:
         trade = window.trade_management
+        assert not hasattr(window.toolbar,'layout_combo')
         assert trade.position_tree._measure_font.measure("仓位%") > 0
         assert trade.tk.call(
             "ttk::style", "lookup", "PositionSell.primary.Outline.TButton", "-anchor"
@@ -47,6 +48,15 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
         for count in (1,4,6,9):
             window.chart.set_layout(count)
             window.update()
+            assert bool(window.list_pane.winfo_ismapped()) == (count==1)
+            if count==6:
+                wide=window.chart.host.winfo_width()
+                window._list_button.invoke()
+                window.update()
+                assert window.list_pane.winfo_ismapped() and window.chart.host.winfo_width()<wide
+                window._list_button.invoke()
+                window.update()
+                assert not window.list_pane.winfo_ismapped() and window.chart.host.winfo_width()==wide
             slot = window.chart._slots[0]
             slot._image = image
             slot._fit_image()

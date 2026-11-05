@@ -215,7 +215,7 @@ def test_hidden_layout_tiles_are_suspended_instead_of_kept_polling():
     from gui.chart_panel import ChartGrid
     visible, hidden = Mock(), Mock()
     grid = SimpleNamespace(_slot_pool=[visible, hidden], _layout_count=1, _slots=[],
-                           host=Mock(), _shape=(1, 1), controls=None)
+                           host=Mock(), _shape=(1, 1), controls=None,_interactive=True)
     ChartGrid._build_slots(grid)
     visible.suspend_interactive.assert_not_called()
     hidden.suspend_interactive.assert_called_once_with()

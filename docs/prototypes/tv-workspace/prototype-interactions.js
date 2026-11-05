@@ -23,7 +23,7 @@ const focusIndex = index => {
 const toolNames = {
   fib: '斐波那契回撤', long: '多头仓位', ray: '水平射线', trend: '趋势线',
   short: '空头仓位', rectangle: '矩形', up: '向上箭头', down: '向下箭头',
-  arrow: '箭头标记', path: '多段折线', channel: '平行通道', text: '文字', ruler: '价格范围'
+  arrow: '箭头标记', path: '路径', channel: '平行通道', text: '文字', ruler: '价格范围'
 };
 const onePointTools = new Set(['ray', 'up', 'down', 'text']);
 const fibLevelDefaults = [
@@ -2362,9 +2362,22 @@ async function copyCurrentChartSnapshot() {
   }
 }
 document.querySelector('#snapshot').addEventListener('click', copyCurrentChartSnapshot);
-document.querySelector('#downloadSnapshot').addEventListener('click', () => {
+async function downloadChartSnapshot(preview) {
+  if (!bars.length) return;
   const day=replayActive?replayCutoffDate||bars[replayIndex].date:bars.at(-1).date;
-  const link = document.createElement('a'); link.download = `Aplus-${chartBoot.displaySymbol || '002259'}-${String(day).slice(0, 10)}.png`; link.href = document.querySelector('#snapshotImage').src; link.click(); closeWorkspaceModal();
+  const filename=`Aplus-${chartBoot.displaySymbol || 'chart'}-${String(day).slice(0,10)}.png`;
+  const png=preview || cleanSnapshotCanvas().toDataURL('image/png');
+  if (chartBoot.production && window.pywebview?.api?.save_snapshot) {
+    try {
+      const result=await window.pywebview.api.save_snapshot(png,filename,chartBoot.sessionToken ?? null);
+      if (result?.ok) showToast('活动图 PNG 已保存');
+    } catch (_) { showToast('图表快照未能保存，请选择可写目录重试'); }
+    return;
+  }
+  const link=document.createElement('a');link.download=filename;link.href=png;link.click();
+}
+document.querySelector('#downloadSnapshot').addEventListener('click', () => {
+  downloadChartSnapshot(document.querySelector('#snapshotImage').src);closeWorkspaceModal();
 });
 document.querySelectorAll('.candidate').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.candidate').forEach(item => item.classList.remove('active')); button.classList.add('active'); if (!button.textContent.includes('升达林业')) showToast('静态原型仅嵌入 002259 真实日线');
@@ -2400,6 +2413,20 @@ document.querySelector('#redoAction').addEventListener('click', () => {
   document.querySelector('#selectedObject').classList.remove('visible'); savePrototypeState(); updateUndoButtons(); updateObjectTree(); renderWorkspace(); showToast('已重做图形操作');
 });
 
+function updateReferenceReadout() {
+  if (!chartBoot.production) return;
+  const node=document.querySelector('#referenceQuote');
+  if (!node) return;
+  const latest=bars[Math.min(replayIndex,bars.length-1)];
+  const minute=/^m\d+$/.test(activeTimeframeUnit);
+  const reference=!replayActive&&!minute&&chartBoot.dailyReference;
+  const label=replayActive?'回放收盘参考':reference?'最新参考价':minute?'末柱收盘参考':'收盘参考';
+  const asof=reference?chartBoot.dailyReference.quote_time:latest.date;
+  node.textContent=`${label} ${chartPrice(latest.close)} · ${asof}`;
+  node.title=`${node.textContent}；只读参考，不是买卖盘报价`;
+  node.hidden=false;
+}
+
 function applyProductionContext() {
   if (!chartBoot.production) return;
   document.body.classList.add('chart-production');
@@ -2421,6 +2448,8 @@ function applyProductionContext() {
   document.querySelector('.quote.buy b').textContent = chartPrice(latest.close);
   document.querySelectorAll('.quote span').forEach(label => label.textContent = '收盘参考');
   document.querySelector('.quote-buttons small').textContent = '非买卖盘报价';
+  document.querySelector('.quote-buttons').hidden=true;
+  updateReferenceReadout();
   updateReadout(bars[Math.min(replayIndex, bars.length - 1)]);
   document.querySelector('.panel-context span').textContent = `${chartBoot.contextTitle} · ${String(latest.date).slice(0, 10)}`;
   document.querySelector('.panel-tabs [data-panel="strategy"]').textContent = chartBoot.contextTitle;

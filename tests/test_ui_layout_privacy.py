@@ -33,8 +33,9 @@ def test_actual_webview_readout_and_label_layout(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize('desktop_limit', [None, (1024, 768)])
 @pytest.mark.native_process
-def test_trade_space_and_closed_privacy_preserve_selection_and_ledger(tmp_path):
+def test_trade_space_and_closed_privacy_preserve_selection_and_ledger(tmp_path, desktop_limit):
     import ttkbootstrap as ttk
     from gui.trade_management import TradeManagementFrame
     from workbench.store import Store
@@ -45,6 +46,8 @@ def test_trade_space_and_closed_privacy_preserve_selection_and_ledger(tmp_path):
     store.save_closed_trade(aid, 'sz.000001', '合成亏损', '2026-10-28', 2, -432, -1.23)
     root = ttk.Window(themename='darkly')
     root.tk.call('tk', 'scaling', 96 / 72)
+    if desktop_limit:
+        root.maxsize(*desktop_limit)
     root.geometry('1800x1100')
     try:
         page = TradeManagementFrame(root, store)
@@ -52,7 +55,14 @@ def test_trade_space_and_closed_privacy_preserve_selection_and_ledger(tmp_path):
         root.update()
         top, funds, bottom, calendar = page._panels
         assert bottom.winfo_height() > top.winfo_height()
-        assert calendar.winfo_rooty() + calendar.winfo_height() <= page.winfo_rooty() + page.winfo_height()
+        if not page._compact_panels and page._panel_canvas.winfo_height() >= page._panel_host.winfo_reqheight():
+            assert calendar.winfo_rooty() + calendar.winfo_height() <= page.winfo_rooty() + page.winfo_height()
+        else:
+            page._panel_canvas.yview_moveto(1)
+            root.update()
+            assert page._panel_canvas.yview()[1] == 1
+            assert calendar.winfo_rooty() < page.winfo_rooty() + page.winfo_height()
+            page._panel_canvas.yview_moveto(0)
         assert page.position_tree.winfo_height() > 100
         metrics = page.fund_metrics
         assert metrics['available_cash'][1].winfo_rooty() - metrics['market_value'][1].winfo_rooty() < 100
@@ -88,8 +98,9 @@ def test_trade_space_and_closed_privacy_preserve_selection_and_ledger(tmp_path):
         root.destroy()
 
 
+@pytest.mark.parametrize('desktop_limit', [None, (1024, 768)])
 @pytest.mark.native_process
-def test_multichart_equal_columns_and_watch_header_budget(tmp_path):
+def test_multichart_equal_columns_and_watch_header_budget(tmp_path, desktop_limit):
     import ttkbootstrap as ttk
     from gui.chart_panel import ChartGrid
     from gui.watch_panel import WatchPanel
@@ -99,12 +110,14 @@ def test_multichart_equal_columns_and_watch_header_budget(tmp_path):
     store.add_manual_watch('159518', '合成很长的证券名称用于列宽验收', '合成备注')
     root = ttk.Window(themename='darkly')
     root.tk.call('tk', 'scaling', 96 / 72)
+    if desktop_limit:
+        root.maxsize(*desktop_limit)
     root.geometry('1800x1000')
     try:
         grid = ChartGrid(root, store=store, interactive=False)
-        grid.pack(side='left', fill='both', expand=True)
         watch = WatchPanel(root, store)
         watch.pack(side='right', fill='y')
+        grid.pack(side='left', fill='both', expand=True)
         # Independent fixed sidebar, as in the real main window.
         watch.configure(width=420)
         watch.pack_propagate(False)

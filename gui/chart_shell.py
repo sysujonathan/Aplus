@@ -195,8 +195,14 @@ def run_session(session_path):
                                        frameless=embedded, easy_drag=False, hidden=embedded,
                                        background_color="#0b0b0b")
         close_guard = ChartCloseGuard(window, bridge)
-        from .chart_snapshot import copy_chart_png
+        from .chart_snapshot import copy_chart_png, save_chart_png
         bridge._copy_snapshot = lambda data: copy_chart_png(data, int(window.native.Handle.ToInt64()))
+        def save_snapshot(data, filename, session_token=None):
+            if embedded:
+                bridge._check_token(session_token)
+            return save_chart_png(data, filename, lambda name: window.create_file_dialog(
+                webview.FileDialog.SAVE, save_filename=name, file_types=('PNG 图片 (*.png)',)))
+        window.expose(save_snapshot)
         if embedded:
             def cancelled():
                 request_token = close_guard.request_token

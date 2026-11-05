@@ -1,24 +1,48 @@
-"""Copy an explicitly requested chart PNG to the Windows image clipboard."""
+"""Export an explicitly requested chart PNG."""
 import base64
 import ctypes
 from ctypes import wintypes
 import io
 import os
+from pathlib import Path
+import re
 
 from PIL import Image
 
 
-def png_dib(data_url):
+def _png_bytes(data_url):
     prefix = 'data:image/png;base64,'
     if not isinstance(data_url, str) or not data_url.startswith(prefix) or len(data_url) > 64_000_000:
         raise ValueError('快照不是有效 PNG')
-    data = base64.b64decode(data_url[len(prefix):], validate=True)
+    return base64.b64decode(data_url[len(prefix):], validate=True)
+
+
+def _check_png(image):
+    if image.format != 'PNG' or image.width * image.height > 32_000_000:
+        raise ValueError('快照格式或尺寸无效')
+
+
+def png_dib(data_url):
+    data = _png_bytes(data_url)
     with Image.open(io.BytesIO(data)) as image:
-        if image.format != 'PNG' or image.width * image.height > 32_000_000:
-            raise ValueError('快照格式或尺寸无效')
+        _check_png(image)
         output = io.BytesIO()
         image.convert('RGB').save(output, format='BMP')
     return output.getvalue()[14:]
+
+
+def save_chart_png(data_url, filename, choose_path):
+    data = _png_bytes(data_url)
+    with Image.open(io.BytesIO(data)) as image:
+        _check_png(image)
+        image.verify()
+    if not isinstance(filename, str) or not re.fullmatch(r'Aplus-[a-zA-Z0-9.-]{1,60}\.png', filename):
+        filename = 'Aplus-chart.png'
+    paths = choose_path(filename)
+    if not paths:
+        return {'ok': False}
+    Path(paths[0]).write_bytes(data)
+    return {'ok': True}
 
 
 def copy_chart_png(data_url, owner):

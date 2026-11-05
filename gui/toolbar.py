@@ -164,7 +164,7 @@ def sync_start_date(store, full_history=False, timeframe='daily'):
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
                  on_timeframe_change=None, on_date_change=None, on_job_finished=None,
-                 on_chart_page=None, on_chart_layout=None):
+                 on_chart_page=None):
         super().__init__(parent)
         self.service = service
         self.store = store
@@ -173,7 +173,6 @@ class ToolBar(ttk.Frame):
         self._on_date = on_date_change
         self._on_job_finished = on_job_finished  # 任务结束回调：(任务名, 终态, 回执)，主窗口借此刷新列表
         self._on_chart_page = on_chart_page
-        self._on_chart_layout = on_chart_layout
         self._job_id = None      # 当前提交的任务（submit 返回值），None=无任务
         self._job_kind = ""      # 任务显示名："下载行情" / "扫描策略"
         self._job_started_at = None
@@ -240,6 +239,7 @@ class ToolBar(ttk.Frame):
         # 日线 / 周线（只由用户手动切换）
         tf_f = ttk.Frame(header)
         tf_f.pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(tf_f,text='盘前周期',foreground=MUTED).pack(side=tk.LEFT,padx=(0,4))
         ttk.Radiobutton(
             tf_f, text="日线", value="daily", variable=self._tf_var, command=self._fire_tf, bootstyle="toolbutton"
         ).pack(side=tk.LEFT)
@@ -385,21 +385,10 @@ class ToolBar(ttk.Frame):
         self.month_combo.bind("<<ComboboxSelected>>", self._on_month_change)
         self.day_combo.bind("<<ComboboxSelected>>", self._on_day_change)
 
-        # TradingView 式多图控制：布局选择 + 整组左右翻页，放在信号日同一行。
+        # 候选整组翻页仍跟随信号日；布局仅由图表工作区控制。
         ttk.Separator(filters, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=(12, 8), pady=2
         )
-        self.layout_var = tk.StringVar(value="1×1")
-        self.layout_combo = ttk.Combobox(
-            filters,
-            textvariable=self.layout_var,
-            values=("1×1", "2×2", "2×3", "3×3"),
-            state="readonly",
-            width=3,
-            font=("Consolas", 9),
-        )
-        self.layout_combo.pack(side=tk.LEFT, padx=(0, 5))
-        self.layout_combo.bind("<<ComboboxSelected>>", self._fire_layout)
         self.btn_chart_prev = ttk.Button(
             filters,
             text="‹",
@@ -663,12 +652,6 @@ class ToolBar(ttk.Frame):
     def set_chart_source(self, label):
         # 来源由右侧对应列表的选中状态表达，顶部不再重复占位显示。
         return None
-
-    def _fire_layout(self, _event=None):
-        label = self.layout_var.get().strip().lower().replace("✖", "×").replace("x", "×")
-        count = {"1×1": 1, "2×2": 4, "2×3": 6, "3×3": 9}.get(label, 4)
-        if self._on_chart_layout:
-            self._on_chart_layout(count)
 
     # ---- 交易日三联 Combobox 联动 ----
     def _load_date_options(self):

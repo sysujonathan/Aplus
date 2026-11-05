@@ -1,0 +1,70 @@
+{
+  "ok": true,
+  "synthetic": true,
+  "rounds": [
+    {
+      "panes": 1,
+      "real_child_renderers": 1,
+      "all_tools": 11,
+      "real_quickbar_edit": true,
+      "undo_redo": true,
+      "real_store_reopened": true,
+      "old_selected_bar_hidden": false,
+      "equal_columns": true,
+      "only_shared_controls": true,
+      "direct_period_buttons": true,
+      "graphical_layout_picker": true,
+      "active_chart_style": true,
+      "favorites_at_bottom": false,
+      "captured_own_client": false
+    },
+    {
+      "panes": 4,
+      "real_child_renderers": 4,
+      "all_tools": 11,
+      "real_quickbar_edit": true,
+      "undo_redo": true,
+      "real_store_reopened": true,
+      "old_selected_bar_hidden": true,
+      "equal_columns": true,
+      "only_shared_controls": true,
+      "direct_period_buttons": true,
+      "graphical_layout_picker": true,
+      "active_chart_style": true,
+      "favorites_at_bottom": true,
+      "captured_own_client": false
+    },
+    {
+      "panes": 6,
+      "real_child_renderers": 6,
+      "all_tools": 11,
+      "real_quickbar_edit": true,
+      "undo_redo": true,
+      "real_store_reopened": true,
+      "old_selected_bar_hidden": true,
+      "equal_columns": true,
+      "only_shared_controls": true,
+      "direct_period_buttons": true,
+      "graphical_layout_picker": true,
+      "active_chart_style": true,
+      "favorites_at_bottom": true,
+      "captured_own_client": false
+    },
+    {
+      "panes": 9,
+      "real_child_renderers": 9,
+      "all_tools": 11,
+      "real_quickbar_edit": true,
+      "undo_redo": true,
+      "real_store_reopened": true,
+      "old_selected_bar_hidden": true,
+      "equal_columns": true,
+      "only_shared_controls": true,
+      "direct_period_buttons": true,
+      "graphical_layout_picker": true,
+      "active_chart_style": true,
+      "favorites_at_bottom": true,
+      "captured_own_client": false
+    }
+  ]
+}

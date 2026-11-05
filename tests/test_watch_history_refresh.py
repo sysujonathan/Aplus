@@ -19,7 +19,7 @@ def test_late_history_reply_keeps_page_token_and_minutes(tmp_path,monkeypatch,re
     frame=pd.DataFrame(dict(date=['2026-10-28','2026-10-29'],open=1.2,high=1.3,low=1.1,close=1.25,volume=100))
     panel=SimpleNamespace(store=store,_interactive=True,_image=None,_intraday_sent=None,
         _intraday_code='sz.159570',_code='sz.159570',_intraday_frame=None,
-        _title_var=Mock(),_analysis_btn=Mock(),readout_frame=Mock(),readout=Mock(),
+        _title_var=Mock(),_analysis_btn=Mock(),header=Mock(),readout_frame=Mock(),readout=Mock(),
         _publish_intraday=Mock(),_fit_image=Mock(),chart_label=Mock())
     host=EmbeddedChartHost.__new__(EmbeddedChartHost)
     host.store=store;host.parent=Mock();host.on_layout=None;host.token=0;host.closing=False
@@ -64,7 +64,7 @@ def test_new_page_for_same_code_replays_cached_minutes_without_network(monkeypat
     monkeypatch.setattr(EmbeddedChartHost,'available',staticmethod(lambda:True))
     frame=object()
     panel=SimpleNamespace(_interactive=True,store=True,_embedded=Mock(),_workspace_context={'code':'sz.159570'},
-        readout_frame=Mock(),readout=Mock(),_intraday_sent='old-token',_intraday_code='sz.159570',
+        header=Mock(),readout_frame=Mock(),readout=Mock(),_intraday_sent='old-token',_intraday_code='sz.159570',
         _code='sz.159570',_intraday_frame=frame,_publish_intraday=Mock())
     ChartPanel._show_interactive(panel)
     assert panel._intraday_sent is None

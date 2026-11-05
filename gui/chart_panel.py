@@ -212,11 +212,12 @@ class ChartPanel(native_ttk.Frame):
             context = self._workspace_context or self._rebuild_workspace_context()
             if self._embedded is None:
                 self._embedded = EmbeddedChartHost(self.chart_frame, self.store, self._embedded_error,
-                    on_layout=self._on_layout, on_ready=self.readout_frame.grid_remove, on_active=self._activate,
+                    on_layout=self._on_layout, on_ready=self._interactive_ready, on_active=self._activate,
                     on_history_result=self._history_refresh_result,
                     workspace=getattr(self, '_workspace_descriptor', None),
                     on_workspace_state=getattr(self, '_on_workspace_state', None))
             self._embedded.workspace = getattr(self, '_workspace_descriptor', None)
+            self.header.grid()
             self.readout_frame.grid()
             self.readout.set('正在切换图表…')
             self._embedded.show(context)
@@ -228,6 +229,17 @@ class ChartPanel(native_ttk.Frame):
         except Exception as exc:
             self._embedded_error(str(exc))
 
+    def _interactive_ready(self):
+        self.readout_frame.grid_remove()
+        self._update_tile_header()
+
+    def _update_tile_header(self):
+        host=self._embedded
+        if getattr(self,'_workspace_multi',False) and host and host.ready():
+            self.header.grid_remove()
+        else:
+            self.header.grid()
+
     def _history_refresh_result(self, accepted, detail=''):
         if accepted:
             if self._embedded is not None and self._embedded.ready():
@@ -237,6 +249,7 @@ class ChartPanel(native_ttk.Frame):
             self.readout.set('日K刷新暂未显示，当前图表已保留；可稍后点“更新K线”重试。' + str(detail))
 
     def _embedded_error(self, error):
+        self.header.grid()
         self.readout_frame.grid()
         self.readout.set('交互主图未就绪：' + error)
         # An embedded blank/stale page covers Tk's preview and error label.
@@ -413,6 +426,7 @@ class ChartPanel(native_ttk.Frame):
 
     def show_placeholder(self, title="空位"):
         self._cancel_manual()
+        self.header.grid()
         self.readout.set('移到 K 线上查看开、高、低、收')
         self._code = None
         self._observation_id = None
@@ -699,7 +713,8 @@ class ChartGrid(ttk.Frame):
     """TradingView 式活动图格：候选分页，关注点击/拖拽只替换指定格。"""
 
     def __init__(self, parent, store=None, layout_count=4, on_page_state=None,
-                 on_active_item=None, interactive=False, on_layout_request=None, auto_quotes=None, on_cases=None):
+                 on_active_item=None, interactive=False, on_layout_request=None, auto_quotes=None, on_cases=None,
+                 on_symbol=None,on_grid_changed=None):
         super().__init__(parent)
         self.store = store
         self._interactive = interactive
@@ -711,6 +726,8 @@ class ChartGrid(ttk.Frame):
         self._on_cases = on_cases
         self._on_active_item = on_active_item
         self._on_layout_request = on_layout_request
+        self._on_symbol = on_symbol
+        self._on_grid_changed = on_grid_changed
         self._items = []
         self._display_items = []
         self._page_start = 0
@@ -736,6 +753,11 @@ class ChartGrid(ttk.Frame):
 
     def command(self, kind, value=None):
         return self.controls.command(kind, value) if self.controls else False
+
+    def open_symbol(self,code):
+        if self._on_symbol:
+            return self._on_symbol(code)
+        return False
 
     def compare(self, code):
         from tkinter import messagebox
@@ -792,6 +814,10 @@ class ChartGrid(ttk.Frame):
         self._build_slots()
         if render:
             self._render_page()
+        if self.controls:
+            self.controls.drawing_tools.place_favorites()
+        if self._on_grid_changed:
+            self._on_grid_changed(count)
 
     def page(self, delta):
         if not self._items:
@@ -923,8 +949,11 @@ class ChartGrid(ttk.Frame):
                     on_layout=self._on_layout_request or self.set_layout,
                     auto_quotes=self._auto_quotes, on_cases=self._on_cases)
                 self._slot_pool.append(slot)
-            slot.grid(row=row, column=column, sticky=tk.NSEW, padx=3, pady=3)
+            gap=1 if self._interactive else 3
+            slot.grid(row=row, column=column, sticky=tk.NSEW, padx=gap, pady=gap)
             if self.controls:
+                slot._workspace_multi=self._layout_count>1
+                slot._update_tile_header()
                 slot._workspace_descriptor = self.controls.descriptor(index)
                 slot._on_workspace_state = lambda state, i=index: self.controls.state_changed(i, state)
                 if slot._embedded:
@@ -998,6 +1027,8 @@ class ChartGrid(ttk.Frame):
     def _refresh_active_styles(self):
         for index, slot in enumerate(self._slots):
             slot.set_active(index == self._active_slot)
+        if self.controls:
+            self.controls.activate()
 
     def _notify_page_state(self):
         if not self._on_page_state:

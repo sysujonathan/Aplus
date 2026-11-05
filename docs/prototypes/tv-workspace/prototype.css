@@ -560,3 +560,17 @@ body.embedded .rangebar nav {flex-shrink:0}
 body.chart-production .instrument-row { height:auto; min-height:54px; flex-basis:auto; flex-wrap:wrap; gap:4px 8px; padding-top:4px; padding-bottom:4px; }
 body.chart-production .instrument-title { flex:1 1 0; }
 body.chart-production .ohlc { order:2; flex:1 1 100%; white-space:normal; line-height:18px; }
+body.workspace-inactive #selectedObject {display:none !important}
+body.chart-production .quote-buttons {display:none}
+.reference-quote {position:absolute;top:10px;left:14px;z-index:4;font:12px "Segoe UI";color:#adb6c4;pointer-events:auto}
+body.chart-production .indicator-legend {top:38px}
+body.workspace-multi .instrument-row {min-height:0;gap:1px 4px;padding:2px 5px}
+body.workspace-multi .instrument-title {font-size:11px;gap:4px}
+body.workspace-multi .exchange-dot {width:16px;height:16px;font-size:9px}
+body.workspace-multi .currency {padding:1px 4px}
+body.workspace-multi .ohlc {font-size:10px;line-height:13px}
+body.workspace-multi .selected-object {overflow-y:hidden;scrollbar-width:thin}
+@media(max-width:680px) {
+  body.chart-production .reference-quote {display:none}
+  body.chart-production .indicator-legend {top:8px}
+}

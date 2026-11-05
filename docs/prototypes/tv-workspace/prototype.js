@@ -220,6 +220,7 @@ function drawLastPrice(ctx, value, y, width, right, showTag = true) {
 }
 
 function updateReadout(row) {
+  if (typeof updateReferenceReadout === 'function') updateReferenceReadout();
   const dateNode = document.querySelector('#readoutDate');
   if (dateNode) {
     const last = bars[Math.min(replayIndex, bars.length - 1)];
