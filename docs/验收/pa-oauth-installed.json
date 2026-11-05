@@ -1,0 +1,193 @@
+{
+  "ok": true,
+  "public_desktop_client": true,
+  "user_tokens": false,
+  "private_keys": false,
+  "files_checked": 3684,
+  "version": "2026.11.05.1",
+  "preview": true,
+  "commit": "d56dda3c3fa7bc12db59d74d2e273aa2ca0348b4",
+  "config_sha256": "6e0a49a8a55c043abf87c3843057c73acfc79084b74ce1e29ae23bd5cb459f2f",
+  "external_oauth_json_in_profile": false,
+  "self_test": {
+    "frozen": "185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c",
+    "strategies": 8,
+    "google_oauth_config": true,
+    "chart_assets": true,
+    "webview": true,
+    "growth_assets": true
+  },
+  "frozen_negative_config": [
+    {
+      "scenario": "missing",
+      "exit": 1,
+      "explicit_google_config_error": true
+    },
+    {
+      "scenario": "corrupt",
+      "exit": 1,
+      "explicit_google_config_error": true
+    }
+  ],
+  "live_google": {
+    "folder_id": "18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX",
+    "authorized_in_installed_version": "2026.11.05.1",
+    "external_json_selected": false,
+    "public_count": 4,
+    "submitted_case": "shared:1k06Nn7Qz-qlJx2lcQz0bJUIBnERKoml5",
+    "data_kind": "test",
+    "originals": [
+      {
+        "image_id": "16cScP_eLzEo3fZJPN4nkTEYd_xSuJuji",
+        "sha256": "2d2e7d11c3830711805586379a524288338426dda8fa8c327cd7a437c45c8049",
+        "bytes": 39099,
+        "matches_imported_original": true
+      },
+      {
+        "image_id": "1DlFKXOkDLb7c4CVW_WPrmJD4ZVwtu69G",
+        "sha256": "a79020a084d94c9532e5339f6ed2dac0b8164abd346a06289f3428259744375b",
+        "bytes": 38419,
+        "matches_imported_original": true
+      }
+    ],
+    "source": "case submitted through installed UI, independently downloaded by protocol checker"
+  },
+  "validation": {
+    "adjacent_pytest": {
+      "passed": 510,
+      "seconds": 251.86,
+      "warnings": 1
+    },
+    "latest_oauth_session_permission_ui": {
+      "passed": 45,
+      "seconds": 9.07
+    },
+    "node_regressions": [
+      "pa_growth_ui_regression",
+      "pa_navigation_regression",
+      "pa_ime_regression",
+      "pa_security_regression"
+    ],
+    "latest_build": {
+      "version": "2026.11.05.4",
+      "source_commit": "48befb9e76b8894a0d4889b4145d704c1b5be8be",
+      "sha256": "90e18cc516a8d2500ac618e839a4a209fb72017b60b9bac9ca0cba92faad56db",
+      "preview": true
+    },
+    "clean_checkout_build_input_and_release_gates": {
+      "passed": 224,
+      "seconds": 22.48,
+      "live_oauth_json_absent_during_test": true
+    }
+  },
+  "installed_upgrade": {
+    "from_version": "2026.11.05.1",
+    "to_version": "2026.11.05.3",
+    "method": "actual Setup over same isolated installation; not official automatic update",
+    "setup_exit": 0,
+    "database_bytes_unchanged": true,
+    "dpapi_bytes_unchanged": true,
+    "former_official_uninstall_registration_restored": true,
+    "audit": {
+      "ok": true,
+      "public_desktop_client": true,
+      "user_tokens": false,
+      "private_keys": false,
+      "files_checked": 3688
+    },
+    "selftest": {
+      "frozen": "185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c",
+      "strategies": 8,
+      "google_oauth_config": true,
+      "chart_assets": true,
+      "webview": true,
+      "growth_assets": true
+    },
+    "fresh_process_login_restored": true
+  },
+  "expired_access_test": {
+    "controlled_expiry": 0,
+    "real_google_token_refresh_by_installed_app": true,
+    "same_login_generation": true,
+    "no_browser_required": true
+  },
+  "invalid_refresh_test": {
+    "controlled_invalid_refresh_grant": true,
+    "real_google_rejection": true,
+    "public_cache_access_disabled": true,
+    "reconnect_required": true,
+    "remote_user_revoke_test": false
+  },
+  "disconnect_test": {
+    "installed_ui_disconnect": true,
+    "active_dpapi_removed": true,
+    "cloud_cases_not_deleted": true
+  },
+  "reconnect_test": {
+    "installed_version": "2026.11.05.3",
+    "system_browser_consent_by_user": true,
+    "manual_json_selection": false,
+    "public_count_after_reconnect": 4,
+    "dpapi_restored": true,
+    "new_build_waiting_indicator_observed": true
+  },
+  "environment_cleanup": {
+    "original_uninstall_registration_matches_snapshot": true,
+    "formal_start_menu_restored": true,
+    "temporary_start_menu_removed": true,
+    "daily_desktop_shortcut_unchanged": true
+  },
+  "unverified": [
+    "fresh Windows installation",
+    "official online automatic update",
+    "real second Google account and account switch",
+    "remote revocation in Google account settings",
+    "real network interruption",
+    "long-term use"
+  ],
+  "not_in_scope": [
+    "personal learning cross-computer synchronization"
+  ],
+  "build_configuration": {
+    "repository": "sysujonathan/Aplus",
+    "name": "APLUS_GOOGLE_DESKTOP_OAUTH_JSON",
+    "configured": true,
+    "updated_at": "2026-11-04T23:55:14Z",
+    "public_desktop_configuration_only": true,
+    "user_tokens": false,
+    "private_keys": false,
+    "unpublished_history_cleaned": true,
+    "push_protection_bypassed": false,
+    "force_push": false
+  },
+  "historical_build_commit_mapping": {
+    "276601126eab2c1fd3ebb24d51fe6e036ea42ee0": "bf155cdaff227aeaf8ab31be45b2b2b00e6d7c0a",
+    "d56dda3c3fa7bc12db59d74d2e273aa2ca0348b4": "0b9313eae525aeb66049a8b657676e40b79c1c77",
+    "9f55ecebbfa4c3b06c6f3a44baafbfcf46d29c77": "4e43ce6224abbddb3da152464a48fa36afef0a5d",
+    "c18ce8fcc551019fd58995c647a545346222fdf4": "31b9fed1a8ab3c37d5a2df8631cce1f5f97764e9"
+  },
+  "latest_injected_installer": {
+    "version": "2026.11.05.4",
+    "source_commit": "48befb9e76b8894a0d4889b4145d704c1b5be8be",
+    "sha256": "90e18cc516a8d2500ac618e839a4a209fb72017b60b9bac9ca0cba92faad56db",
+    "preview": true,
+    "real_setup_upgrade_exit": 0,
+    "test_db_bytes_unchanged": true,
+    "dpapi_bytes_unchanged": true,
+    "session_matches_packaged_public_client": true,
+    "audit": {
+      "ok": true,
+      "public_desktop_client": true,
+      "user_tokens": false,
+      "private_keys": false,
+      "files_checked": 3692
+    },
+    "fresh_installed_pa_window_restored_login": true,
+    "real_google_refresh_after_install": true,
+    "public_count": 4,
+    "normal_window_exit_code": 0,
+    "original_registration_restored_after_v4": true,
+    "online_refreshed_utc": "2026-11-05T00:05:08.772208+00:00",
+    "config_sha256": "5b1762135f8fdd6c4b619e58612cf119203f708bce07b982e1da38c963b65403"
+  }
+}

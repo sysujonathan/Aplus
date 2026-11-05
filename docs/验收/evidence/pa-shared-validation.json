@@ -1,0 +1,35 @@
+{
+  "implementation_commit": "27899d5591de835b86ded958b20703b8b5bbd382",
+  "base": "773b24481db0d881003acc77aa6706488158d21a",
+  "full_regression": {
+    "passed": 2354,
+    "skipped": 7,
+    "failed": 1,
+    "seconds": 2449.52,
+    "final_commit_full_rerun": false
+  },
+  "corrected_failure": {
+    "test": "test_metadata_catalogue_is_private_and_does_not_join_images",
+    "passed": 1,
+    "seconds": 0.72
+  },
+  "pa_regression": {
+    "passed": 121,
+    "seconds": 135.73
+  },
+  "latest_image_cache_lifecycle": {
+    "passed": 30,
+    "seconds": 36.6
+  },
+  "latest_auth": {
+    "passed": 6,
+    "seconds": 0.72
+  },
+  "frozen": "185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c",
+  "real_google_two_accounts": false,
+  "real_ime_keyboard": false,
+  "runtime_screenshots_archived": false,
+  "formal_runtime_modified": false,
+  "ci_verified": false,
+  "merged": false
+}

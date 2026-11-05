@@ -22,6 +22,7 @@ import zipfile
 from PIL import Image
 
 from .store import digest, dumps
+from .pa_terms import IDS as TERM_IDS, matching as matching_terms
 
 
 MAX_IMAGE_BYTES = 40 * 1024 * 1024
@@ -39,7 +40,7 @@ TOPIC_IDS = frozenset(('root context continuation range reversal structure disci
     'cont-h2 cont-h1 cont-breakout cont-pullback cont-gap cont-mm '
     'range-boundary range-fail range-middle rev-mtr rev-climax rev-wedge rev-double '
     'struct-signal struct-tail struct-inside struct-outside struct-slope '
-    'risk-entry risk-sl risk-exposure risk-exit').split())
+    'risk-entry risk-sl risk-exposure risk-exit').split()) | TERM_IDS
 
 
 def now():
@@ -353,6 +354,7 @@ def search(store, query='', filters=None, limit=100, offset=0):
     matched = 0
     labels = {'title': '标题', 'memory': '记忆描述', 'keywords': '个人关键词', 'tags': '已确认 PA 标签',
               'symbol': '品种', 'timeframe': '周期', 'market': '市场'}
+    term_hits = set(matching_terms(query)) if query else set()
     for row in rows:
         item = _decode(row)
         if any((_text(str(value), 1000).casefold() not in
@@ -362,6 +364,8 @@ def search(store, query='', filters=None, limit=100, offset=0):
             continue
         reasons = [label for key, label in labels.items()
                    if query and query in (' '.join(item[key]) if key in LIST_FIELDS else item[key]).casefold()]
+        if query and term_hits.intersection(item['topic_ids']):
+            reasons.append('Brooks 标准术语')
         if query and not reasons:
             # Appended research notes are also deliberate personal text.
             if item['id'] in note_hits:

@@ -24,8 +24,8 @@ def test_case_driven_atlas_and_mask_pixels_in_real_webview():
     assert receipt['ok'] and receipt['synthetic'] and receipt['real_webview']
     assert set(receipt['checks']) == {
         'empty_universe_single_origin_no_phantom_topics',
-        'unclassified_case_grows_one_real_star',
-        'case_backed_galaxy_drilldown_zoom_and_return',
+        'private_case_does_not_enter_shared_graph',
+        'shared_graph_pan_zoom_controls_keep_private_data_out',
         'mask_hides_future_pixels_title_and_fullscreen',
         'explicit_four_stage_reveal_original_bytes_and_judgment_preserved',
         'backup_restore_quarantine_warning_in_real_ui',

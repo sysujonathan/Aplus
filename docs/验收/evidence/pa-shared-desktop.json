@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-04",
+  "base": "773b24481db0d881003acc77aa6706488158d21a",
+  "source_parent": "0a0e8dddeb81bf6aeac324f8bd27cbb1d251841d",
+  "source_scope": "folder-scoping change in the accompanying commit",
+  "folder_id": "18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX",
+  "fixture": "tests/pa_shared_native_probe.py --visual",
+  "synthetic": true,
+  "real_webview": true,
+  "real_google": false,
+  "real_ime_keyboard": true,
+  "ime_method": "Windows physical key events and space candidate confirmation, not DOM composition or Unicode insertion",
+  "ime_verified_fields": ["home search", "case library search", "personal case research note"],
+  "ime_not_verified_fields": ["capture case description"],
+  "checks": [
+    "home zhong-space commits 中 without switching page",
+    "library shangye-space commits 商业 and Enter returns 5 matches with description hit reason",
+    "original zoom 100 to 125 to 100 and return retains query and results",
+    "judgment save retains stage 1 of 2 until explicit reveal to stage 2",
+    "account B contribution 2, public 5 and personal judgment 1 remain distinct",
+    "personal research hao-space commits 好, save shows author/time and clears editor"
+  ],
+  "screenshots": [
+    "../images/pa-shared/01-shared-graph.jpg",
+    "../images/pa-shared/02-pinyin-search.jpg",
+    "../images/pa-shared/03-original-view.jpg",
+    "../images/pa-shared/04-trial-before-judgment.jpg",
+    "../images/pa-shared/05-judgment-before-reveal.jpg",
+    "../images/pa-shared/06-trial-after-reveal.jpg",
+    "../images/pa-shared/07-personal-records.jpg",
+    "../images/pa-shared/08-personal-research-ime.jpg"
+  ],
+  "targeted_folder_tests": {"passed": 24, "seconds": 15.26},
+  "formal_runtime_modified": false,
+  "ci_verified": false,
+  "long_term_use_verified": false,
+  "real_two_account_permissions_verified": false
+}
