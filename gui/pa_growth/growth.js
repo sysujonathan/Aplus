@@ -5,7 +5,6 @@
   const $$ = (selector, parent = document) => Array.from(parent.querySelectorAll(selector));
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icons = {
-    home:'<path d="m3 11 9-8 9 8M5 10v11h5v-7h4v7h5V10"/>',
     trial:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
     library:'<path d="M4 4c2-1 5-1 8 1 3-2 6-2 8-1v15c-2-1-5-1-8 1-3-2-6-2-8-1zM12 5v15"/>',
     universe:'<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="11" ry="4.5" transform="rotate(-28 12 12)"/><circle cx="12" cy="12" r="2"/>',
@@ -24,9 +23,9 @@
     lock:'<rect x="4" y="10" width="16" height="12" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'
   };
   const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.image}</svg>`;
-  const navItems = [['home','首页'],['trial','PA 交易试炼'],['library','案例研究'],['universe','知识宇宙'],['growth','个人成长']];
+  const navItems = [['library','案例研究'],['trial','PA 交易试炼'],['universe','知识宇宙'],['growth','个人成长']];
   const S = {
-    terms:[], graph:{nodes:[],edges:[]}, scope:'public', composing:false, ready:false, page:'home', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
+    terms:[], graph:{nodes:[],edges:[]}, scope:'public', composing:false, ready:false, page:'library', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
     query:'', filters:{symbol:'',timeframe:'',market:'',data_kind:''}, filterOpen:false,
     searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, hasMore:false, case:null, imageIndex:0,
     studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
@@ -77,7 +76,7 @@
     Object.assign(S,{case:null,trialCase:null,trialRecord:null,original:null,cases:[],topicCases:[],topicId:null,
       topicParent:null,topicLoading:false,trials:[],records:[],draftText:{},stats:{},boot:{},graph:{nodes:[],edges:[]},
       query:'',filters:{},trialThought:'',trialReview:{},marks:[],judgment:'',setupCase:null,setupDraft:null,
-      dirtyMetadata:false,page:'home',composing:false});
+      dirtyMetadata:false,page:'library',composing:false});
     closeOverlay(true);render();
   }
   function reloadSecurity() {
@@ -217,7 +216,7 @@
       const data = await api('bootstrap');
       S.terms = data.terms || S.terms; S.graph = data.graph || S.graph; S.boot = data; S.atlasCases = data.atlas_cases || [];
       S.cases = S.scope==='public' ? (data.public_cases || []) : (data.cases || []);
-      S.hasMore = data.has_more === true;
+      S.hasMore = S.scope==='public' ? data.public_count>100 : data.has_more === true;
       S.topics = data.topics || [];
       S.stats = data.stats || {};
       S.trials = data.trials || [];
@@ -240,7 +239,7 @@
     S.topics = data.topics || S.topics;
     S.trials = data.trials || [];
     S.records = data.records || [];
-    if (S.page === 'home') { S.cases = S.scope==='public' ? (data.public_cases || []) : (data.cases || []); S.hasMore = S.scope==='public' ? data.public_count>100 : data.has_more === true; }
+    if (S.page === 'library' && !S.query && !Object.values(S.filters).some(Boolean)) { S.cases = S.scope==='public' ? (data.public_cases || []) : (data.cases || []); S.hasMore = S.scope==='public' ? data.public_count>100 : data.has_more === true; }
     return data;
   }
   function navigation() {
@@ -272,18 +271,15 @@
   function grid(cases, emptyText = '还没有案例') {
     return cases.length ? `<div class="case-grid">${cases.map(card).join('')}</div>` : `<div class="empty"><strong>${esc(emptyText)}</strong><p>粘贴或导入一张截图。</p><button class="btn primary" data-action="paste">${icon('paste')} 粘贴截图</button><button class="btn" style="margin-left:8px" data-action="import">${icon('upload')} 导入图片</button></div>`;
   }
-  function home() {
-    const hasUse = (S.stats.cases || 0) > 0 || (S.stats.trials || 0) > 0 || (S.stats.studied_cases || 0)>0 || S.records.length>0;
-    const recent = S.boot.recent_case || (S.boot.recent_case_id && S.cases.find(c => c.id === S.boot.recent_case_id));
-    return `<section class="page home-page">${contextBanner()}${sharedBanner()}<div class="hero"><div class="hero-copy"><span class="eyebrow">MY TRADING MEMORY</span><h1>${hasUse ? '欢迎回来。' : '我的交易记忆'}</h1>${searchBox(S.query,'home-search')}<div class="hero-shortcuts"><button class="btn ghost small" data-action="navigate" data-page="library">${icon('library')} 全部案例</button><button class="btn ghost small" data-action="navigate" data-page="trial">${icon('trial')} 开始 PA 试炼</button></div>${!hasUse ? '<div class="first-hint">Ctrl+V 收录截图；不填标题也可以保存。</div>' : ''}</div><div class="drop-box" data-action="import" role="button" tabindex="0" aria-label="导入截图"><div class="drop-icon">${icon('paste')}</div><h2>收录截图</h2><p>拖入图片 · 批量导入</p><span class="paste-key">Ctrl + V</span><button class="btn small" data-action="paste">粘贴截图</button></div></div>${recent ? `<div class="resume"><div><h3>继续研究 · ${esc(caseTitle(recent))}</h3><p>${esc(summary(recent))}</p></div><button class="btn" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : ''}<div class="section-head"><h2>${hasUse ? '最近案例' : '案例素材'}</h2>${hasUse ? '<button class="btn ghost small" data-action="navigate" data-page="library">全部案例 →</button>' : ''}</div><div id="home-results">${grid(S.cases.slice(0,6))}</div></section>`;
-  }
   function library() {
     const count = S.cases.length;
+    const recent = S.boot.recent_case;
+    const resume = recent ? `<div class="resume"><span>继续研究 · ${esc(caseTitle(recent))}</span><button class="btn small" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : '';
     const results = S.searchError && !count
       ? `<div class="save-error">${esc(S.searchError)}<br><button class="link-button" data-action="search-now">重新搜索</button></div>`
-      : count ? grid(S.cases) : `<div class="empty"><strong>${S.query || Object.values(S.filters).some(Boolean) ? '没有找到对应案例' : '还没有案例'}</strong><p>${S.query || Object.values(S.filters).some(Boolean) ? '试试更短的关键词，或清除筛选。' : '粘贴或导入一张截图。'}</p>${S.query || Object.values(S.filters).some(Boolean) ? '<button class="btn" data-action="reset-search">查看全部案例</button>' : '<button class="btn primary" data-action="import">收录截图</button>'}</div>`;
+      : count ? grid(S.cases) : `<div class="empty"><strong>${S.query || Object.values(S.filters).some(Boolean) ? '没有找到对应案例' : '还没有案例'}</strong><p>${S.query || Object.values(S.filters).some(Boolean) ? '试试更短的关键词，或清除筛选。' : 'Ctrl+V 粘贴截图，或拖入、批量导入；不填标题也能保存。'}</p>${S.query || Object.values(S.filters).some(Boolean) ? '<button class="btn" data-action="reset-search">查看全部案例</button>' : '<button class="btn primary" data-action="import">收录截图</button>'}</div>`;
     const more = S.hasMore ? `${S.searchError && count ? `<div class="save-error" style="margin-top:18px">${esc(S.searchError)}</div>` : ''}<div style="display:flex;justify-content:center;margin-top:22px"><button class="btn" data-action="load-more" ${S.searchBusy ? 'disabled' : ''}>${S.searchBusy ? '正在加载…' : S.searchError ? '重试加载更多' : '加载更多案例'}</button></div>` : '';
-    return `<section class="page">${contextBanner()}${sharedBanner()}<div class="library-header between"><div><span class="eyebrow">CASE STUDIES</span><h1>案例研究</h1></div><div class="button-group"><button class="btn" data-action="paste">${icon('paste')} 粘贴</button><button class="btn primary" data-action="import">${icon('plus')} 收录截图</button></div></div>${searchBox(S.query)}<div class="between results-head"><span>${S.searchBusy ? '正在找图…' : `${S.hasMore ? '已显示 ' : ''}${count} 个案例${S.query ? ` · “${esc(S.query)}”` : ''}`}</span><button class="btn ghost small" data-action="toggle-filters" aria-expanded="${S.filterOpen}">${icon('filter')} 筛选${Object.values(S.filters).some(Boolean) ? ' · 已启用' : ''}</button></div>${S.filterOpen ? `<div class="filter-bar"><label>品种<input class="field" data-filter="symbol" value="${esc(S.filters.symbol)}" placeholder="名称或代码"></label><label>周期<input class="field" data-filter="timeframe" value="${esc(S.filters.timeframe)}" placeholder="如 日线、5m"></label><label>市场<input class="field" data-filter="market" value="${esc(S.filters.market)}" placeholder="如 A股、加密"></label><label>贡献者<select class="field" data-filter="contributor"><option value="">全部</option><option value="me" ${S.filters.contributor==='me'?'selected':''}>我上传的案例</option></select></label><label>来源<select class="field" data-filter="data_kind"><option value="">全部</option><option value="imported" ${S.filters.data_kind === 'imported' ? 'selected' : ''}>个人导入</option><option value="test" ${S.filters.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label><button class="btn ghost small" data-action="clear-filters">清除</button></div>` : ''}<div id="search-results">${results}${more}</div></section>`;
+    return `<section class="page">${contextBanner()}${sharedBanner()}<div class="library-header between"><div><span class="eyebrow">CASE STUDIES</span><h1>案例研究</h1></div><div class="button-group"><button class="btn" data-action="paste">${icon('paste')} 粘贴</button><button class="btn primary" data-action="import">${icon('plus')} 收录截图</button></div></div>${searchBox(S.query)}${resume}<div class="between results-head"><span>${S.searchBusy ? '正在找图…' : `${S.hasMore ? '已显示 ' : ''}${count} 个案例${S.query ? ` · “${esc(S.query)}”` : ''}`}</span><button class="btn ghost small" data-action="toggle-filters" aria-expanded="${S.filterOpen}">${icon('filter')} 筛选${Object.values(S.filters).some(Boolean) ? ' · 已启用' : ''}</button></div>${S.filterOpen ? `<div class="filter-bar"><label>品种<input class="field" data-filter="symbol" value="${esc(S.filters.symbol)}" placeholder="名称或代码"></label><label>周期<input class="field" data-filter="timeframe" value="${esc(S.filters.timeframe)}" placeholder="如 日线、5m"></label><label>市场<input class="field" data-filter="market" value="${esc(S.filters.market)}" placeholder="如 A股、加密"></label><label>贡献者<select class="field" data-filter="contributor"><option value="">全部</option><option value="me" ${S.filters.contributor==='me'?'selected':''}>我上传的案例</option></select></label><label>来源<select class="field" data-filter="data_kind"><option value="">全部</option><option value="imported" ${S.filters.data_kind === 'imported' ? 'selected' : ''}>个人导入</option><option value="test" ${S.filters.data_kind === 'test' ? 'selected' : ''}>测试样本</option></select></label>${S.scope==='public'&&S.boot.shared_status?.admin?`<label>状态<select class="field" data-filter="hidden"><option value="">正常案例</option><option value="yes" ${S.filters.hidden==='yes'?'selected':''}>已下架</option></select></label>`:''}<button class="btn ghost small" data-action="clear-filters">清除</button></div>` : ''}<div id="search-results">${results}${more}</div></section>`;
   }
   function study() {
     const c = S.case;
@@ -291,15 +287,20 @@
     const image = imageOf(c,S.imageIndex);
     const src = imageUrl(image);
     const topics = c.topic_ids || [];
-    return `<section class="page study-page">${contextBanner()}<div class="study-header between"><div><h1>${esc(caseTitle(c))}</h1><p>${esc(summary(c))} · ${c.status==='shared'?'公共案例 · '+esc(c.contributor.name):sourceLabel(c)+' · 本机私密草稿'}</p></div><div class="button-group"><button class="btn" data-action="study-back">${icon('back')} 返回搜索</button><button class="btn" data-action="original">${icon('zoom')} 查看原图</button>${S.context?.can_compare === true && !S.context?.comparison ? '<button class="btn primary" data-action="compare">' + icon('layers') + ' 与当前行情对照</button>' : ''}</div></div><div class="study-layout"><section class="photo-panel"><div class="photo-heading"><span>${icon('image')} 历史原图</span><span class="muted">${c.data_kind === 'test' ? '测试样本 · ' : ''}${S.imageIndex + 1} / ${(c.images || []).length}</span></div><button class="study-image" data-action="original" title="放大原图">${src ? `<img src="${esc(src)}" alt="${esc(image?.name || caseTitle(c))}">` : `<span class="muted">${esc(imageMessage(image))}</span>`}</button>${gallery(c)}<div class="photo-footer"><div class="topic-list">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>${c.status==='shared'?termColors(c):`<button class="btn ghost small" data-action="append-images">${icon('plus')} 追加图片</button>`}</div></section><aside class="study-side"><h2>案例笔记</h2><nav class="tabs">${[['memory','当时的记忆'],['notes','研究记录'],['topics','知识线索']].map(([id,name]) => `<button data-action="study-pane" data-pane="${id}" class="${S.studyPane === id ? 'active' : ''}">${name}</button>`).join('')}</nav><div class="side-content">${studyPane(c,topics)}</div></aside></div></section>`;
+    return `<section class="page study-page">${contextBanner()}<div class="study-header between"><div><h1>${esc(caseTitle(c))}</h1><p>${esc(summary(c))} · ${c.status==='shared'?'公共案例 · '+esc(c.contributor.name):sourceLabel(c)+' · 本机私密草稿'}</p></div><div class="button-group"><button class="btn" data-action="study-back">${icon('back')} 返回搜索</button><button class="btn" data-action="original">${icon('zoom')} 查看原图</button>${S.context?.can_compare === true && !S.context?.comparison ? '<button class="btn primary" data-action="compare">' + icon('layers') + ' 与当前行情对照</button>' : ''}</div></div><div class="study-layout"><section class="photo-panel"><div class="photo-heading"><span>${icon('image')} 历史原图</span><span class="muted">${c.data_kind === 'test' ? '测试样本 · ' : ''}${S.imageIndex + 1} / ${(c.images || []).length}</span></div><button class="study-image" data-action="original" title="放大原图">${src ? `<img src="${esc(src)}" alt="${esc(image?.name || caseTitle(c))}">` : `<span class="muted">${esc(imageMessage(image))}</span>`}</button>${gallery(c)}<div class="photo-footer"><div class="topic-list">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>${c.status==='shared'?termColors(c):`<button class="btn ghost small" data-action="append-images">${icon('plus')} 追加图片</button>`}</div></section><aside class="study-side"><h2>案例笔记</h2><nav class="tabs">${[['memory','案例资料'],['notes','个人笔记'],['topics','知识线索'],...(c.status==='shared'?[['comments','公共留言'],['history','修改历史']]:[])].map(([id,name]) => `<button data-action="study-pane" data-pane="${id}" class="${S.studyPane === id ? 'active' : ''}">${name}</button>`).join('')}</nav><div class="side-content">${c.hidden?'<div class="alert-line">已下架 · 原图和记录保留</div>':''}${c.revision_conflict?'<div class="alert-line">资料有并发修改，当前显示分歧前版本。请查看修改历史后重新保存。</div>':''}${c.visibility_conflict?'<div class="alert-line">上下架操作冲突，案例暂保持下架；请重新确认状态。</div>':''}${studyPane(c,topics)}</div></aside></div></section>`;
   }
   function gallery(c, action = 'case-image') {
     return c.images?.length > 1 ? `<div class="small-gallery">${c.images.map((image,index) => `<button class="${S.imageIndex === index ? 'active' : ''}" data-action="${action}" data-index="${index}" aria-label="第 ${index + 1} 张图片" title="${esc(image.name || '案例图片')}"><span class="micro">第 ${index + 1} 张</span></button>`).join('')}</div>` : '';
   }
   function studyPane(c,topics) {
-    if (S.studyPane === 'memory') return `${c.personal_error?`<div class="alert-line">${esc(c.personal_error)}</div>`:''}${c.trial_setup_error?`<div class="alert-line">${esc(c.trial_setup_error)}</div>`:''}<div class="memory">${esc(c.memory || '尚未添加记忆描述')}</div><div class="rule"></div><div class="source-details">${c.keywords?.length ? `<div>关键词 <strong>${esc(Array.isArray(c.keywords) ? c.keywords.join(' / ') : c.keywords)}</strong></div>` : ''}<div>收录于 <strong>${esc(date(c.created))}</strong></div><div>图片 <strong>${c.images?.length || 0} 张</strong></div></div><div class="form-actions">${c.status==='shared'?'<button class="btn small" data-action="mark-studied">记为已研究</button>':'<button class="btn small" data-action="edit-case">编辑资料</button><button class="btn primary small" data-action="publish-preview">提交到公共空间</button>'}</div><div class="rule"></div><button class="btn ghost small" data-action="start-trial" data-id="${esc(c.id)}">${icon('trial')} 开始分阶段试炼</button>${c.status==='shared'?'':'<button class="btn ghost small" data-action="configure-trial">设置试炼</button>'}`;
+    if (S.studyPane === 'comments') return `<p class="micro">团队可见</p>${(c.comments||[]).map(n=>`<article class="note-item"><small>${esc(n.author.name)} · ${esc(date(n.created))}</small><p class="memory">${esc(n.text)}</p></article>`).join('')||'<div class="inline-empty">还没有公共留言。</div>'}<div class="note-composer"><textarea id="public-comment" class="field" maxlength="10000" data-draft="public-comment:${esc(c.id)}" aria-label="公共留言" placeholder="留下自己的观点">${esc(S.draftText['public-comment:'+c.id]||'')}</textarea>${S.boot.shared_status?.writable?'<button class="btn primary small" data-action="save-comment">发表公共留言</button>':''}<button class="btn ghost small" data-action="reload-case">刷新留言</button></div>`;
+    if (S.studyPane === 'history') {
+      const revisions=[{id:'original',author:c.contributor,created:c.created,values:c.original_metadata},...(c.history||[])];
+      return revisions.map(n=>`<article class="note-item"><small>${n.id==='original'?'原始贡献':'资料修订'} · ${esc(n.author.name)} · ${esc(date(n.created))}</small><b>${esc(n.values?.title||'未命名')}</b><p class="memory">${esc(n.values?.memory||'')}</p><small>${esc((n.values?.keywords||[]).join(' / '))}<br>${esc((n.values?.term_ids||[]).map(topicName).join(' / '))}</small></article>`).join('');
+    }
+    if (S.studyPane === 'memory') return `${c.personal_error?`<div class="alert-line">${esc(c.personal_error)}</div>`:''}${c.trial_setup_error?`<div class="alert-line">${esc(c.trial_setup_error)}</div>`:''}<div class="memory">${esc(c.memory || '尚未添加记忆描述')}</div><div class="rule"></div><div class="source-details">${c.keywords?.length ? `<div>关键词 <strong>${esc(Array.isArray(c.keywords) ? c.keywords.join(' / ') : c.keywords)}</strong></div>` : ''}<div>收录于 <strong>${esc(date(c.created))}</strong></div><div>图片 <strong>${c.images?.length || 0} 张</strong></div></div><div class="form-actions">${c.status==='shared'?`<button class="btn small" data-action="mark-studied">记为已研究</button>${S.boot.shared_status?.writable?'<button class="btn small" data-action="edit-case">编辑资料</button>':''}<button class="btn ghost small" data-action="reload-case">刷新案例</button>${S.boot.shared_status?.admin?`<button class="btn small" data-action="visibility-case">${c.hidden?'恢复案例':'下架案例'}</button>`:''}`:'<button class="btn small" data-action="edit-case">编辑资料</button><button class="btn primary small" data-action="publish-preview">提交到公共空间</button>'}</div><div class="rule"></div>${c.hidden?'':`<button class="btn ghost small" data-action="start-trial" data-id="${esc(c.id)}">${icon('trial')} 开始分阶段试炼</button>`}${c.status==='shared'?'':'<button class="btn ghost small" data-action="configure-trial">设置试炼</button>'}`;
     if (S.studyPane === 'topics') return `<div class="topic-list">${topics.length ? topics.map(id => `<button class="topic-chip" data-action="open-topic" data-id="${esc(id)}">${esc(topicName(id))}</button>`).join('') : '<span class="micro">尚未关联知识主题</span>'}</div>${c.status==='shared'?'':'<div class="form-actions"><button class="btn small" data-action="edit-case">关联术语</button></div>'}`;
-    return `${notesOf(c).length ? `<div class="note-list">${notesOf(c).map(note => `<article class="note-item"><small>${esc(note.author || '我')} · ${esc(date(note.created))}</small><p>${esc(note.text || note.content || '')}</p></article>`).join('')}</div>` : '<div class="inline-empty">还没有研究记录。</div>'}<div class="note-composer"><label class="field-label" for="case-note">添加个人研究</label><textarea id="case-note" class="field" data-draft="case-note:${esc(c.id)}" placeholder="现在看到了什么？">${esc(S.draftText['case-note:' + c.id] || '')}</textarea><button class="btn primary small" data-action="save-note">保存研究笔记</button></div>`;
+    return `${notesOf(c).length ? `<div class="note-list">${notesOf(c).map(note => `<article class="note-item"><small>${esc(note.author || '我')} · ${esc(date(note.created))}</small><p>${esc(note.text || note.content || '')}</p></article>`).join('')}</div>` : '<div class="inline-empty">还没有研究记录。</div>'}<div class="note-composer"><label class="field-label" for="case-note">个人研究笔记 · 仅本人可见</label><textarea id="case-note" class="field" data-draft="case-note:${esc(c.id)}" placeholder="现在看到了什么？">${esc(S.draftText['case-note:' + c.id] || '')}</textarea><button class="btn primary small" data-action="save-note">保存研究笔记</button></div>`;
   }
   function trialFraction() {
     const cfg=S.trialCase?.trial_setup;
@@ -391,7 +392,7 @@
   function render() {
     navigation();
     const scroll = $('#main').scrollTop;
-    $('#main').innerHTML = ({home,library,study,trial,universe,growth}[S.page] || home)();
+    $('#main').innerHTML = ({library,study,trial,universe,growth}[S.page] || library)();
     $('#main').scrollTop = scroll;
     if (S.page === 'trial') requestAnimationFrame(renderMarks);
     requestVisibleImage(); paintMask(); requestThumbnails();
@@ -402,7 +403,7 @@
     S.caseSeq++; S.page = page;
     $('#main').scrollTop = 0;
     if (page === 'library') { render(); await search(false); }
-    else if (['home','growth','universe','trial'].includes(page)) {
+    else if (['growth','universe','trial'].includes(page)) {
       try { await refreshData(); } catch (error) { toast(error.message,true); }
       render();
     } else render();
@@ -423,7 +424,7 @@
     if (moreButton) { moreButton.disabled = true; moreButton.textContent = '正在加载…'; }
     try {
       const result = await api('search_cases',query,filters,offset);
-      if (seq !== S.searchSeq || S.page !== origin || !['home','library'].includes(S.page) || S.composing || query !== S.query || JSON.stringify(filters) !== JSON.stringify({...S.filters,scope:S.scope})) return;
+      if (seq !== S.searchSeq || S.page !== origin || S.page!=='library' || S.composing || query !== S.query || JSON.stringify(filters) !== JSON.stringify({...S.filters,scope:S.scope})) return;
       S.cases = append ? [...S.cases,...(result.cases || [])] : result.cases || [];
       S.hasMore = result.has_more === true;
     } catch (error) {
@@ -433,9 +434,8 @@
     } finally {
       if (seq === S.searchSeq) {
         S.searchBusy = false;
-        if (!S.composing && S.page===origin && ['home','library'].includes(S.page)) {
-          if(S.page==='home') {const host=$('#home-results');if(host)host.innerHTML=S.searchError?`<div class="save-error">${esc(S.searchError)}</div>`:grid(S.cases.slice(0,6),'没有找到对应案例');}
-          else {
+        if (!S.composing && S.page===origin && S.page==='library') {
+          {
             const host=$('#search-results'), html=library(), marker='<div id="search-results">';
             if(host)host.innerHTML=html.slice(html.indexOf(marker)+marker.length,html.lastIndexOf('</div></section>'));
             const count=$('.results-head > span');if(count)count.textContent=`${S.hasMore?'已显示 ':''}${S.cases.length} 个案例`;
@@ -454,7 +454,7 @@
     if(S.composing)return;
     const origin=S.page;
     S.searchTimer = setTimeout(() => {
-      if(S.page===origin && ['home','library'].includes(S.page) && !S.overlay && !S.composing)search();
+      if(S.page===origin && S.page==='library' && !S.overlay && !S.composing)search();
     },180);
   }
   async function openCase(id, quick = false) {
@@ -477,8 +477,10 @@
   async function backToSearch() {
     S.caseSeq++;
     S.page = S.returnPage === 'study' ? 'library' : S.returnPage;
-    if (!['home','library','universe','growth','trial'].includes(S.page)) S.page = 'library';
-    render(); $('#main').scrollTop = S.returnScroll;
+    if (!['library','universe','growth','trial'].includes(S.page)) S.page = 'library';
+    render();
+    if(S.sharedChanged&&S.page==='library'){S.sharedChanged=false;await search(false);}
+    $('#main').scrollTop = S.returnScroll;
   }
   function dialog(title,body,foot,wide = false) {
     return `<div class="overlay"><section class="dialog ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="dialog-head"><h2>${title}</h2><button class="btn ghost icon-button" data-action="close-overlay" aria-label="关闭">${icon('close')}</button></div><div class="dialog-body">${body}</div>${foot ? `<div class="dialog-foot">${foot}</div>` : ''}</section></div>`;
@@ -606,7 +608,7 @@
         const data = await api('get_case',appended); S.case = data.case; render();
       } else if (S.page === 'library') {render();await search(false);}
       else if (['study','universe'].includes(S.page)) render();
-      else { S.page = 'home'; render(); }
+      else { S.page = 'library'; render(); }
     } catch (error) {
       if (committed) toast(`案例已保存，列表暂时无法刷新。${error.message}`,true);
       else S.captureError = error.message;
@@ -618,8 +620,10 @@
   }
   function editCase() {
     S.dirtyMetadata = false;
-    const body = `<div id="metadata-error" class="save-error"></div>${metadataForm(S.case,'metadata-form')}`;
-    overlayHTML(dialog('编辑案例资料',body,'<span class="micro">本机私密草稿</span><button class="btn primary" data-action="save-metadata">保存资料</button>'),'metadata');
+    S.editVersion = S.case.revision_version;
+    const form = S.case.status==='shared' ? `<div id="metadata-form" class="capture-form"><label class="field-label">标题</label><input class="field" data-meta="title" value="${esc(S.case.title||'')}"><label class="field-label">案例描述</label><textarea class="field" data-meta="memory">${esc(S.case.memory||'')}</textarea><label class="field-label">关键词</label><input class="field" data-meta="keywords" value="${esc((S.case.keywords||[]).join('，'))}">${termPicker(S.case)}</div>` : metadataForm(S.case,'metadata-form');
+    const body = `<div id="metadata-error" class="save-error"></div>${form}`;
+    overlayHTML(dialog('编辑案例资料',body,`${S.case.status==='shared'?'<button class="btn ghost" data-action="reload-case">重新加载</button>':'<span class="micro">本机私密草稿</span>'}<button class="btn primary" data-action="save-metadata">保存资料</button>`),'metadata');
   }
   async function saveMetadata() {
     if (S.saving) return;
@@ -627,11 +631,41 @@
     S.saving++;
     const button = $('[data-action="save-metadata"]'); button.disabled = true; button.textContent = '正在保存…';
     try {
-      const result = await api('update_case',S.case.id,metadata);
+      const shared = S.case.status==='shared';
+      const result = shared ? await api('revise_public_case',S.case.id,S.editVersion,{title:metadata.title,memory:metadata.memory,keywords:metadata.keywords,term_ids:metadata.topic_ids}) : await api('update_case',S.case.id,metadata);
       if (result.case) S.case = result.case;
+      if(shared)S.sharedChanged=true;
       S.dirtyMetadata = false; closeOverlay(true); render(); toast('资料已保存');
+      if(shared)try{await refreshData();}catch(e){toast('资料已保存，列表尚未刷新：'+e.message,true);}
     } catch (error) { $('#metadata-error').textContent = error.message; }
     finally { S.saving--; if (S.overlay === 'metadata') { button.disabled = false; button.textContent = '保存资料'; } else $('#overlay-root').innerHTML = ''; }
+  }
+  async function reloadCase() {
+    const id=S.case.id, pane=S.studyPane, index=S.imageIndex;
+    if(S.overlay&&!closeOverlay())return;
+    await api('refresh_shared');
+    await refreshData();
+    await openCase(id,false);
+    S.sharedChanged=true;S.studyPane=pane;S.imageIndex=Math.min(index,(S.case.images?.length||1)-1);render();
+  }
+  async function saveComment() {
+    const text=$('#public-comment')?.value.trim();
+    if(!text||S.saving)return;
+    S.saving++;
+    try {
+      const result=await api('comment_public_case',S.case.id,text);
+      S.case=result.case;S.sharedChanged=true;S.draftText['public-comment:'+S.case.id]='';render();toast('公共留言已发表');
+    } catch(e){toast(e.message,true);} finally{S.saving--;}
+  }
+  async function changeVisibility() {
+    const hidden=!S.case.hidden;
+    if(!window.confirm(`${hidden?'下架':'恢复'}“${caseTitle(S.case)}”？${hidden?'原图、历史与留言会保留。':''}`))return;
+    S.saving++;
+    try {
+      const result=await api('set_public_visibility',S.case.id,S.case.visibility_version,hidden);
+      S.case=result.case;S.sharedChanged=true;render();toast(hidden?'案例已下架':'案例已恢复');
+      try{await refreshData();}catch(e){toast('状态已保存，列表尚未刷新：'+e.message,true);}
+    }catch(e){toast(e.message,true);}finally{S.saving--;}
   }
   async function saveNote() {
     const text = $('#case-note')?.value.trim();
@@ -700,6 +734,7 @@
     const data = await api('get_case',id);
     if (seq !== S.caseSeq) return;
     closeOverlay(true);
+    if(data.case.hidden) {toast('此案例已下架，不能开始试炼。',true);return;}
     if(!data.case.trial_setup) {openTrialSetup(data.case,true);return;}
     S.trialStep=0;S.trialReveal=0;
     S.trialCase = data.case; S.trialRecord = null; S.judgment = ''; S.trialThought = ''; S.trialReview = {}; S.marks = []; S.imageIndex = 0; S.marking = false;
@@ -841,12 +876,16 @@
       if(method==='refresh_shared')clearThumbnails();
       const result=await api(method);
       if(result.cancelled)return;
-      if(['disconnect_google','connect_google'].includes(method)) {clearThumbnails();cancelSearch();S.caseSeq++;originalCache.clear();originalCacheBytes=0;imageWanted=null;S.case=null;S.trialCase=null;S.trialRecord=null;S.original=null;S.draftText={};S.trials=[];S.records=[];S.topicCases=[];S.topicId=null;S.topicSeq++;S.page='home';closeOverlay(true);}
+      if(['disconnect_google','connect_google'].includes(method)) {clearThumbnails();cancelSearch();S.caseSeq++;originalCache.clear();originalCacheBytes=0;imageWanted=null;S.case=null;S.trialCase=null;S.trialRecord=null;S.original=null;S.draftText={};S.trials=[];S.records=[];S.topicCases=[];S.topicId=null;S.topicSeq++;S.page='library';closeOverlay(true);}
       await refreshData();
-      if(S.page==='library')await search(false); else render();
+      if(method==='refresh_shared'&&S.page==='study'&&S.case?.status==='shared') {
+        try{S.case=(await api('get_case',S.case.id)).case;}catch(e){S.case=null;S.page='library';toast(e.message,true);}
+        S.sharedChanged=true;
+      }
+      if(S.page==='library'){render();await search(false);}else render();
       if(result.refresh_error){toast('账号已连接，公共案例尚未刷新：'+result.refresh_error,true);return;}
       toast(method==='refresh_shared'?'公共案例已刷新':method==='connect_google'?'Google 账号已连接':'已断开连接');
-    } catch(e){toast(e.message,true);try{await refreshData();if(!S.boot.shared_status?.cached&&S.scope==='public'){cancelSearch();S.caseSeq++;S.case=null;S.trialCase=null;S.original=null;S.topicCases=[];S.page='home';clearThumbnails();originalCache.clear();originalCacheBytes=0;closeOverlay(true);render();}}catch(_){} }finally{S.saving--;if(method==='connect_google')$$('[data-action="connect-google"]').forEach(button=>{button.disabled=false;const a=S.boot.shared_status;button.textContent=a?.connected?(a.reconnect_required?'重新授权':'切换账号'):'连接 Google 账号';});}
+    } catch(e){toast(e.message,true);try{await refreshData();if(!S.boot.shared_status?.cached&&S.scope==='public'){cancelSearch();S.caseSeq++;S.case=null;S.trialCase=null;S.original=null;S.topicCases=[];S.page='library';clearThumbnails();originalCache.clear();originalCacheBytes=0;closeOverlay(true);render();}}catch(_){} }finally{S.saving--;if(method==='connect_google')$$('[data-action="connect-google"]').forEach(button=>{button.disabled=false;const a=S.boot.shared_status;button.textContent=a?.connected?(a.reconnect_required?'重新授权':'切换账号'):'连接 Google 账号';});}
   }
   function publishPreview() {
     const c=S.case;
@@ -872,7 +911,7 @@
       case 'publish-case': return publishCase();
       case 'mark-studied': await api('mark_studied',S.case.id);toast('已记录本次研究');await refreshData();return;
       case 'retry-boot': return boot();
-      case 'search-now': S.query = ($('#home-search') || $('#search-input'))?.value.trim() || ''; if (S.page !== 'library') { S.page = 'library'; render(); } return search();
+      case 'search-now': S.query = $('#search-input')?.value.trim() || ''; if (S.page !== 'library') { S.page = 'library'; render(); } return search();
       case 'load-more': return search(true,true);
       case 'toggle-filters': S.filterOpen = !S.filterOpen; render(); break;
       case 'clear-filters': S.filters = {symbol:'',timeframe:'',market:'',data_kind:''}; render(); return search(false);
@@ -892,6 +931,9 @@
       case 'edit-case': return editCase();
       case 'save-metadata': return saveMetadata();
       case 'save-note': return saveNote();
+      case 'save-comment': return saveComment();
+      case 'visibility-case': return changeVisibility();
+      case 'reload-case': return reloadCase();
       case 'original': return openOriginal(true,false);
       case 'trial-original': return openOriginal(false,true);
       case 'close-original': return closeOriginal();
@@ -952,7 +994,6 @@
     const target = event.target;
     if (target.hasAttribute('data-term-search')) {const q=target.value.toLowerCase().replace(/\s/g,'');$$('[data-term-option]',target.parentElement).forEach(n=>{n.hidden=!n.dataset.match.replace(/\s/g,'').includes(q);});}
     if (target.id === 'search-input') { S.query = target.value; if(!event.isComposing&&!S.composing)scheduleSearch(); }
-    if (target.id === 'home-search') { S.query = target.value; if(!event.isComposing&&!S.composing)scheduleSearch(); }
     if (target.dataset.filter) { S.filters[target.dataset.filter] = target.value; scheduleSearch(); }
     if (target.dataset.draft) S.draftText[target.dataset.draft] = target.value;
     if(target.id==='setup-cutoff'){S.setupDraft.cutoff=Number(target.value)/100;$('#setup-line').style.left=target.value+'%';$('#cutoff-value').textContent=target.value+'%';S.dirtyMetadata=true;}
@@ -968,8 +1009,8 @@
     if (event.target.id === 'capture-duplicate') S.duplicateAllowed = event.target.checked;
     if (event.target.closest('#metadata-form')) S.dirtyMetadata = true;
   });
-  document.addEventListener('compositionstart', event => {if(['home-search','search-input'].includes(event.target.id)){S.composing=true;cancelSearch();}});
-  document.addEventListener('compositionend', event => {if(['home-search','search-input'].includes(event.target.id)){S.composing=false;S.query=event.target.value;scheduleSearch();}});
+  document.addEventListener('compositionstart', event => {if(event.target.id==='search-input'){S.composing=true;cancelSearch();}});
+  document.addEventListener('compositionend', event => {if(event.target.id==='search-input'){S.composing=false;S.query=event.target.value;scheduleSearch();}});
   document.addEventListener('keydown', event => {
     if(event.isComposing || event.keyCode===229 || S.composing)return;
     if (event.key === 'Escape') {
@@ -980,11 +1021,10 @@
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
       if (S.overlay) return;
-      if (S.page === 'home') $('#home-search')?.focus();
-      else if (S.page === 'library') $('#search-input')?.focus();
+      if (S.page === 'library') $('#search-input')?.focus();
       else navigate('library').then(() => $('#search-input')?.focus());
     }
-    if (event.key === 'Enter' && ['home-search','search-input'].includes(event.target.id)) {
+    if (event.key === 'Enter' && event.target.id==='search-input') {
       event.preventDefault(); S.query = event.target.value.trim(); cancelSearch(); search(false);
     }
     if (event.key === 'Enter' && event.target.matches('.drop-box,[role="button"]')) {

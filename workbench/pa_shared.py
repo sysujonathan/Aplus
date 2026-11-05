@@ -98,6 +98,7 @@ class GoogleDrive:
         if info.get('trashed') or info.get('mimeType') != 'application/vnd.google-apps.folder':
             raise ValueError('指定的 PA 共享目录不可用')
         self.folder_shared = info.get('shared')
+        self.folder_owners = [v.get('permissionId') for v in info.get('owners', [])]
         return info.get('capabilities', {}).get('canAddChildren', False)
 
     def allocate(self, count):
@@ -105,9 +106,14 @@ class GoogleDrive:
         return [identifier(v) for v in json.loads(raw)['ids']]
 
     def list_cases(self):
+        return self.list_records('case-v1')
+
+    def list_records(self, kind):
+        if kind not in ('case-v1', 'collaboration-v1'):
+            raise ValueError('未知公共记录类型')
         rows, token = [], ''
         while True:
-            params = {'q': f"'{FOLDER}' in parents and trashed=false and properties has {{ key='aplus_kind' and value='case-v1' }}",
+            params = {'q': f"'{FOLDER}' in parents and trashed=false and properties has {{ key='aplus_kind' and value='{kind}' }}",
                       'pageSize': 100, 'fields': 'nextPageToken,files(' + FIELDS + ')'}
             if token:
                 params['pageToken'] = token
@@ -186,6 +192,7 @@ class Workspace:
         return dict(connected=True, user=user, folder_id=FOLDER, cached=bool(access.get('granted')),
                     refreshed=access.get('refreshed'), writable=access.get('writable', False),
                     directory_shared=access.get('shared'),
+                    admin=user['id'] in access.get('owners', []),
                     access_epoch=access.get('epoch'),
                     reconnect_required=bool(access.get('auth_required')),
                     cache_error=getattr(self.store, '_pa_shared_cache_error', None))
@@ -222,7 +229,25 @@ class Workspace:
                 cases.append(value)
             if len({c['global_id'] for c in cases}) != len(cases):
                 raise ValueError('云端存在重复的全局案例身份，请核对原提交；未替换本地缓存')
-            if len(encoded(cases)) > 32 * 1024 * 1024:
+            owners = getattr(self.drive, 'folder_owners', [])
+            events = []
+            old_events = {e['id']: e for e in self.get(self.space_key('collaboration'), [])}
+            for row in self.drive.list_records('collaboration-v1'):
+                old = old_events.get(row['id'])
+                if old and old.get('cloud_md5') and old['cloud_md5'] != row.get('md5Checksum'):
+                    raise ValueError('公共协作记录被改写，未替换有效缓存')
+                try:
+                    raw = self.drive.read(row['id'], MAX_MANIFEST)
+                except DriveError as exc:
+                    if exc.status != 404:
+                        raise
+                    self.drive.check_folder()
+                    raise ValueError('一条公共协作记录暂不可读取，请重试刷新；已保留有效缓存') from None
+                events.append(validate_event(json.loads(raw), row, owners))
+            # Validate every chain before replacing either cache snapshot.
+            for case in cases:
+                compose_case(case, events)
+            if len(encoded([cases, events])) > 32 * 1024 * 1024:
                 raise ValueError('公共案例目录超过本版缓存上限；未替换原缓存')
         except DriveError as exc:
             raise
@@ -233,12 +258,13 @@ class Workspace:
             if self.get(key, {}).get('epoch') != epoch:
                 raise ValueError('访问权限已在其他请求中失效，请重新刷新')
             self.set(self.space_key('catalogue'), cases)
+            self.set(self.space_key('collaboration'), events)
             self.set(self.space_key('catalogue_stamp'), uuid.uuid4().hex)
-            self.set(key, dict(granted=True, epoch=epoch, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None)))
+            self.set(key, dict(granted=True, epoch=epoch, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None), owners=owners))
         self.store._pa_shared_cache_error = None
         return dict(count=len(cases), status=self.status())
 
-    def catalogue(self):
+    def _originals(self):
         status = self.status()
         if not status['connected'] or not status['cached']:
             return []
@@ -258,11 +284,18 @@ class Workspace:
         self.store._pa_shared_catalogue_cache = (FOLDER, stamp, result)
         return result
 
+    def catalogue(self, include_hidden=False):
+        if include_hidden and not self.status().get('admin'):
+            raise ValueError('只有知识库所有者可以查看已下架案例')
+        events = self.get(self.space_key('collaboration'), [])
+        cases = [compose_case(c, events) for c in self._originals()]
+        return [c for c in cases if include_hidden or not c['hidden']]
+
     def search(self, query='', filters=None, offset=0):
         filters = filters or {}
         if type(offset) is not int or offset < 0 or not isinstance(query, str) or len(query) > 1000:
             raise ValueError('搜索条件无效')
-        if set(filters) - {'symbol', 'market', 'timeframe', 'data_kind', 'topic_id', 'contributor', 'scope'}:
+        if set(filters) - {'symbol', 'market', 'timeframe', 'data_kind', 'topic_id', 'contributor', 'scope', 'hidden'}:
             raise ValueError('未知公共案例筛选')
         q = query.casefold().strip()
         terms = set(matching(q)) if q else set()
@@ -274,7 +307,10 @@ class Workspace:
             note_hits = set()
             personal_error = '个人笔记暂时无法检索，公共案例资料仍可搜索'
         results = []
-        for c in self.catalogue():
+        hidden = filters.get('hidden') == 'yes'
+        for c in self.catalogue(include_hidden=hidden):
+            if hidden and not c['hidden']:
+                continue
             if any(value and value.casefold() not in str(c.get(key, '')).casefold()
                    for key, value in filters.items() if key in ('symbol', 'market', 'timeframe', 'data_kind')):
                 continue
@@ -296,7 +332,7 @@ class Workspace:
                     next_offset=offset + min(100, max(0, len(results) - offset)), personal_error=personal_error)
 
     def case(self, case_id):
-        value = next((c for c in self.catalogue() if c['id'] == case_id), None)
+        value = next((c for c in self.catalogue(include_hidden=self.status().get('admin', False)) if c['id'] == case_id), None)
         if value is None:
             raise ValueError('公共案例不存在或尚未获得访问权限，请刷新')
         try:
@@ -308,7 +344,7 @@ class Workspace:
 
     @network_operation
     def image(self, case_id, image_id, thumbnail=False, cache_only=False):
-        case = next((c for c in self.catalogue() if c['id'] == case_id), None)
+        case = next((c for c in self.catalogue(include_hidden=self.status().get('admin', False)) if c['id'] == case_id), None)
         if case is None:
             raise ValueError('公共案例不存在或无权访问')
         image = next((i for i in case['images'] if i['id'] == image_id), None)
@@ -350,6 +386,41 @@ class Workspace:
             raise ValueError('公共缓存访问权限已失效，请重新连接后刷新')
         atomic_secret(path, data)
         return data
+
+    @network_operation
+    def collaborate(self, case_id, kind, expected, value):
+        if kind not in ('revision', 'comment', 'visibility'):
+            raise ValueError('未知协作操作')
+        self.refresh()  # Online permission + observed stale-version check.
+        status = self.status()
+        if not status.get('writable'):
+            raise ValueError('当前账号只有只读权限')
+        if kind == 'visibility' and not status.get('admin'):
+            raise ValueError('只有知识库所有者可以下架或恢复案例')
+        case = self.case(case_id)
+        stream = 'visibility' if kind == 'visibility' else 'revision'
+        if kind != 'comment' and expected != case[stream + '_version']:
+            raise ValueError('案例已有新修改，请重新加载后再保存')
+        event = dict(version=1, type=kind, case_id=case_id, author=status['user'], created=now())
+        if kind == 'comment':
+            event['text'] = value
+        else:
+            event.update(parents=case[stream + '_heads'])
+            event['values' if kind == 'revision' else 'hidden'] = value
+        file_id = self.drive.allocate(1)[0]
+        event = validate_event(event, dict(id=file_id, parents=[FOLDER], owners=[dict(permissionId=status['user']['id'])]),
+                               [status['user']['id']] if status.get('admin') else [])
+        raw = encoded({k: v for k, v in event.items() if k not in ('id', 'cloud_md5')})
+        if len(raw) > MAX_MANIFEST:
+            raise ValueError('协作记录超过共享上限，尚未提交')
+        self.drive.put_once(file_id, 'collaboration-' + file_id + '.json', raw, 'application/json', 'collaboration-v1')
+        self.refresh()
+        if file_id not in {e['id'] for e in self.get(self.space_key('collaboration'), [])}:
+            raise ValueError('记录已上传，但目录刷新尚未确认；请刷新核对后再操作')
+        result = self.case(case_id)
+        if kind != 'comment' and result[stream + '_conflict']:
+            raise ValueError('检测到并发修改，两个版本均已保留；请重新加载并核对历史后保存')
+        return dict(case=result)
 
     @network_operation
     def publish(self, case_id):
@@ -545,6 +616,93 @@ class Workspace:
         return {'restored': added, 'isolated_unreadable': isolated}
 
 
+def validate_event(value, info, folder_owners):
+    """Only public fields cross this boundary; never serialize personal records."""
+    if not isinstance(value, dict) or value.get('version') != 1 or value.get('type') not in ('revision', 'comment', 'visibility'):
+        raise ValueError('公共协作记录格式无效')
+    if FOLDER not in info.get('parents', []) or info.get('trashed'):
+        raise ValueError('公共协作记录不在指定目录')
+    author = value.get('author', {})
+    if (not isinstance(author, dict) or author.get('id') not in [v.get('permissionId') for v in info.get('owners', [])]
+            or not isinstance(author.get('name'), str) or len(author['name']) > 300):
+        raise ValueError('公共协作成员身份无法核实')
+    identifier(author['id'])
+    case_id = value.get('case_id', '')
+    if not isinstance(case_id, str) or not case_id.startswith('shared:'):
+        raise ValueError('公共协作案例身份无效')
+    identifier(case_id[7:])
+    if not isinstance(value.get('created'), str) or not 1 <= len(value['created']) <= 80:
+        raise ValueError('公共协作时间无效')
+    result = dict(version=1, id=identifier(info['id']), type=value['type'], case_id=case_id,
+                  author={k: author[k] for k in ('id', 'name')}, created=value['created'], cloud_md5=info.get('md5Checksum'))
+    if value['type'] == 'comment':
+        text = value.get('text')
+        if not isinstance(text, str) or not 1 <= len(text.strip()) <= 10000:
+            raise ValueError('请填写 1—10000 字的纯文本留言')
+        result['text'] = text.strip()
+    else:
+        parents = value.get('parents')
+        if not isinstance(parents, list) or len(parents) > MAX_CASES or len(set(parents)) != len(parents):
+            raise ValueError('公共协作版本无效')
+        result['parents'] = sorted(identifier(p) for p in parents)
+        if value['type'] == 'revision':
+            fields = value.get('values')
+            if not isinstance(fields, dict) or set(fields) != {'title', 'memory', 'keywords', 'term_ids'}:
+                raise ValueError('只能修改标题、案例描述、关键词和标准术语')
+            clean = metadata({k: fields[k] for k in ('title', 'memory', 'keywords')})
+            result['values'] = {k: clean[k] for k in ('title', 'memory', 'keywords')}
+            result['values']['term_ids'] = selected(fields['term_ids'], required=True)
+        else:
+            if author['id'] not in folder_owners or type(value.get('hidden')) is not bool:
+                raise ValueError('案例上下架记录无法核实知识库所有者身份')
+            result['hidden'] = value['hidden']
+    return result
+
+
+def resolve_events(events):
+    """Append-only heads: siblings stay visible as conflicts, never last-writer-wins.
+
+    Drive has no create-if-head CAS. A later explicit full revision with all
+    observed heads as parents resolves a conflict without deleting either one.
+    """
+    pending = {e['id']: e for e in events}
+    ancestors = {}
+    while pending:
+        ready = [e for e in pending.values() if all(p in ancestors for p in e['parents'])]
+        if not ready:
+            raise ValueError('公共修订历史不完整或版本循环，请核对共享记录')
+        for event in ready:
+            ancestors[event['id']] = {event['id']}.union(*(ancestors[p] for p in event['parents']))
+            del pending[event['id']]
+    heads = sorted(set(ancestors) - {p for e in events for p in e['parents']})
+    common = set.intersection(*(ancestors[h] for h in heads)) if heads else set()
+    current = max(common, key=lambda i: (len(ancestors[i]), i)) if common else None
+    return heads, current
+
+
+def compose_case(original, events):
+    rows = sorted((e for e in events if e['case_id'] == original['id']), key=lambda e: (e['created'], e['id']))
+    result = dict(original, comments=[e for e in rows if e['type'] == 'comment'], hidden=False,
+                  history=[e for e in rows if e['type'] == 'revision'])
+    for kind in ('revision', 'visibility'):
+        changes = [e for e in rows if e['type'] == kind]
+        heads, current = resolve_events(changes)
+        result[kind + '_heads'] = heads
+        result[kind + '_version'] = checksum(encoded(heads))
+        result[kind + '_conflict'] = len(heads) > 1
+        if kind == 'revision' and current:
+            event = next(e for e in changes if e['id'] == current)
+            result.update(event['values'], updated=event['created'])
+        if kind == 'visibility':
+            # Conflicting admin actions fail closed until the owner resolves.
+            result['hidden'] = any(e['hidden'] for e in changes if e['id'] in heads)
+    result['topic_ids'] = result['term_ids']
+    result['original_metadata'] = {k: original[k] for k in ('title', 'memory', 'keywords', 'term_ids')}
+    if result['hidden']:
+        result['trial_setup'] = None
+    return result
+
+
 def validate_manifest(value, info):
     if not isinstance(value, dict) or value.get('version') != 1 or not re.fullmatch(r'[a-f0-9]{32}', value.get('uuid', '')):
         raise ValueError('公共案例格式或版本无效')
@@ -598,7 +756,7 @@ def validate_manifest(value, info):
 def dispatch(store, operation, *args, drive=None):
     workspace = Workspace(store, drive or GoogleDrive(profile=store.root))
     if operation not in ('status', 'refresh', 'catalogue', 'search', 'case', 'image', 'publish', 'personal', 'record',
-                         'export_learning', 'restore_learning'):
+                         'export_learning', 'restore_learning', 'collaborate'):
         raise ValueError('未知共享操作')
     session = getattr(workspace.drive, 'session', None)
     with session.operation() if isinstance(session, GoogleSession) else nullcontext():

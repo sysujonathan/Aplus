@@ -28,9 +28,6 @@ async function run(){
  assert.equal(el('#search-input'),input);assert.equal(el('#main').innerHTML,before);
  assert.match(el('#search-results').innerHTML,/锦和商业/);
  assert.equal(input.value,'锦和商业');
- Object.assign(S,{page:'home',query:'ETH'});input.id='home-search';elements.set('#home-search',input);
- events.input({target:input,isComposing:false});await flush();assert.equal(S.page,'home','home typing does not replace focused field');
- release({ok:true,cases:[]});await new Promise(r=>setImmediate(r));
- console.log(JSON.stringify({ok:true,compositionBoundary:true,stableInput:true,lateReplyRejected:true,homeFocusRetained:true}));
+ console.log(JSON.stringify({ok:true,compositionBoundary:true,stableInput:true,lateReplyRejected:true}));
 }
 run().catch(e=>{console.error(e);process.exitCode=1;});

@@ -362,7 +362,7 @@ class GrowthBridge:
             result = self._public('search', query, {k:v for k,v in filters.items() if k != 'scope'}, offset)
             result['cases'] = self._summaries(result['cases'])
             return result
-        filters = {k:v for k,v in (filters or {}).items() if k not in ('scope', 'contributor')}
+        filters = {k:v for k,v in (filters or {}).items() if k not in ('scope', 'contributor', 'hidden')}
         if filters and filters.get('topic_id'):
             family = self._topic_family(filters['topic_id'])
             if len(family) > 1:
@@ -552,6 +552,18 @@ class GrowthBridge:
         for token in tokens:
             self._pending.pop(token, None)
         return {'cases': self._summaries(results), 'duplicates': []}
+
+    @guarded
+    def revise_public_case(self, case_id, expected, metadata):
+        return self._public('collaborate', case_id, 'revision', expected, metadata)
+
+    @guarded
+    def comment_public_case(self, case_id, text):
+        return self._public('collaborate', case_id, 'comment', None, text)
+
+    @guarded
+    def set_public_visibility(self, case_id, expected, hidden):
+        return self._public('collaborate', case_id, 'visibility', expected, hidden)
 
     @guarded
     def update_case(self, case_id, metadata):
