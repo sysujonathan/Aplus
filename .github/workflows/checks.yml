@@ -37,7 +37,7 @@ jobs:
       - name: Verify frozen source bytes
         run: python -c "from workbench.strategies import verify_frozen; print(verify_frozen())"
       - name: Install verified compiler for actual shortcut tests
-        if: steps.scope.outputs.lane != 'docs'
+        if: steps.scope.outputs.needs_inno == 'true'
         shell: pwsh
         run: |
           $compiler = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
