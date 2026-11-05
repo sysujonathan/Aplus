@@ -649,16 +649,18 @@
     S.sharedChanged=true;S.studyPane=pane;S.imageIndex=Math.min(index,(S.case.images?.length||1)-1);render();
   }
   async function saveComment() {
-    const text=$('#public-comment')?.value.trim();
+    const submitted=$('#public-comment')?.value, text=submitted?.trim();
     if(!text||S.saving)return;
-    const pending=S.commentRequests[S.case.id];
-    if(!pending||pending.text!==text)S.commentRequests[S.case.id]={id:crypto.randomUUID(),text};
-    const request=S.commentRequests[S.case.id];
+    const caseId=S.case.id, draftKey='public-comment:'+caseId;
+    const pending=S.commentRequests[caseId];
+    if(!pending||pending.text!==text)S.commentRequests[caseId]={id:crypto.randomUUID(),text};
+    const request=S.commentRequests[caseId];
     S.saving++;
     try {
-      const result=await api('comment_public_case',S.case.id,text,request.id);
-      delete S.commentRequests[S.case.id];
-      S.case=result.case;S.sharedChanged=true;S.draftText['public-comment:'+S.case.id]='';render();toast('公共留言已发表');
+      const result=await api('comment_public_case',caseId,text,request.id);
+      delete S.commentRequests[caseId];
+      if((S.draftText[draftKey]??submitted)===submitted)S.draftText[draftKey]='';
+      S.case=result.case;S.sharedChanged=true;render();toast('公共留言已发表');
     } catch(e){toast(e.message,true);} finally{S.saving--;}
   }
   async function changeVisibility() {

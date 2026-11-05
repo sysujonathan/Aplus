@@ -1,12 +1,12 @@
 /* Small render checks for this batch only; no WebView/OAuth/install replay. */
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
-const elements=new Map();
+const elements=new Map(),events={};
 const el=k=>{if(!elements.has(k))elements.set(k,{innerHTML:''});return elements.get(k);};
 let requestSerial=0;
-const ctx=vm.createContext({crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener(){}},console});
+const ctx=vm.createContext({crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener:(name,fn)=>events[name]=fn},console});
 const source=fs.readFileSync(require('node:path').join(__dirname,'../gui/pa_growth/growth.js'),'utf8');
-vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,saveComment,setApi:fn=>api=fn,setEffects:()=>{render=()=>{};toast=()=>{}}};})();',ctx);
-if (!process.argv.includes('--comment-retry')) {
+vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,saveComment,setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
+if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')) {
 const {S,navigation,library,study,studyPane}=ctx.window.test;
 assert.equal(S.page,'library');navigation();
 const nav=el('#navigation').innerHTML;
@@ -25,7 +25,7 @@ S.studyPane='notes';html=studyPane(c,[]);assert(html.includes('仅本人可见')
 S.studyPane='history';assert(studyPane(c,[]).includes('Contributor'));
 console.log('PA collaboration UI: default navigation, single search, resume, roles and escaped comments passed');
 
-} else {
+} else if (process.argv.includes('--comment-retry')) {
 const {S,saveComment,setApi,setEffects}=ctx.window.test;
 setEffects();
 el('#public-comment').value='Same public text';
@@ -42,4 +42,31 @@ setApi(async(...args)=>{calls.push(args);if(calls.length===1)throw Error('lost a
   console.log('public comment lost-ack retry: stable request, then fresh intent');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 
+}
+
+if(process.argv.includes('--comment-draft')) {
+const {S,saveComment,studyPane,setApi,setEffects}=ctx.window.test;
+const key='public-comment:shared:case',field=el('#public-comment');
+Object.assign(field,{id:'public-comment',dataset:{draft:key},hasAttribute:()=>false,closest:()=>null});
+S.case={id:'shared:case',comments:[]};S.studyPane='comments';S.boot={shared_status:{writable:true}};
+let release,rendered='';const calls=[];
+setEffects(()=>{rendered=studyPane(S.case,[]);});
+setApi((...args)=>{calls.push(args);return new Promise(resolve=>{release=resolve;});});
+const type=text=>{field.value=text;events.input({target:field});};
+(async()=>{
+  type('  First submitted  ');
+  const first=saveComment();
+  type('Second draft typed during upload');
+  release({case:{id:'shared:case',comments:[]}});await first;
+  assert.equal(calls[0][2],'First submitted');
+  assert.equal(S.draftText[key],'Second draft typed during upload','a late success must retain newer input');
+  assert(rendered.includes('>Second draft typed during upload</textarea>'),'the newer draft survives repaint');
+  const second=saveComment();
+  assert.equal(calls[1][2],'Second draft typed during upload');
+  assert.notEqual(calls[0][3],calls[1][3],'the retained draft is a new submission intent');
+  release({case:{id:'shared:case',comments:[]}});await second;
+  assert.equal(S.draftText[key],'','unchanged submitted draft clears after success');
+  assert(rendered.includes('></textarea>'));
+  console.log('public comment delayed reply: newer draft retained, unchanged submitted draft cleared');
+})().catch(e=>{console.error(e);process.exitCode=1;});
 }

@@ -271,3 +271,11 @@ def test_unchanged_collaboration_cache_revalidates_identity_and_downloads_only_w
     with pytest.raises(ValueError, match='所有者身份'):
         a.refresh()
     assert not downloads  # Unchanged bytes do not bypass live admin validation.
+
+
+def test_comment_reply_keeps_newly_typed_draft():
+    node = shutil.which('node')
+    assert node, 'Node required for the production delayed-comment handler'
+    result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs')), '--comment-draft'],
+                            capture_output=True, text=True, encoding='utf-8', timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
