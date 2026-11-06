@@ -231,13 +231,17 @@ def candidate_dates(store, timeframe="daily", source=None):
         )
     days = {row['day'] for row in rows if row.get('day')}
     if source is None:
-        days.update(r['asof'] for r in store.shape_runs(market_source(store)))
+        if timeframe == 'daily':
+            days.update(r['asof'] for r in store.shape_runs(market_source(store)) if r['status'] in ('completed','partial'))
     return sorted(days,reverse=True)
 
 
 def latest_candidate_date(store, timeframe="daily"):
     """返回启动默认页：本地最近一次已有策略结果，而非最新行情日。"""
-    return latest_scan_date(store, timeframe=timeframe)
+    days = [latest_scan_date(store, timeframe=timeframe)]
+    if timeframe == 'daily':
+        days += [r['asof'] for r in store.shape_runs(market_source(store)) if r['status'] in ('completed','partial')]
+    return max((day for day in days if day),default=None)
 
 
 def latest_market_date(store, timeframe="daily", source=None):

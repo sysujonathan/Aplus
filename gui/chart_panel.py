@@ -625,6 +625,8 @@ class ChartPanel(native_ttk.Frame):
         self.store, self._code, self._tf = store,item.code,'daily'
         try:
             frame, record = load_dataset(store,shape['dataset_id'])
+            if record['code'] != item.code or record['source'] != item.source or record['timeframe'] != 'daily':
+                raise ValueError('形态图格与行情身份不一致')
             if shape.get('sha256') and record['sha256'] != shape['sha256']:
                 raise ValueError('形态候选快照身份不一致')
             frame = frame[frame.date <= shape['end']].copy()

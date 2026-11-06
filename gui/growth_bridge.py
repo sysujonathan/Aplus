@@ -512,6 +512,7 @@ class GrowthBridge:
         if callback is None:
             raise ValueError('请从 Aplus 成长空间打开本地形态检索')
         value = {key:case.get(key,'') for key in ('id','title','symbol','timeframe')}
+        value['title'] = value['title'] or str(case.get('memory') or '案例模板')[:80]
         callback(value)
         return {'local_shape':True,'case_id':case_id}
 

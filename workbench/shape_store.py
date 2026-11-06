@@ -9,6 +9,7 @@ from datetime import date
 import json
 import math
 import re
+import time
 import uuid
 
 from .store import digest, dumps, now
@@ -36,10 +37,12 @@ def options(value=None):
     window = int(value.get('window',60))
     threshold = float(value.get('threshold',75))
     topn = int(value.get('topn',30))
+    if any(isinstance(value.get(k),bool) for k in ('window','threshold','topn')):
+        raise ValueError('匹配参数必须是数值')
     if window not in WINDOWS or not math.isfinite(threshold) or not 0 <= threshold <= 100 or not 1 <= topn <= 200:
         raise ValueError('长度须为30／60／120，阈值为0—100，结果数为1—200')
     from .market import BOARDS, code_of
-    boards = value.get('boards') or list(BOARDS)
+    boards = value.get('boards',list(BOARDS))
     if not isinstance(boards,list) or not boards or any(b not in BOARDS for b in boards):
         raise ValueError('股票范围无效')
     codes = value.get('codes') or []
@@ -56,8 +59,20 @@ def templates(store):
         head = json.loads(row['value'])
         version = read_meta(store, f"shape_template:{head['id']}:{head['version']}")
         if version:
+            validate_definition(version)
+            if version['version'] != head['version']:
+                raise ValueError('形态模板版本索引不一致')
             result.append(dict(version, tracking=head['tracking'], settings=head['settings'], revision=head['revision']))
     return result
+
+
+def validate_definition(template):
+    try:
+        definition = {key:template[key] for key in ('id','name','kind','path','origin','algorithm')}
+        if digest(dumps(definition).encode()) != template['version'] or template['algorithm'] != ALGORITHM:
+            raise ValueError('形态模板内容与版本校验不一致，请恢复模板或另存新模板')
+    except (KeyError,TypeError) as exc:
+        raise ValueError('形态模板记录不完整') from exc
 
 
 def save_template(store, value, expected_revision=None):
@@ -79,11 +94,16 @@ def save_template(store, value, expected_revision=None):
         start, cutoff = str(origin.get('start') or ''), str(origin.get('cutoff') or '')
         date.fromisoformat(start); date.fromisoformat(cutoff)
         clip = frame[(frame.date >= start) & (frame.date <= cutoff)]
-        if len(clip) < 3 or start > cutoff or record['sha256'] != origin.get('sha256'):
+        if (len(clip) < 3 or start > cutoff or record['sha256'] != origin.get('sha256')
+                or str(clip.date.iloc[-1]) != cutoff or record['timeframe'] != 'daily'
+                or record['source'] not in ('baostock','tickflow','tencent')):
             raise ValueError('案例行情区间或快照校验不一致')
         path = normalize(clip.close).round(10).tolist()
         origin.update(code=record['code'],source=record['source'],adjustment=record['adjustment'],
                       start=str(clip.date.iloc[0]),cutoff=str(clip.date.iloc[-1]),bars=len(clip))
+    if kind == 'classic':
+        from .shape_matching import classic
+        path = normalize(classic(origin.get('classic_key'))).round(10).tolist()
     definition = dict(id=identifier,name=name,kind=kind,path=path,origin=origin,algorithm=ALGORITHM)
     version = digest(dumps(definition).encode())
     settings = options(value.get('settings'))
@@ -108,6 +128,7 @@ def save_run(store, report):
     relative = f'shape_runs/{identifier}.json'
     content = dumps(report).encode('utf-8')
     sha = digest(content)
+    started = time.perf_counter()
     with store.atomic_write():
         if read_meta(store,'shape_run:'+identifier):
             raise ValueError('形态扫描回执已存在，不允许覆盖')
@@ -115,6 +136,11 @@ def save_run(store, report):
         write_meta(store,'shape_run:'+identifier,dict(id=identifier,path=relative,sha256=sha,
                    asof=report['asof'],source=report['source'],created=report['created'],
                    status=report['status'],mode=report['mode']))
+    # Receipt bytes stay immutable. Completion timing is an adjunct metadata
+    # measurement, including the artifact fsync and database commit above.
+    elapsed = time.perf_counter()-started
+    write_meta(store,'shape_metrics:'+identifier,dict(save=elapsed))
+    report['timings']['save'] = elapsed
     return identifier
 
 
@@ -125,11 +151,13 @@ def run(store, identifier):
     content = store.read_artifact(index['path'])
     if digest(content) != index['sha256']:
         raise ValueError('形态历史回执校验失败，不使用已修改的记录')
-    return json.loads(content)
+    report = json.loads(content)
+    report['timings'].update(read_meta(store,'shape_metrics:'+identifier,{}))
+    return report
 
 
 def runs(store, source=None):
-    values = [json.loads(row['value']) for row in store.rows("SELECT value FROM meta WHERE key LIKE 'shape_run:%'")]
+    values = [json.loads(row['value']) for row in store.rows("SELECT value FROM meta WHERE key LIKE 'shape_run:%' ORDER BY rowid DESC")]
     return sorted((v for v in values if source is None or v['source']==source),key=lambda v:v['created'],reverse=True)
 
 
@@ -166,9 +194,13 @@ def watch_match(store, run_id, match_id):
     template = next(t for t in report['templates'] if t['id']==match['template_id'])
     code = match['code']
     with store.atomic_write():
-        store.add_manual_watch(code,match.get('name',''),f"形态研究：{template['name']} · {report['asof']}")
+        store.execute('BEGIN IMMEDIATE')
+        store.execute('INSERT INTO watchlist VALUES(?,?,?,1,?,?) ON CONFLICT(code) DO UPDATE SET '
+                      'active=1,updated=excluded.updated',
+                      (code,'',f"形态研究：{template['name']} · {report['asof']}",now(),now()))
         evidence = read_meta(store,'shape_watch:'+code,[])
         item = dict(run_id=run_id,match_id=match_id,template=template['name'],asof=report['asof'])
         if item not in evidence:
-            write_meta(store,'shape_watch:'+code,(evidence+[item])[-200:])
+            write_meta(store,'shape_watch:'+code,evidence+[item])
+        store.event(None,'形态候选加入公共关注',code=code,run_id=run_id,match_id=match_id)
     return code

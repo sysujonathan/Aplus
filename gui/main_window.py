@@ -598,6 +598,8 @@ class AplusMainWindow(ttk.Window):
     def _shape_results(self, asof=None):
         # Manual searches intentionally show their selected day. Automatic
         # tracking only refreshes saved results and never changes this date.
+        self._tf_var.set('daily')
+        self.chart.set_timeframe('daily')
         self.toolbar._load_date_options()
         if asof:
             self.toolbar._select_date(asof)
@@ -605,17 +607,25 @@ class AplusMainWindow(ttk.Window):
 
     def _poll_shape_results(self):
         if self._closing:return
-        status = self.service.shape_tasks().status()
-        if status.get('run_id') and status['run_id'] != self._shape_last_run:
-            self._shape_last_run = status['run_id']
-            self.toolbar._load_date_options()
-            self.candidates.load_from_store(self.store,timeframe=self._tf_var.get(),
-                asof_filter=self.toolbar.selected_date(),source=self._candidate_source,notify=False)
-        self.after(1000,self._poll_shape_results)
+        try:
+            status = self.service.shape_tasks().status()
+            self.candidates.set_task_status(status)
+            if status.get('run_id') and status['run_id'] != self._shape_last_run:
+                self._shape_last_run = status['run_id']
+                self.toolbar._load_date_options()
+                self.candidates.load_from_store(self.store,timeframe=self._tf_var.get(),
+                    asof_filter=self.toolbar.selected_date(),source=self._candidate_source,notify=False)
+        except (ValueError,OSError) as exc:
+            self._status_text.set('形态结果暂未刷新：'+str(exc))
+        finally:
+            self.after(1000,self._poll_shape_results)
 
     def _compare_shape(self, row):
         origin = row['template'].get('origin',{})
         if not origin.get('dataset_id'):
+            if origin.get('case_id'):
+                self._open_shape_case(row)
+                return
             from tkinter import messagebox
             messagebox.showinfo('轮廓模板', '手绘和经典模板没有真实OHLC。请在形态模板窗口核对原轮廓；候选仍在当前图表中。', parent=self)
             return
@@ -703,6 +713,8 @@ class AplusMainWindow(ttk.Window):
 
     def on_stock_selected(self, code, observation_id=None):
         if observation_id and self.store is not None:
+            if self.candidates.consume_refresh() is True:
+                self._chart_mode = 'refresh_candidates'
             if self._chart_mode != "candidates":
                 rows = self.candidates.rows()
                 items = chart_items(rows, "candidate")
@@ -795,6 +807,11 @@ class AplusMainWindow(ttk.Window):
             self._status_text.set(f"无 {code} 的可用行情快照")
 
     def _on_chart_page(self, delta):
+        if self._chart_mode == 'candidates' and self.candidates.consume_refresh() is True:
+            current = self.chart.current_item()
+            rows = self.candidates.rows()
+            index = next((i for i,r in enumerate(rows) if current and r.get('observation_id')==current.observation_id),0)
+            self.chart.set_items(chart_items(rows,'candidate'),selected_index=index)
         self.chart.page(delta)
 
     def _on_chart_layout(self, count):
@@ -930,7 +947,7 @@ class AplusMainWindow(ttk.Window):
 
     def _open_shape_case(self,row):
         from .growth_space import open_shape_case
-        open_shape_case(self,self.store,row['template']['origin']['case_id'])
+        self._case_comparisons.append(open_shape_case(self,self.store,row['template']['origin']['case_id']))
 
     def _add_watch(self, code, observation_id):
         try:

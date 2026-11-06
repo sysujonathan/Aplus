@@ -18,6 +18,8 @@ class ShapeTasks:
         self.cache = FrameCache()
         self.lock = threading.Lock()
         self.active = None
+        self.closed = False
+        self.pending_tracked = False
         old = read_meta(self.store,'shape_task',{})
         if old.get('state') in ('running','queued'):
             write_meta(self.store,'shape_task',dict(old,state='interrupted',message='上次程序退出；可按原条件重新匹配，已保存历史保留'))
@@ -27,8 +29,11 @@ class ShapeTasks:
 
     def submit(self, templates, asof, source, *, checkpoint=None, automatic=False):
         with self.lock:
+            if self.closed:
+                raise ValueError('程序正在退出，形态任务未启动')
             if self.active:
                 if automatic:
+                    self.pending_tracked = True
                     return None
                 raise ValueError('形态匹配正在进行，可先取消或等待完成')
             identifier = 'shape:'+uuid.uuid4().hex
@@ -39,6 +44,7 @@ class ShapeTasks:
                 self.service.cancel_flags[identifier] = event
             self.active = (identifier,event)
             write_meta(self.store,'shape_task',dict(id=identifier,state='queued',asof=asof,source=source,
+                spec=dict(templates=templates,asof=asof,source=source),checkpoint=checkpoint,
                 message='等待盘前任务完成后在本地匹配',created=now(),progress=0,total=0))
             self.pool.submit(self._run,identifier,event,templates,asof,source,checkpoint)
             return identifier
@@ -49,6 +55,9 @@ class ShapeTasks:
                 self.active[1].set()
 
     def close(self):
+        with self.lock:
+            self.closed = True
+            self.pending_tracked = False
         self.cancel()
         self.pool.shutdown(wait=True)
 
@@ -63,28 +72,41 @@ class ShapeTasks:
                     return
                 event.wait(.1)
         last_progress = [0.]
+        checkpoint_id = [checkpoint]
+        spec = dict(templates=templates,asof=asof,source=source)
+        def save_checkpoint(value):
+            checkpoint_id[0] = value
+            progress(0,0,'已保存恢复点')
         def progress(done,total,message):
             current = time.monotonic()
             if done not in (0,total) and current-last_progress[0]<.5:
                 return
             last_progress[0] = current
             write_meta(self.store,'shape_task',dict(id=identifier,state='running',asof=asof,source=source,
+                        spec=spec,checkpoint=checkpoint_id[0],
                         progress=done,total=total,message=message))
         try:
             check()
-            report = scan(self.store,templates,asof,source,cancel=check,progress=progress,cache=self.cache,checkpoint=checkpoint)
+            report = scan(self.store,templates,asof,source,cancel=check,progress=progress,cache=self.cache,
+                          checkpoint=checkpoint,on_checkpoint=save_checkpoint)
             write_meta(self.store,'shape_task',dict(id=identifier,state=report['status'],asof=asof,source=source,
                 run_id=report['id'],message=f"形态匹配：{len(report['matches'])} 项相似结果（非交易信号）",
-                timings=report['timings'],progress=len(report['inputs']),finished=now()))
+                spec=spec,checkpoint=report['id'],timings=report['timings'],progress=len(report['inputs']),finished=now()))
         except InterruptedError:
-            write_meta(self.store,'shape_task',dict(id=identifier,state='cancelled',message='形态匹配已取消；历史记录保留',asof=asof,source=source))
+            write_meta(self.store,'shape_task',dict(id=identifier,state='cancelled',message='形态匹配已取消；历史记录保留',asof=asof,source=source,
+                                                 spec=spec,checkpoint=checkpoint_id[0]))
         except Exception as exc:
-            write_meta(self.store,'shape_task',dict(id=identifier,state='failed',message=str(exc),asof=asof,source=source))
+            write_meta(self.store,'shape_task',dict(id=identifier,state='failed',message=str(exc),asof=asof,source=source,
+                                                 spec=spec,checkpoint=checkpoint_id[0]))
         finally:
             with self.service.lock:
                 self.service.cancel_flags.pop(identifier,None)
             with self.lock:
                 self.active = None
+                follow = self.pending_tracked and not self.closed
+                self.pending_tracked = False
+            if follow:
+                self.tracked()
 
     def tracked(self):
         from .sources import market_source
@@ -101,7 +123,7 @@ class ShapeTasks:
 
 
 def runner(service):
-    # Created on the main service thread before dispatch, not concurrently.
-    if not getattr(service,'_shape_tasks',None):
-        service._shape_tasks = ShapeTasks(service)
-    return service._shape_tasks
+    with service.lock:
+        if not getattr(service,'_shape_tasks',None):
+            service._shape_tasks = ShapeTasks(service)
+        return service._shape_tasks

@@ -42,7 +42,8 @@ def test_six_templates_and_explicit_text_mapping():
     assert len(drawing_path([(0,100),(50,10),(100,90)]))==120
 
 
-def test_no_schema_or_formal_signal_writes_and_history_survives_upgrade(tmp_path):
+def test_no_schema_or_formal_signal_writes_and_history_survives_upgrade(tmp_path,monkeypatch):
+    monkeypatch.setattr('workbench.market.completed_date',lambda:'2026-10-20')
     store=Store(tmp_path)
     tables=store.rows("SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name")
     raw=frame();save_dataset(store,'600000',raw,'baostock','qfq')
@@ -169,10 +170,94 @@ def test_pa_case_entry_only_exports_identity_not_images_or_credentials(tmp_path)
     from gui.growth_bridge import GrowthBridge
     store=Store(tmp_path)
     buffer=__import__('io').BytesIO();Image.new('RGB',(120,90),'white').save(buffer,format='PNG')
-    case=store.pa_save_case([dict(data=buffer.getvalue(),name='case.png')],dict(title='双底',symbol='600000'))
+    saved=store.pa_save_case([dict(data=buffer.getvalue(),name='case.png')],dict(title='双底',symbol='600000'))
+    case=saved['case']
     bridge=GrowthBridge(store);bridge._find_similar=Mock()
     # Use the guarded public boundary just like the real page.
     result=bridge.find_similar(case['id'])
     assert result.get('ok',True) is True
     exported=bridge._find_similar.call_args.args[0]
     assert set(exported)=={'id','title','symbol','timeframe'}
+
+
+def test_recovery_reuses_version_despite_revision_change_and_reranks_all_scores(tmp_path):
+    store=Store(tmp_path)
+    for code,key in (('600000','w_bottom'),('600001','trend_pullback'),('600002','top_reversal')):
+        save_dataset(store,code,frame(key),'baostock','qfq')
+    t=template(store)
+    t=store.save_shape_template(dict(t,settings=dict(t['settings'],topn=1)),t['revision'])
+    original=scan(store,[t],'2026-10-20','baostock')
+    assert len(original['matches'])==1 and len(original['evaluations'])==3
+    t=store.save_shape_template(dict(t,tracking=True),t['revision'])
+    save_dataset(store,'600000',frame('top_reversal'),'baostock','qfq')
+    resumed=scan(store,[t],'2026-10-20','baostock',checkpoint=original['id'])
+    fresh=scan(store,[t],'2026-10-20','baostock')
+    assert resumed['timings']['score_reused']==2
+    assert resumed['matches'][0]['code']==fresh['matches'][0]['code']
+    assert resumed['matches'][0]['code']!='sh.600000'
+
+
+def test_watch_origin_failure_rolls_back_new_watch_and_never_rewrites_old_anchor(tmp_path,monkeypatch):
+    store=Store(tmp_path);save_dataset(store,'600000',frame(),'baostock','qfq')
+    report=scan(store,[template(store)],'2026-10-20','baostock')
+    from workbench import shape_store
+    write=shape_store.write_meta
+    def fail(store,key,value):
+        if key.startswith('shape_watch:'):raise OSError('磁盘保存失败')
+        return write(store,key,value)
+    monkeypatch.setattr(shape_store,'write_meta',fail)
+    with pytest.raises(OSError):store.watch_shape_match(report['id'],report['matches'][0]['id'])
+    assert not store.rows('SELECT * FROM watchlist')
+
+
+def test_future_template_cross_source_and_wrong_adjustment_are_explicit(tmp_path):
+    store=Store(tmp_path);identifier=save_dataset(store,'600000',frame(),'baostock','qfq')
+    rec=store.rows('SELECT * FROM datasets WHERE id=?',(identifier,))[0]
+    t=store.save_shape_template(dict(name='案例',kind='case',path=[1,2,3],origin=dict(
+        dataset_id=identifier,sha256=rec['sha256'],start='2026-07-01',cutoff='2026-08-03')))
+    with pytest.raises(ValueError,match='之后'):scan(store,[t],'2026-08-01','baostock')
+    with pytest.raises(ValueError,match='来源不同'):scan(store,[t],'2026-10-20','tickflow')
+    save_dataset(store,'000001',frame(),'baostock','hfq')
+    report=scan(store,[template(store)],'2026-10-20','baostock')
+    assert report['status']=='partial' and '复权' in report['errors'][0]['reason']
+
+
+def test_crash_checkpoint_is_immutable_and_can_continue(tmp_path,monkeypatch):
+    store=Store(tmp_path)
+    for code in ('600000','600001'):save_dataset(store,code,frame(),'baostock','qfq')
+    t=template(store);clock=[0]
+    def monotonic():clock[0]+=6;return clock[0]
+    monkeypatch.setattr('workbench.shape_scan.time.monotonic',monotonic)
+    checkpoints=[]
+    report=scan(store,[t],'2026-10-20','baostock',on_checkpoint=checkpoints.append)
+    assert checkpoints
+    saved=store.shape_run(checkpoints[0]);assert saved['status']=='checkpoint'
+    resumed=scan(store,[t],'2026-10-20','baostock',checkpoint=checkpoints[0])
+    assert resumed['status']=='completed' and resumed['timings']['score_reused']>=1
+    assert len(store.shape_runs())>=4
+    assert store.shape_run(report['id'])['timings']['save']>0
+
+
+def test_template_tampering_is_not_silently_reused(tmp_path):
+    store=Store(tmp_path);t=template(store)
+    value=dict(t,path=[0,1,0])
+    store.execute('UPDATE meta SET value=? WHERE key=?',(json.dumps(value),f"shape_template:{t['id']}:{t['version']}"))
+    with pytest.raises(ValueError,match='校验'):store.shape_templates()
+
+
+def test_completed_market_job_automatically_tracks_without_extending_its_receipt(tmp_path,monkeypatch):
+    from workbench.service import Service
+    store=Store(tmp_path);save_dataset(store,'600000',frame(),'baostock','qfq')
+    template(store,tracking=True)
+    service=Service(store);runner=service.shape_tasks()
+    monkeypatch.setattr(service,'_sync',lambda job,spec:dict(complete=True,source='baostock',asof='2026-10-20'))
+    job=service.submit('sync',dict(source='baostock',resume=True))
+    deadline=time.monotonic()+10
+    try:
+        while time.monotonic()<deadline and runner.status().get('state')!='completed':time.sleep(.02)
+        assert runner.status()['state']=='completed'
+        original=store.rows('SELECT status,result FROM jobs WHERE id=?',(job,))[0]
+        assert original['status']=='completed'
+        assert json.loads(original['result'])==dict(complete=True,source='baostock',asof='2026-10-20')
+        assert not store.rows('SELECT * FROM observations') and not store.rows('SELECT * FROM plans')
+    finally:runner.close();service.pool.shutdown()

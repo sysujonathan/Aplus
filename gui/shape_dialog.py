@@ -32,9 +32,17 @@ class ShapeDialog(tk.Toplevel):
         self.current = None
         self.points,self.path = [],None
         self.screenshot,self.photo,self.crop = None,None,None
-        self._last_run = None
+        self._last_run = self.runner.status().get('run_id')
         self._timer = None
         self._rows = {}
+        self._case_image = None
+        if case and not str(case.get('id','')).startswith('shared:'):
+            try:
+                original=self.store.pa_case(case['id'],touch=False)
+                images=original.get('images') or []
+                if images:self._case_image=self.store.pa_image(images[0]['id'])
+            except (ValueError,KeyError,OSError):
+                pass  # Real OHLC association remains available without an image.
         from .data import latest_market_date
         self.asof = '-'.join(asof_filter) if asof_filter and all(asof_filter) else latest_market_date(store,'daily',self.source)
         self.name = tk.StringVar(value=case.get('title','案例模板') if case else TEMPLATES['w_bottom'][0])
@@ -64,8 +72,10 @@ class ShapeDialog(tk.Toplevel):
         header.grid(row=0,column=0,sticky=tk.EW)
         ttk.Label(header,text='本地形态捕手',font=('Microsoft YaHei UI',15,'bold')).pack(side=tk.LEFT)
         ttk.Label(header,text=f"研究 · {SOURCES[self.source]} · 匹配截止 {self.asof or '暂无行情'}",foreground=MUTED).pack(side=tk.RIGHT)
-        body = ttk.Frame(self,padding=(16,0,16,8))
-        body.grid(row=1,column=0,sticky=tk.NSEW)
+        self.workspace = ttk.Notebook(self)
+        self.workspace.grid(row=1,column=0,sticky=tk.NSEW,padx=12,pady=(0,12))
+        body = ttk.Frame(self.workspace,padding=(12,12,12,8))
+        self.workspace.add(body,text='模板与每日跟踪')
         body.columnconfigure(1,weight=1)
         body.rowconfigure(0,weight=1)
         saved = ttk.Frame(body,width=210)
@@ -76,6 +86,8 @@ class ShapeDialog(tk.Toplevel):
         self.saved.heading('name',text='模板');self.saved.heading('track',text='跟踪')
         self.saved.column('name',width=160);self.saved.column('track',width=40,stretch=False)
         self.saved.grid(row=1,column=0,sticky=tk.NSEW)
+        from .tree_scroll import attach_vertical_scrollbar
+        attach_vertical_scrollbar(saved,self.saved,row=1)
         self.saved.bind('<<TreeviewSelect>>',self._select_template)
         ttk.Button(saved,text='新建模板',command=self._new).grid(row=2,column=0,sticky=tk.EW,pady=5)
         self.form = form = ttk.Frame(body)
@@ -104,6 +116,7 @@ class ShapeDialog(tk.Toplevel):
         ttk.Label(self.classic_page,text='文字入口映射六类经典形态；复杂结构请从案例行情或手绘建立。',foreground=MUTED,wraplength=600).pack(anchor=tk.W)
         self.classic_canvas = tk.Canvas(self.classic_page,height=130,bg=PANEL_BG,highlightthickness=0)
         self.classic_canvas.pack(fill=tk.BOTH,expand=True,pady=8)
+        self.classic_canvas.bind('<Configure>',lambda e:self._resize_preview(e.widget))
         self._case_form()
         self._drawing_form()
         parameters = ttk.Frame(form);parameters.grid(row=2,column=0,sticky=tk.EW,pady=(8,0))
@@ -119,8 +132,11 @@ class ShapeDialog(tk.Toplevel):
         ttk.Checkbutton(actions,text='行情更新后每日跟踪',variable=self.track).pack(side=tk.LEFT)
         ttk.Button(actions,text='保存模板',command=self._save).pack(side=tk.RIGHT,padx=(5,0))
         ttk.Button(actions,text='保存并匹配',command=self._search,bootstyle='primary').pack(side=tk.RIGHT)
-        bottom = ttk.Frame(self,padding=(16,0,16,12))
-        bottom.grid(row=2,column=0,sticky=tk.EW);bottom.columnconfigure(0,weight=1)
+        bottom = ttk.Frame(self.workspace,padding=12)
+        self.results_page = bottom
+        self.workspace.add(bottom,text='匹配结果与历史')
+        bottom.columnconfigure(0,weight=1)
+        bottom.rowconfigure(3,weight=1)
         self.progress = ttk.Progressbar(bottom,mode='determinate')
         self.progress.grid(row=0,column=0,columnspan=2,sticky=tk.EW,pady=4)
         ttk.Label(bottom,textvariable=self.status,foreground=MUTED,wraplength=850).grid(row=1,column=0,sticky=tk.W)
@@ -132,10 +148,12 @@ class ShapeDialog(tk.Toplevel):
         self.history.pack(side=tk.LEFT,fill=tk.X,expand=True,padx=8)
         self.history.bind('<<ComboboxSelected>>',self._open_history)
         ttk.Button(history,text='继续未完成匹配',command=self._resume).pack(side=tk.RIGHT)
-        self.results = ttk.Treeview(bottom,columns=('code','template','score','date'),show='headings',height=5)
+        result_host=ttk.Frame(bottom)
+        result_host.grid(row=3,column=0,columnspan=2,sticky=tk.NSEW,pady=4)
+        self.results=ttk.Treeview(result_host,columns=('code','template','score','date'),show='headings')
         for col,label,width in (('code','标的',130),('template','模板',250),('score','相似度',80),('date','匹配截止',120)):
             self.results.heading(col,text=label);self.results.column(col,width=width)
-        self.results.grid(row=3,column=0,columnspan=2,sticky=tk.EW,pady=4)
+        attach_vertical_scrollbar(result_host,self.results)
         bar = ttk.Frame(bottom);bar.grid(row=4,column=0,columnspan=2,sticky=tk.EW)
         ttk.Button(bar,text='在公共匹配列表查看',command=self._show_results).pack(side=tk.RIGHT)
         ttk.Button(bar,text='候选／原案例双图',command=self._compare).pack(side=tk.RIGHT,padx=5)
@@ -150,9 +168,15 @@ class ShapeDialog(tk.Toplevel):
             ttk.Label(line,text=label,width=14).pack(side=tk.LEFT)
             ttk.Entry(line,textvariable=var).pack(side=tk.LEFT,fill=tk.X,expand=True)
         ttk.Button(self.case_page,text='读取本地行情并预览（默认最近60根）',command=self._preview_case).pack(anchor=tk.W,pady=8)
+        if self.case:
+            bar=ttk.Frame(self.case_page);bar.pack(fill=tk.X,pady=3)
+            ttk.Button(bar,text='查看案例原图与标注',command=self._open_case).pack(side=tk.LEFT)
+            if self._case_image:
+                ttk.Button(bar,text='沿原案例截图描绘',command=self._trace_case).pack(side=tk.LEFT,padx=6)
         ttk.Label(self.case_page,text='日期格式 YYYY-MM-DD。截止K线须为案例当时可见的最后一根；不使用其后走势。\n无法关联本地真实行情时，请使用手绘轮廓，不会凭截图编造OHLC。',foreground=MUTED,wraplength=590).pack(anchor=tk.W)
         self.case_canvas = tk.Canvas(self.case_page,height=110,bg=PANEL_BG,highlightthickness=0)
         self.case_canvas.pack(fill=tk.BOTH,expand=True,pady=8)
+        self.case_canvas.bind('<Configure>',lambda e:self._resize_preview(e.widget))
 
     def _drawing_form(self):
         bar = ttk.Frame(self.draw_page);bar.pack(fill=tk.X)
@@ -171,12 +195,17 @@ class ShapeDialog(tk.Toplevel):
         ttk.Label(self.draw_page,text='从左往右手绘；截图先框选主价格区，再识别或沿原图描绘。识别轮廓须人工核对确认。',foreground=MUTED,wraplength=600).pack(anchor=tk.W)
 
     def _draw_path(self,canvas,path):
+        canvas._shape_preview=list(path)
         canvas.delete('preview')
-        self.update_idletasks()
-        width,height = max(200,canvas.winfo_width()),max(80,canvas.winfo_height())
+        width,height = canvas.winfo_width(),canvas.winfo_height()
+        if min(width,height)<10:return
         values = normalize(path)
         points = [coordinate for i,y in enumerate(values) for coordinate in (12+i*(width-24)/(len(values)-1),height-12-float(y)*(height-24))]
         canvas.create_line(*points,fill=ACCENT,width=2,tags='preview')
+
+    def _resize_preview(self,canvas):
+        if getattr(canvas,'_shape_preview',None):
+            self._draw_path(canvas,canvas._shape_preview)
 
     def _classic_changed(self,_event=None):
         self.name.set(self.classic_key.get())
@@ -222,7 +251,20 @@ class ShapeDialog(tk.Toplevel):
 
     def _new(self):
         self.current = None;self.name.set('新形态模板');self.track.set(False)
+        self.case = None
+        self.points,self.path = [],None
+        self.screenshot,self.photo,self.crop = None,None,None
+        self.draw_canvas.delete('all')
         self.saved.selection_remove(*self.saved.selection())
+
+    def _open_case(self):
+        from .growth_space import open_shape_case
+        self.master._case_comparisons.append(open_shape_case(self.master,self.store,self.case['id']))
+
+    def _trace_case(self):
+        if not self._case_image:return
+        self.tabs.select(self.draw_page)
+        self._image_bytes(self._case_image)
 
     def _load_templates(self):
         self.templates = self.store.shape_templates()
@@ -235,6 +277,8 @@ class ShapeDialog(tk.Toplevel):
         if not selection:return
         self.current = next(t for t in self.templates if t['id']==selection[0])
         t = self.current
+        self.points=[];self.screenshot=None;self.photo=None;self.crop=None
+        self.draw_canvas.delete('all')
         self.name.set(t['name']);self.track.set(t['tracking'])
         self.window.set(str(t['settings']['window']));self.threshold.set(str(t['settings']['threshold']));self.topn.set(str(t['settings']['topn']))
         config=t['settings']
@@ -275,7 +319,8 @@ class ShapeDialog(tk.Toplevel):
             path = drawing_path(self.points) if self.points else self.path
             if path is None:raise ValueError('请先绘制轮廓或识别截图')
             definition=dict(kind='screenshot' if self.screenshot else 'drawing',path=path,
-                            origin=dict(image_sha256=getattr(self,'image_sha',None),method=getattr(self,'image_method','manual-contour')))
+                            origin=dict(image_sha256=getattr(self,'image_sha',None),method=getattr(self,'image_method','manual-contour'),
+                                        case_id=(self.case or {}).get('id')))
         definition.update(name=self.name.get(),tracking=self.track.get(),settings=self._settings())
         if self.current:definition['id']=self.current['id']
         return definition
@@ -319,6 +364,7 @@ class ShapeDialog(tk.Toplevel):
         if identifier:self._display_run(identifier)
 
     def _display_run(self,identifier):
+        self.workspace.select(self.results_page)
         self.report=self.store.shape_run(identifier)
         self._view_run=identifier
         label=next((k for k,v in self._history_map.items() if v==identifier),'')
@@ -338,8 +384,13 @@ class ShapeDialog(tk.Toplevel):
         self.status.set(f"{self.report['asof']} · {self.report['status']} · {len(self.report['matches'])} 项 · 跳过 {len(self.report['skipped'])} / 错误 {len(self.report['errors'])}")
 
     def _resume(self):
-        if not hasattr(self,'report'):return
-        try:self.runner.submit(self.report['templates'],self.report['asof'],self.report['source'],checkpoint=self.report['id'])
+        try:
+            if hasattr(self,'report'):
+                self.runner.submit(self.report['templates'],self.report['asof'],self.report['source'],checkpoint=self.report['id'])
+            else:
+                status=self.runner.status()
+                if not status.get('spec'):raise ValueError('没有未完成任务，可保存模板后重新匹配')
+                self.runner.submit(**status['spec'],checkpoint=status.get('checkpoint'))
         except Exception as exc:self.status.set(str(exc))
 
     def _selected(self):
@@ -349,12 +400,16 @@ class ShapeDialog(tk.Toplevel):
     def _watch(self):
         row=self._selected()
         if row:
-            self.store.watch_shape_match(row['run_id'],row['id'])
-            self.master.watch.reload();self.status.set('已加入公共关注；没有创建交易计划')
+            try:
+                self.store.watch_shape_match(row['run_id'],row['id'])
+                self.master.watch.reload();self.status.set('已加入公共关注；没有创建交易计划')
+            except Exception as exc:self.status.set(str(exc))
 
     def _compare(self):
         row=self._selected()
-        if row and self.on_compare:self.on_compare(row)
+        if row and self.on_compare:
+            self.on_compare(row)
+            self.master.lift()
 
     def _show_results(self):
         if hasattr(self,'report') and self.on_results:
@@ -366,18 +421,21 @@ class ShapeDialog(tk.Toplevel):
         try:
             from pathlib import Path
             data=Path(path).read_bytes()
-            if len(data)>15*1024*1024:raise ValueError('截图超过15MB，请先裁切')
-            image=Image.open(io.BytesIO(data));image.load()
-            self.screenshot=image.convert('RGB');self.image_sha=digest(data)
-            self.points=[];self.path=None;self.crop=None
-            self.draw_canvas.delete('all')
-            self.update_idletasks()
-            shown=self.screenshot.copy();shown.thumbnail((self.draw_canvas.winfo_width(),self.draw_canvas.winfo_height()))
-            self._image_scale=self.screenshot.width/shown.width
-            self.photo=ImageTk.PhotoImage(shown,master=self)
-            self.draw_canvas.create_image(0,0,image=self.photo,anchor=tk.NW,tags='background')
-            self.status.set('请框选不含成交量／标注／坐标的价格区，再尝试识别或描绘。')
+            self._image_bytes(data)
         except Exception as exc:self.status.set(str(exc))
+
+    def _image_bytes(self,data):
+        if len(data)>15*1024*1024:raise ValueError('截图超过15MB，请先裁切')
+        image=Image.open(io.BytesIO(data));image.load()
+        self.screenshot=image.convert('RGB');self.image_sha=digest(data)
+        self.points=[];self.path=None;self.crop=None
+        self.draw_canvas.delete('all')
+        self.update_idletasks()
+        shown=self.screenshot.copy();shown.thumbnail((self.draw_canvas.winfo_width(),self.draw_canvas.winfo_height()))
+        self._image_scale=self.screenshot.width/shown.width
+        self.photo=ImageTk.PhotoImage(shown,master=self)
+        self.draw_canvas.create_image(0,0,image=self.photo,anchor=tk.NW,tags='background')
+        self.status.set('只描绘截止标注之前的走势；框选不含成交量／坐标的价格区。确认时不得包含后续走势。')
 
     def _clear_drawing(self):
         self.points=[];self.path=None;self.draw_canvas.delete('trace');self.draw_canvas.delete('preview')
