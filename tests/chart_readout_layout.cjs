@@ -24,10 +24,12 @@ const context = vm.createContext({
   indicatorSettings:{ema:true, ema_offset:0, ema_color:'#ff9800'}, ema:[15,17.32],
   ctx:{save(){}, restore(){}, setLineDash(){}, beginPath(){}, moveTo(x,y){segments.push([x,y]);},
        lineTo(x,y){segments.push([x,y]);}, stroke(){}},
-  priceTag:(ctx,text,y,color)=>tags.push({text,y,color}),
+  priceTag:(ctx,text,y,color,width,right,subtitle)=>tags.push({text,y,color,subtitle}),
 });
 vm.runInContext([
   extract('drawing-settings.js','chartPrice'),
+  extract('drawing-settings.js','barCloseCountdown'),
+  extract('drawing-settings.js','currentPriceCountdown'),
   extract('drawing-settings.js','layoutAxisPriceTags'),
   extract('drawing-settings.js','drawAxisPriceTags'),
   extract('prototype.js','updateReadout'),
@@ -59,6 +61,44 @@ for (const ys of [[20,20.1],[540,541],[10,300,1000],[100,100,100,100,100]]) {
   for(let i=1;i<result.length;i++)assert.ok(result[i].labelY-result[i-1].labelY>=22);
 }
 
+const market = {sessions:[[570,690],[780,900]],days:{
+  '2026-11-06':true, '2026-11-07':false, '2026-11-30':true,
+  '2026-09-24':true, '2026-09-25':false,
+}};
+const countdown = (unit, stamp, now) =>
+  context.barCloseCountdown(unit,stamp,market,Date.parse(now.replace(' ','T')+'+08:00'));
+for (const [unit, previous, expected] of [
+  ['m1','10:01','00:40'], ['m5','10:00','03:40'], ['m15','10:00','13:40'],
+  ['m30','10:00','28:40'], ['m60','10:30','28:40'],
+]) {
+  assert.equal(countdown(unit,`2026-11-06 ${previous}`,'2026-11-06 10:01:20'),expected);
+  assert.equal(countdown(unit,'2026-11-06 11:30','2026-11-06 11:42:29'),'');
+}
+assert.equal(countdown('m5','2026-11-06 13:05','2026-11-06 13:00:00'),'05:00');
+assert.equal(countdown('m5','2026-11-06 14:55','2026-11-06 15:00:00'),'');
+assert.equal(countdown('m1','2026-11-06 09:55','2026-11-06 10:01:20'),'');
+assert.equal(countdown('daily','2026-11-06','2026-11-06 11:42:29'),'03:17:31');
+assert.equal(countdown('daily','2026-11-06','2026-11-06 15:00:00'),'');
+assert.equal(countdown('weekly','2026-09-25','2026-09-24 10:00:00'),'05:00:00');
+assert.equal(countdown('monthly','2026-11-30','2026-11-07 10:00:00'),'23d 5h');
+assert.equal(countdown('monthly','2026-09-30','2026-09-24 10:00:00'),'');
+
+context.chartBoot.barClock = market;
+context.bars[1].date = '2026-11-06';
+context.view.rows[0].date = '2026-11-06';
+const now = Date.parse('2026-11-06T11:42:29+08:00');
+assert.equal(context.currentPriceCountdown(context.view,now),'03:17:31');
+context.replayActive = true;
+assert.equal(context.currentPriceCountdown(context.view,now),'');
+context.replayActive = false;
+context.view.rows[0].date = '2026-11-05';
+assert.equal(context.currentPriceCountdown(context.view,now),'');
+tags = [];
+vm.runInContext("drawAxisPriceTags(ctx,view,'03:17:31')",context);
+assert.equal(tags.find(tag=>tag.text==='17.40').subtitle,'03:17:31');
+assert.equal(tags.find(tag=>tag.text==='17.32').subtitle,'');
+assert.ok(tags[1].y-tags[0].y>=36,'two-line price tag reserves room beneath it');
+
 context.chartBoot.priceStep = 0.001;
 context.activeTimeframeUnit = 'm5';
 context.bars = [
@@ -72,4 +112,4 @@ vm.runInContext('updateReadout(bars[1])',context);
 assert.deepEqual(ohlc(),['2.142','2.142','2.138','2.139']);
 assert.ok([...elements.values()].some(node => node.textContent === '-0.003 (-0.14%)'));
 
-console.log(JSON.stringify({ok:true, historicalAndLatestReadouts:true, axisLabelsSeparated:true, etfOhlc:true}));
+console.log(JSON.stringify({ok:true, historicalAndLatestReadouts:true, axisLabelsSeparated:true, etfOhlc:true, countdown:true}));

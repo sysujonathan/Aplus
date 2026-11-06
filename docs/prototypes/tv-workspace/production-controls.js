@@ -372,7 +372,16 @@ setInterval(async()=>{
   finally {alertPolling=false;}
 },5000);
 setInterval(() => {
-  document.querySelector('.clock').textContent = new Intl.DateTimeFormat('zh-CN', {timeZone:'Asia/Shanghai', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}).format(new Date()) + ' UTC+8';
+  const now = new Date();
+  document.querySelector('.clock').textContent = new Intl.DateTimeFormat('zh-CN', {timeZone:'Asia/Shanghai', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}).format(now) + ' UTC+8';
+  const view = canvas._view;
+  if (!view || !chartBoot.barClock || document.hidden) return;
+  const countdown = currentPriceCountdown(view, now.getTime());
+  if (countdown === view.barCloseText) return;
+  view.barCloseText = countdown;
+  const ctx = foregroundCanvas.getContext('2d');
+  ctx.clearRect(view.width-view.right, 0, view.right, view.height-view.bottom);
+  drawAxisPriceTags(ctx, view, countdown);
 }, 1000);
 
 // Native candidate/watch lists are the navigation source, never the prototype's fake list.
