@@ -270,8 +270,8 @@
     const a=S.boot.shared_status||{},shared=c.status==='shared';
     const edit=!locked&&(!shared||a.writable),reason=locked?'完成当前判断后可管理案例':'需要公共库写入权限';
     const items=caseAction(c,'edit','编辑资料',edit,reason)+(shared
-      ? (a.admin?caseAction(c,'visibility',c.hidden?'恢复案例':'下架（从 Aplus 移除）',!locked&&a.writable,reason):'<span class="micro">下架与恢复仅管理员可用</span>')
-      : caseAction(c,'publish','发布到公共案例',!locked&&a.connected&&a.writable,locked?reason:'请先连接有写入权限的 Google 账号')+caseAction(c,'delete','删除本机案例',!locked,reason));
+      ? (a.admin?caseAction(c,'visibility',c.hidden?'恢复案例':'下架公共案例',!locked&&a.writable,reason):'<span class="micro">下架与恢复仅管理员可用</span>')
+      : caseAction(c,'publish','发布到公共案例',!locked&&a.connected&&a.writable,locked?reason:'请先连接有写入权限的 Google 账号')+caseAction(c,'delete','从本机案例库移除',!locked,reason));
     return `<div class="case-menu-host"><button class="btn small case-menu-trigger" data-action="case-menu" aria-label="案例管理" aria-expanded="false">···</button><div class="case-menu" hidden>${items}</div></div>`;
   }
   function applyCaseUpdate(c) {
@@ -316,12 +316,12 @@
   }
   async function deleteLocalCase() {
     const c=S.case;
-    if(!window.confirm(`删除本机案例“${caseTitle(c)}”？\n该案例及其本机研究记录将移除，原图文件保留在本机。已发布的公共版本与账号历史不受影响。`))return;
+    if(!window.confirm(`从本机案例库移除“${caseTitle(c)}”？\n该案例及其本机研究记录将移除，原图文件与恢复资料保留在本机。已发布的公共版本与账号历史不受影响。`))return;
     S.saving++;let committed=false;
     try {
       const result=await api('delete_case',c.id);if(!result.deleted)throw Error('未收到删除确认');committed=true;
-      forgetCase(c.id);await refreshData();if(S.page==='library')await search(false);toast('本机案例已删除，原图文件保留在本机');
-    } catch(e){toast(committed?'本机案例已删除，列表尚未刷新：'+e.message:e.message,true);}finally{S.saving--;}
+      forgetCase(c.id);await refreshData();if(S.page==='library')await search(false);toast('案例已从本机案例库移除，原图和恢复资料仍保留');
+    } catch(e){toast(committed?'案例已从本机案例库移除，列表尚未刷新：'+e.message:e.message,true);}finally{S.saving--;}
   }
   function card(c) {
     const src = thumbOf(c);
@@ -566,7 +566,7 @@
       S.dirtyMetadata = false;
     }
     S.caseSeq++;
-    S.overlay = null; S.original = null;
+    S.overlay = null; S.original = null; S.editSession = null;
     $('#overlay-root').innerHTML = '';
     const context=S.actionContext;S.actionContext=null;
     if(context){
@@ -685,6 +685,7 @@
     }
   }
   function editCase() {
+    S.editSession = {caseId:S.case.id};
     S.dirtyMetadata = false;
     S.editVersion = S.case.revision_version;
     const form = S.case.status==='shared' ? `<div id="metadata-form" class="capture-form"><label class="field-label">标题</label><input class="field" data-meta="title" value="${esc(S.case.title||'')}"><label class="field-label">案例描述</label><textarea class="field" data-meta="memory">${esc(S.case.memory||'')}</textarea><label class="field-label">关键词</label><input class="field" data-meta="keywords" value="${esc((S.case.keywords||[]).join('，'))}">${termPicker(S.case)}</div>` : metadataForm(S.case,'metadata-form');
@@ -710,8 +711,15 @@
     const id=S.case.id, pane=S.studyPane, index=S.imageIndex;
     if(!S.actionContext&&S.overlay&&!closeOverlay())return;
     if(S.actionContext){
+      const context=S.actionContext, session=S.editSession, seq=S.caseSeq;
+      const current=()=>S.overlay==='metadata'&&S.actionContext===context&&S.editSession===session&&S.caseSeq===seq&&S.case?.id===id;
+      if(!current())return;
       if(S.dirtyMetadata&&!window.confirm('资料尚未保存。放弃修改并重新加载？'))return;
-      await api('refresh_shared');S.case=(await api('get_case',id)).case;S.actionContext.updated=S.case;editCase();return;
+      await api('refresh_shared');
+      if(!current())return;
+      const result=await api('get_case',id);
+      if(!current())return;
+      S.case=result.case;context.updated=S.case;editCase();return;
     }
     await api('refresh_shared');
     await refreshData();

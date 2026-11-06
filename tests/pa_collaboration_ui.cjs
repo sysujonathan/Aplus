@@ -5,8 +5,8 @@ const el=k=>{if(!elements.has(k))elements.set(k,{innerHTML:'',style:{},scrollTop
 let requestSerial=0;
 const ctx=vm.createContext({setTimeout,clearTimeout,crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener:(name,fn)=>events[name]=fn},console});
 const source=fs.readFileSync(require('node:path').join(__dirname,'../gui/pa_growth/growth.js'),'utf8');
-vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,growth,saveComment,card,caseActions,caseCommand,saveMetadata,publishCase,closeOverlay,renderOriginal,dispatch,setQuickHooks:h=>{if(h.refresh)refreshData=h.refresh;if(h.search)search=h.search;if(h.form)readMetadata=h.form;if(h.viewer)renderOriginal=h.viewer;if(h.images)requestVisibleImage=h.images;},setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
-if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')&&!process.argv.includes('--quick-actions')) {
+vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,growth,saveComment,card,caseActions,caseCommand,saveMetadata,publishCase,closeOverlay,reloadCase,renderOriginal,dispatch,setQuickHooks:h=>{if(h.refresh)refreshData=h.refresh;if(h.search)search=h.search;if(h.form)readMetadata=h.form;if(h.viewer)renderOriginal=h.viewer;if(h.images)requestVisibleImage=h.images;},setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
+if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')&&!process.argv.includes('--quick-actions')&&!process.argv.includes('--reload-session')) {
 const {S,navigation,library,study,studyPane}=ctx.window.test;
 assert.equal(S.page,'library');navigation();
 const nav=el('#navigation').innerHTML;
@@ -18,8 +18,9 @@ assert(html.includes('继续研究 · Continue me')&&html.includes('Ctrl+V'));
 S.filterOpen=true;html=library();assert(html.includes('已下架'));
 const c={id:'shared:case',title:'Public',status:'shared',contributor:{name:'Contributor'},images:[{id:'image'}],comments:[{author:{name:'Member'},created:'2026-11-05',text:'<script>bad</script>'}],history:[],original_metadata:{}};
 S.case=c;S.studyPane='memory';html=study();
-assert(html.includes('公共留言')&&html.includes('个人笔记')&&html.includes('编辑资料')&&html.includes('下架（从 Aplus 移除）'));
-S.boot.shared_status.admin=false;assert(!study().includes('下架（从 Aplus 移除）'));
+assert(html.includes('公共留言')&&html.includes('个人笔记')&&html.includes('编辑资料')&&html.includes('下架公共案例'));
+S.boot.shared_status.admin=false;assert(!study().includes('下架公共案例'));
+assert(ctx.window.test.caseActions({...c,status:'private_draft'}).includes('从本机案例库移除'));
 S.studyPane='comments';html=studyPane(c,[]);assert(html.includes('&lt;script&gt;bad&lt;/script&gt;')&&!html.includes('<script>bad'));
 S.studyPane='notes';html=studyPane(c,[]);assert(html.includes('仅本人可见')&&!html.includes('bad'));
 S.studyPane='history';assert(studyPane(c,[]).includes('Contributor'));
@@ -102,7 +103,7 @@ ctx.window.confirm=()=>true;
   assert(t.study().includes('案例管理')&&t.study().includes('data-command="edit"'));
   await caseCommand('edit',updated.id);assert.equal(S.page,'study');closeOverlay(true);
   S.boot.shared_status.admin=false;let shared=caseActions(publicCase);assert(shared.includes('data-command="edit"')&&!shared.includes('data-command="visibility"')&&!shared.includes('data-command="delete"'));
-  S.boot.shared_status.admin=true;assert(caseActions(publicCase).includes('下架（从 Aplus 移除）'));assert(caseActions({...publicCase,hidden:true}).includes('恢复案例'));
+  S.boot.shared_status.admin=true;assert(caseActions(publicCase).includes('下架公共案例'));assert(caseActions({...publicCase,hidden:true}).includes('恢复案例'));
   S.boot.shared_status.writable=false;assert(/data-command="edit"[^>]+disabled/.test(caseActions(publicCase)));assert(/data-command="visibility"[^>]+disabled/.test(caseActions(publicCase)));
   await caseCommand('edit',publicCase.id);assert.notEqual(S.overlay,'metadata');
   S.boot.shared_status={connected:true,writable:true,admin:false};S.page='library';S.overlay=null;
@@ -118,5 +119,45 @@ ctx.window.confirm=()=>true;
   const history=t.growth();assert(history.includes('Retained account history')&&!history.includes(`data-id="${updated.id}"`));
   assert(!source.includes('PA 成长空间'));
   console.log('quick case actions: card/viewer/detail, in-place edit, roles, publication feedback and deleted references passed');
+})().catch(e=>{console.error(e);process.exitCode=1;});
+}
+
+if(process.argv.includes('--reload-session')) {
+const {S,caseCommand,reloadCase,closeOverlay,setApi,setEffects,setQuickHooks}=ctx.window.test;
+const a={id:'shared:A',status:'shared',title:'CASE_A',memory:'A',keywords:[],topic_ids:[],images:[],revision_version:'A1'};
+const b={...a,id:'shared:B',title:'CASE_B',memory:'B',revision_version:'B1'};
+S.boot={shared_status:{connected:true,writable:true,admin:false}};S.page='library';
+setEffects();setQuickHooks({refresh:async()=>{},search:async()=>{}});ctx.window.confirm=()=>true;
+(async()=>{
+  for(const delayed of ['refresh_shared','get_case']) {
+    let release,loading=false;const calls=[];
+    setApi((method,id)=>{
+      calls.push([method,id]);
+      if(loading&&method===delayed&&(method!=='get_case'||id===a.id))return new Promise(r=>{release=r;});
+      return Promise.resolve(method==='get_case'?{case:id===a.id?a:b}:{});
+    });
+    await caseCommand('edit',a.id);loading=true;
+    const pending=reloadCase();await new Promise(r=>setImmediate(r));assert(release);
+    closeOverlay(true);await caseCommand('edit',b.id);
+    const context=S.actionContext,session=S.editSession,form=el('#overlay-root').innerHTML,version=S.editVersion;
+    release(delayed==='get_case'?{case:{...a,title:'LATE_A',revision_version:'A_LATE'}}:{});await pending;
+    assert.equal(S.case.id,b.id,`${delayed}: A must not replace B`);
+    assert.equal(S.actionContext,context);assert.equal(S.editSession,session);
+    assert.equal(S.editVersion,version);assert.equal(S.editVersion,'B1');
+    assert.equal(el('#overlay-root').innerHTML,form);assert.equal(S.actionContext.updated,undefined);
+    if(delayed==='refresh_shared')assert.equal(calls.filter(c=>c[0]==='get_case'&&c[1]===a.id).length,1,'stale refresh must not start the second request');
+    closeOverlay(true);
+  }
+  let calls=0,fresh=false;
+  setApi(async(method)=>{calls++;return method==='get_case'?{case:fresh?{...a,title:'FRESH_A',revision_version:'A2'}:a}:{};});
+  await caseCommand('edit',a.id);S.dirtyMetadata=true;
+  const oldSession=S.editSession,before=calls;
+  ctx.window.confirm=()=>false;await reloadCase();
+  assert.equal(calls,before,'declining discard keeps unsaved edits and sends no request');assert(S.dirtyMetadata);
+  fresh=true;ctx.window.confirm=()=>true;await reloadCase();
+  assert.equal(S.case.id,a.id);assert.equal(S.editVersion,'A2');assert.equal(S.actionContext.updated.title,'FRESH_A');
+  assert.equal(S.overlay,'metadata');assert(!S.dirtyMetadata);assert.notEqual(S.editSession,oldSession);
+  assert(el('#overlay-root').innerHTML.includes('FRESH_A'));
+  console.log('editor reload: delayed refresh/get-case cannot replace B; active A reload and unsaved prompt retained');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 }

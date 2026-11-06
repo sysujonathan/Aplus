@@ -568,7 +568,7 @@ class GrowthBridge:
     @guarded
     def delete_case(self, case_id):
         if str(case_id).startswith('shared:'):
-            raise ValueError('公共案例请使用管理员下架；不会删除 Google Drive 原件')
+            raise ValueError('公共案例删除尚未实现；管理员可选择下架，Google Drive 原件不会删除')
         return self._store.pa_delete_case(case_id)
 
     @guarded

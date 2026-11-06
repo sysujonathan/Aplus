@@ -345,3 +345,11 @@ def test_quick_case_management_in_real_webview():
     assert result.returncode == 0, result.stdout + result.stderr + detail
     receipt = json.loads((folder / 'quick-result.json').read_text(encoding='utf-8'))
     assert receipt['ok'] and receipt['real_webview'] and len(receipt['checks']) == 5
+
+
+def test_reload_case_discards_responses_for_closed_edit_session():
+    node = shutil.which('node')
+    assert node, 'Node required for production delayed editor reload'
+    result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs')), '--reload-session'],
+                            capture_output=True, text=True, encoding='utf-8', timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
