@@ -559,7 +559,7 @@ class Store:
 
     def load_ui_preferences(self, namespace):
         """Versioned view configuration; never a second trading-state store."""
-        if namespace not in ('watch_views', 'chart_layouts'):
+        if namespace not in ('watch_views', 'chart_layouts', 'chart_periods'):
             raise ValueError('未知界面设置')
         rows = self.rows('SELECT value FROM meta WHERE key=?', ('ui:' + namespace,))
         if not rows:
@@ -571,7 +571,7 @@ class Store:
         return document
 
     def save_ui_preferences(self, namespace, data, expected_revision, *, layout_copy=None):
-        if namespace not in ('watch_views', 'chart_layouts') or not isinstance(data, dict):
+        if namespace not in ('watch_views', 'chart_layouts', 'chart_periods') or not isinstance(data, dict):
             raise ValueError('未知界面设置')
         encoded = dumps(data)
         if len(encoded.encode('utf-8')) > 1024 * 1024:

@@ -23,7 +23,7 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
             self.loaded=True
             self._last_workspace_state=dict(token=self.token,identity=f'synthetic-{index}',
                 symbol=f'sh.60000{index}',timeframe='daily',asof='2026-11-04',tool='cross',
-                available=['daily','weekly','monthly']+(['m5','m60','m240'] if index else []),
+                available=['daily','weekly','monthly']+(['m1','m5','m15','m30','m60'] if index else []),
                 magnet=True,locked=False,hidden=False)
         def ready(self):return self.loaded
         def command(self,kind,value=None):
@@ -47,7 +47,20 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
         assert set(controls._layout_popup.choices)=={1,4,6,8,9}
         controls._layout_popup.choices[8].invoke()
         assert grid._shape==(2,4) and controls._layout_popup is None
-        assert [b.cget('text') for b in controls.period_buttons.values()]==['5分','1小时','天','周','月']
+        strip = controls.period_more.master
+        assert [b.cget('text') for b in strip.pack_slaves()]==['5分','1小时','天','周','月','⌄']
+        controls.period_more.invoke()
+        picker = controls._period_popup
+        assert list(picker.choices) == ['m1','m5','m15','m30','m60','daily','weekly','monthly']
+        picker.stars['m30'].invoke()
+        picker.stars['m1'].invoke()
+        assert picker.stars['m1'].cget('text') == '★'
+        assert [b.cget('text') for b in strip.pack_slaves()]==['1分','5分','30分','1小时','天','周','月','⌄']
+        assert store.load_ui_preferences('chart_periods')['data']['favorites'] == [
+            'm1','m5','m30','m60','daily','weekly','monthly']
+        picker.stars['m1'].invoke()
+        picker.stars['m30'].invoke()
+        controls._close_period_picker()
         for count in (1,4,9):
             grid.set_layout(count)
             for index,slot in enumerate(grid._slots):

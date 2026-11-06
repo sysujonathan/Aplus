@@ -52,6 +52,15 @@ svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-lineca
 .timeframes button:hover, .layout-name:hover { background: var(--hover); }
 .timeframes .active { background: var(--active); color: #fff; }
 .timeframes .disabled { color: #4f5157; cursor: not-allowed; text-decoration: none; }
+.period-picker { position: fixed; z-index: 80; min-width: 152px; max-height: 75vh; overflow: auto;
+  padding: 5px; border: 1px solid #303237; border-radius: 8px; background: #17191d; box-shadow: 0 4px 14px #0008; }
+.period-picker-row { display: flex; }
+.period-picker-row button { border: 0; border-radius: 5px; padding: 6px 9px; background: transparent; color: inherit; }
+.period-picker-row .period-choice { flex: 1; text-align: left; }
+.period-picker-row button:hover, .period-picker-row .active { background: var(--hover); }
+.period-picker-row button:disabled { opacity: .45; cursor: not-allowed; }
+.period-picker-row .period-star { color: #888d97; font-size: 17px; }
+.period-picker-row .period-star[aria-pressed="true"] { color: #fff; }
 .icon-button, .icon-label { height: 38px; min-width: 40px; padding: 0 8px; display: flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 7px; background: transparent; }
 .icon-button:hover, .icon-label:hover { background: var(--hover); }
 .icon-button.muted { color: #56585e; }

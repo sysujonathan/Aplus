@@ -16,6 +16,7 @@ def run(folder, manual=False, startup_delay=0):
     from gui.chart_shell import _materialize_page
     from workbench.store import Store
     from workbench.live_minutes import coarse_series
+    from workbench.workspace_layouts import load_period_favorites
 
     folder = Path(folder).resolve()
     folder.mkdir(parents=True, exist_ok=True)
@@ -32,7 +33,10 @@ def run(folder, manual=False, startup_delay=0):
     context = dict(frame=daily, minute_series=pd.DataFrame(minutes), code='sz.159570', timeframe='daily',
                    context_kind='watch', record=dict(source='test', adjustment='不复权'))
     context['hour_series'] = coarse_series(None, context['minute_series'], 60)
-    context['halfday_series'] = coarse_series(None, context['minute_series'], 240)
+    context['minute_series'].attrs['m1'] = [
+        dict(date=f'{day} {t//60:02d}:{t%60:02d}:00', open=10., high=11., low=9., close=10., volume=20.)
+        for day in days[-2:] for t in (*range(570, 691), *range(781, 901))
+    ]
     boot = workspace_boot(store, context)
     bridge = ChartBridge(store, boot)
     session = folder/'session.json'
@@ -75,8 +79,20 @@ def run(folder, manual=False, startup_delay=0):
             # New WebView user-data directories can cold-start slowly on CI.
             # Wait for the real event; this is a ceiling, not a fixed sleep.
             assert window.events.loaded.wait(45), 'native WebView page load exceeded 45 seconds'
-            wait("typeof placeDrawing==='function' && Boolean(canvas._view) && Boolean(window.pywebview?.api?.save_state)")
+            wait("typeof placeDrawing==='function' && Boolean(canvas._view) && Boolean(window.pywebview?.api?.save_state)"
+                 " && Boolean(window.pywebview?.api?.set_chart_period_favorite)")
             startup_delay_ms = window.evaluate_js('window.probeInjectedDelayMs || 0')
+            window.evaluate_js("document.querySelector('#periodPickerButton').click()")
+            check("document.querySelectorAll('#periodPicker .period-picker-row').length===8")
+            window.evaluate_js("document.querySelector('#periodPicker .period-picker-row:nth-child(4) .period-star').click()")
+            wait("!document.querySelector('[data-timeframe=m30]').hidden")
+            window.evaluate_js("document.querySelector('#periodPicker .period-picker-row:first-child .period-star').click()")
+            wait("!document.querySelector('[data-timeframe=m1]').hidden")
+            check("[...document.querySelectorAll('.timeframes [data-timeframe]:not([hidden])')].map(b=>b.dataset.timeframe).join()"
+                  "==='m1,m5,m30,m60,daily,weekly,monthly' && activeTimeframeUnit==='daily'")
+            assert load_period_favorites(store) == ['m1','m5','m30','m60','daily','weekly','monthly']
+            window.evaluate_js("document.querySelector('#periodPicker .period-choice').click()")
+            check("activeTimeframeUnit==='m1' && document.querySelector('#periodPicker').hidden")
             check("switchProductionTimeframe('m5',false)")
             window.evaluate_js('magnetEnabled=false;')
             kinds = ['fib', 'long', 'ray', 'trend', 'short', 'rectangle', 'up', 'down', 'arrow', 'path', 'channel']
@@ -94,7 +110,7 @@ def run(folder, manual=False, startup_delay=0):
             assert len(stored) == 11, f'first saved drawings: expected 11, got {len(stored)}'
             original = window.evaluate_js("JSON.stringify(userObjects.map(o=>({id:o.id,a:[o.a.date,o.a.value],b:[o.b.date,o.b.value],c:o.c&&[o.c.date,o.c.value],points:o.points?.map(p=>[p.date,p.value]),stop:o.stop})))")
             window.evaluate_js('window.probeCoordinates='+json.dumps(original)+';')
-            for unit in ('daily', 'weekly', 'monthly', 'm60', 'm240', 'm5'):
+            for unit in ('daily', 'weekly', 'monthly', 'm60', 'm30', 'm15', 'm1', 'm5'):
                 check(f"switchProductionTimeframe('{unit}')")
                 saved()
                 check("JSON.stringify(userObjects.map(o=>({id:o.id,a:[o.a.date,o.a.value],b:[o.b.date,o.b.value],c:o.c&&[o.c.date,o.c.value],points:o.points?.map(p=>[p.date,p.value]),stop:o.stop})))===window.probeCoordinates")

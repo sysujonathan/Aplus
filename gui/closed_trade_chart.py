@@ -293,8 +293,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_frame = None
         self._live_poller = MinutePoller(fetch=fetch)
         self._live_primed = False
-        # Eight months of provider-native 60-minute bars drive the hourly and
-        # half-day units' history; the live five-minute frame drives their tail.
+        # Provider-native 60-minute bars supply the hourly chart's history.
         self._hourly = (HourlyHistory(fetch=hourly_fetch or minute_fetch)
                         if hourly_fetch is not None or minute_fetch is not None else HourlyHistory())
         self._hour_after = None
@@ -312,7 +311,8 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             try:
                 # Same row shape the poller publishes, so the first tick after
                 # the prime compares like for like instead of re-sending it.
-                self._live_sent = _rows_key(minute_rows(primed))
+                self._live_sent = (_rows_key(minute_rows(primed)), str(primed.attrs.get('quote')),
+                                   primed.attrs.get('m1'))
             except ValueError:
                 self._live_sent = None
         super().__init__(parent, store, row, data=payload, interactive=interactive)
@@ -360,15 +360,13 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
 
     def _workspace_context(self):
         context = super()._workspace_context()
-        minute = self.data.get("minute_series")
+        minute = getattr(self, "_live_frame", None)
+        if minute is None:
+            minute = self.data.get("minute_series")
         if minute is not None:
-            from workbench.live_minutes import INTERVAL, coarse_series
-            history = self._hourly.history(self.data['code'])
+            from workbench.live_minutes import INTERVAL
             context["minute_series"] = minute
-            for key, minutes in (("hour_series", 60), ("halfday_series", 240)):
-                coarse = coarse_series(history, minute, minutes)
-                if coarse is not None and len(coarse):
-                    context[key] = coarse
+            context["hour_series"] = self._hourly.history(self.data['code'])
             context["display_timeframe"] = "daily"
             context["minute_interval"] = INTERVAL
         return context
@@ -460,7 +458,7 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_after = self.top.after(400, self._live_tick)
 
     def _publish_live(self, frame):
-        from workbench.live_minutes import coarse_series, minute_rows, live_metadata
+        from workbench.live_minutes import chart_minute_series, live_metadata, minute_rows
         try:
             rows = minute_rows(frame)
         except ValueError as exc:
@@ -469,22 +467,10 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
             return
         self._live_error = ""
         self._live_frame = frame
-        key = (_rows_key(rows), str(frame.attrs.get('quote')))
+        key = (_rows_key(rows), str(frame.attrs.get('quote')), frame.attrs.get('m1'))
         embedded = self._embedded
         if key != self._live_sent and embedded is not None and not embedded.closed():
-            series = {"m5": rows}
-            # The hourly and half-day units share the same transport: history
-            # from the provider's own 60-minute series, tail rebuilt from the
-            # five-minute frame that is already in hand. One polled request
-            # keeps all three units current.
-            for unit, minutes in (("m60", 60), ("m240", 240)):
-                coarse = coarse_series(self._hourly.history(self.data['code']), frame, minutes)
-                if coarse is None or not len(coarse):
-                    continue
-                try:
-                    series[unit] = minute_rows(coarse)
-                except ValueError:
-                    continue
+            series = chart_minute_series(frame, self._hourly.history(self.data['code']))
             payload = {"series": series,"live": live_metadata(frame)}
             if embedded.push_live(payload):
                 self._live_sent = key

@@ -109,7 +109,7 @@ def test_prototype_is_offline_and_contains_reviewed_states():
     } <= parser.ids
     # Every intraday period is a real button; none of them is a dead label.
     assert parser.minute_buttons == []
-    assert parser.timeframe_buttons == ['m5', 'm60', 'm240', 'daily', 'weekly', 'monthly']
+    assert parser.timeframe_buttons == ['m1', 'm5', 'm15', 'm30', 'm60', 'daily', 'weekly', 'monthly']
 
 
 def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():
@@ -125,7 +125,7 @@ def test_prototype_embeds_public_daily_bars_and_gap_visual_contract():
     assert "ctx.strokeStyle = '#cbd5e1'" in script
     assert "callout(ctx, 'Gap'," in script
     assert '--blue: #2962ff' in style
-    assert '5分钟行情接入后可用' in (PROTOTYPE / 'index.html').read_text(encoding='utf-8')
+    assert '分钟行情接入后可用' in (PROTOTYPE / 'index.html').read_text(encoding='utf-8')
     assert "ctx.setLineDash([6, 4])" in interactions
     assert "ctx.strokeStyle = '#cbd5e1'" in interactions
     assert "callout(ctx, 'Gap'," in interactions

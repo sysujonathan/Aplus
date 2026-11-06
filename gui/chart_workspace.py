@@ -32,7 +32,8 @@ from .theme import ACCENT, APP_BG, BORDER, CHART_BG, CONTROL_BG, MUTED, PANEL_BG
 TOOL_GLYPHS = dict(fib='≋', long='L↑', ray='↦', trend='╱', short='S↓', rectangle='□',
                    up='↑', down='↓', arrow='➚', path='⌁', channel='∥')
 DRAWING_LABELS = {**dict(TOOLS), 'text': '文字', 'ruler': '价格范围'}
-TF_LABELS = [('5m', '5分'), ('1h', '1小时'), ('4h', '4小时'),
+MINUTE_UNITS = {'1m': 'm1', '5m': 'm5', '15m': 'm15', '30m': 'm30', '1h': 'm60'}
+TF_LABELS = [('1m', '1分'), ('5m', '5分'), ('15m', '15分'), ('30m', '30分'), ('1h', '1小时'),
              ('daily', '日'), ('weekly', '周'), ('monthly', '月')]
 CONDITION_LABELS = {'above': '高于', 'below': '低于', 'cross_up': '向上穿越',
                     'cross_down': '向下穿越', 'cross': '任意穿越',
@@ -98,7 +99,8 @@ class ChartWorkspaceDialog:
 
     def __init__(self, parent, store, *, frame, record, code, name='', timeframe='daily',
                  payload=None, metadata=None, strategy=None, strategy_type='',
-                 instrument_type=None, holding_levels=(), replay_events=(), title='', display_timeframe=None):
+                 instrument_type=None, holding_levels=(), replay_events=(), title='', display_timeframe=None,
+                 minute_series=None, hour_series=None):
         self.store, self.code, self.name = store, str(code), str(name or '')
         self.record = dict(record or {})
         self.source = str(self.record.get('source') or 'unknown')
@@ -109,6 +111,10 @@ class ChartWorkspaceDialog:
         self.frame = self.base_frame
         self.base_timeframe = timeframe
         self.timeframe = timeframe if timeframe in dict(TF_LABELS) else 'daily'
+        self.minute_series = {}
+        if minute_series is not None and len(minute_series):
+            from workbench.live_minutes import chart_minute_series
+            self.minute_series = chart_minute_series(minute_series, hour_series)
         self.payload, self.metadata = dict(payload or {}), dict(metadata or {})
         self.strategy, self.strategy_type = strategy, strategy_type
         self.instrument_type = instrument_type
@@ -418,11 +424,11 @@ class ChartWorkspaceDialog:
                                         font=('Microsoft YaHei UI', 10, 'bold'), tags='overlay')
                 y += 23
             if settings.get('bar_count'):
-                state = '' if self.timeframe in ('5m', '1h', '4h') else '（切到真实分钟图显示）'
+                state = '' if self.timeframe in MINUTE_UNITS else '（切到真实分钟图显示）'
                 self.canvas.create_text(94, y, text=f"Bar Count Normal {settings['count_interval']} {state}",
                                         fill=settings['count_color'], anchor=tk.NW,
                                         font=('Microsoft YaHei UI', 10), tags='overlay')
-        if settings.get('bar_count') and self.timeframe in ('5m', '1h', '4h'):
+        if settings.get('bar_count') and self.timeframe in MINUTE_UNITS:
             candles, xs = self._info.get('candles', []), self._info.get('candle_x', [])
             if candles:
                 bars = pd.DataFrame(candles)
@@ -696,7 +702,13 @@ class ChartWorkspaceDialog:
             self.history.commit(doc); self._save(); self.selected_id = None; self.schedule_render()
 
     def change_timeframe(self, timeframe):
-        if timeframe in ('5m', '1h', '4h'):
+        live_rows = self.minute_series.get(MINUTE_UNITS.get(timeframe))
+        if live_rows:
+            self.frame = pd.DataFrame(live_rows)
+        elif timeframe in ('1m', '15m', '30m'):
+            messagebox.showinfo('周期不可用', '当前图表没有该周期的真实分钟行情。', parent=self.top)
+            return
+        elif timeframe in ('5m', '1h'):
             try:
                 frame, _ = self.store.load_chart_series(self.identity, '5m')
             except Exception as exc:
@@ -819,7 +831,7 @@ class ChartWorkspaceDialog:
         ttk.Checkbutton(fields, text='弱磁吸 OHLC', variable=magnet).grid(row=2,column=2,columnspan=3,sticky=tk.W)
         ttk.Label(fields, text='多空测算风险预算（分析假设）').grid(row=3,column=0,columnspan=4,sticky=tk.W,pady=(10,0))
         ttk.Entry(fields,textvariable=risk,width=12).grid(row=3,column=4,sticky=tk.W,pady=(10,0))
-        ttk.Label(fields, text='Bar Count 只在真实 5分／1小时／4小时 K 线上绘制；午休不重置，次交易日从 1 开始。',
+        ttk.Label(fields, text='Bar Count 只在真实分钟 K 线上绘制；午休不重置，次交易日从 1 开始。',
                   foreground=MUTED).grid(row=4,column=0,columnspan=8,sticky=tk.W,pady=10)
         def save():
             try:
@@ -1061,7 +1073,7 @@ class ChartWorkspaceDialog:
             raise ValueError('图表尚未完成绘制')
         image = self._image.convert('RGB').copy(); draw = ImageDraw.Draw(image, 'RGBA')
         settings = self.history.value['settings']
-        if not self.hide_indicators and settings.get('bar_count') and self.timeframe in ('5m','1h','4h'):
+        if not self.hide_indicators and settings.get('bar_count') and self.timeframe in MINUTE_UNITS:
             candles, xs = self._info.get('candles',[]), self._info.get('candle_x',[])
             for count,x,row in zip(session_counts(pd.DataFrame(candles)),xs,candles):
                 if count % int(settings['count_interval']) == 0:
@@ -1201,4 +1213,5 @@ def open_chart_workspace(parent, store, **context):
             )
     fallback = dict(context)
     fallback.pop('context_kind', None)
+    fallback.pop('minute_interval', None)
     return ChartWorkspaceDialog(parent, store, **fallback)

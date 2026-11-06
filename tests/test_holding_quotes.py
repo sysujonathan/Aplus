@@ -975,6 +975,15 @@ def test_holding_chart_publishes_verified_intraday_rows_once(tmp_path, quote_win
         assert pushes[-1]["series"]["m5"][-1]["volume"] == 1.8e5
         chart._publish_live(minute)             # identical frame is still deduplicated
         assert len(pushes) == 2
+        fine = minute.tail(2).assign(date=['2026-09-30 14:59', '2026-09-30 15:00']).to_dict('records')
+        minute.attrs['m1'] = fine
+        chart._publish_live(minute)
+        assert len(pushes) == 3
+        minute.attrs['m1'] = [{**fine[0], 'close': 10.88}, fine[1]]
+        chart._publish_live(minute)
+        assert len(pushes) == 4
+        assert pushes[-1]['series']['m5'] == pushes[-2]['series']['m5']
+        assert pushes[-1]['series']['m1'][0]['close'] == 10.88
     finally:
         lifecycle["closed"] = True
         chart.close()

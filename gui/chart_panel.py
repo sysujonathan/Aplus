@@ -362,8 +362,8 @@ class ChartPanel(native_ttk.Frame):
             in_session = session_status(moment, calendar) == "交易中"
             # The first read for a symbol happens even with the market shut: a
             # trader opening the watch list at noon or in the evening must still
-            # get the five-minute, hourly and half-day units instead of three
-            # dead buttons.  Only the repeat polling is limited to the session.
+            # get the available minute periods. Only repeat polling is limited
+            # to the session.
             auto = self._auto_quotes_enabled()
             read = ((not getattr(self, '_intraday_attempted', False)) or
                     (auto and should_read_intraday(loaded=self._intraday_loaded, in_session=in_session)))
@@ -383,7 +383,8 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_after = self.after(500, self._intraday_tick)
 
     def _publish_intraday(self, frame):
-        from workbench.live_minutes import coarse_series, minute_rows, live_metadata, expected_minute_close
+        from workbench.live_minutes import (chart_minute_series, expected_minute_close,
+                                            live_metadata, minute_rows)
         from workbench.holding_quotes import china_now
         embedded = self._embedded
         if embedded is None or embedded.closed():
@@ -396,21 +397,13 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_frame = frame
         metadata = live_metadata(frame)
         key = (tail['date'], len(rows), tail['open'], tail['high'], tail['low'], tail['close'], tail['volume'],
-               str(metadata.get('quote')))
+               str(metadata.get('quote')), frame.attrs.get('m1'))
         if key == self._intraday_sent:
             return
         if self._hourly is not None:
             self._hourly.request(self._code)
-        series = {"m5": rows}
-        for unit, minutes in (("m60", 60), ("m240", 240)):
-            history = self._hourly.history(self._code) if self._hourly is not None else None
-            coarse = coarse_series(history, frame, minutes)
-            if coarse is None or not len(coarse):
-                continue
-            try:
-                series[unit] = minute_rows(coarse)
-            except ValueError:
-                continue
+        history = self._hourly.history(self._code) if self._hourly is not None else None
+        series = chart_minute_series(frame, history)
         payload = {"series": series,"live": metadata}
         if embedded.push_live(payload):
             self._intraday_sent = key

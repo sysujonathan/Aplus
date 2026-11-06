@@ -5,13 +5,15 @@ from tkinter import simpledialog, messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.widgets import ToolTip
 
-from workbench.workspace_layouts import SHAPES, SYNC_KEYS, new_layout, validate_layout
+from workbench.workspace_layouts import (DEFAULT_PERIOD_FAVORITES, SHAPES, SYNC_KEYS, load_period_favorites,
+                                         new_layout, save_period_favorite, validate_layout)
 from .chart_items import ChartItem
 from .theme import APP_BG, CONTROL_BG, TEXT, MUTED
 from .workspace_icons import icon
 
-PERIOD_LABELS = {'daily':'日线', 'weekly':'周线', 'monthly':'月线', 'm5':'5分钟', 'm60':'1小时', 'm240':'4小时'}
-QUICK_PERIODS=(('m5','5分'),('m60','1小时'),('daily','天'),('weekly','周'),('monthly','月'))
+PERIOD_LABELS = {'m1':'1分钟', 'm5':'5分钟', 'm15':'15分钟', 'm30':'30分钟',
+                 'm60':'1小时', 'daily':'日线', 'weekly':'周线', 'monthly':'月线'}
+QUICK_PERIODS = dict(zip(PERIOD_LABELS, ('1分','5分','15分','30分','1小时','天','周','月')))
 RANGE_PRESETS=('1天','5天','1个月','3个月','6个月','YTD','1年','5年','全部')
 MAX_FAVORITE_LAYOUTS = 4
 
@@ -57,6 +59,9 @@ class WorkspaceControls:
         self.right = tk.Frame(self.top,autostyle=False,background=APP_BG)
         self.right.grid(row=0,column=1,sticky=tk.E)
         saved_favorites = saved['data'].get('toolbar', {})
+        self.favorite_periods = set(DEFAULT_PERIOD_FAVORITES)
+        self._reload_period_favorites()
+        self._period_popup = None
         favorite_ids = saved_favorites.get('favoriteLayouts', []) if isinstance(saved_favorites, dict) else []
         known_ids = {layout['id'] for layout in self.layouts}
         self.favorite_layouts = list(dict.fromkeys(
@@ -278,20 +283,104 @@ class WorkspaceControls:
         strip=tk.Frame(self.left_actions,autostyle=False,background=APP_BG)
         strip.pack(side=tk.LEFT,padx=(0,5))
         self.period_buttons={}
-        for period,label in QUICK_PERIODS:
+        for period,label in QUICK_PERIODS.items():
             button=tk.Button(strip,autostyle=False,text=label,foreground=TEXT,background=APP_BG,
                 activebackground=CONTROL_BG,activeforeground=TEXT,disabledforeground='#686D76',borderwidth=0,
                 font=('Microsoft YaHei UI',10),padx=5,pady=4,command=lambda p=period:self.select_period(p))
-            button.pack(side=tk.LEFT,padx=1)
             ToolTip(button,text=f'活动图周期：{PERIOD_LABELS[period]}',delay=650)
             self.period_buttons[period]=button
-        self.period_more=self._menu_button(strip,text='⌄')
-        self.period_options=self._menu(self.period_more)
-        for period,label in PERIOD_LABELS.items():
-            self.period_options.add_command(label=label,command=lambda p=period:self.select_period(p))
-        self.period_more.configure(menu=self.period_options)
+        self.period_more=tk.Button(strip,autostyle=False,text='⌄',foreground=TEXT,background=APP_BG,
+                                   borderwidth=0,padx=5,pady=4,command=self._open_period_picker)
+        self._pack_period_favorites()
         ToolTip(self.period_more,text='更多图表周期',delay=650)
         self._separator()
+
+    def _pack_period_favorites(self):
+        for button in (*self.period_buttons.values(), self.period_more):
+            button.pack_forget()
+        for period, button in self.period_buttons.items():
+            if period in self.favorite_periods:
+                button.pack(side=tk.LEFT,padx=1)
+        self.period_more.pack(side=tk.LEFT)
+
+    def _close_period_picker(self):
+        popup, self._period_popup = self._period_popup, None
+        if popup is not None:
+            popup.destroy()
+
+    def _period_focus_changed(self, popup):
+        focus = self.grid.focus_get()
+        if self._period_popup is popup and (focus is None or focus.winfo_toplevel() is not popup):
+            self._close_period_picker()
+
+    def _open_period_picker(self):
+        if self._period_popup is not None:
+            self._close_period_picker()
+            return
+        self._reload_period_favorites()
+        self._pack_period_favorites()
+        popup = self._period_popup = tk.Toplevel(self.grid, autostyle=False)
+        popup.withdraw()
+        popup.overrideredirect(True)
+        popup.configure(background='#17191D', padx=5, pady=5)
+        popup.choices, popup.stars = {}, {}
+        for period, label in PERIOD_LABELS.items():
+            row = tk.Frame(popup, autostyle=False, background='#17191D')
+            row.pack(fill=tk.X)
+            choice = tk.Button(row, autostyle=False, text=label, width=10, anchor=tk.W,
+                               borderwidth=0, foreground=TEXT, activebackground=CONTROL_BG,
+                               activeforeground=TEXT, pady=3, command=lambda p=period:self._choose_period(p))
+            choice.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            star = tk.Button(row, autostyle=False, width=3, borderwidth=0, background='#17191D',
+                             activebackground=CONTROL_BG, activeforeground=TEXT, pady=3,
+                             command=lambda p=period:self._toggle_period_favorite(p))
+            star.pack(side=tk.RIGHT)
+            ToolTip(star, text=f'在顶部显示或隐藏{label}', delay=650)
+            popup.choices[period], popup.stars[period] = choice, star
+        self._paint_period_picker(*getattr(self, '_period_visual', (None, (), False))[:2])
+        popup.update_idletasks()
+        x = min(self.period_more.winfo_rootx(), popup.winfo_screenwidth()-popup.winfo_reqwidth())
+        y = self.period_more.winfo_rooty()+self.period_more.winfo_height()+4
+        popup.geometry(f'+{max(0,x)}+{max(0,y)}')
+        popup.deiconify()
+        popup.lift()
+        popup.focus_force()
+        popup.bind('<Escape>', lambda _e:self._close_period_picker())
+        popup.bind('<FocusOut>', lambda _e:self.grid.after_idle(self._period_focus_changed,popup))
+
+    def _choose_period(self, period):
+        self._close_period_picker()
+        self.select_period(period)
+
+    def _toggle_period_favorite(self, period):
+        try:
+            if self.store:
+                self.favorite_periods = set(save_period_favorite(self.store, period, period not in self.favorite_periods))
+            else:
+                self.favorite_periods.symmetric_difference_update((period,))
+        except (ValueError, OSError) as exc:
+            self.caption.set(f'周期收藏未保存：{exc}')
+            return
+        self._pack_period_favorites()
+        current, available, ready = getattr(self, '_period_visual', (None, (), False))
+        self._period_visual = None
+        self._paint_period_strip({'timeframe':current,'available':available},ready)
+
+    def _reload_period_favorites(self):
+        if self.store:
+            try:
+                self.favorite_periods = set(load_period_favorites(self.store))
+            except (ValueError, OSError):
+                pass
+
+    def _paint_period_picker(self, current, available):
+        popup = self._period_popup
+        if popup is not None:
+            for period, choice in popup.choices.items():
+                choice.configure(state=tk.NORMAL if period in available else tk.DISABLED,
+                                 background='#33363B' if period==current else '#17191D')
+                favorite = period in self.favorite_periods
+                popup.stars[period].configure(text='★' if favorite else '☆', foreground=TEXT if favorite else MUTED)
 
     def _paint_period_strip(self,state,ready):
         current=state.get('timeframe')
@@ -302,10 +391,8 @@ class WorkspaceControls:
         for period,button in self.period_buttons.items():
             button.configure(state=tk.NORMAL if period in available else tk.DISABLED,
                              background='#33363B' if period==current else APP_BG)
-        for index,period in enumerate(PERIOD_LABELS):
-            self.period_options.entryconfigure(index,state=tk.NORMAL if period in available else tk.DISABLED)
-        extra=PERIOD_LABELS.get(current,'') if current not in self.period_buttons else ''
-        self.period_more.configure(text=f'{extra} ⌄' if extra else '⌄',state=tk.NORMAL if ready else tk.DISABLED)
+        self._paint_period_picker(current,available)
+        self.period_more.configure(background='#33363B' if current and current not in self.favorite_periods else APP_BG)
 
     def show_active_target(self,state,ready):
         self._paint_period_strip(state,ready)

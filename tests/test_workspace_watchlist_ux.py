@@ -74,6 +74,11 @@ def test_saved_layout_round_trip(tmp_path, rows, columns):
     assert validate_layout(actual)==layout
     with pytest.raises(ValueError):validate_layout({**layout,'rows':4})
 
+    if rows * columns >= 3:
+        actual['panes'][2]['timeframe'] = 'm240'
+        assert validate_layout(actual)['panes'][2]['timeframe'] == 'm60'
+        assert actual['panes'][2]['timeframe'] == 'm240'
+
 
 def test_delayed_minute_layout_keeps_saved_period_until_command_ack(tmp_path):
     from types import SimpleNamespace

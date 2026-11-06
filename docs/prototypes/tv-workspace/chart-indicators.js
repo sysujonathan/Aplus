@@ -86,7 +86,7 @@
   function replayFrame(series, unit, cutoff, closeDates = {}) {
     const complete = series[unit] || [];
     const daily = series.daily || [];
-    if (!daily.length) {
+    if (!daily.length || /^m\d+$/.test(unit)) {
       const index = complete.findLastIndex(row => (closeDates[unit]?.[row.date] || row.date) <= cutoff);
       return {rows: structuredClone(complete), index};
     }
@@ -99,7 +99,7 @@
   }
   function nextReplayDate(series, unit, cutoff, closeDates = {}) {
     const daily = series.daily || [];
-    if (!daily.length) return (series[unit] || []).map(row => closeDates[unit]?.[row.date] || row.date)
+    if (!daily.length || /^m\d+$/.test(unit)) return (series[unit] || []).map(row => closeDates[unit]?.[row.date] || row.date)
       .find(date => date > cutoff) || null;
     const ends = new Map();
     daily.forEach(row => ends.set(periodKey(row.date, unit), row.date));
