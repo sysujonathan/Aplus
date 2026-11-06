@@ -1,0 +1,137 @@
+"""SHA-verified local snapshot matching; no network or strategy execution."""
+from __future__ import annotations
+
+from collections import OrderedDict
+from datetime import date
+import io
+import time
+import uuid
+
+import pandas as pd
+
+from .market import board_of, validate_bars
+from .shape_matching import ALGORITHM, compare
+from .shape_store import options
+from .store import digest, now
+
+
+class FrameCache:
+    def __init__(self, limit=32):
+        self.limit = limit
+        self.frames = OrderedDict()
+
+    def read(self, store, record, timings):
+        start = time.perf_counter()
+        content = store.read_artifact(record['path'])
+        timings['read'] += time.perf_counter()-start
+        start = time.perf_counter()
+        if digest(content) != record['sha256']:
+            raise ValueError('行情 SHA 校验失败；请先修复行情，不使用该快照')
+        timings['verify'] += time.perf_counter()-start
+        key = record['id']
+        if key in self.frames:
+            self.frames.move_to_end(key)
+            timings['parsed_reused'] += 1
+            return self.frames[key]
+        start = time.perf_counter()
+        frame = validate_bars(pd.read_csv(io.BytesIO(content)))
+        timings['parse'] += time.perf_counter()-start
+        self.frames[key] = frame
+        while len(self.frames) > self.limit:
+            self.frames.popitem(last=False)
+        return frame
+
+
+def scan(store, templates, asof, source, *, cancel=None, progress=None, cache=None, checkpoint=None):
+    date.fromisoformat(asof)
+    from .market import completed_date
+    if asof > completed_date():
+        raise ValueError('不能匹配尚未收盘的未来交易日')
+    if source not in ('baostock','tickflow','tencent'):
+        raise ValueError('请选择 Aplus 正式行情来源；不扫描旧工程数据库')
+    if not templates:
+        raise ValueError('请先保存并选择形态模板')
+    configs = [(template,options(template.get('settings'))) for template in templates]
+    records = store.rows("SELECT * FROM (SELECT *,ROW_NUMBER() OVER(PARTITION BY code ORDER BY end DESC,created DESC,rowid DESC) AS rank "
+                         "FROM datasets WHERE source=? AND timeframe='daily') WHERE rank=1 ORDER BY code",(source,))
+    if not records:
+        raise ValueError('本地没有所选来源的日线，请先更新行情')
+    latest = max(record['end'] for record in records)
+    if asof > latest:
+        raise ValueError(f'本地行情只到 {latest}，不能匹配 {asof}')
+    records = [r for r in records if any((not c['codes'] or r['code'] in c['codes']) and
+               board_of(r['code']) in c['boards'] for _,c in configs)]
+    if not records:
+        raise ValueError('所选股票范围没有本地行情')
+    cache = cache or FrameCache()
+    timings = dict(read=0.,verify=0.,parse=0.,compute=0.,save=0.,parsed_reused=0,score_reused=0)
+    report = dict(id=uuid.uuid4().hex,created=now(),asof=asof,source=source,algorithm=ALGORITHM,
+                  mode='replay' if asof < latest else 'observed',status='running',
+                  templates=templates,matches=[],inputs=[],skipped=[],errors=[],timings=timings)
+    started = time.perf_counter()
+    matches = []
+    previous = {}
+    if checkpoint:
+        # Reuse only exactly identical version/parameters/date/source/snapshot.
+        old = store.shape_run(checkpoint)
+        if old['asof']==asof and old['source']==source and old['templates']==templates and old['algorithm']==ALGORITHM:
+            previous = {item['dataset_id']:item for item in old['inputs']}
+            matches = list(old['matches'])
+    try:
+        for index,record in enumerate(records):
+            if cancel:
+                cancel()
+            if progress:
+                progress(index,len(records),f"{record['code']} · {asof}")
+            try:
+                frame = cache.read(store,record,timings)
+                prefix = frame[frame.date <= asof]
+                if prefix.empty or str(prefix.date.iloc[-1]) != asof:
+                    report['skipped'].append(dict(code=record['code'],reason='该交易日没有已完成K线，不借用旧价或未来价'))
+                    continue
+                lineage = dict(dataset_id=record['id'],sha256=record['sha256'],code=record['code'],
+                               source=source,adjustment=record['adjustment'],snapshot_end=record['end'],cutoff=asof)
+                report['inputs'].append(lineage)
+                if record['id'] in previous and previous[record['id']]==lineage:
+                    timings['score_reused'] += 1
+                    continue
+                # A resume may see a replacement snapshot; remove its old score.
+                matches = [m for m in matches if m['code'] != record['code']]
+                for template,config in configs:
+                    if (config['codes'] and record['code'] not in config['codes']) or board_of(record['code']) not in config['boards']:
+                        continue
+                    window = config['window']
+                    if len(prefix)<window:
+                        report['skipped'].append(dict(code=record['code'],template_id=template['id'],reason=f'不足 {window} 根已完成K线'))
+                        continue
+                    start = time.perf_counter()
+                    clip = prefix.tail(window)
+                    score = compare(clip.close.to_numpy(),template['path'])
+                    timings['compute'] += time.perf_counter()-start
+                    if score['score'] >= config['threshold']:
+                        matches.append(dict(id=uuid.uuid4().hex,code=record['code'],name='',
+                            template_id=template['id'],template_version=template['version'],
+                            dataset_id=record['id'],sha256=record['sha256'],adjustment=record['adjustment'],
+                            market_asof=asof,start=str(clip.date.iloc[0]),end=asof,window=window,
+                            window_return_pct=round(100*(clip.close.iloc[-1]/clip.close.iloc[0]-1),2),**score))
+            except (ValueError,OSError,pd.errors.ParserError) as exc:
+                report['errors'].append(dict(code=record['code'],reason=str(exc)))
+            # Yield CPU/IO to the main strategy workflow and interactive chart.
+            time.sleep(.001)
+        report['status'] = 'partial' if report['errors'] else 'completed'
+    except InterruptedError:
+        report['status'] = 'cancelled'
+    report['matches'] = []
+    input_ids = {v['dataset_id'] for v in report['inputs']}
+    for template,config in configs:
+        values = [m for m in matches if m['template_id']==template['id'] and m['dataset_id'] in input_ids]
+        report['matches'] += sorted(values,key=lambda m:(-m['score'],m['code']))[:config['topn']]
+    timings['elapsed_before_save'] = time.perf_counter()-started
+    # Save time is measured separately by the task and retained in its receipt.
+    start = time.perf_counter()
+    store.save_shape_run(report)
+    timings['save'] = time.perf_counter()-start
+    timings['elapsed'] = time.perf_counter()-started
+    if progress:
+        progress(len(report['inputs']),len(records),report['status'])
+    return report

@@ -23,6 +23,7 @@ class ChartItem:
     market_asof: str | None = None
     anchor_asof: str | None = None
     manual: bool = False
+    shape: dict | None = None
 
 
 def chart_items(rows, mode: ChartMode):
@@ -32,7 +33,8 @@ def chart_items(rows, mode: ChartMode):
         value: Mapping = row
         observation_id = value.get("observation_id")
         manual = mode == 'watch' and bool(value.get('manual'))
-        if not observation_id and not manual:
+        shape = dict(value) if value.get('kind') == 'shape' else None
+        if not observation_id and not manual and not shape:
             continue
         result.append(
             ChartItem(
@@ -47,6 +49,7 @@ def chart_items(rows, mode: ChartMode):
                 market_asof=value.get("market_asof"),
                 anchor_asof=value.get("anchor_asof"),
                 manual=manual,
+                shape=shape,
             )
         )
     return result

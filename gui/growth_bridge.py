@@ -503,6 +503,19 @@ class GrowthBridge:
         return {}
 
     @guarded
+    def find_similar(self, case_id):
+        """Read case identity only; market association/cutoff is confirmed locally."""
+        case = self._public('case',case_id) if str(case_id).startswith('shared:') else self._store.pa_case(case_id,touch=False)
+        if case.get('data_kind')=='test':
+            raise ValueError('测试案例不能用于真实股票检索，请选择真实案例或建立手绘模板')
+        callback = getattr(self,'_find_similar',None)
+        if callback is None:
+            raise ValueError('请从 Aplus 成长空间打开本地形态检索')
+        value = {key:case.get(key,'') for key in ('id','title','symbol','timeframe')}
+        callback(value)
+        return {'local_shape':True,'case_id':case_id}
+
+    @guarded
     def compare_case(self, case_id):
         if str(case_id).startswith('shared:'):
             self._public('case', case_id)

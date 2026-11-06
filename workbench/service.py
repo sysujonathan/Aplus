@@ -107,6 +107,10 @@ class Service:
         with self.lock:
             self._code_update_reserved = False
 
+    def shape_tasks(self):
+        from .shape_tasks import runner
+        return runner(self)
+
     @contextmanager
     def chart_access(self, cancel_event):
         """An on-demand chart read must finish before code can be replaced."""
@@ -114,7 +118,7 @@ class Service:
         with self.lock:
             if self._code_update_reserved:
                 raise ValueError('正在准备软件更新，请完成更新后再获取K图')
-            if any(not key.startswith('chart:') for key in self.cancel_flags):
+            if any(not key.startswith(('chart:', 'shape:')) for key in self.cancel_flags):
                 raise ValueError('盘前或研究任务正在进行；先保留本地K图，任务结束后可更新K线')
             self.cancel_flags[key] = cancel_event
         try:
@@ -169,6 +173,13 @@ class Service:
             self.store.event(job,'任务结束',self.store.path)
             with self.lock:
                 self.cancel_flags.pop(job,None)
+            if kind in ('sync','premarket'):
+                try:
+                    rows = self.store.rows('SELECT status FROM jobs WHERE id=?',(job,))
+                    if rows and rows[0]['status'] in ('completed','partial'):
+                        self.shape_tasks().tracked()
+                except Exception as exc:
+                    self.store.event(job,'形态跟踪未启动',detail=str(exc))
 
     def _wait_for_chart_reads(self, job):
         """Do not race a cancelled on-demand read for the vendor OS lease."""

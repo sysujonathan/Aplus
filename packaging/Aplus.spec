@@ -12,7 +12,7 @@ read_client(resource_path(root))  # Direct spec builds also fail closed.
 datas = []
 datas.append((str(resource_path(root)), 'resources'))
 datas.append((os.environ['APLUS_BUILD_METADATA'], '.'))
-for name in ('docs', 'workbench/evidence', 'gui/pa_growth'):
+for name in ('docs', 'workbench/evidence', 'gui/pa_growth', 'third_party'):
     datas.append((str(root/name), name))
 for name in ('frozen_manifest.json', 'release_catalog.json', 'release_installation.json',
              'launch_dashboard.py', 'app.py', 'icon_aplus.ico'):

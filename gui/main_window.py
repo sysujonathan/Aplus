@@ -7,7 +7,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox
 import ttkbootstrap as ttk
 
-from .candidate_tabs import CandidateTabs
+from .match_list import MatchList as CandidateTabs
 from .chart_items import ChartItem, chart_items
 from .chart_panel import ChartGrid
 from .data import REALTIME_MARKET_SOURCE
@@ -100,6 +100,9 @@ class AplusMainWindow(ttk.Window):
         self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
         self._build_ui()
         self._load_strategies()
+        self._shape_last_run = None
+        if self.service is not None:
+            self.after(1000,self._poll_shape_results)
         self.after_idle(self.chart.restore_saved_layout)
         import sys
         if getattr(sys, 'frozen', False):
@@ -201,6 +204,7 @@ class AplusMainWindow(ttk.Window):
             on_context=self._candidate_context,
             on_rows_changed=self._on_candidate_rows,
             on_page_request=self._on_chart_page,
+            on_manage=self._open_shapes,
         )
         self.candidates.grid(row=0, column=0, sticky=tk.NSEW)
         ttk.Separator(self.list_pane, orient=tk.HORIZONTAL).grid(
@@ -234,7 +238,7 @@ class AplusMainWindow(ttk.Window):
         self._list_button=tk.Button(self._list_rail,autostyle=False,image=self._list_icon,
             command=self._toggle_lists,background=APP_BG,activebackground=CONTROL_BG,borderwidth=0,padx=4,pady=5)
         self._list_button.pack()
-        ToolTip(self._list_button,text='显示／隐藏策略结果和关注列表',delay=650)
+        ToolTip(self._list_button,text='显示／隐藏匹配列表和关注列表',delay=650)
         self._lists_override=None
         self._apply_list_layout(self.chart.layout_count)
 
@@ -332,7 +336,7 @@ class AplusMainWindow(ttk.Window):
                                             auto_quote_var=self.auto_quote_var)
             elif key == 'growth':
                 from .growth_space import GrowthSpacePage
-                page = GrowthSpacePage(self.page_host, self.store)
+                page = GrowthSpacePage(self.page_host, self.store, on_shape=self._shape_from_case)
             else:
                 raise ValueError('未知业务页面')
             page.grid(row=0, column=0, sticky=tk.NSEW)
@@ -531,6 +535,9 @@ class AplusMainWindow(ttk.Window):
                     slot._show_interactive()
 
     def destroy(self):
+        runner = vars(self.service).get('_shape_tasks') if self.service is not None else None
+        if runner is not None:
+            runner.close()
         super().destroy()
 
     def _close_for_version_update(self):
@@ -575,6 +582,49 @@ class AplusMainWindow(ttk.Window):
     def _toggle_lists(self):
         self._lists_override=not bool(self.list_pane.grid_info())
         self._apply_list_layout(self.chart.layout_count)
+
+    def _open_shapes(self, case=None):
+        if self.store is None or self.service is None:
+            return
+        from .shape_dialog import ShapeDialog
+        self._switch_section('premarket')
+        ShapeDialog(self,self.store,self.service,self.toolbar.selected_date(),case=case,
+                    on_results=self._shape_results,on_compare=self._compare_shape,
+                    current_item=self.chart.current_item())
+
+    def _shape_from_case(self, case):
+        self._open_shapes(case)
+
+    def _shape_results(self, asof=None):
+        # Manual searches intentionally show their selected day. Automatic
+        # tracking only refreshes saved results and never changes this date.
+        self.toolbar._load_date_options()
+        if asof:
+            self.toolbar._select_date(asof)
+        self._on_date_change(*self.toolbar.selected_date())
+
+    def _poll_shape_results(self):
+        if self._closing:return
+        status = self.service.shape_tasks().status()
+        if status.get('run_id') and status['run_id'] != self._shape_last_run:
+            self._shape_last_run = status['run_id']
+            self.toolbar._load_date_options()
+            self.candidates.load_from_store(self.store,timeframe=self._tf_var.get(),
+                asof_filter=self.toolbar.selected_date(),source=self._candidate_source,notify=False)
+        self.after(1000,self._poll_shape_results)
+
+    def _compare_shape(self, row):
+        origin = row['template'].get('origin',{})
+        if not origin.get('dataset_id'):
+            from tkinter import messagebox
+            messagebox.showinfo('轮廓模板', '手绘和经典模板没有真实OHLC。请在形态模板窗口核对原轮廓；候选仍在当前图表中。', parent=self)
+            return
+        original = dict(kind='shape',code=origin['code'],name='原案例',source=origin['source'],
+            observation_id='shape-template:'+row['template']['version'],dataset_id=origin['dataset_id'],
+            sha256=origin['sha256'],start=origin['start'],end=origin['cutoff'],
+            label=row['template']['name'],score=100)
+        self.chart.set_grid(1,2,render=False)
+        self.chart.set_items(chart_items([original,row],'candidate'))
 
     def _save_sidebar(self, _event=None):
         self.watch.views.data['sidebarWidth'] = self._sidebar_width
@@ -648,7 +698,7 @@ class AplusMainWindow(ttk.Window):
     # ---- 候选与多图联动 ----
     def _on_candidate_rows(self, rows):
         self._chart_mode = "candidates"
-        self.toolbar.set_chart_source("策略")
+        self.toolbar.set_chart_source("匹配")
         self.chart.set_items(chart_items(rows, "candidate"))
 
     def on_stock_selected(self, code, observation_id=None):
@@ -665,7 +715,10 @@ class AplusMainWindow(ttk.Window):
                 self.toolbar.set_chart_source("策略")
                 self.chart.set_items(items, selected_index=index)
             else:
-                self.chart.focus_observation(observation_id)
+                if not self.chart.focus_observation(observation_id):
+                    rows = self.candidates.rows()
+                    index = next((i for i,r in enumerate(rows) if r.get('observation_id')==observation_id),0)
+                    self.chart.set_items(chart_items(rows,'candidate'),selected_index=index)
             self._status_text.set(f"已加载：{code}")
         elif code and self.store is not None:
             from .data import latest_observation
@@ -868,11 +921,24 @@ class AplusMainWindow(ttk.Window):
             label=f"加入关注（{code}）",
             command=lambda: self._add_watch(code, observation_id),
         )
+        row = next((r for r in self.candidates.rows() if r.get('observation_id')==observation_id),None)
+        if row and row.get('kind')=='shape':
+            menu.add_command(label='与原模板双图对照',command=lambda:self._compare_shape(row))
+            if row['template'].get('origin',{}).get('case_id'):
+                menu.add_command(label='返回原案例研究',command=lambda:self._open_shape_case(row))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _open_shape_case(self,row):
+        from .growth_space import open_shape_case
+        open_shape_case(self,self.store,row['template']['origin']['case_id'])
 
     def _add_watch(self, code, observation_id):
         try:
-            self.store.watch(observation_id)
+            row = next((r for r in self.candidates.rows() if r.get('observation_id')==observation_id),None)
+            if row and row.get('kind')=='shape':
+                self.store.watch_shape_match(row['run_id'],row['id'])
+            else:
+                self.store.watch(observation_id)
         except Exception as exc:
             messagebox.showerror("加入关注失败", str(exc), parent=self)
             return

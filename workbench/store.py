@@ -604,6 +604,34 @@ class Store:
                          ('ui:' + namespace, dumps(document)))
         return document
 
+    def shape_templates(self):
+        from .shape_store import templates
+        return templates(self)
+
+    def save_shape_template(self, value, expected_revision=None):
+        from .shape_store import save_template
+        return save_template(self, value, expected_revision)
+
+    def shape_runs(self, source=None):
+        from .shape_store import runs
+        return runs(self, source)
+
+    def shape_run(self, identifier):
+        from .shape_store import run
+        return run(self, identifier)
+
+    def save_shape_run(self, report):
+        from .shape_store import save_run
+        return save_run(self, report)
+
+    def shape_candidates(self, asof_filter=None, source=None):
+        from .shape_store import candidates
+        return candidates(self, asof_filter, source)
+
+    def watch_shape_match(self, run_id, match_id):
+        from .shape_store import watch_match
+        return watch_match(self, run_id, match_id)
+
     def watch(self, observation_id):
         rows = self.rows('SELECT code FROM observations WHERE id=?', (observation_id,))
         if not rows:

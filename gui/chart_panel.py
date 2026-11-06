@@ -335,6 +335,8 @@ class ChartPanel(native_ttk.Frame):
 
     def _intraday_tick(self):
         self._intraday_after = None
+        if self._workspace_context and self._workspace_context.get('context_kind') == 'shape':
+            return  # Saved dated research must not silently advance to live bars.
         if not self._intraday_on or not self.winfo_exists():
             return
         poller = self._intraday_poller
@@ -613,6 +615,40 @@ class ChartPanel(native_ttk.Frame):
         self._history_btn.pack(side=tk.RIGHT, fill=tk.Y)
         from .watch_chart import WatchChartController
         self._manual_controller = WatchChartController(self, item)
+
+    def show_shape(self, store, item):
+        """Read the saved candidate prefix, never infer a formal strategy signal."""
+        from workbench.market import load_dataset
+        from .chart_renderer import render_chart
+        shape = item.shape
+        self.show_placeholder(item.name or item.code)
+        self.store, self._code, self._tf = store,item.code,'daily'
+        try:
+            frame, record = load_dataset(store,shape['dataset_id'])
+            if shape.get('sha256') and record['sha256'] != shape['sha256']:
+                raise ValueError('形态候选快照身份不一致')
+            frame = frame[frame.date <= shape['end']].copy()
+            if frame.empty:
+                raise ValueError('匹配截止日之前没有行情')
+            bars = frame.tail(300).copy()
+            bars['ema20'] = frame.close.ewm(span=20,adjust=False).mean().tail(300)
+            self._image = render_chart(bars,{},'',{},code=item.code)
+            self._title_var.set(f"{item.code} {item.name} · {shape.get('label','形态模板')}"
+                                f" · 相似 {shape.get('score',100):.1f} · 截至 {shape['end']} · 研究")
+            self._workspace_context = dict(frame=frame,record=record,code=item.code,name=item.name,
+                timeframe='daily',payload={},metadata={},strategy_type='',context_kind='shape',
+                shape=dict(label=shape.get('label'),score=shape.get('score'),start=shape.get('start'),end=shape['end']))
+            self._workspace_request = {'shape':shape}
+            self._observation_id = item.observation_id
+            self._tv_btn.configure(state=tk.NORMAL)
+            self._analysis_btn.configure(state=tk.NORMAL)
+            if hasattr(self,'_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
+            if self._interactive:
+                self._show_interactive()
+            else:
+                self._fit_image()
+        except Exception as exc:
+            self.chart_label.configure(text=f'形态行情暂未显示：{exc}')
 
     def _open_cases(self):
         self._activate()
@@ -1002,6 +1038,9 @@ class ChartGrid(ttk.Frame):
         self._show_item(self._slots[index], item)
 
     def _show_item(self, slot, item):
+        if item.shape:
+            slot.show_shape(self.store,item)
+            return
         if item.manual:
             slot.show_manual(self.store, item)
             return

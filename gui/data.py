@@ -229,7 +229,10 @@ def candidate_dates(store, timeframe="daily", source=None):
             ") WHERE day IS NOT NULL AND day<>'' ORDER BY day DESC",
             (*allowed, timeframe, market_source(store), timeframe),
         )
-    return [row["day"] for row in rows if row.get("day")]
+    days = {row['day'] for row in rows if row.get('day')}
+    if source is None:
+        days.update(r['asof'] for r in store.shape_runs(market_source(store)))
+    return sorted(days,reverse=True)
 
 
 def latest_candidate_date(store, timeframe="daily"):
