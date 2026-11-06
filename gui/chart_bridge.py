@@ -9,6 +9,7 @@ import threading
 import pandas as pd
 
 from workbench.chart_workspace import create_alert, identity, validate_document
+from workbench.workspace_layouts import DEFAULT_PERIOD_FAVORITES, load_period_favorites, save_period_favorite
 
 
 def _edit_fields(document):
@@ -253,15 +254,14 @@ def workspace_boot(store, context):
     # Live intraday bars are transport, not Store history. They are offered as
     # separate units so a failed refresh can never be mistaken for daily prices.
     # Unit names stay in the ``m<n>`` shape the page already treats as intraday.
-    for unit, context_key in (("m5", "minute_series"), ("m60", "hour_series"),
-                              ("m240", "halfday_series")):
-        unit_frame = context.get(context_key)
-        if unit_frame is not None and len(unit_frame):
-            series[unit] = _bars(unit_frame)
+    minute_frame = context.get("minute_series")
+    if minute_frame is not None and len(minute_frame):
+        from workbench.live_minutes import chart_minute_series
+        series.update(chart_minute_series(minute_frame, context.get("hour_series")))
     from .chart_evidence import strategy_evidence
     vectors = strategy_evidence(context)
     from workbench.chart_workspace import bar_close_time
-    intraday = ("m5", "m60", "m240")
+    intraday = ("m1", "m5", "m15", "m30", "m60")
     close_dates = {unit: {row['date']: str(bar_close_time(row['date'], unit).date()) for row in data}
                    for unit, data in series.items() if unit not in intraday}
     for unit in intraday:
@@ -282,8 +282,13 @@ def workspace_boot(store, context):
         live = {"interval": int(context.get("minute_interval") or 8),
                 "source": str(context.get("minute_source") or "腾讯分钟行情"),
                 "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}
+    try:
+        favorites = load_period_favorites(store)
+    except (AttributeError, ValueError, OSError):
+        favorites = list(DEFAULT_PERIOD_FAVORITES)
     return {
         "production": True, "identity": key, "revision": int(document["revision"]),
+        "favoritePeriods": favorites,
         "bars": rows, "drawings": state["objects"], "state": state,
         "settings": _native(settings), "alerts": _native(document["alerts"]),
         "editBaseline": _native(_edit_fields(document)),
@@ -343,6 +348,12 @@ class ChartBridge:
 
     def bootstrap(self):
         return deepcopy(self.boot)
+
+    def read_chart_period_favorites(self):
+        return load_period_favorites(self.store)
+
+    def set_chart_period_favorite(self, period, favorite):
+        return save_period_favorite(self.store, period, favorite)
 
     def read_alerts(self):
         """Observe monitor progress without advancing this editor's CAS baseline."""

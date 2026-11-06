@@ -105,6 +105,22 @@ function run() {
   assert.equal(context.chartBoot.seriesCloseDates.m5[rows.at(-1).date], rows.at(-1).date);
   assert.equal(context.chartBoot.live.source, '腾讯 5 分钟');
 
+  const oneMinute = ['09:30','09:31','09:32'].map((clock, index) =>
+    minuteBar(`2026-10-22 ${clock}`, 25 + index * .01));
+  assert.equal(apply({series:{m5:rows,m1:oneMinute},live:{source:'腾讯分钟行情'}}),true);
+  assert.equal(context.switchProductionTimeframe('m1',false),true);
+  const changedMinute = [...oneMinute.slice(0,-1), minuteBar(oneMinute.at(-1).date,25.08)];
+  assert.equal(apply({series:{m5:rows,m1:changedMinute},live:{source:'腾讯分钟行情'}}),true);
+  assert.equal(context.bars.at(-1).close,25.08);
+  assert.match(element('.instrument-title b').textContent,/1分钟.*09:32/);
+  assert.equal(coordinates.project({date:oneMinute[0].date,value:25},oneMinute.slice(1),'m1').index,-1);
+  assert.equal(context.AplusChartIndicators.replayFrame(boot.series,'m1',oneMinute[1].date).index,1);
+  assert.equal(context.AplusChartIndicators.nextReplayDate(boot.series,'m1',oneMinute[1].date),oneMinute[2].date);
+  assert.equal(apply({series:{m5:rows},live:{source:'腾讯分钟行情'}}),true);
+  assert.match(element('.instrument-title b').textContent,/数据待刷新/);
+  assert.equal(context.bars.at(-1).close,25.08);
+  assert.equal(context.switchProductionTimeframe('m5',false),true);
+
   // A delayed daily history fetch in the same watch must not reload/reset the
   // page or discard minutes, even outside market hours when no new tick follows.
   Object.assign(boot,{identity:'watch-test',contextKind:'watch',strategyType:'',source:'baostock',adjustment:'不复权'});

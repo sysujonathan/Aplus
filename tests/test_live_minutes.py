@@ -242,7 +242,7 @@ def test_workspace_boot_ignores_an_unknown_start_unit(tmp_path):
     assert "m5" in boot["series"]
 
 
-def test_workspace_boot_offers_hourly_and_half_day_units(tmp_path):
+def test_workspace_boot_offers_hourly_and_ignores_retired_half_day(tmp_path):
     store = Store(tmp_path)
     hourly = pd.DataFrame({
         "date": ["2026-10-24 10:30", "2026-10-24 11:30"],
@@ -256,10 +256,10 @@ def test_workspace_boot_offers_hourly_and_half_day_units(tmp_path):
                                         hour_series=hourly, halfday_series=halfday))
     assert boot["startTimeframe"] == "m60"
     assert [row["date"] for row in boot["series"]["m60"]] == ["2026-10-24 10:30", "2026-10-24 11:30"]
-    assert [row["date"] for row in boot["series"]["m240"]] == ["2026-10-24 11:30"]
+    assert "m240" not in boot["series"]
     # Closing-labelled transport: the watermark is the bar, not bar plus five.
     assert boot["seriesCloseDates"]["m60"]["2026-10-24 11:30"] == "2026-10-24 11:30"
-    assert boot["axisDates"]["m60"] == [] and boot["axisDates"]["m240"] == []
+    assert boot["axisDates"]["m60"] == []
 
 
 # ---- period grid and the forming bar -------------------------------------
@@ -338,6 +338,20 @@ def test_source_reads_the_skeleton_once_and_then_only_the_tail():
     assert calls == ["m5", "m1", "m1"]
     assert first.equals(second)
     assert first.date.tolist() == ["2026-10-26 14:20", "2026-10-26 14:25", "2026-10-26 14:30"]
+    assert first.attrs['m1'] == minute_rows(tail)
+    assert 'm1' not in skeleton.attrs
+
+
+def test_five_minute_skeleton_aggregates_15_and_30_without_crossing_lunch():
+    stamps = pd.date_range("2026-10-26 11:05", "2026-10-26 11:30", freq="5min").union(
+        pd.date_range("2026-10-26 13:05", "2026-10-26 13:30", freq="5min"))
+    frame = pd.DataFrame(dict(date=stamps.strftime('%Y-%m-%d %H:%M'), open=25.,
+                              high=25.5, low=24.8, close=25., volume=100.))
+    half_hour = aggregate_minute_bars(frame, 30, source_minutes=5)
+    assert half_hour.date.tolist() == ['2026-10-26 11:30', '2026-10-26 13:30']
+    assert half_hour.volume.tolist() == [600., 600.]
+    with_gap = aggregate_minute_bars(frame.drop(index=2), 15, source_minutes=5)
+    assert with_gap.date.tolist() == ['2026-10-26 11:30', '2026-10-26 13:15', '2026-10-26 13:30']
 
 
 def test_source_keeps_the_skeleton_when_the_tail_request_fails():

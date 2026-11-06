@@ -36,6 +36,7 @@ window.AplusChartCoordinates = (() => {
     const span = size === 240 ? 120 : size;
     if (!Number.isFinite(span) || span <= 0) throw new Error('分钟周期无效');
     const clocks = [];
+    if (size === 1) clocks.push('09:30:00');
     for (let end = span; end <= 240; end += span) {
       const minute = end <= 120 ? 570 + end : 780 + end - 120;
       clocks.push(`${String(Math.floor(minute / 60)).padStart(2,'0')}:${String(minute % 60).padStart(2,'0')}:00`);
@@ -49,6 +50,7 @@ window.AplusChartCoordinates = (() => {
       if (!clock) return rank * clocks.length; // a daily anchor maps to the first session bar
       const minute = Number(clock[1]) * 60 + Number(clock[2]);
       const elapsed = minute <= 690 ? minute - 570 : 120 + Math.max(0, minute - 780);
+      if (size === 1) return rank * clocks.length + Math.max(0, Math.min(240, elapsed));
       return rank * clocks.length + Math.max(0, Math.min(clocks.length - 1, Math.ceil(elapsed / span) - 1));
     };
     const positions = rows.map(row => position(row.date));

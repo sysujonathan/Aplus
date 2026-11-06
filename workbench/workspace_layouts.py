@@ -2,9 +2,37 @@
 from copy import deepcopy
 import uuid
 
-PERIODS = ('daily', 'weekly', 'monthly', 'm5', 'm60', 'm240')
+PERIODS = ('m1', 'm5', 'm15', 'm30', 'm60', 'daily', 'weekly', 'monthly')
+DEFAULT_PERIOD_FAVORITES = ('m5', 'm60', 'daily', 'weekly', 'monthly')
 SYNC_KEYS = ('symbol', 'timeframe', 'crosshair', 'time', 'range')
 SHAPES = {1: (1, 1), 4: (2, 2), 6: (2, 3), 8: (2, 4), 9: (3, 3)}
+
+def _favorite_periods(document):
+    saved = document['data'].get('favorites', DEFAULT_PERIOD_FAVORITES)
+    if not isinstance(saved, (list, tuple)):
+        raise ValueError('周期收藏设置无效')
+    return [period for period in PERIODS if period in saved]
+
+
+def load_period_favorites(store):
+    return _favorite_periods(store.load_ui_preferences('chart_periods'))
+
+
+def save_period_favorite(store, period, favorite):
+    if period not in PERIODS or type(favorite) is not bool:
+        raise ValueError('周期收藏选项无效')
+    current = store.load_ui_preferences('chart_periods')
+    selected = _favorite_periods(current)
+    if favorite == (period in selected):
+        return selected
+    selected = set(selected)
+    if favorite:
+        selected.add(period)
+    else:
+        selected.remove(period)
+    favorites = [value for value in PERIODS if value in selected]
+    saved = store.save_ui_preferences('chart_periods', {'favorites': favorites}, current['revision'])
+    return _favorite_periods(saved)
 
 
 def validate_layout(value):
@@ -25,6 +53,8 @@ def validate_layout(value):
     if not isinstance(panes, list) or len(panes) > rows * columns:
         raise ValueError('图格设置无效')
     for pane in panes:
+        if isinstance(pane, dict) and pane.get('timeframe') == 'm240':
+            pane['timeframe'] = 'm60'
         if not isinstance(pane, dict) or pane.get('timeframe', 'daily') not in PERIODS:
             raise ValueError('图格周期无效')
         item = pane.get('item')

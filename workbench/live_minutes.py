@@ -193,8 +193,8 @@ def _has_auction(value, day):
     return bool(((value['_day'] == day) & (value['_slot'] == AUCTION)).any())
 
 
-def aggregate_minute_bars(frame, minutes):
-    """Collapse one-minute rows into a coarser closing-labelled unit.
+def aggregate_minute_bars(frame, minutes, *, source_minutes=1):
+    """Collapse closing-labelled minute rows into a coarser unit.
 
     A window truncated by the provider's row ceiling is dropped, because its
     open would belong to a later minute than the real bar.  The newest window
@@ -215,18 +215,18 @@ def aggregate_minute_bars(frame, minutes):
     rows = []
     for (day, slot), group in groups:
         # m1 can omit the 13:00 print included by native m5: keep native OHLC.
-        if slot == AFTERNOON_OPEN + minutes:
+        if source_minutes == 1 and slot == AFTERNOON_OPEN + minutes:
             continue
         # 09:35 carries the opening call auction on top of five minutes.
-        expected = minutes + 1 if (slot == MORNING_OPEN + minutes and _has_auction(value, day)) \
-            else minutes
+        auction = source_minutes == 1 and slot == MORNING_OPEN + minutes and _has_auction(value, day)
+        expected = minutes // source_minutes + int(auction)
         if len(group) < expected and (day, slot) != (newest_day, newest_slot):
             continue          # truncated head or a hole: never repaired
         first = pd.Timestamp(group.date.iloc[0])
-        required_start = AUCTION if expected == minutes + 1 else slot - minutes + 1
+        required_start = AUCTION if auction else slot - minutes + source_minutes
         stamps = pd.to_datetime(group.date)
         if (first.hour * 60 + first.minute != required_start
-                or not stamps.diff().iloc[1:].eq(timedelta(minutes=1)).all()):
+                or not stamps.diff().iloc[1:].eq(timedelta(minutes=source_minutes)).all()):
             continue          # even a forming tail needs its real open
         # The slot is the bar's own close, not the minute that happened to arrive
         # last: a window that is still forming must be dated where it will end,
@@ -237,7 +237,7 @@ def aggregate_minute_bars(frame, minutes):
                          high=float(group.high.max()), low=float(group.low.min()),
                          close=float(group.close.iloc[-1]), volume=float(group.volume.sum())))
     if not rows:
-        raise ValueError('没有完整的 5 分钟窗口；不会用缺失分钟线拼接')
+        raise ValueError(f'没有完整的 {minutes} 分钟窗口；不会用缺失分钟线拼接')
     return pd.DataFrame(rows)
 
 
@@ -326,6 +326,22 @@ def coarse_series(history, live, minutes):
     keep = history[~stamped.isin(pd.to_datetime(derived['date']))]
     merged = pd.concat([keep, derived], ignore_index=True)
     return merged.sort_values('date').reset_index(drop=True)
+
+
+def chart_minute_series(frame, hourly=None):
+    """Offer the available display periods from the existing live transport."""
+    series = {'m5': minute_rows(frame)}
+    if frame.attrs.get('m1'):
+        series['m1'] = frame.attrs['m1']
+    for minutes in (15, 30, 60):
+        try:
+            bars = (coarse_series(hourly, frame, minutes) if minutes == 60
+                    else aggregate_minute_bars(frame, minutes, source_minutes=5))
+            if bars is not None and len(bars) >= 2:
+                series[f'm{minutes}'] = minute_rows(bars)
+        except ValueError:
+            continue
+    return series
 
 
 class HourlyHistory:
@@ -462,8 +478,13 @@ class IntradaySource:
             if refreshed is not None and len(refreshed) >= 2:
                 merged = refreshed
         quotes = [f.attrs.get('quote') for f in (skeleton, tail) if f is not None and f.attrs.get('quote')]
+        merged = merged.copy(deep=False)
         if quotes:
             merged.attrs['quote'] = max(quotes, key=lambda q:q['quote_time'])
+        # The same provider response feeds the 1-minute view, without another
+        # poll or a dependency on a five-minute candle changing first.
+        if tail is not None and len(tail) >= 2:
+            merged.attrs['m1'] = minute_rows(tail)
         return merged
 
     def forget(self, code):

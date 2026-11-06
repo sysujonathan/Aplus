@@ -93,6 +93,14 @@ class ChartSessionBridge:
         boot['sessionToken'] = self.active_token
         return boot
 
+    def read_chart_period_favorites(self):
+        from workbench.workspace_layouts import load_period_favorites
+        return load_period_favorites(self.store)
+
+    def set_chart_period_favorite(self, period, favorite):
+        from workbench.workspace_layouts import save_period_favorite
+        return save_period_favorite(self.store, period, favorite)
+
     def _check_token(self, session_token):
         if self.active_token and session_token != self.active_token:
             raise ValueError('图表页面已切换，旧页面修改未写入当前标的')

@@ -307,7 +307,7 @@ document.querySelectorAll('.tool[data-tool], [data-favorite]').forEach(button =>
 }));
 
 document.querySelectorAll('.timeframes .disabled').forEach(button => button.addEventListener('click', () => showToast(button.dataset.unavailable)));
-document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
+if (!window.tvPrototypeV2) document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.timeframes button').forEach(item => item.classList.remove('active'));
   button.classList.add('active');
   showToast(`${button.textContent}线原型状态`);

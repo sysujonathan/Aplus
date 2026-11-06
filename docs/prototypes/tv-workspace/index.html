@@ -52,13 +52,15 @@
       <button class="round-button">＋</button>
       <span class="divider"></span>
       <nav class="timeframes" aria-label="时间周期">
+        <button data-timeframe="m1" hidden>1分</button>
         <button data-timeframe="m5">5分</button>
+        <button data-timeframe="m15" hidden>15分</button>
+        <button data-timeframe="m30" hidden>30分</button>
         <button data-timeframe="m60">1小时</button>
-        <button data-timeframe="m240">4小时</button>
         <button class="active" data-timeframe="daily">天</button>
         <button data-timeframe="weekly">周</button>
         <button data-timeframe="monthly">月</button>
-        <button aria-label="更多周期">⌄</button>
+        <button id="periodPickerButton" aria-label="更多周期" aria-expanded="false" aria-controls="periodPicker">⌄</button>
       </nav>
       <span class="divider"></span>
       <button class="icon-button" title="折线"><svg><use href="#i-trend"/></svg></button>
@@ -121,7 +123,7 @@
           <div id="referenceQuote" class="reference-quote" hidden></div>
           <div class="indicator-legend">
             <div><span>EMA 20 close</span><b class="ema-value">4.32</b><button>⋮</button></div>
-            <div class="disabled-indicator"><span>Bar Count Normal 2</span><span class="hint">5分钟行情接入后可用</span><button>◉̸</button></div>
+            <div class="disabled-indicator"><span>Bar Count Normal 2</span><span class="hint">分钟行情接入后可用</span><button>◉̸</button></div>
           </div>
 
           <div class="favorite-tools" id="favoriteTools" aria-label="常用绘图工具">
@@ -320,6 +322,7 @@
     <small>策略证据为只读，移除可撤销</small>
   </div>
   <div class="chart-context-menu" id="templateMenu"><button id="quickNamedTemplate" class="quick-template-unimplemented" aria-disabled="true" title="功能暂未实现" hidden>保存模板为…<small aria-hidden="true">#</small></button><button data-template-action="apply">应用本机默认模板</button><button data-template-action="save">保存当前设置为本机默认模板</button></div>
+  <div id="periodPicker" class="period-picker" aria-label="图表周期" hidden></div>
   <script>window.tvPrototypeV2 = true;</script>
   <script src="historical-bars-v2.js"></script>
   <script src="prototype.js?v=20261021-1"></script>

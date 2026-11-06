@@ -1767,7 +1767,7 @@ document.querySelectorAll('.timeframes .disabled').forEach(button => button.addE
 // Self-contained on purpose: the Node regression extracts single functions into
 // an empty context, so this must not read any module-level constant.
 function periodLabel(unit) {
-  const labels = {m5: '5分钟', m60: '1小时', m240: '4小时'};
+  const labels = {m1: '1分钟', m5: '5分钟', m15: '15分钟', m30: '30分钟', m60: '1小时', m240: '4小时'};
   return unit === 'weekly' ? '1周' : unit === 'monthly' ? '1月' : labels[unit] || '1天';
 }
 function refreshSeriesTitle(unit = activeTimeframeUnit) {
@@ -1777,9 +1777,9 @@ function refreshSeriesTitle(unit = activeTimeframeUnit) {
   const source = minute ? chartBoot.live?.source || '分钟来源待确认' : reference ?
     `${chartBoot.source}历史＋腾讯实时参考` : chartBoot.source || '来源待确认';
   const adjustment = minute ? chartBoot.live?.adjustment || '不复权' : chartBoot.adjustment || '口径待确认';
-  const asof = reference ? chartBoot.dailyReference.quote_time : minute ? chartBoot.live?.asof || rows.at(-1)?.date :
+  const asof = reference ? chartBoot.dailyReference.quote_time : minute ? rows.at(-1)?.date :
     chartBoot.latest?.date || rows.at(-1)?.date;
-  const lag = minute && chartBoot.live?.stale ? ' · 数据待刷新' : '';
+  const lag = minute && (chartBoot.live?.stale || (unit === 'm1' && chartBoot.live?.minute1Stale)) ? ' · 数据待刷新' : '';
   const blocked = !minute && chartBoot.dailyReferenceStatus?.includes('未核对') ? ' · 实时口径待核对' : '';
   const label = minute ? '分钟数据末柱标签' : reference ? '最新参考报价时间' : '历史截至';
   const quoteTime = minute && chartBoot.live?.quote?.quote_time ? ` · 报价 ${chartBoot.live.quote.quote_time}` : '';
@@ -1820,7 +1820,8 @@ function switchProductionTimeframe(timeframe, persist = true) {
   const target = chartBoot.series?.[timeframe];
   if (!target?.length || timeframe === activeTimeframeUnit) return false;
   const cutoff = replayActive ? replayCutoffDate || bars[replayIndex].date : null;
-  const replayFrame = cutoff && chartBoot.series?.daily?.length ? AplusChartIndicators.replayFrame(chartBoot.series,timeframe,cutoff) : null;
+  const replayFrame = cutoff && chartBoot.series?.daily?.length ?
+    AplusChartIndicators.replayFrame(chartBoot.series,timeframe,cutoff,chartBoot.seriesCloseDates) : null;
   const lastVisible = replayFrame ? replayFrame.index : cutoff ? target.findLastIndex(row =>
     (chartBoot.seriesCloseDates?.[timeframe]?.[row.date] || row.date) <= cutoff) : target.length - 1;
   if (lastVisible < 0) {showToast('所选日期之前没有已收盘的该周期K线');return false;}
@@ -1838,8 +1839,7 @@ function switchProductionTimeframe(timeframe, persist = true) {
   if (replayActive && typeof updateReplayUi === 'function') updateReplayUi();
   viewCount = Math.min(DEFAULT_VISIBLE_BARS, replayIndex+1, bars.length); viewOffset = 0; priceZoom = 1; priceCenterOffset = 0;
   document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === timeframe));
-  document.querySelector('[aria-label="更多周期"]')?.classList?.toggle('active-box',
-    !['daily','weekly','monthly'].includes(timeframe));
+  if (typeof paintPeriodFavorites === 'function') paintPeriodFavorites();
   const period = periodLabel(timeframe);
   document.querySelector('.instrument-title b').textContent = `${chartBoot.name} · ${period} · ${String(chartBoot.symbol || '').startsWith('sh.') ? 'SSE' : 'SZSE'}`;
   if (typeof refreshSeriesTitle === 'function') refreshSeriesTitle(timeframe);
@@ -1922,15 +1922,15 @@ window.aplusApplyLiveBars = payload => {
   if (!Array.isArray(incoming) || incoming.length < 2) return false;
   chartBoot.series = chartBoot.series || {};
   chartBoot.seriesCloseDates = chartBoot.seriesCloseDates || {};
-  // One polled request can carry every intraday unit at once: the five-minute
-  // tail plus the hourly and half-day bars rebuilt from it. They are replaced
-  // together so the three never disagree about the same minute.
+  // All display periods share the existing minute poll.
   Object.entries(payload.series).forEach(([unit, rows]) => {
     if (!Array.isArray(rows) || rows.length < 2) return;
     chartBoot.seriesCloseDates[unit] = Object.fromEntries(rows.map(row => [row.date, row.date]));
     chartBoot.series[unit] = rows;
   });
-  if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live};
+  if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live,
+    minute1Stale: !payload.series.m1?.length};
+  if (typeof refreshPeriodChoices === 'function') refreshPeriodChoices();
   const dailyChanged = typeof applyDailyReference === 'function' && applyDailyReference(payload.live?.quote);
   if (typeof refreshSeriesTitle === 'function') refreshSeriesTitle();
   if (!/^m\d+$/.test(String(activeTimeframeUnit || '')) && !dailyChanged) {
@@ -1940,11 +1940,122 @@ window.aplusApplyLiveBars = payload => {
   return repaintCurrentSeries();
 };
 
-document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.addEventListener('click', () => {
-  if(button.dataset.timeframe === activeTimeframeUnit)return;
-  if(switchProductionTimeframe(button.dataset.timeframe))showToast(`已切换到${button.textContent}线真实聚合行情`);
-  else showToast(/^m\d+$/.test(button.dataset.timeframe) ? '该周期的分钟行情尚未取得，请稍候重试' : '该周期暂无可显示的K线');
-}));
+const periodButtons = [...document.querySelectorAll('.timeframes button[data-timeframe]')];
+const periodPicker = document.querySelector('#periodPicker');
+const periodPickerButton = document.querySelector('#periodPickerButton');
+const periodFavoriteKey = 'aplus-chart-period-favorites';
+let favoritePeriods = new Set(periodButtons.filter(button => !button.hidden).map(button => button.dataset.timeframe));
+let periodFavoritePending = false;
+let periodFavoriteEdit = 0;
+if (Array.isArray(chartBoot.favoritePeriods)) favoritePeriods = new Set(chartBoot.favoritePeriods);
+else try {
+  const saved = JSON.parse(localStorage.getItem(periodFavoriteKey));
+  if (Array.isArray(saved)) favoritePeriods = new Set(saved);
+} catch (_) { /* Keep the default favorites. */ }
+
+function paintPeriodFavorites() {
+  for (const button of periodButtons) button.hidden = !favoritePeriods.has(button.dataset.timeframe);
+  periodPickerButton?.classList.toggle('active', !favoritePeriods.has(activeTimeframeUnit));
+}
+
+function chooseChartPeriod(unit) {
+  if (unit === activeTimeframeUnit) return;
+  if (!chartBoot.series?.[unit]?.length) {
+    showToast('该周期暂无可显示的K线');
+    return;
+  }
+  switchProductionTimeframe(unit);
+}
+
+function refreshPeriodChoices() {
+  if (!periodPicker || periodPicker.hidden) return;
+  for (const choice of periodPicker.querySelectorAll('.period-choice')) {
+    const unit = choice.dataset.period;
+    choice.classList.toggle('active', unit === activeTimeframeUnit);
+    choice.disabled = !chartBoot.series?.[unit]?.length;
+    choice.title = choice.disabled ? '该周期暂无可显示的K线' : periodLabel(unit);
+  }
+}
+
+function setPeriodPicker(open) {
+  periodPicker.hidden = !open;
+  periodPickerButton.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  periodPicker.replaceChildren();
+  for (const button of periodButtons) {
+    const unit = button.dataset.timeframe, label = periodLabel(unit);
+    const row = document.createElement('div');
+    row.className = 'period-picker-row';
+    const choice = document.createElement('button');
+    choice.className = 'period-choice';
+    choice.dataset.period = unit;
+    choice.textContent = label;
+    choice.onclick = () => { setPeriodPicker(false); chooseChartPeriod(unit); };
+    const star = document.createElement('button');
+    star.className = 'period-star';
+    star.setAttribute('aria-label', `在顶部显示或隐藏${label}`);
+    const paintStar = () => {
+      const favorite = favoritePeriods.has(unit);
+      star.textContent = favorite ? '★' : '☆';
+      star.setAttribute('aria-pressed', String(favorite));
+    };
+    paintStar();
+    star.onclick = async () => {
+      if (periodFavoritePending) return;
+      const favorite = !favoritePeriods.has(unit);
+      periodFavoritePending = true;
+      periodFavoriteEdit += 1;
+      try {
+        if (chartBoot.production) {
+          const saved = await window.pywebview?.api?.set_chart_period_favorite?.(unit, favorite);
+          if (!Array.isArray(saved)) throw new Error('周期收藏接口尚未就绪');
+          favoritePeriods = new Set(saved);
+        } else {
+          if (favorite) favoritePeriods.add(unit);
+          else favoritePeriods.delete(unit);
+          localStorage.setItem(periodFavoriteKey, JSON.stringify([...favoritePeriods]));
+        }
+        paintStar();
+        paintPeriodFavorites();
+      } catch (_) {
+        showToast('周期收藏未保存，请重新打开周期菜单再试');
+      } finally {
+        periodFavoritePending = false;
+      }
+    };
+    row.append(choice, star);
+    periodPicker.append(row);
+  }
+  refreshPeriodChoices();
+  const rect = periodPickerButton.getBoundingClientRect();
+  periodPicker.style.left = `${Math.max(0, Math.min(rect.left, innerWidth - periodPicker.offsetWidth - 4))}px`;
+  periodPicker.style.top = `${rect.bottom + 3}px`;
+}
+periodButtons.forEach(button => button.addEventListener('click', () => chooseChartPeriod(button.dataset.timeframe)));
+if (periodPicker && periodPickerButton) {
+  periodPickerButton.addEventListener('click', async () => {
+    const open = periodPicker.hidden;
+    setPeriodPicker(open);
+    if (!open || !chartBoot.production) return;
+    const edit = periodFavoriteEdit;
+    try {
+      const saved = await window.pywebview?.api?.read_chart_period_favorites?.();
+      if (!Array.isArray(saved) || periodFavoritePending || edit !== periodFavoriteEdit || periodPicker.hidden) return;
+      if (saved.length === favoritePeriods.size && saved.every(unit => favoritePeriods.has(unit))) return;
+      favoritePeriods = new Set(saved);
+      paintPeriodFavorites();
+      setPeriodPicker(true);
+    } catch (_) { /* The current favorites remain usable. */ }
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!periodPicker.hidden && !periodPicker.contains(event.target) && !periodPickerButton.contains(event.target))
+      setPeriodPicker(false);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !periodPicker.hidden) setPeriodPicker(false);
+  });
+}
+paintPeriodFavorites();
 document.querySelector('#openAlert').addEventListener('click', () => openWorkspaceModal('alertModal'));
 document.querySelector('#openObject').addEventListener('click', openObjectSettings);
 function refreshRemoveMenu() {
@@ -2189,7 +2300,8 @@ function updateReplayUi() {
   document.querySelector('#replayDatePicker').title = `当前回放：${replayCutoffDate || bars[replayIndex].date}`;
   const rank = {daily:0,weekly:1,monthly:2};
   if(replayIntervalUnit !== 'auto' && rank[replayIntervalUnit] > rank[activeTimeframeUnit])replayIntervalUnit='auto';
-  document.querySelector('#replayInterval').textContent = ({daily:'天',weekly:'周',monthly:'月'})[replayIntervalUnit==='auto'?activeTimeframeUnit:replayIntervalUnit];
+  const unit = replayIntervalUnit==='auto' ? activeTimeframeUnit : replayIntervalUnit;
+  document.querySelector('#replayInterval').textContent = ({daily:'天',weekly:'周',monthly:'月'})[unit] || periodLabel(unit);
   document.querySelector('#replayPlay').innerHTML = replayPlaying
     ? '<svg viewBox="0 0 24 24"><path d="M8 4v16M16 4v16"/></svg>'
     : '<svg viewBox="0 0 24 24"><path d="m7 4 12 8-12 8Z"/></svg>';
@@ -2230,7 +2342,7 @@ function enterReplay(index, date = null) {
   if(daily?.length){
     const requested=date||replayCutoffDate;
     replayCutoffDate=(daily.findLast(row=>row.date<=requested)||daily[0]).date;
-    const frame=AplusChartIndicators.replayFrame(chartBoot.series,activeTimeframeUnit,replayCutoffDate);
+    const frame=AplusChartIndicators.replayFrame(chartBoot.series,activeTimeframeUnit,replayCutoffDate,chartBoot.seriesCloseDates);
     bars.splice(0,bars.length,...frame.rows);replayIndex=frame.index;
   }
   viewCount = Math.min(DEFAULT_VISIBLE_BARS, replayIndex + 1);
@@ -2512,6 +2624,7 @@ function applyProductionContext() {
   document.querySelector('#alertName').value = `${display} 穿越 ${chartPrice(latest.close)}`;
   document.querySelectorAll('.timeframes button[data-timeframe]').forEach(button => button.classList.toggle('active', button.dataset.timeframe === chartBoot.timeframe));
   activeTimeframeUnit = chartBoot.timeframe;
+  paintPeriodFavorites();
   userObjects.forEach(object=>chartCoordinates.projectObject(object,bars,activeTimeframeUnit));
   const restoredTimeframe = initialPrototypeState.timeframe || chartBoot.timeframe;
   if (restoredTimeframe !== chartBoot.timeframe && switchProductionTimeframe(restoredTimeframe, false)) {

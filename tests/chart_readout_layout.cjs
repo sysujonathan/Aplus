@@ -58,4 +58,18 @@ for (const ys of [[20,20.1],[540,541],[10,300,1000],[100,100,100,100,100]]) {
   assert.ok(result.every(t=>t.labelY>=30 && t.labelY<=540));
   for(let i=1;i<result.length;i++)assert.ok(result[i].labelY-result[i-1].labelY>=22);
 }
-console.log(JSON.stringify({ok:true, historicalAndLatestReadouts:true, axisLabelsSeparated:true}));
+
+context.chartBoot.priceStep = 0.001;
+context.activeTimeframeUnit = 'm5';
+context.bars = [
+  {date:'2026-10-12 11:20', open:2.141, high:2.143, low:2.139, close:2.142},
+  {date:'2026-10-12 11:25', open:2.142, high:2.142, low:2.138, close:2.139},
+];
+const ohlc = () => ['#openValue','#highValue','#lowValue','#closeValue'].map(id => element(id).textContent);
+vm.runInContext('updateReadout(bars[0])',context);
+assert.deepEqual(ohlc(),['2.141','2.143','2.139','2.142']);
+vm.runInContext('updateReadout(bars[1])',context);
+assert.deepEqual(ohlc(),['2.142','2.142','2.138','2.139']);
+assert.ok([...elements.values()].some(node => node.textContent === '-0.003 (-0.14%)'));
+
+console.log(JSON.stringify({ok:true, historicalAndLatestReadouts:true, axisLabelsSeparated:true, etfOhlc:true}));
