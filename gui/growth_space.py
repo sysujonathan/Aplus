@@ -116,7 +116,7 @@ class GrowthSpacePage(ttk.Frame):
         self.store, self.host = store, None
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self._status = tk.StringVar(value='正在打开 PA 成长空间…')
+        self._status = tk.StringVar(value='正在打开 成长空间…')
         self.canvas = tk.Frame(self, background=APP_BG, width=640, height=480)
         self.canvas.grid(row=0, column=0, sticky=tk.NSEW)
         self._loading = ttk.Frame(self, padding=24)
@@ -130,7 +130,7 @@ class GrowthSpacePage(ttk.Frame):
         if self.host:
             self.host.cleanup()
         try:
-            self._status.set('正在打开 PA 成长空间…')
+            self._status.set('正在打开 成长空间…')
             self._retry.pack_forget()
             self._loading.place(relx=.5, rely=.5, anchor=tk.CENTER)
             self._loading.lift()

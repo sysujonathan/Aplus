@@ -28,7 +28,7 @@
     terms:[], graph:{nodes:[],edges:[]}, scope:'public', composing:false, ready:false, page:'library', boot:{}, cases:[], topics:[], stats:{}, trials:[], records:[],
     query:'', filters:{symbol:'',timeframe:'',market:'',data_kind:''}, filterOpen:false,
     searchSeq:0, searchTimer:null, searchError:'', searchBusy:false, hasMore:false, case:null, imageIndex:0,
-    commentRequests:{}, studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
+    actionContext:null, commentRequests:{}, studyPane:'memory', returnPage:'library', returnScroll:0, overlay:null, pending:[],
     captureCaseId:null, captureMetadata:{}, captureGroup:false, captureError:'', duplicateAllowed:false,
     saving:0, staging:0, draftText:{}, original:null, topicId:null, topicParent:null, topicCases:[], topicSeq:0, topicLoading:false,
     trialCase:null, trialDepth:'quick', judgment:'', trialThought:'', marks:[], marking:false,
@@ -74,7 +74,7 @@
     cancelSearch();S.caseSeq++;S.topicSeq++;clearThumbnails();
     originalCache.clear();originalCacheBytes=0;imageWanted=null;
     Object.assign(S,{case:null,trialCase:null,trialRecord:null,original:null,cases:[],topicCases:[],topicId:null,
-      topicParent:null,topicLoading:false,trials:[],records:[],draftText:{},commentRequests:{},stats:{},boot:{},graph:{nodes:[],edges:[]},
+      topicParent:null,topicLoading:false,trials:[],records:[],draftText:{},commentRequests:{},actionContext:null,publishedCaseId:null,stats:{},boot:{},graph:{nodes:[],edges:[]},
       query:'',filters:{},trialThought:'',trialReview:{},marks:[],judgment:'',setupCase:null,setupDraft:null,
       dirtyMetadata:false,page:'library',composing:false});
     closeOverlay(true);render();
@@ -262,11 +262,72 @@
   function termColors(c) {
     return `<span class="term-colors">${[...new Set((c.term_ids||c.topic_ids||[]).map(id=>S.terms.find(t=>t.id===id)?.color).filter(Boolean))].map(color=>`<i style="background:${color}"></i>`).join('')}</span>`;
   }
+  function closeCaseMenus(){ $$('.case-menu').forEach(n=>{n.hidden=true;});$$('.case-menu-trigger').forEach(n=>n.setAttribute('aria-expanded','false')); }
+  function caseAction(c,command,label,enabled=true,reason='') {
+    return `<button class="btn ghost small" data-action="case-command" data-command="${command}" data-id="${esc(c.id)}" ${enabled?'':`disabled title="${esc(reason)}"`}>${label}</button>`;
+  }
+  function caseActions(c,locked=false) {
+    const a=S.boot.shared_status||{},shared=c.status==='shared';
+    const edit=!locked&&(!shared||a.writable),reason=locked?'完成当前判断后可管理案例':'需要公共库写入权限';
+    const items=caseAction(c,'edit','编辑资料',edit,reason)+(shared
+      ? (a.admin?caseAction(c,'visibility',c.hidden?'恢复案例':'下架公共案例',!locked&&a.writable,reason):'<span class="micro">下架与恢复仅管理员可用</span>')
+      : caseAction(c,'publish','发布到公共案例',!locked&&a.connected&&a.writable,locked?reason:'请先连接有写入权限的 Google 账号')+caseAction(c,'delete','从本机案例库移除',!locked,reason));
+    return `<div class="case-menu-host"><button class="btn small case-menu-trigger" data-action="case-menu" aria-label="案例管理" aria-expanded="false">···</button><div class="case-menu" hidden>${items}</div></div>`;
+  }
+  function applyCaseUpdate(c) {
+    if(S.actionContext?.case.id===c.id)S.actionContext.updated=c;
+    if(S.case?.id===c.id)S.case=c;
+    if(S.original?.case.id===c.id)S.original.case=c;
+    if(S.trialCase?.id===c.id){if(c.hidden){S.trialCase=null;S.trialRecord=null;}else S.trialCase=c;}
+    S.cases=S.cases.map(v=>v.id===c.id?c:v).filter(v=>S.scope!=='public'||(S.filters.hidden==='yes'?v.hidden:!v.hidden));
+    S.topicCases=S.topicCases.map(v=>v.id===c.id?c:v).filter(v=>!v.hidden);
+    if(S.boot.recent_case?.id===c.id)S.boot.recent_case=c.hidden?null:c;
+  }
+  function forgetCase(id) {
+    if(S.actionContext?.case.id===id)S.actionContext.deleted=true;
+    S.cases=S.cases.filter(c=>c.id!==id);S.topicCases=S.topicCases.filter(c=>c.id!==id);S.atlasCases=S.atlasCases.filter(c=>c.id!==id);
+    if(S.boot.recent_case?.id===id){S.boot.recent_case=null;S.boot.recent_case_id=null;}
+    if(S.case?.id===id)S.case=null;
+    if(S.trialCase?.id===id){S.trialCase=null;S.trialRecord=null;S.judgment='';S.trialThought='';S.trialReview={};S.marks=[];}
+    if(S.original?.case.id===id)S.original=null;
+    for(const key of Object.keys(S.draftText))if(key.endsWith(':'+id))delete S.draftText[key];
+    delete S.commentRequests[id];clearThumbnails();originalCache.clear();originalCacheBytes=0;
+    if(S.page==='study')S.page='library';
+  }
+  async function caseCommand(command,id) {
+    if(S.saving)return;
+    if(S.overlay&&S.overlay!=='original'){toast('先完成当前操作，再管理案例。');return;}
+    if(S.original?.fromTrial&&!S.trialRecord){toast('完成当前判断后可管理案例。');return;}
+    const seq=++S.caseSeq;
+    let c;S.saving++;
+    try{c=(await api('get_case',id)).case;}finally{S.saving--;}
+    if(seq!==S.caseSeq)return;
+    const a=S.boot.shared_status||{};
+    if(c.status==='shared'&&command==='visibility'&&!a.admin){toast('只有管理员可下架或恢复公共案例。',true);return;}
+    if(c.status==='shared'&&['edit','visibility'].includes(command)&&!a.writable){toast('需要公共库写入权限。',true);return;}
+    S.actionContext={case:c,previousCase:S.case,viewer:S.original?{...S.original}:null};S.case=c;
+    if(command==='edit'){editCase();return;}
+    if(command==='publish'&&c.status!=='shared'){publishPreview();return;}
+    try {
+      if(command==='visibility'&&c.status==='shared')await changeVisibility();
+      else if(command==='delete'&&c.status!=='shared')await deleteLocalCase();
+      else throw Error('此案例不支持该操作');
+    } finally {closeOverlay(true);render();}
+  }
+  async function deleteLocalCase() {
+    const c=S.case;
+    if(!window.confirm(`从本机案例库移除“${caseTitle(c)}”？\n该案例及其本机研究记录将移除，原图文件与恢复资料保留在本机。已发布的公共版本与账号历史不受影响。`))return;
+    S.saving++;let committed=false;
+    try {
+      const result=await api('delete_case',c.id);if(!result.deleted)throw Error('未收到删除确认');committed=true;
+      forgetCase(c.id);await refreshData();if(S.page==='library')await search(false);toast('案例已从本机案例库移除，原图和恢复资料仍保留');
+    } catch(e){toast(committed?'案例已从本机案例库移除，列表尚未刷新：'+e.message:e.message,true);}finally{S.saving--;}
+  }
   function card(c) {
     const src = thumbOf(c);
     const reasons = c.match_reasons || c.hit_reasons || c.matches || [];
     const hit = Array.isArray(reasons) ? reasons.map(v => typeof v === 'string' ? v : v.label || v.field || '').join(' · ') : String(reasons);
-    return `<button class="case-card" data-action="quick-open" data-id="${esc(c.id)}" aria-label="查看 ${esc(caseTitle(c))}"><div class="case-photo" ${c.status==='shared'?`data-thumb-case="${esc(c.id)}"`:''}>${src ? `<img src="${esc(src)}" alt="${esc(caseTitle(c))}" loading="lazy">` : `<span class="micro">${c.thumbnail_pending?'正在读取缩略图…':'图片暂不可用'}</span>`}${c.data_kind === 'test' ? '<span class="test-tag">测试样本</span>' : ''}</div><div class="case-info"><small class="between"><span>${esc(summary(c))}</span><span class="privacy">${c.status==='shared'?esc(c.contributor.name):'私密'}</span></small><b>${esc(caseTitle(c))}</b>${termColors(c)}${hit ? `<span class="hit">命中：${esc(hit)}</span>` : `<small>${esc((c.keywords || []).join ? (c.keywords || []).join(' / ') : c.keywords || '')}${c.image_count > 1 ? ` · ${c.image_count} 张图` : ''}</small>`}</div></button>`;
+    return `<article role="group" class="case-card" data-action="quick-open" data-id="${esc(c.id)}" aria-label="查看 ${esc(caseTitle(c))}"><button class="case-card-main" data-action="quick-open" data-id="${esc(c.id)}"><div class="case-photo" ${c.status==='shared'?`data-thumb-case="${esc(c.id)}"`:''}>${src ? `<img src="${esc(src)}" alt="${esc(caseTitle(c))}" loading="lazy">` : `<span class="micro">${c.thumbnail_pending?'正在读取缩略图…':'图片暂不可用'}</span>`}${c.data_kind === 'test' ? '<span class="test-tag">测试样本</span>' : ''}</div><div class="case-info"><small class="between"><span>${esc(summary(c))}</span><span class="privacy">${c.status==='shared'?esc(c.contributor.name):'私密'}</span></small><b>${esc(caseTitle(c))}</b>${termColors(c)}${hit ? `<span class="hit">命中：${esc(hit)}</span>` : `<small>${esc((c.keywords || []).join ? (c.keywords || []).join(' / ') : c.keywords || '')}${c.image_count > 1 ? ` · ${c.image_count} 张图` : ''}</small>`}</div></button>${caseActions(c)}</article>`;
   }
   function grid(cases, emptyText = '还没有案例') {
     return cases.length ? `<div class="case-grid">${cases.map(card).join('')}</div>` : `<div class="empty"><strong>${esc(emptyText)}</strong><p>粘贴或导入一张截图。</p><button class="btn primary" data-action="paste">${icon('paste')} 粘贴截图</button><button class="btn" style="margin-left:8px" data-action="import">${icon('upload')} 导入图片</button></div>`;
@@ -274,7 +335,7 @@
   function library() {
     const count = S.cases.length;
     const recent = S.boot.recent_case;
-    const resume = recent ? `<div class="resume"><span>继续研究 · ${esc(caseTitle(recent))}</span><button class="btn small" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : '';
+    const resume = recent ? `<div class="resume"><span>继续研究 · ${esc(caseTitle(recent))}<small class="micro"> · ${recent.status==='shared'?'公共案例':'私密草稿'}</small></span>${caseActions(recent)}<button class="btn small" data-action="study-open" data-id="${esc(recent.id)}">继续 ${icon('arrow')}</button></div>` : '';
     const results = S.searchError && !count
       ? `<div class="save-error">${esc(S.searchError)}<br><button class="link-button" data-action="search-now">重新搜索</button></div>`
       : count ? grid(S.cases) : `<div class="empty"><strong>${S.query || Object.values(S.filters).some(Boolean) ? '没有找到对应案例' : '还没有案例'}</strong><p>${S.query || Object.values(S.filters).some(Boolean) ? '试试更短的关键词，或清除筛选。' : 'Ctrl+V 粘贴截图，或拖入、批量导入；不填标题也能保存。'}</p>${S.query || Object.values(S.filters).some(Boolean) ? '<button class="btn" data-action="reset-search">查看全部案例</button>' : '<button class="btn primary" data-action="import">收录截图</button>'}</div>`;
@@ -287,7 +348,7 @@
     const image = imageOf(c,S.imageIndex);
     const src = imageUrl(image);
     const topics = c.topic_ids || [];
-    return `<section class="page study-page">${contextBanner()}<div class="study-header between"><div><h1>${esc(caseTitle(c))}</h1><p>${esc(summary(c))} · ${c.status==='shared'?'公共案例 · '+esc(c.contributor.name):sourceLabel(c)+' · 本机私密草稿'}</p></div><div class="button-group"><button class="btn" data-action="study-back">${icon('back')} 返回搜索</button><button class="btn" data-action="original">${icon('zoom')} 查看原图</button>${S.context?.can_compare === true && !S.context?.comparison ? '<button class="btn primary" data-action="compare">' + icon('layers') + ' 与当前行情对照</button>' : ''}</div></div><div class="study-layout"><section class="photo-panel"><div class="photo-heading"><span>${icon('image')} 历史原图</span><span class="muted">${c.data_kind === 'test' ? '测试样本 · ' : ''}${S.imageIndex + 1} / ${(c.images || []).length}</span></div><button class="study-image" data-action="original" title="放大原图">${src ? `<img src="${esc(src)}" alt="${esc(image?.name || caseTitle(c))}">` : `<span class="muted">${esc(imageMessage(image))}</span>`}</button>${gallery(c)}<div class="photo-footer"><div class="topic-list">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>${c.status==='shared'?termColors(c):`<button class="btn ghost small" data-action="append-images">${icon('plus')} 追加图片</button>`}</div></section><aside class="study-side"><h2>案例笔记</h2><nav class="tabs">${[['memory','案例资料'],['notes','个人笔记'],['topics','知识线索'],...(c.status==='shared'?[['comments','公共留言'],['history','修改历史']]:[])].map(([id,name]) => `<button data-action="study-pane" data-pane="${id}" class="${S.studyPane === id ? 'active' : ''}">${name}</button>`).join('')}</nav><div class="side-content">${c.hidden?'<div class="alert-line">已下架 · 原图和记录保留</div>':''}${c.revision_conflict?'<div class="alert-line">资料有并发修改，当前显示分歧前版本。请查看修改历史后重新保存。</div>':''}${c.visibility_conflict?'<div class="alert-line">上下架操作冲突，案例暂保持下架；请重新确认状态。</div>':''}${studyPane(c,topics)}</div></aside></div></section>`;
+    return `<section class="page study-page">${contextBanner()}<div class="study-header between"><div><h1>${esc(caseTitle(c))}</h1><p>${esc(summary(c))} · ${c.status==='shared'?'公共案例 · '+esc(c.contributor.name):sourceLabel(c)+' · 本机私密草稿'}</p></div><div class="button-group">${caseAction(c,'edit','编辑',c.status!=='shared'||S.boot.shared_status?.writable,'需要公共库写入权限')}${caseActions(c)}<button class="btn" data-action="study-back">${icon('back')} 返回搜索</button><button class="btn" data-action="original">${icon('zoom')} 查看原图</button>${S.context?.can_compare === true && !S.context?.comparison ? '<button class="btn primary" data-action="compare">' + icon('layers') + ' 与当前行情对照</button>' : ''}</div></div><div class="study-layout"><section class="photo-panel"><div class="photo-heading"><span>${icon('image')} 历史原图</span><span class="muted">${c.data_kind === 'test' ? '测试样本 · ' : ''}${S.imageIndex + 1} / ${(c.images || []).length}</span></div><button class="study-image" data-action="original" title="放大原图">${src ? `<img src="${esc(src)}" alt="${esc(image?.name || caseTitle(c))}">` : `<span class="muted">${esc(imageMessage(image))}</span>`}</button>${gallery(c)}<div class="photo-footer"><div class="topic-list">${(c.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>${c.status==='shared'?termColors(c):`<button class="btn ghost small" data-action="append-images">${icon('plus')} 追加图片</button>`}</div></section><aside class="study-side"><h2>案例笔记</h2><nav class="tabs">${[['memory','案例资料'],['notes','个人笔记'],['topics','知识线索'],...(c.status==='shared'?[['comments','公共留言'],['history','修改历史']]:[])].map(([id,name]) => `<button data-action="study-pane" data-pane="${id}" class="${S.studyPane === id ? 'active' : ''}">${name}</button>`).join('')}</nav><div class="side-content">${c.hidden?'<div class="alert-line">已下架 · 原图和记录保留</div>':''}${c.revision_conflict?'<div class="alert-line">资料有并发修改，当前显示分歧前版本。请查看修改历史后重新保存。</div>':''}${c.visibility_conflict?'<div class="alert-line">上下架操作冲突，案例暂保持下架；请重新确认状态。</div>':''}${studyPane(c,topics)}</div></aside></div></section>`;
   }
   function gallery(c, action = 'case-image') {
     return c.images?.length > 1 ? `<div class="small-gallery">${c.images.map((image,index) => `<button class="${S.imageIndex === index ? 'active' : ''}" data-action="${action}" data-index="${index}" aria-label="第 ${index + 1} 张图片" title="${esc(image.name || '案例图片')}"><span class="micro">第 ${index + 1} 张</span></button>`).join('')}</div>` : '';
@@ -298,7 +359,7 @@
       const revisions=[{id:'original',author:c.contributor,created:c.created,values:c.original_metadata},...(c.history||[])];
       return revisions.map(n=>`<article class="note-item"><small>${n.id==='original'?'原始贡献':'资料修订'} · ${esc(n.author.name)} · ${esc(date(n.created))}</small><b>${esc(n.values?.title||'未命名')}</b><p class="memory">${esc(n.values?.memory||'')}</p><small>${esc((n.values?.keywords||[]).join(' / '))}<br>${esc((n.values?.term_ids||[]).map(topicName).join(' / '))}</small></article>`).join('');
     }
-    if (S.studyPane === 'memory') return `${c.personal_error?`<div class="alert-line">${esc(c.personal_error)}</div>`:''}${c.trial_setup_error?`<div class="alert-line">${esc(c.trial_setup_error)}</div>`:''}<div class="memory">${esc(c.memory || '尚未添加记忆描述')}</div><div class="rule"></div><div class="source-details">${c.keywords?.length ? `<div>关键词 <strong>${esc(Array.isArray(c.keywords) ? c.keywords.join(' / ') : c.keywords)}</strong></div>` : ''}<div>收录于 <strong>${esc(date(c.created))}</strong></div><div>图片 <strong>${c.images?.length || 0} 张</strong></div></div><div class="form-actions">${c.status==='shared'?`<button class="btn small" data-action="mark-studied">记为已研究</button>${S.boot.shared_status?.writable?'<button class="btn small" data-action="edit-case">编辑资料</button>':''}<button class="btn ghost small" data-action="reload-case">刷新案例</button>${S.boot.shared_status?.admin?`<button class="btn small" data-action="visibility-case">${c.hidden?'恢复案例':'下架案例'}</button>`:''}`:'<button class="btn small" data-action="edit-case">编辑资料</button><button class="btn primary small" data-action="publish-preview">提交到公共空间</button>'}</div><div class="rule"></div>${c.hidden?'':`<button class="btn ghost small" data-action="start-trial" data-id="${esc(c.id)}">${icon('trial')} 开始分阶段试炼</button>`}${c.status==='shared'?'':'<button class="btn ghost small" data-action="configure-trial">设置试炼</button>'}`;
+    if (S.studyPane === 'memory') return `${c.personal_error?`<div class="alert-line">${esc(c.personal_error)}</div>`:''}${c.trial_setup_error?`<div class="alert-line">${esc(c.trial_setup_error)}</div>`:''}<div class="memory">${esc(c.memory || '尚未添加记忆描述')}</div><div class="rule"></div><div class="source-details">${c.keywords?.length ? `<div>关键词 <strong>${esc(Array.isArray(c.keywords) ? c.keywords.join(' / ') : c.keywords)}</strong></div>` : ''}<div>收录于 <strong>${esc(date(c.created))}</strong></div><div>图片 <strong>${c.images?.length || 0} 张</strong></div></div><div class="form-actions">${c.status==='shared'?`<button class="btn small" data-action="mark-studied">记为已研究</button><button class="btn ghost small" data-action="reload-case">刷新案例</button>`:''}</div><div class="rule"></div>${c.hidden?'':`<button class="btn ghost small" data-action="start-trial" data-id="${esc(c.id)}">${icon('trial')} 开始分阶段试炼</button>`}${c.status==='shared'?'':'<button class="btn ghost small" data-action="configure-trial">设置试炼</button>'}`;
     if (S.studyPane === 'topics') return `<div class="topic-list">${topics.length ? topics.map(id => `<button class="topic-chip" data-action="open-topic" data-id="${esc(id)}">${esc(topicName(id))}</button>`).join('') : '<span class="micro">尚未关联知识主题</span>'}</div>${c.status==='shared'?'':'<div class="form-actions"><button class="btn small" data-action="edit-case">关联术语</button></div>'}`;
     return `${notesOf(c).length ? `<div class="note-list">${notesOf(c).map(note => `<article class="note-item"><small>${esc(note.author || '我')} · ${esc(date(note.created))}</small><p>${esc(note.text || note.content || '')}</p></article>`).join('')}</div>` : '<div class="inline-empty">还没有研究记录。</div>'}<div class="note-composer"><label class="field-label" for="case-note">个人研究笔记 · 仅本人可见</label><textarea id="case-note" class="field" data-draft="case-note:${esc(c.id)}" placeholder="现在看到了什么？">${esc(S.draftText['case-note:' + c.id] || '')}</textarea><button class="btn primary small" data-action="save-note">保存研究笔记</button></div>`;
   }
@@ -364,7 +425,7 @@
   }
   function judgmentName(value) { return ({consider:'考虑计划',wait:'继续观察',pass:'主动放弃'})[value] || value || '已记录判断'; }
   function trialHistory() {
-    return `<div class="section-head"><h2>我的判断记录</h2></div><div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}</p><small>${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>`;
+    return `<div class="section-head"><h2>我的判断记录</h2></div><div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}</p><small>${esc(date(record.created))}</small>${record.case_id && record.case_available!==false ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>`;
   }
   function universe() {
     const graph=S.graph||{nodes:[],edges:[]}, nodes=graph.nodes||[], selected=nodes.find(n=>n.id===S.topicId);
@@ -387,7 +448,7 @@
     const stats = S.stats;
     const cases = Number(stats.cases || 0), images = Number(stats.images || stats.assets || 0), topics = Number(stats.researched_topics || stats.topics || 0), trials = Number(stats.trials || 0);
     const records = S.records || [];
-    return `<section class="page"><span class="eyebrow">MY JOURNEY</span><h1>个人成长</h1><p class="micro">${S.boot.shared_status?.connected?'当前 Google 账号 · 本机历史记录仍在私密案例页':'本机记录 · 账号研究请连接原 Google 账号查看'}</p>${S.boot.personal_error?`<div class="alert-line">${esc(S.boot.personal_error)}</div>`:''}<div class="growth-grid"><section class="growth-cell"><h3>${S.boot.shared_status?.connected?'我的公共贡献':'本机私密案例'}</h3><strong class="growth-number">${S.boot.shared_status?.connected?Number(stats.contributions||0):cases}</strong><p>${S.boot.shared_status?.connected?`公共库共 ${Number(stats.public_cases||0)} 个案例 · 已研究 ${Number(stats.studied_cases||0)} 个`:`${images} 张原始图片 · 私密草稿`}${Number(stats.test_cases || 0) ? `<br>含 ${Number(stats.test_cases)} 个测试样本` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="library">查看案例 →</button></section><section class="growth-cell"><h3>已开展的知识研究</h3><strong class="growth-number">${S.boot.personal_error?'—':topics}</strong><p>${Number(stats.topic_notes || 0)} 条主题研究记录</p><button class="btn ghost small" data-action="navigate" data-page="universe">进入知识宇宙 →</button></section><section class="growth-cell"><h3>真实判断记录</h3><strong class="growth-number">${S.boot.personal_error?'—':trials}</strong><p>截图自主试炼 · 不自动评判盈亏${Number(stats.test_trials || 0) ? `<br>含 ${Number(stats.test_trials)} 条测试样本判断` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="trial">查看判断 →</button></section></div><div class="growth-lower"><section class="growth-panel"><h2>个人研究轨迹</h2>${records.length ? `<div class="timeline">${records.slice(0,12).map(record => `<article class="timeline-item"><b>${esc(record.title || record.case_title || (record.topic_id ? topicName(record.topic_id) : '个人研究'))}</b><p>${esc(record.text || record.content || record.memory || '')}</p><small>${esc(record.author || '我')} · ${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">案例笔记和主题研究保存后，会出现在这里。</div>'}</section><section class="growth-panel"><h2>判断与回看</h2>${S.trials.length ? `<div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}<br>${esc(record.details?.thought || '')}</p><small>${esc(date(record.created))}</small>${record.case_id ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">回看原图</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">还没有判断记录。</div>'}</section></div></section>`;
+    return `<section class="page"><span class="eyebrow">MY JOURNEY</span><h1>个人成长</h1><p class="micro">${S.boot.shared_status?.connected?'当前 Google 账号 · 本机历史记录仍在私密案例页':'本机记录 · 账号研究请连接原 Google 账号查看'}</p>${S.boot.personal_error?`<div class="alert-line">${esc(S.boot.personal_error)}</div>`:''}<div class="growth-grid"><section class="growth-cell"><h3>${S.boot.shared_status?.connected?'我的公共贡献':'本机私密案例'}</h3><strong class="growth-number">${S.boot.shared_status?.connected?Number(stats.contributions||0):cases}</strong><p>${S.boot.shared_status?.connected?`公共库共 ${Number(stats.public_cases||0)} 个案例 · 已研究 ${Number(stats.studied_cases||0)} 个`:`${images} 张原始图片 · 私密草稿`}${Number(stats.test_cases || 0) ? `<br>含 ${Number(stats.test_cases)} 个测试样本` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="library">查看案例 →</button></section><section class="growth-cell"><h3>已开展的知识研究</h3><strong class="growth-number">${S.boot.personal_error?'—':topics}</strong><p>${Number(stats.topic_notes || 0)} 条主题研究记录</p><button class="btn ghost small" data-action="navigate" data-page="universe">进入知识宇宙 →</button></section><section class="growth-cell"><h3>真实判断记录</h3><strong class="growth-number">${S.boot.personal_error?'—':trials}</strong><p>截图自主试炼 · 不自动评判盈亏${Number(stats.test_trials || 0) ? `<br>含 ${Number(stats.test_trials)} 条测试样本判断` : ''}</p><button class="btn ghost small" data-action="navigate" data-page="trial">查看判断 →</button></section></div><div class="growth-lower"><section class="growth-panel"><h2>个人研究轨迹</h2>${records.length ? `<div class="timeline">${records.slice(0,12).map(record => `<article class="timeline-item"><b>${esc(record.title || record.case_title || (record.topic_id ? topicName(record.topic_id) : '个人研究'))}</b><p>${esc(record.text || record.content || record.memory || '')}</p><small>${esc(record.author || '我')} · ${esc(date(record.created))}</small>${record.case_id && record.case_available!==false ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">查看案例</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">案例笔记和主题研究保存后，会出现在这里。</div>'}</section><section class="growth-panel"><h2>判断与回看</h2>${S.trials.length ? `<div class="timeline">${S.trials.slice(0,8).map(record => `<article class="timeline-item"><b>${esc(judgmentName(record.judgment))}</b><p>${esc(record.case_title || record.title || '截图自主试炼')}${record.data_kind === 'test' ? ' · 测试样本' : ''}<br>${esc(record.details?.thought || '')}</p><small>${esc(date(record.created))}</small>${record.case_id && record.case_available!==false ? ` · <button class="link-button" data-action="study-open" data-id="${esc(record.case_id)}">回看原图</button>` : ''}</article>`).join('')}</div>` : '<div class="inline-empty">还没有判断记录。</div>'}</section></div></section>`;
   }
   function render() {
     navigation();
@@ -398,7 +459,7 @@
     requestVisibleImage(); paintMask(); requestThumbnails();
   }
   async function navigate(page) {
-    if (S.overlay) { if (!closeOverlay()) return; }
+    if (S.overlay) { if (!closeOverlay()) return; if(S.overlay==='original')closeOriginal(); }
     cancelSearch();
     S.caseSeq++; S.page = page;
     $('#main').scrollTop = 0;
@@ -505,8 +566,13 @@
       S.dirtyMetadata = false;
     }
     S.caseSeq++;
-    S.overlay = null; S.original = null;
+    S.overlay = null; S.original = null; S.editSession = null;
     $('#overlay-root').innerHTML = '';
+    const context=S.actionContext;S.actionContext=null;
+    if(context){
+      S.case=context.previousCase?.id===context.case.id?(context.deleted?null:context.updated||context.case):context.previousCase;
+      if(context.viewer&&!context.deleted){S.original={...context.viewer,case:context.updated||context.case};renderOriginal();}
+    }
     return true;
   }
   function captureMetadata() {
@@ -619,6 +685,7 @@
     }
   }
   function editCase() {
+    S.editSession = {caseId:S.case.id};
     S.dirtyMetadata = false;
     S.editVersion = S.case.revision_version;
     const form = S.case.status==='shared' ? `<div id="metadata-form" class="capture-form"><label class="field-label">标题</label><input class="field" data-meta="title" value="${esc(S.case.title||'')}"><label class="field-label">案例描述</label><textarea class="field" data-meta="memory">${esc(S.case.memory||'')}</textarea><label class="field-label">关键词</label><input class="field" data-meta="keywords" value="${esc((S.case.keywords||[]).join('，'))}">${termPicker(S.case)}</div>` : metadataForm(S.case,'metadata-form');
@@ -633,16 +700,27 @@
     try {
       const shared = S.case.status==='shared';
       const result = shared ? await api('revise_public_case',S.case.id,S.editVersion,{title:metadata.title,memory:metadata.memory,keywords:metadata.keywords,term_ids:metadata.topic_ids}) : await api('update_case',S.case.id,metadata);
-      if (result.case) S.case = result.case;
+      if (result.case) applyCaseUpdate(result.case);
       if(shared)S.sharedChanged=true;
       S.dirtyMetadata = false; closeOverlay(true); render(); toast('资料已保存');
-      if(shared)try{await refreshData();}catch(e){toast('资料已保存，列表尚未刷新：'+e.message,true);}
+      try{await refreshData();if(S.page==='library')await search(false);render();}catch(e){toast('资料已保存，列表尚未刷新：'+e.message,true);}
     } catch (error) { $('#metadata-error').textContent = error.message; }
-    finally { S.saving--; if (S.overlay === 'metadata') { button.disabled = false; button.textContent = '保存资料'; } else $('#overlay-root').innerHTML = ''; }
+    finally { S.saving--; if (S.overlay === 'metadata') { button.disabled = false; button.textContent = '保存资料'; } }
   }
   async function reloadCase() {
     const id=S.case.id, pane=S.studyPane, index=S.imageIndex;
-    if(S.overlay&&!closeOverlay())return;
+    if(!S.actionContext&&S.overlay&&!closeOverlay())return;
+    if(S.actionContext){
+      const context=S.actionContext, session=S.editSession, seq=S.caseSeq;
+      const current=()=>S.overlay==='metadata'&&S.actionContext===context&&S.editSession===session&&S.caseSeq===seq&&S.case?.id===id;
+      if(!current())return;
+      if(S.dirtyMetadata&&!window.confirm('资料尚未保存。放弃修改并重新加载？'))return;
+      await api('refresh_shared');
+      if(!current())return;
+      const result=await api('get_case',id);
+      if(!current())return;
+      S.case=result.case;context.updated=S.case;editCase();return;
+    }
     await api('refresh_shared');
     await refreshData();
     await openCase(id,false);
@@ -669,7 +747,7 @@
     S.saving++;
     try {
       const result=await api('set_public_visibility',S.case.id,S.case.visibility_version,hidden);
-      S.case=result.case;S.sharedChanged=true;render();toast(hidden?'案例已下架':'案例已恢复');
+      applyCaseUpdate(result.case);S.sharedChanged=true;render();toast(hidden?'案例已下架':'案例已恢复');
       try{await refreshData();}catch(e){toast('状态已保存，列表尚未刷新：'+e.message,true);}
     }catch(e){toast(e.message,true);}finally{S.saving--;}
   }
@@ -706,7 +784,7 @@
     const background = S.page === 'study' ? $('.study-image') : S.page === 'trial' ? $('#trial-image-wrap') : null;
     if (background) background.innerHTML = '';
     const canBrowse = c.images.length > 1 && !original.fromTrial;
-    const html = `<div class="overlay original-overlay"><section class="original-dialog" role="dialog" aria-modal="true" aria-label="原图速览"><div class="original-toolbar"><span class="image-name">${original.fromTrial&&!S.trialRecord?'当前阶段':esc(image?.name || caseTitle(c))}${c.data_kind === 'test' ? ' · 测试样本' : ''} · ${c.status==='shared'?'公共案例':'私密'}</span><div class="button-group"><button class="btn ghost icon-button" data-action="zoom-out" aria-label="缩小">${icon('minus')}</button><span class="zoom-label">${Math.round(original.zoom * 100)}%</span><button class="btn ghost icon-button" data-action="zoom-in" aria-label="放大">${icon('plus')}</button><button class="btn small" data-action="zoom-fit">适应</button><button class="btn small" data-action="zoom-native">1:1</button>${!original.fromStudy && !original.fromTrial ? '<button class="btn primary small" data-action="quick-study">研究此案例</button>' : ''}<button class="btn ghost icon-button" data-action="close-original" aria-label="返回">${icon('close')}</button></div></div><div class="original-stage" id="original-stage">${imageUrl(image) ? (original.fromTrial?trialMarkup(image,'original-image'):`<img id="original-image" src="${esc(imageUrl(image))}" alt="${esc(image?.name || caseTitle(c))}" draggable="false">`) : `<div class="loading"><p>${esc(imageMessage(image))}</p>${S.imageError?.id === image?.id ? '<button class="btn" data-action="retry-image">重新读取原图</button>' : ''}</div>`}</div><div class="original-footer"><span>${original.index + 1} / ${c.images.length} · ${image?.width || ''}${image?.height ? ' × ' + image.height : ''}</span><span class="pan-hint">滚轮缩放 · 拖动平移 · Esc 返回</span><div class="button-group">${canBrowse ? `<button class="btn ghost small" data-action="original-prev" ${original.index <= 0 ? 'disabled' : ''}>上一张</button><button class="btn ghost small" data-action="original-next" ${original.index >= c.images.length - 1 ? 'disabled' : ''}>下一张</button>` : ''}</div></div></section></div>`;
+    const html = `<div class="overlay original-overlay"><section class="original-dialog" role="dialog" aria-modal="true" aria-label="原图速览"><div class="original-toolbar"><span class="image-name">${original.fromTrial&&!S.trialRecord?'当前阶段':esc(caseTitle(c))}${c.data_kind === 'test' ? ' · 测试样本' : ''} · ${c.status==='shared'?'公共案例':'私密'}</span><div class="button-group"><button class="btn ghost icon-button" data-action="zoom-out" aria-label="缩小">${icon('minus')}</button><span class="zoom-label">${Math.round(original.zoom * 100)}%</span><button class="btn ghost icon-button" data-action="zoom-in" aria-label="放大">${icon('plus')}</button><button class="btn small" data-action="zoom-fit">适应</button><button class="btn small" data-action="zoom-native">1:1</button>${caseAction(c,'edit','编辑',!(original.fromTrial&&!S.trialRecord)&&(c.status!=='shared'||S.boot.shared_status?.writable),original.fromTrial&&!S.trialRecord?'完成当前判断后可管理案例':'需要公共库写入权限')}${caseActions(c,original.fromTrial&&!S.trialRecord)}${!original.fromStudy && !original.fromTrial ? '<button class="btn primary small" data-action="quick-study">研究此案例</button>' : ''}<button class="btn ghost icon-button" data-action="close-original" aria-label="返回">${icon('close')}</button></div></div><div class="original-stage" id="original-stage">${imageUrl(image) ? (original.fromTrial?trialMarkup(image,'original-image'):`<img id="original-image" src="${esc(imageUrl(image))}" alt="${esc(image?.name || caseTitle(c))}" draggable="false">`) : `<div class="loading"><p>${esc(imageMessage(image))}</p>${S.imageError?.id === image?.id ? '<button class="btn" data-action="retry-image">重新读取原图</button>' : ''}</div>`}</div><div class="original-footer"><span>${original.index + 1} / ${c.images.length} · ${image?.width || ''}${image?.height ? ' × ' + image.height : ''}</span><span class="pan-hint">滚轮缩放 · 拖动平移 · Esc 返回</span><div class="button-group">${canBrowse ? `<button class="btn ghost small" data-action="original-prev" ${original.index <= 0 ? 'disabled' : ''}>上一张</button><button class="btn ghost small" data-action="original-next" ${original.index >= c.images.length - 1 ? 'disabled' : ''}>下一张</button>` : ''}</div></div></section></div>`;
     S.overlay = 'original'; $('#overlay-root').innerHTML = html;
     applyOriginalTransform();
     requestVisibleImage(); paintMask();
@@ -882,7 +960,7 @@
       if(method==='refresh_shared')clearThumbnails();
       const result=await api(method);
       if(result.cancelled)return;
-      if(['disconnect_google','connect_google'].includes(method)) {clearThumbnails();cancelSearch();S.caseSeq++;originalCache.clear();originalCacheBytes=0;imageWanted=null;S.case=null;S.trialCase=null;S.trialRecord=null;S.original=null;S.draftText={};S.commentRequests={};S.trials=[];S.records=[];S.topicCases=[];S.topicId=null;S.topicSeq++;S.page='library';closeOverlay(true);}
+      if(['disconnect_google','connect_google'].includes(method)) {clearThumbnails();cancelSearch();S.caseSeq++;originalCache.clear();originalCacheBytes=0;imageWanted=null;S.case=null;S.trialCase=null;S.trialRecord=null;S.original=null;S.draftText={};S.commentRequests={};S.actionContext=null;S.publishedCaseId=null;S.trials=[];S.records=[];S.topicCases=[];S.topicId=null;S.topicSeq++;S.page='library';closeOverlay(true);}
       await refreshData();
       if(method==='refresh_shared'&&S.page==='study'&&S.case?.status==='shared') {
         try{S.case=(await api('get_case',S.case.id)).case;}catch(e){S.case=null;S.page='library';toast(e.message,true);}
@@ -900,7 +978,10 @@
   async function publishCase() {
     if(S.saving)return;S.saving++;
     const button=$('[data-action="publish-case"]');if(button){button.disabled=true;button.textContent='正在上传并校验…';}
-    try {const result=await api('publish_case',S.case.id);if(!result.published)throw Error('未收到云端提交确认');closeOverlay(true);toast('公共案例已提交');try{await api('refresh_shared');await refreshData();render();}catch(e){toast('提交已确认，列表刷新失败：'+e.message,true);}}
+    try {const result=await api('publish_case',S.case.id);if(!result.published)throw Error('未收到云端提交确认');
+      S.publishedCaseId=result.case_id;
+      overlayHTML(dialog('已发布到公共案例',`<p>${esc(caseTitle(S.case))}</p><p class="micro">本机私密原件已保留，个人笔记和试炼判断未公开。</p>`,`<button class="btn" data-action="close-overlay">留在原处</button><button class="btn primary" data-action="view-published">查看公共版本</button>`),'published');
+      try{await api('refresh_shared');await refreshData();render();}catch(e){toast('发布已确认，列表刷新失败：'+e.message,true);}}
     catch(e){const node=$('#publish-result');if(node)node.textContent=e.message;else toast(e.message,true);}
     finally{S.saving--;if(button){button.disabled=false;button.textContent='重试提交';}}
   }
@@ -908,6 +989,15 @@
     if (S.saving && !['zoom-in','zoom-out','zoom-fit','zoom-native'].includes(action)) return;
     switch (action) {
       case 'navigate': return navigate(element.dataset.page);
+      case 'case-menu': {
+        const host=element.closest('.case-menu-host'),menu=host.querySelector('.case-menu'),opening=menu.hidden;
+        closeCaseMenus();
+        menu.hidden=!opening;element.setAttribute('aria-expanded',String(opening));return;
+      }
+      case 'case-command': return caseCommand(element.dataset.command,element.dataset.id);
+      case 'view-published': {
+        const id=S.publishedCaseId;closeOverlay(true);if(S.original)closeOriginal();S.scope='public';S.filters={};S.query='';await api('refresh_shared');await refreshData();await navigate('library');return openCase(id,true);
+      }
       case 'export-learning': case 'restore-learning': {if(S.saving)return;S.saving++;try{const result=await api('learning_backup',action==='restore-learning');if(!result.cancelled){$('#backup-result').textContent=action==='restore-learning'?`个人学习已恢复 · ${result.result.restored} 条新增${result.result.isolated_unreadable?' · 原异常记录已单独保留':''}`:'个人学习加密备份已保存';await refreshData();}}catch(e){$('#backup-error').textContent=e.message;}finally{S.saving--;}return;}
       case 'set-scope': S.scope=element.dataset.scope;S.filters={};S.query='';cancelSearch();S.page='library';render();return search(false);
       case 'connect-google': if(!canLeaveDraft()){toast('先保存当前图片或研究文字，再连接账号。');return;}return cloudAction('connect_google');
@@ -992,7 +1082,8 @@
   }
   document.addEventListener('click', event => {
     const element = event.target.closest('[data-action]');
-    if (element) { event.preventDefault(); dispatch(element.dataset.action,element,event).catch(error => toast(error.message,true)); }
+    if(element?.dataset.action!=='case-menu')closeCaseMenus();
+    if (element) { event.preventDefault(); if(['case-menu','case-command'].includes(element.dataset.action))event.stopPropagation(); dispatch(element.dataset.action,element,event).catch(error => toast(error.message,true)); }
     else if(event.target.closest('#setup-chart')){const rect=$('#setup-image').getBoundingClientRect();S.setupDraft.cutoff=Math.min(.95,Math.max(.05,(event.clientX-rect.left)/rect.width));$('#setup-line').style.left=(S.setupDraft.cutoff*100)+'%';$('#setup-cutoff').value=Math.round(S.setupDraft.cutoff*100);$('#cutoff-value').textContent=Math.round(S.setupDraft.cutoff*100)+'%';S.dirtyMetadata=true;}
     else if (event.target.closest('#trial-image-wrap')) markPosition(event);
   });
@@ -1020,6 +1111,7 @@
   document.addEventListener('keydown', event => {
     if(event.isComposing || event.keyCode===229 || S.composing)return;
     if (event.key === 'Escape') {
+      if($$('.case-menu').some(n=>!n.hidden)){closeCaseMenus();event.preventDefault();return;}
       event.preventDefault();
       if (S.overlay === 'original') closeOriginal(); else if (S.overlay) closeOverlay(); else if (S.page === 'study') backToSearch();
       return;
@@ -1080,7 +1172,7 @@
   window.addEventListener('resize', () => { if (S.page === 'trial') renderMarks(); });
   navigation();
   const bridgeTimeout = setTimeout(() => {
-    if (!S.ready && !S.bootFailed) $('#main').innerHTML = '<div class="failure-screen"><h1>尚未连接成长空间</h1><p>请从 Aplus 的「PA 成长空间」入口打开。</p><button class="btn" data-action="retry-boot">重试连接</button></div>';
+    if (!S.ready && !S.bootFailed) $('#main').innerHTML = '<div class="failure-screen"><h1>尚未连接成长空间</h1><p>请从 Aplus 的「成长空间」入口打开。</p><button class="btn" data-action="retry-boot">重试连接</button></div>';
   },12000);
   bridgeReady.then(() => clearTimeout(bridgeTimeout));
   boot();

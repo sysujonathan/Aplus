@@ -566,6 +566,12 @@ class GrowthBridge:
         return self._public('collaborate', case_id, 'visibility', expected, hidden)
 
     @guarded
+    def delete_case(self, case_id):
+        if str(case_id).startswith('shared:'):
+            raise ValueError('公共案例删除尚未实现；管理员可选择下架，Google Drive 原件不会删除')
+        return self._store.pa_delete_case(case_id)
+
+    @guarded
     def update_case(self, case_id, metadata):
         if str(case_id).startswith('shared:'):
             raise ValueError('公共案例保留原始提交；个人研究请保存为笔记')
@@ -637,7 +643,8 @@ class GrowthBridge:
         case_map = {row['id']: row for row in cases + public}
         for row in data.get('trials', []) + data.get('notes', []):
             case = case_map.get(row.get('case_id'), {})
-            row['case_title'] = case.get('title') or case.get('memory') or case.get('symbol') or '未命名案例'
+            row['case_available'] = bool(case)
+            row['case_title'] = case.get('title') or case.get('memory') or case.get('symbol') or ('未命名案例' if case else '案例已移除或不可访问')
             row['data_kind'] = case.get('data_kind', 'imported')
         if status['connected']:
             recent = sorted(personal.get('visited', []), key=lambda r: r['created'], reverse=True)

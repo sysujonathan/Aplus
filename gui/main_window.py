@@ -134,7 +134,7 @@ class AplusMainWindow(ttk.Window):
             ("afterhours", "盘后回测"),
             ("strategy", "策略迭代"),
             ("other", "交易管理"),
-            ("growth", "PA 成长空间"),
+            ("growth", "成长空间"),
         )
         for key, label in section_names:
             button = ttk.Button(

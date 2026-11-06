@@ -37,3 +37,7 @@
 .mini-thumb{display:block;flex:0 0 64px;min-height:38px}.mini-thumb img{display:block;width:64px;height:40px;object-fit:contain}
 
 .study-side .tabs{flex-wrap:wrap}.study-side .form-actions{flex-wrap:wrap;justify-content:flex-start}
+
+.case-card{position:relative;cursor:pointer}.case-card>.case-menu-host{position:absolute;right:9px;top:9px;z-index:3}.case-menu-host{position:relative;display:inline-flex;flex-shrink:0}.case-menu-trigger{font-size:19px;line-height:1;padding:3px 9px;min-width:32px;background:#132237ed;border-color:#6483a5}.case-menu{position:absolute;right:0;top:calc(100% + 5px);min-width:190px;padding:6px;background:#152436;border:1px solid #54708f;border-radius:9px;box-shadow:0 10px 28px #0009;z-index:40;text-align:left}.case-menu .btn{display:block;width:100%;text-align:left;white-space:nowrap}.case-menu .micro{display:block;padding:6px;white-space:normal}.original-toolbar .case-menu{max-height:70vh;overflow:auto}
+
+.case-card-main{display:block;width:100%;border:0;background:transparent;padding:0;text-align:left}.original-toolbar>.button-group,.study-header>.button-group{flex-wrap:wrap;justify-content:flex-end}
