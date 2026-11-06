@@ -13,6 +13,7 @@ import pandas as pd
 from .market import board_of, validate_bars
 from .shape_matching import ALGORITHM, compare
 from .shape_store import options,validate_definition
+from .shape_sources import require_adjustment,template_problem
 from .store import digest, now
 
 
@@ -50,24 +51,21 @@ class FrameCache:
 
 
 def scan(store, templates, asof, source, *, cancel=None, progress=None, cache=None, checkpoint=None,
-         on_checkpoint=None):
+         on_checkpoint=None, skipped_templates=None):
     date.fromisoformat(asof)
     from .market import completed_date
     if asof > completed_date():
         raise ValueError('不能匹配尚未收盘的未来交易日')
     if source not in ('baostock','tickflow','tencent'):
         raise ValueError('请选择 Aplus 正式行情来源；不扫描旧工程数据库')
-    if not templates:
+    if not templates and not skipped_templates:
         raise ValueError('请先保存并选择形态模板')
     configs = [(template,options(template.get('settings'))) for template in templates]
     for template,_ in configs:
         validate_definition(template)
-        if template.get('kind') in ('case','chart'):
-            origin = template['origin']
-            if origin['source'] != source:
-                raise ValueError('案例模板与匹配行情来源不同，请从当前来源重新关联真实案例行情')
-            if origin['cutoff'] > asof:
-                raise ValueError('模板包含匹配日之后的行情，不能用于该历史日回放')
+        problem = template_problem(template,source,asof)
+        if problem:
+            raise ValueError(problem)
     records = store.rows("SELECT * FROM (SELECT *,ROW_NUMBER() OVER(PARTITION BY code ORDER BY end DESC,created DESC,rowid DESC) AS rank "
                          "FROM datasets WHERE source=? AND timeframe='daily') WHERE rank=1 ORDER BY code",(source,))
     if not records:
@@ -77,13 +75,14 @@ def scan(store, templates, asof, source, *, cancel=None, progress=None, cache=No
         raise ValueError(f'本地行情只到 {latest}，不能匹配 {asof}')
     records = [r for r in records if any((not c['codes'] or r['code'] in c['codes']) and
                board_of(r['code']) in c['boards'] for _,c in configs)]
-    if not records:
+    if configs and not records:
         raise ValueError('所选股票范围没有本地行情')
     cache = cache or FrameCache()
     timings = dict(read=0.,verify=0.,parse=0.,compute=0.,save=0.,parsed_reused=0,score_reused=0)
     report = dict(id=uuid.uuid4().hex,created=datetime.now(timezone.utc).isoformat(),asof=asof,source=source,algorithm=ALGORITHM,
                   mode='replay' if asof < completed_date() or asof < latest else 'observed',status='running',
-                  templates=templates,matches=[],inputs=[],skipped=[],errors=[],timings=timings)
+                  templates=templates,matches=[],inputs=[],skipped=[],errors=[],timings=timings,
+                  skipped_templates=list(skipped_templates or []))
     started = time.perf_counter()
     matches = []
     previous = {}
@@ -116,9 +115,7 @@ def scan(store, templates, asof, source, *, cancel=None, progress=None, cache=No
             if progress:
                 progress(index,len(records),f"{record['code']} · {asof}")
             try:
-                adjustments = ('不复权','none','raw') if source=='tencent' else ('前复权','qfq')
-                if record['adjustment'] not in adjustments:
-                    raise ValueError('行情复权口径与所选来源不符，不混合价格')
+                require_adjustment(source,record['adjustment'])
                 lineage = dict(dataset_id=record['id'],sha256=record['sha256'],code=record['code'],
                                source=source,adjustment=record['adjustment'],snapshot_end=record['end'],cutoff=asof)
                 reuse = previous.get(record['id']) == lineage
@@ -160,7 +157,7 @@ def scan(store, templates, asof, source, *, cancel=None, progress=None, cache=No
                 saved = capture('checkpoint')
                 on_checkpoint(saved['id'])
                 checkpoint_at = time.monotonic()
-        report['status'] = 'partial' if report['errors'] else 'completed'
+        report['status'] = 'skipped' if not configs else ('partial' if report['errors'] else 'completed')
     except InterruptedError:
         report['status'] = 'cancelled'
     report = capture(report['status'])

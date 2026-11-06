@@ -306,6 +306,8 @@ class ChartPanel(native_ttk.Frame):
         reader, so a late answer for the previous symbol is discarded instead
         of being drawn on the new one.
         """
+        if (getattr(self,'_workspace_context',None) or {}).get('context_kind') == 'shape':
+            on = False
         if not on:
             self._intraday_on = False
             if self._intraday_poller is not None:
@@ -335,7 +337,7 @@ class ChartPanel(native_ttk.Frame):
 
     def _intraday_tick(self):
         self._intraday_after = None
-        if self._workspace_context and self._workspace_context.get('context_kind') == 'shape':
+        if (getattr(self,'_workspace_context',None) or {}).get('context_kind') == 'shape':
             return  # Saved dated research must not silently advance to live bars.
         if not self._intraday_on or not self.winfo_exists():
             return
@@ -385,6 +387,10 @@ class ChartPanel(native_ttk.Frame):
         self._intraday_after = self.after(500, self._intraday_tick)
 
     def _publish_intraday(self, frame):
+        # Both same-symbol cache replay and late poller/hourly replies enter
+        # here. A dated shape session must never receive any minute transport.
+        if (getattr(self,'_workspace_context',None) or {}).get('context_kind') == 'shape':
+            return
         from workbench.live_minutes import (chart_minute_series, expected_minute_close,
                                             live_metadata, minute_rows)
         from workbench.holding_quotes import china_now
@@ -622,6 +628,7 @@ class ChartPanel(native_ttk.Frame):
         from .chart_renderer import render_chart
         shape = item.shape
         self.show_placeholder(item.name or item.code)
+        self._history_btn.pack_forget()
         self.store, self._code, self._tf = store,item.code,'daily'
         try:
             frame, record = load_dataset(store,shape['dataset_id'])

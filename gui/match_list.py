@@ -65,6 +65,8 @@ class MatchList(CandidateTabs):
             self.task_status.set(f"形态 {source} {value.get('progress',0)}/{value.get('total',0)}")
         elif state in ('failed','cancelled','interrupted','partial'):
             self.task_status.set({'failed':'形态匹配失败','cancelled':'形态匹配已取消','interrupted':'形态待续做','partial':'形态部分完成'}[state])
+        elif value.get('skipped_templates'):
+            self.task_status.set(f"形态 {len(value['skipped_templates'])}模板未运行")
         else:
             self.task_status.set('')
 

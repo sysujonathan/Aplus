@@ -98,6 +98,8 @@ def save_template(store, value, expected_revision=None):
                 or str(clip.date.iloc[-1]) != cutoff or record['timeframe'] != 'daily'
                 or record['source'] not in ('baostock','tickflow','tencent')):
             raise ValueError('案例行情区间或快照校验不一致')
+        from .shape_sources import require_adjustment
+        require_adjustment(record['source'],record['adjustment'])
         path = normalize(clip.close).round(10).tolist()
         origin.update(code=record['code'],source=record['source'],adjustment=record['adjustment'],
                       start=str(clip.date.iloc[0]),cutoff=str(clip.date.iloc[-1]),bars=len(clip))

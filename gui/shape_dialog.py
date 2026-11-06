@@ -148,6 +148,8 @@ class ShapeDialog(tk.Toplevel):
         self.history.pack(side=tk.LEFT,fill=tk.X,expand=True,padx=8)
         self.history.bind('<<ComboboxSelected>>',self._open_history)
         ttk.Button(history,text='继续未完成匹配',command=self._resume).pack(side=tk.RIGHT)
+        self.skipped_button=ttk.Button(history,text='未运行模板',command=self._show_skipped_templates,state=tk.DISABLED)
+        self.skipped_button.pack(side=tk.RIGHT,padx=5)
         result_host=ttk.Frame(bottom)
         result_host.grid(row=3,column=0,columnspan=2,sticky=tk.NSEW,pady=4)
         self.results=ttk.Treeview(result_host,columns=('code','template','score','date'),show='headings')
@@ -366,6 +368,7 @@ class ShapeDialog(tk.Toplevel):
     def _display_run(self,identifier):
         self.workspace.select(self.results_page)
         self.report=self.store.shape_run(identifier)
+        self.skipped_button.configure(state=tk.NORMAL if self.report.get('skipped_templates') else tk.DISABLED)
         self._view_run=identifier
         label=next((k for k,v in self._history_map.items() if v==identifier),'')
         self.history_var.set(label)
@@ -381,12 +384,29 @@ class ShapeDialog(tk.Toplevel):
             self._rows[iid]=row
         children=self.results.get_children()
         if children:self.results.selection_set(children[0])
-        self.status.set(f"{self.report['asof']} · {self.report['status']} · {len(self.report['matches'])} 项 · 跳过 {len(self.report['skipped'])} / 错误 {len(self.report['errors'])}")
+        state='未运行' if self.report['status']=='skipped' else self.report['status']
+        self.status.set(f"{self.report['asof']} · {state} · {len(self.report['matches'])} 项 · 跳过 {len(self.report['skipped'])} / 错误 {len(self.report['errors'])} · 未运行模板 {len(self.report.get('skipped_templates',[]))}")
+
+    def _show_skipped_templates(self):
+        values=getattr(self,'report',{}).get('skipped_templates',[])
+        if not values:return
+        from tkinter.scrolledtext import ScrolledText
+        window=tk.Toplevel(self)
+        window.title('未运行模板与原因')
+        window.geometry('900x460')
+        text=ScrolledText(window,wrap=tk.WORD,font=('Microsoft YaHei UI',10),
+                          background=PANEL_BG,foreground=TEXT,padx=14,pady=12)
+        text.pack(fill=tk.BOTH,expand=True)
+        text.insert('1.0',f"{self.report['asof']} · {SOURCES[self.report['source']]}\n跟踪设置保留；没有把以下项目算作未命中。\n\n"+
+                    '\n\n'.join(f"{value['name']}\n{value['reason']}" for value in values))
+        text.configure(state=tk.DISABLED)
+        return window,text
 
     def _resume(self):
         try:
             if hasattr(self,'report'):
-                self.runner.submit(self.report['templates'],self.report['asof'],self.report['source'],checkpoint=self.report['id'])
+                self.runner.submit(self.report['templates'],self.report['asof'],self.report['source'],checkpoint=self.report['id'],
+                                   skipped_templates=self.report.get('skipped_templates'))
             else:
                 status=self.runner.status()
                 if not status.get('spec'):raise ValueError('没有未完成任务，可保存模板后重新匹配')
