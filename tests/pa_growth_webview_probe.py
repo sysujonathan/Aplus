@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-def run(folder, reopen=False):
+def run(folder, reopen=False, quick=False):
     import webview
     from gui.growth_bridge import GrowthBridge
     from gui.growth_shell import ASSETS
@@ -78,6 +78,51 @@ def run(folder, reopen=False):
             wait("document.querySelector('[data-action=import]') && !document.querySelector('.failure-screen')")
             click('[data-action=set-scope][data-scope=private]')
             wait("Boolean(document.querySelector('#search-input'))")
+            if quick:
+                c = store.pa_save_case([dict(name='quick.png', data=(folder / 'samples/sample-1.png').read_bytes())],
+                                       dict(title='Quick case', memory='快捷管理隔离样本', data_kind='test'))['case']
+                click('[data-page=library]')
+                wait("!!document.querySelector('.case-card')")
+                assert evaluate("document.querySelector('.case-menu-trigger').offsetParent!==null")
+                click('.case-card .case-menu-trigger')
+                wait("!document.querySelector('.case-card .case-menu').hidden")
+                assert not evaluate("!!document.querySelector('.original-dialog,.study-page')")
+                click('.case-card [data-command=edit]')
+                wait("!!document.querySelector('#metadata-form')")
+                evaluate("document.querySelector('#metadata-form details').open=true")
+                field('#metadata-form [data-meta=title]', 'Edited from card')
+                click('[data-action=save-metadata]')
+                wait("!window.aplusGrowthBusy() && !document.querySelector('#metadata-form') && document.querySelector('.case-card')?.innerText.includes('Edited from card')")
+                click('.case-card-main')
+                wait("document.querySelector('#original-image')?.naturalWidth>0")
+                click('[data-action=zoom-in]')
+                zoom = evaluate("document.querySelector('.zoom-label').textContent")
+                click('.original-toolbar [data-command=edit]')
+                wait("!!document.querySelector('#metadata-form')")
+                evaluate("document.querySelector('#metadata-form details').open=true")
+                field('#metadata-form [data-meta=title]', 'Edited from original')
+                click('[data-action=save-metadata]')
+                wait("!window.aplusGrowthBusy() && document.querySelector('#original-image')?.naturalWidth>0")
+                assert evaluate("document.querySelector('.zoom-label').textContent") == zoom
+                assert not evaluate("!!document.querySelector('.study-page')")
+                click('[data-action=quick-study]')
+                wait("!!document.querySelector('.study-header')")
+                click('.study-header [data-command=edit]')
+                wait("!!document.querySelector('#metadata-form')")
+                field('#metadata-form [data-meta=memory]', 'Edited in detail')
+                click('[data-action=save-metadata]')
+                wait("!window.aplusGrowthBusy() && !document.querySelector('#metadata-form')")
+                assert store.pa_case(c['id'], touch=False)['memory'] == 'Edited in detail'
+                click('[data-action=original]')
+                wait("document.querySelector('#original-image')?.naturalWidth>0")
+                click('.original-toolbar .case-menu-trigger')
+                evaluate('window.confirm=()=>true')
+                click('.original-toolbar [data-command=delete]')
+                wait("!window.aplusGrowthBusy() && !document.querySelector('.original-dialog,.study-page,.case-card,.resume')")
+                assert not store.pa_search()
+                (folder / 'quick-result.json').write_text(json.dumps(dict(ok=True, real_webview=True, synthetic=True,
+                    checks=['visible-card-menu', 'card-edit-in-place', 'viewer-edit-restores-zoom', 'detail-edit', 'viewer-delete-clears-references'])), encoding='utf-8')
+                return
             if reopen:
                 click('[data-page=library]')
                 wait("Boolean(document.querySelector('.resume'))")
@@ -257,4 +302,4 @@ def run(folder, reopen=False):
 
 
 if __name__ == '__main__':
-    run(sys.argv[1], reopen='--reopen' in sys.argv[2:])
+    run(sys.argv[1], reopen='--reopen' in sys.argv[2:], quick='--quick-actions' in sys.argv[2:])

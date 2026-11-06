@@ -1,12 +1,12 @@
 /* Small render checks for this batch only; no WebView/OAuth/install replay. */
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const elements=new Map(),events={};
-const el=k=>{if(!elements.has(k))elements.set(k,{innerHTML:''});return elements.get(k);};
+const el=k=>{if(!elements.has(k))elements.set(k,{innerHTML:'',style:{},scrollTop:0,focus(){}});return elements.get(k);};
 let requestSerial=0;
-const ctx=vm.createContext({crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener:(name,fn)=>events[name]=fn},console});
+const ctx=vm.createContext({setTimeout,clearTimeout,crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener:(name,fn)=>events[name]=fn},console});
 const source=fs.readFileSync(require('node:path').join(__dirname,'../gui/pa_growth/growth.js'),'utf8');
-vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,saveComment,setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
-if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')) {
+vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,growth,saveComment,card,caseActions,caseCommand,saveMetadata,publishCase,closeOverlay,renderOriginal,dispatch,setQuickHooks:h=>{if(h.refresh)refreshData=h.refresh;if(h.search)search=h.search;if(h.form)readMetadata=h.form;if(h.viewer)renderOriginal=h.viewer;if(h.images)requestVisibleImage=h.images;},setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
+if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')&&!process.argv.includes('--quick-actions')) {
 const {S,navigation,library,study,studyPane}=ctx.window.test;
 assert.equal(S.page,'library');navigation();
 const nav=el('#navigation').innerHTML;
@@ -18,8 +18,8 @@ assert(html.includes('继续研究 · Continue me')&&html.includes('Ctrl+V'));
 S.filterOpen=true;html=library();assert(html.includes('已下架'));
 const c={id:'shared:case',title:'Public',status:'shared',contributor:{name:'Contributor'},images:[{id:'image'}],comments:[{author:{name:'Member'},created:'2026-11-05',text:'<script>bad</script>'}],history:[],original_metadata:{}};
 S.case=c;S.studyPane='memory';html=study();
-assert(html.includes('公共留言')&&html.includes('个人笔记')&&html.includes('编辑资料')&&html.includes('下架案例'));
-S.boot.shared_status.admin=false;assert(!study().includes('下架案例'));
+assert(html.includes('公共留言')&&html.includes('个人笔记')&&html.includes('编辑资料')&&html.includes('下架（从 Aplus 移除）'));
+S.boot.shared_status.admin=false;assert(!study().includes('下架（从 Aplus 移除）'));
 S.studyPane='comments';html=studyPane(c,[]);assert(html.includes('&lt;script&gt;bad&lt;/script&gt;')&&!html.includes('<script>bad'));
 S.studyPane='notes';html=studyPane(c,[]);assert(html.includes('仅本人可见')&&!html.includes('bad'));
 S.studyPane='history';assert(studyPane(c,[]).includes('Contributor'));
@@ -68,5 +68,55 @@ const type=text=>{field.value=text;events.input({target:field});};
   assert.equal(S.draftText[key],'','unchanged submitted draft clears after success');
   assert(rendered.includes('></textarea>'));
   console.log('public comment delayed reply: newer draft retained, unchanged submitted draft cleared');
+})().catch(e=>{console.error(e);process.exitCode=1;});
+}
+
+if(process.argv.includes('--quick-actions')) {
+const t=ctx.window.test,{S,card,caseActions,caseCommand,saveMetadata,publishCase,closeOverlay,dispatch,setApi,setEffects,setQuickHooks}=t;
+const privateCase={id:'private-case',status:'private_draft',title:'Private case',memory:'Memory',keywords:[],topic_ids:[],tags:[],notes:[{text:'PRIVATE_NOTE'}],trials:[{text:'PRIVATE_JUDGMENT'}],images:[{id:'image',name:'Chart',data_url:'data:image/png;base64,YQ==',width:60,height:40}]};
+const publicCase={...privateCase,id:'shared:public-case',status:'shared',contributor:{id:'owner',name:'Owner'},revision_version:'rev',visibility_version:'vis'};
+const calls=[];let updated=privateCase;
+S.boot={shared_status:{connected:true,writable:true,admin:false}};S.ready=true;S.scope='private';
+setEffects();setQuickHooks({refresh:async()=>{},search:async()=>{},images:()=>{},form:()=>({title:'Renamed'})});
+setApi(async(method,...args)=>{calls.push([method,...args]);if(method==='get_case')return {case:args[0]===publicCase.id?publicCase:updated};if(method==='update_case'){updated={...updated,...args[1]};return {case:updated};}if(method==='publish_case')return {published:true,case_id:publicCase.id};if(method==='delete_case')return {deleted:true};return {};});
+ctx.window.confirm=()=>true;
+(async()=>{
+  const markup=card(privateCase);
+  assert(markup.includes('aria-label="案例管理"')&&markup.includes('data-command="edit"')&&markup.includes('data-command="publish"')&&markup.includes('data-command="delete"'));
+  const menu={hidden:true},host={querySelector:()=>menu},trigger={dataset:{action:'case-menu'},closest:()=>host,setAttribute(){}};
+  let stopped=0;const before=calls.length;
+  events.click({target:{closest:()=>trigger},preventDefault(){},stopPropagation(){stopped++;}});
+  assert.equal(stopped,1);assert.equal(menu.hidden,false);assert.equal(calls.length,before,'card menu cannot open an image');
+  S.page='library';S.overlay=null;S.case=null;S.original=null;S.cases=[privateCase];
+  await caseCommand('edit',privateCase.id);
+  assert.equal(S.page,'library');assert.equal(S.overlay,'metadata');assert(el('#overlay-root').innerHTML.includes('编辑案例资料'));
+  closeOverlay(true);
+  S.original={case:privateCase,index:0,zoom:2,x:17,y:-8,fromStudy:false,fromTrial:false};S.overlay='original';S.case=privateCase;
+  t.renderOriginal();let viewer=el('#overlay-root').innerHTML;
+  assert(viewer.includes('data-command="edit"')&&viewer.includes('案例管理')&&viewer.includes('研究此案例'));
+  setQuickHooks({viewer:()=>{S.overlay='original';}});
+  await caseCommand('edit',privateCase.id);await saveMetadata();
+  assert.equal(S.page,'library');assert.equal(S.overlay,'original');assert.equal(S.original.zoom,2);assert.equal(S.original.x,17);
+  assert.equal(S.original.case.title,'Renamed');assert.equal(S.cases[0].title,'Renamed');
+  S.overlay=null;S.original=null;S.page='study';S.case=updated;
+  assert(t.study().includes('案例管理')&&t.study().includes('data-command="edit"'));
+  await caseCommand('edit',updated.id);assert.equal(S.page,'study');closeOverlay(true);
+  S.boot.shared_status.admin=false;let shared=caseActions(publicCase);assert(shared.includes('data-command="edit"')&&!shared.includes('data-command="visibility"')&&!shared.includes('data-command="delete"'));
+  S.boot.shared_status.admin=true;assert(caseActions(publicCase).includes('下架（从 Aplus 移除）'));assert(caseActions({...publicCase,hidden:true}).includes('恢复案例'));
+  S.boot.shared_status.writable=false;assert(/data-command="edit"[^>]+disabled/.test(caseActions(publicCase)));assert(/data-command="visibility"[^>]+disabled/.test(caseActions(publicCase)));
+  await caseCommand('edit',publicCase.id);assert.notEqual(S.overlay,'metadata');
+  S.boot.shared_status={connected:true,writable:true,admin:false};S.page='library';S.overlay=null;
+  await caseCommand('publish',updated.id);await publishCase();
+  const success=el('#overlay-root').innerHTML;assert(success.includes('已发布到公共案例')&&success.includes('view-published'));
+  assert(success.includes('本机私密原件已保留')&&!success.includes('PRIVATE_NOTE')&&!success.includes('PRIVATE_JUDGMENT'));
+  await dispatch('view-published',{},{});assert.equal(S.case.id,publicCase.id);assert.equal(S.overlay,'original');
+  closeOverlay(true);S.original=null;S.overlay=null;S.scope='private';S.case=updated;
+  S.cases=[updated];S.boot.recent_case=updated;S.trialCase=updated;S.trialRecord={id:'trial'};
+  await caseCommand('delete',updated.id);
+  assert.equal(S.cases.length,0);assert.equal(S.boot.recent_case,null);assert.equal(S.trialCase,null);assert.equal(S.case,null);
+  S.records=[{case_id:updated.id,case_available:false,text:'Retained account history'}];S.trials=[];
+  const history=t.growth();assert(history.includes('Retained account history')&&!history.includes(`data-id="${updated.id}"`));
+  assert(!source.includes('PA 成长空间'));
+  console.log('quick case actions: card/viewer/detail, in-place edit, roles, publication feedback and deleted references passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 }

@@ -438,6 +438,36 @@ def update_case(store, case_id, value):
     return read_case(store, case_id, touch=False)
 
 
+def delete_case(store, case_id):
+    """Remove only this profile's case; retain original bytes for recovery.
+
+    The archived row/relations are local, never a public contribution. Shared
+    assets stay registered for their other cases; no runtime tree is removed.
+    """
+    owner = _owner(store)
+    with store.atomic_write():
+        case = _case_row(store, case_id, owner)
+        images = _images(store, case_id, owner)
+        notes = store.rows('SELECT * FROM pa_notes WHERE case_id=? AND owner=?', (case_id, owner))
+        trials = store.rows('SELECT * FROM pa_trials WHERE case_id=? AND owner=?', (case_id, owner))
+        setup_keys = [f'{kind}:{owner}:{case_id}' for kind in ('pa_trial_setup', 'pa_trial_setup_issue')]
+        archive = dict(case=case, images=images, notes=notes, trials=trials, deleted=now(),
+                       assets=store.rows('SELECT a.* FROM pa_assets a JOIN pa_case_images i ON a.id=i.asset_id '
+                                         'WHERE i.case_id=? AND a.owner=?', (case_id, owner)),
+                       settings=[r for key in setup_keys for r in store.rows('SELECT * FROM meta WHERE key=?', (key,))])
+        store.execute('INSERT INTO meta(key,value) VALUES(?,?)', (f'pa_deleted:{owner}:{case_id}:{uuid.uuid4().hex}', dumps(archive)))
+        for table in ('pa_notes', 'pa_trials'):
+            store.execute('DELETE FROM ' + table + ' WHERE case_id=? AND owner=?', (case_id, owner))
+        store.execute('DELETE FROM pa_case_images WHERE case_id=?', (case_id,))
+        store.execute('DELETE FROM pa_cases WHERE id=? AND owner=?', (case_id, owner))
+        for key in setup_keys:
+            store.execute('DELETE FROM meta WHERE key=?', (key,))
+        for image in images:
+            store.execute('DELETE FROM pa_assets WHERE id=? AND owner=? '
+                          'AND NOT EXISTS(SELECT 1 FROM pa_case_images WHERE asset_id=?)', (image['id'], owner, image['id']))
+    return dict(deleted=True, case_id=case_id, originals_retained=True)
+
+
 def add_note(store, case_id, text):
     owner = _owner(store)
     _case_row(store, case_id, owner)

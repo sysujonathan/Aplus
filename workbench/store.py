@@ -258,6 +258,10 @@ class Store:
         from .pa_growth import update_case
         return update_case(self, case_id, metadata)
 
+    def pa_delete_case(self, case_id):
+        from .pa_growth import delete_case
+        return delete_case(self, case_id)
+
     def pa_add_note(self, case_id, text):
         from .pa_growth import add_note
         return add_note(self, case_id, text)

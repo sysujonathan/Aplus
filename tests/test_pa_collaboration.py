@@ -2,6 +2,10 @@
 from concurrent.futures import ThreadPoolExecutor
 import copy
 import hashlib
+import os
+import sys
+import uuid
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -279,3 +283,65 @@ def test_comment_reply_keeps_newly_typed_draft():
     result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs')), '--comment-draft'],
                             capture_output=True, text=True, encoding='utf-8', timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_quick_case_management_three_entry_points():
+    node = shutil.which('node')
+    assert node, 'Node required for production quick case management'
+    result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs')), '--quick-actions'],
+                            capture_output=True, text=True, encoding='utf-8', timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_private_delete_keeps_public_original_and_other_owner_safe(team):
+    cloud, a, b, case_id, private, image = team
+    a.store.pa_add_trial(private['id'], 'wait', details={'thought': 'PRIVATE_JUDGMENT'})
+    a.record('notes', private['id'], 'ACCOUNT_HISTORY')
+    before = copy.deepcopy(cloud.files)
+    a.refresh()
+    bridge = GrowthBridge(a.store)
+    bridge._drive = a.drive
+    republished = bridge.publish_case(private['id'])
+    assert republished['ok'] and republished['published'] and republished['case_id'] == case_id
+    assert not bridge.delete_case(case_id)['ok']  # Public cases use explicit admin unpublishing.
+    original_owner = a.store.rows("SELECT value FROM meta WHERE key='pa_local_owner'")[0]['value']
+    a.store.execute("UPDATE meta SET value='another-local-owner' WHERE key='pa_local_owner'")
+    other, _ = make_case(a.store, color='red')
+    a.store.execute("UPDATE meta SET value=? WHERE key='pa_local_owner'", (original_owner,))
+    assert not bridge.delete_case(other['id'])['ok']
+    assert a.store.rows('SELECT id FROM pa_cases WHERE id=?', (other['id'],))
+    result = bridge.delete_case(private['id'])
+    assert result['ok'] and result['deleted'] and result['originals_retained']
+    history = next(r for r in bridge.bootstrap()['records'] if r.get('text') == 'ACCOUNT_HISTORY')
+    assert history['case_available'] is False and history['case_title'] == '案例已移除或不可访问'
+    reopened = Store(a.store.root)
+    with pytest.raises(ValueError, match='不存在'):
+        reopened.pa_case(private['id'])
+    assert not reopened.pa_search() and not reopened.pa_growth()['recent']
+    assert reopened.pa_random_trial('private', drive=a.drive)['eligible'] == 0
+    assert not reopened.rows('SELECT * FROM pa_notes WHERE case_id=?', (private['id'],))
+    assert not reopened.rows('SELECT * FROM pa_trials WHERE case_id=?', (private['id'],))
+    archive = reopened.rows('SELECT value FROM meta WHERE key LIKE ?', (f"pa_deleted:{original_owner}:{private['id']}:%",))
+    assert archive and 'PRIVATE_JUDGMENT' in archive[0]['value']
+    asset = json.loads(archive[0]['value'])['assets'][0]
+    assert (reopened.root / asset['path']).read_bytes() == image
+    assert cloud.files == before  # No public file is edited, trashed or deleted.
+    b.refresh()
+    public = b.case(case_id)
+    assert b.image(case_id, public['images'][0]['id']) == image and not public['notes']
+    assert 'PRIVATE_JUDGMENT' not in repr(cloud.files)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Native Edge WebView')
+def test_quick_case_management_in_real_webview():
+    root = Path(__file__).resolve().parents[1]
+    folder = root / '.test-pa-growth' / ('quick-' + uuid.uuid4().hex[:10])
+    (folder / 'temp').mkdir(parents=True)
+    env = dict(os.environ, TEMP=str(folder / 'temp'), TMP=str(folder / 'temp'),
+               A_WORKBENCH_HOME=str(folder / 'runtime'), PYTHONIOENCODING='utf-8')
+    result = subprocess.run([sys.executable, str(root / 'tests/pa_growth_webview_probe.py'), str(folder), '--quick-actions'],
+                            cwd=root, env=env, capture_output=True, text=True, encoding='utf-8', timeout=65)
+    detail = (folder / 'failure.txt').read_text(encoding='utf-8') if (folder / 'failure.txt').exists() else ''
+    assert result.returncode == 0, result.stdout + result.stderr + detail
+    receipt = json.loads((folder / 'quick-result.json').read_text(encoding='utf-8'))
+    assert receipt['ok'] and receipt['real_webview'] and len(receipt['checks']) == 5

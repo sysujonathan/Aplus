@@ -91,7 +91,7 @@ def run_session(session_path):
         from workbench.store import Store
         from .growth_bridge import GrowthBridge
         bridge = GrowthBridge(Store(payload['runtime_root']), payload.get('context'))
-        window = webview.create_window('Aplus · PA 成长空间', (ASSETS / 'index.html').as_uri(),
+        window = webview.create_window('Aplus · 成长空间', (ASSETS / 'index.html').as_uri(),
             js_api=bridge, width=1100, height=800, min_size=(700, 500),
             frameless=bool(parent), hidden=bool(parent), easy_drag=False, background_color='#101923')
         bridge._window = window
