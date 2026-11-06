@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
 import math
 import threading
 
@@ -96,7 +97,6 @@ def _coordinate_dates(rows, timeframe):
     Week/month labels are calendar periods. Daily labels require the published
     exchange calendar; unpublished years deliberately remain unavailable.
     """
-    from datetime import timedelta
     from workbench.exchange_calendar import is_trading_day
     if timeframe not in ('daily', 'weekly', 'monthly'):
         # Intraday bars occupy verified minutes only. The axis ends at the last
@@ -117,6 +117,26 @@ def _coordinate_dates(rows, timeframe):
             if opened:
                 output.append(day.isoformat())
     return list(reversed(before)) + [row['date'] for row in rows] + after
+
+
+def _bar_close_calendar(root, today):
+    from workbench.exchange_calendar import is_trading_day
+    from workbench.live_minutes import AFTERNOON_CLOSE, AFTERNOON_OPEN, MORNING_CLOSE, MORNING_OPEN
+
+    try:
+        calendar = json.loads((root / 'trading_calendar.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        calendar = None
+    first = today.replace(day=1)
+    last = today + timedelta(days=62)
+    days = {}
+    for offset in range((last - first).days + 1):
+        day = first + timedelta(days=offset)
+        status = is_trading_day(day, calendar)
+        if status is not None:
+            days[day.isoformat()] = status
+    return {'days': days, 'sessions': [[MORNING_OPEN, MORNING_CLOSE],
+                                       [AFTERNOON_OPEN, AFTERNOON_CLOSE]]}
 
 
 def _nearest_index(dates, day):
@@ -282,6 +302,9 @@ def workspace_boot(store, context):
         live = {"interval": int(context.get("minute_interval") or 8),
                 "source": str(context.get("minute_source") or "腾讯分钟行情"),
                 "note": "盘中实时读取；不写入正式行情、不参与策略和账本。"}
+    from workbench.holding_quotes import china_now
+    bar_clock = (_bar_close_calendar(store.root, china_now().date())
+                 if context_kind in ('candidate', 'watch', 'holding') else None)
     try:
         favorites = load_period_favorites(store)
     except (AttributeError, ValueError, OSError):
@@ -298,6 +321,7 @@ def workspace_boot(store, context):
         "displayTimeframe": str(context.get('display_timeframe') or timeframe),
         "startTimeframe": start_timeframe, "live": live,
         "seriesCloseDates": close_dates,
+        "barClock": bar_clock,
         "axisDates": {unit: _coordinate_dates(data, unit) for unit, data in series.items()},
         "contextKind": context_kind, "contextTitle": title,
         "strategyType": str(context.get("strategy_type") or ""), "evidence": payload,

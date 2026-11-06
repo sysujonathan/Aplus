@@ -202,11 +202,15 @@ function callout(ctx, label, x, y, tx, ty, dashed = false) {
   ctx.restore();
 }
 
-function priceTag(ctx, value, py, color, width, right) {
-  ctx.fillStyle = color; ctx.fillRect(width - right, py - 10, right, 20);
+function priceTag(ctx, value, py, color, width, right, subtitle = '') {
+  ctx.fillStyle = color; ctx.fillRect(width - right, py - 10, right, subtitle ? 34 : 20);
   const hex=String(color).replace('#','');
   const light=hex.length===6 && .299*parseInt(hex.slice(0,2),16)+.587*parseInt(hex.slice(2,4),16)+.114*parseInt(hex.slice(4,6),16)>150;
   ctx.fillStyle = light?'#111':'#fff'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(value, width - right / 2, py + 4);
+  if (subtitle) {
+    ctx.font = '11px Segoe UI';
+    ctx.fillText(subtitle, width - right / 2, py + 18);
+  }
 }
 
 function drawLastPrice(ctx, value, y, width, right, showTag = true) {

@@ -210,6 +210,20 @@ def test_workspace_boot_offers_intraday_unit_without_writing_history(tmp_path):
     assert boot["seriesCloseDates"]["m5"]["2026-10-26 14:30"] == "2026-10-26 14:30"
     assert boot["startTimeframe"] == "m5"
     assert boot["live"]["source"] == "腾讯分钟行情"
+    assert boot["barClock"]["sessions"] == [[570, 690], [780, 900]]
+
+
+def test_bar_close_calendar_prefers_verified_local_coverage(tmp_path):
+    from datetime import date
+    from gui.chart_bridge import _bar_close_calendar
+
+    (tmp_path / 'trading_calendar.json').write_text(json.dumps({
+        'start': '2027-01-01', 'end': '2027-01-05', 'trading_days': ['2027-01-05'],
+    }), encoding='utf-8')
+    days = _bar_close_calendar(tmp_path, date(2026, 12, 24))['days']
+    assert days['2026-12-25'] is True
+    assert days['2027-01-04'] is False and days['2027-01-05'] is True
+    assert '2027-01-06' not in days
 
 
 def test_workspace_boot_without_intraday_bars_keeps_daily_only(tmp_path):

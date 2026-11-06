@@ -590,7 +590,9 @@ function renderWorkspace(mode = 'all') {
     registerRect(`alert:${alert.id}`, left, py - 5, width - right, py + 5);
   });
   topContext.restore();
-  drawAxisPriceTags(topContext,canvas._view);
+  const countdown = typeof currentPriceCountdown === 'function' ? currentPriceCountdown(canvas._view) : '';
+  canvas._view.barCloseText = countdown;
+  drawAxisPriceTags(topContext,canvas._view,countdown);
   drawLastPrice(topContext, rows.at(-1).close, y, width, right, false);
   const legendIndex = Math.min(replayIndex, bars.length - 1) - Number(indicatorSettings.ema_offset);
   const emaValue = legendIndex <= replayIndex ? ema[legendIndex] : undefined;

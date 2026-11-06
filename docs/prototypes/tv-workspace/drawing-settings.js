@@ -31,27 +31,84 @@ function drawingPriceInput(value) {
   // Keep canonical prices intact; strip only binary floating-point display noise.
   return Number(Number(value).toFixed(8));
 }
+function barCloseCountdown(unit, stamp, calendar, now = Date.now()) {
+  if (!calendar || !stamp) return '';
+  const minute = 60_000, day = 24 * 60 * minute, offset = 8 * 60 * minute;
+  const local = new Date(now + offset);
+  const today = local.toISOString().slice(0, 10);
+  const midnight = Date.parse(today + 'T00:00:00Z');
+  const closeTime = calendar.sessions.at(-1)[1] * minute;
+  const toDay = time => new Date(time).toISOString().slice(0, 10);
+  let deadline;
+  const intraday = {m1:1,m5:5,m15:15,m30:30,m60:60}[unit];
+  if (intraday) {
+    const clock = (now + offset - midnight) / minute;
+    const session = calendar.sessions.find(([start, end]) => clock >= start && clock < end);
+    if (!session || calendar.days[today] !== true) return '';
+    const last = Date.parse(stamp.replace(' ', 'T') + '+08:00');
+    const close = Math.min(session[1], session[0] + (Math.floor((clock-session[0])/intraday)+1)*intraday);
+    deadline = midnight + close * minute - offset;
+    // The feed may only have the preceding completed bar at a boundary.
+    if (!(last >= deadline - intraday * minute && last <= deadline)) return '';
+  } else if (unit === 'daily') {
+    if (stamp.slice(0,10) !== today || calendar.days[today] !== true) return '';
+    deadline = midnight + closeTime - offset;
+  } else if (unit === 'weekly' || unit === 'monthly') {
+    const periodEnd = date => unit === 'monthly'
+      ? Date.UTC(date.getUTCFullYear(), date.getUTCMonth()+1, 0)
+      : Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + (5-date.getUTCDay()+7)%7);
+    const lastDate = new Date(stamp.slice(0,10) + 'T00:00:00Z');
+    let end = periodEnd(local);
+    if (periodEnd(lastDate) !== end) return '';
+    for (; end >= midnight && calendar.days[toDay(end)] === false; end -= day) {}
+    if (end < midnight || calendar.days[toDay(end)] !== true) return '';
+    deadline = end + closeTime - offset;
+  } else return '';
+  const seconds = Math.ceil((deadline - now) / 1000);
+  if (seconds <= 0) return '';
+  const hours = Math.floor(seconds / 3600);
+  const pad = value => String(value).padStart(2, '0');
+  if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  const tail = `${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
+  return intraday ? tail : `${pad(hours)}:${tail}`;
+}
+
+function currentPriceCountdown(view, now = Date.now()) {
+  const stamp = view.rows.at(-1)?.date;
+  if (replayActive || stamp !== bars.at(-1)?.date) return '';
+  return barCloseCountdown(activeTimeframeUnit, stamp, chartBoot.barClock, now);
+}
+
 function layoutAxisPriceTags(tags, top, bottom) {
-  const gap = 22, half = 10;
+  const gap = 2, half = 10;
   // Preserve the last price and EMA first when a very small axis is crowded.
-  const capacity = Math.max(0, Math.floor((bottom - top) / gap));
-  const result = tags.slice(0, capacity).map(tag => ({...tag})).sort((a,b) => a.py - b.py);
+  const result = [];
+  let remaining = bottom - top;
+  for (const tag of tags) {
+    remaining -= 2 * half + gap + (tag.extra || 0);
+    if (remaining < 0) break;
+    result.push({...tag});
+  }
+  result.sort((a,b) => a.py - b.py);
   result.forEach((tag,index) => {
-    tag.labelY = Math.max(top + half, tag.py, index ? result[index-1].labelY + gap : top + half);
+    const previous = result[index-1];
+    tag.labelY = Math.max(top + half, tag.py,
+      previous ? previous.labelY + 2 * half + gap + (previous.extra || 0) : top + half);
   });
   for (let index=result.length-1; index>=0; index--) {
-    result[index].labelY = Math.min(result[index].labelY,
-      index===result.length-1 ? bottom-half : result[index+1].labelY-gap);
+    const tag = result[index], extra = tag.extra || 0;
+    tag.labelY = Math.min(tag.labelY, index===result.length-1 ? bottom-half-extra
+      : result[index+1].labelY-2*half-gap-extra);
   }
   return result;
 }
-function drawAxisPriceTags(ctx,view) {
+function drawAxisPriceTags(ctx,view, countdown = '') {
   const tags = [];
-  const tag=(value,color)=>{
+  const tag=(value,color,subtitle='')=>{
     if(!Number.isFinite(value)||value<view.low||value>view.high)return;
-    tags.push({value,color,py:view.y(value)});
+    tags.push({value,color,py:view.y(value),subtitle,extra:subtitle ? 14 : 0});
   };
-  tag(view.rows.at(-1).close, '#f3f3f3');
+  tag(view.rows.at(-1).close, '#f3f3f3', countdown);
   if(indicatorSettings.ema && indicatorSettings.indicators_visible!==false && indicatorSettings['ema_'+activeTimeframeUnit]!==false && indicatorSettings.ema_price_labels!==false){
     const index=Math.min(replayIndex,bars.length-1)-Number(indicatorSettings.ema_offset);
     if(index<=replayIndex)tag(ema[index],indicatorSettings.ema_color);
@@ -71,7 +128,7 @@ function drawAxisPriceTags(ctx,view) {
       ctx.beginPath();ctx.moveTo(view.width-view.right,item.py);
       ctx.lineTo(view.width-view.right+5,item.labelY);ctx.stroke();ctx.restore();
     }
-    priceTag(ctx,chartPrice(item.value),item.labelY,item.color,view.width,view.right);
+    priceTag(ctx,chartPrice(item.value),item.labelY,item.color,view.width,view.right,item.subtitle);
   });
 }
 function configureDrawingTabs(object) {
