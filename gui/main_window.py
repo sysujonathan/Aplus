@@ -34,7 +34,7 @@ def right_list_width(window_width, scale=1):
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
         from workbench.branding import APPLICATION_TITLE, apply_window_icon
-        super().__init__(themename="darkly", title=APPLICATION_TITLE)
+        super().__init__(themename="darkly", title=APPLICATION_TITLE, iconphoto=None)
         apply_window_icon(self)
         self._display_scale = self.winfo_fpixels('1i') / 96
         listing_font = tkfont.Font(root=self, family='Microsoft YaHei UI', size=9)
