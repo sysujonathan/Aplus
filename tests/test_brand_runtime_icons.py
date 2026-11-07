@@ -9,7 +9,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import queue
-from unittest.mock import Mock
+from unittest.mock import Mock,call
 
 from PIL import Image
 import pytest
@@ -38,10 +38,14 @@ def test_branding_is_cwd_independent_and_has_no_data_dependency(tmp_path,monkeyp
     assert result.returncode==0,result.stderr
 
 
-def test_root_sets_default_icon_for_child_dialogs():
+def test_root_sets_current_icon_and_default_for_child_dialogs():
     window=Mock()
     assert branding.apply_window_icon(window)
-    window.iconbitmap.assert_called_once_with(default=str(ROOT/'icon_aplus.ico'))
+    window.iconbitmap.assert_has_calls([
+        call(str(ROOT/'icon_aplus.ico')),
+        call(default=str(ROOT/'icon_aplus.ico')),
+    ])
+    assert window.iconbitmap.call_count==2
 
 
 def test_actual_tray_entry_loads_the_approved_icon(monkeypatch):
@@ -61,13 +65,16 @@ def test_actual_tray_entry_loads_the_approved_icon(monkeypatch):
     window._status_text.set.assert_not_called()
 
 
-@pytest.mark.parametrize('failure',['missing','tk_error'])
-def test_cosmetic_icon_failure_does_not_block_startup(tmp_path,monkeypatch,failure):
+@pytest.mark.parametrize('failure',['missing','tk_error','default_error','os_error'])
+def test_cosmetic_icon_failure_does_not_block_startup(tmp_path,monkeypatch,caplog,failure):
     from tkinter import TclError
     window=Mock()
     if failure=='missing':monkeypatch.setattr(branding,'application_icon',lambda:tmp_path/'missing.ico')
+    elif failure=='default_error':window.iconbitmap.side_effect=[None,TclError('synthetic default unavailable')]
+    elif failure=='os_error':window.iconbitmap.side_effect=OSError('synthetic resource failure')
     else:window.iconbitmap.side_effect=TclError('synthetic icon unavailable')
     assert branding.apply_window_icon(window) is False
+    assert 'workbench.branding' in caplog.text and '.ico' in caplog.text
 
 
 def test_shortcuts_use_versioned_icon_but_keep_stable_launch_target():
