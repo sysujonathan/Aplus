@@ -91,6 +91,14 @@ def _resample(frame, rule):
     return output
 
 
+HISTORY_PERIOD_RULES = {"weekly": "W-FRI", "monthly": "ME"}
+
+
+def calendar_close_dates(rows, unit):
+    from workbench.chart_workspace import bar_close_time
+    return {row['date']: str(bar_close_time(row['date'], unit).date()) for row in rows}
+
+
 def _coordinate_dates(rows, timeframe):
     """Extend the time axis, never the price series, into verified sessions.
 
@@ -235,8 +243,9 @@ def drawing_from_frontend(value, rows):
 def workspace_boot(store, context):
     frame = context["frame"].reset_index(drop=True)
     rows = _bars(frame)
-    source = str((context.get("record") or {}).get("source") or "unknown")
-    adjustment = str((context.get("record") or {}).get("adjustment") or "unknown")
+    record = context.get("record") or {}
+    source = str(record.get("source") or "unknown")
+    adjustment = str(record.get("adjustment") or "unknown")
     key = identity(str(context["code"]), source, adjustment)
     document = store.chart_document(key)
     workspace = context.get('workspace')
@@ -264,6 +273,14 @@ def workspace_boot(store, context):
         match = context.get('shape') or {}
         title = f"形态研究 · {match.get('label','')} · 相似 {match.get('score',100):.1f} · {match.get('start','')}—{match.get('end','')}"
     latest = rows[-1]
+    history_start = record.get("start")
+    snapshot_history = (
+        {"dataset": record["id"], "start": history_start}
+        if context.get("embedded") and context.get("context_kind") == "candidate"
+        and timeframe in ("daily", "weekly", "monthly")
+        and record.get("id")
+        and history_start and history_start < rows[0]["date"] else None
+    )
     from workbench.prices import tick_size
     try:
         price_step = tick_size(str(context['code']), latest['close'],
@@ -272,8 +289,13 @@ def workspace_boot(store, context):
         price_step = None  # Unknown instruments cannot borrow a stock tick.
     series = {timeframe: rows}
     if timeframe == "daily":
-        series["weekly"] = _bars(_resample(frame, "W-FRI"))
-        series["monthly"] = _bars(_resample(frame, "ME"))
+        for unit, rule in HISTORY_PERIOD_RULES.items():
+            aggregated = _bars(_resample(frame, rule))
+            # With an earlier snapshot prefix, the first bucket could be
+            # incomplete. Let the page reader return that bucket in full.
+            series[unit] = aggregated[1:] if snapshot_history and len(aggregated) > 1 else aggregated
+    if snapshot_history:
+        snapshot_history["initial"] = {unit: data[0]["date"] for unit, data in series.items()}
     # Live intraday bars are transport, not Store history. They are offered as
     # separate units so a failed refresh can never be mistaken for daily prices.
     # Unit names stay in the ``m<n>`` shape the page already treats as intraday.
@@ -281,11 +303,15 @@ def workspace_boot(store, context):
     if minute_frame is not None and len(minute_frame):
         from workbench.live_minutes import chart_minute_series
         series.update(chart_minute_series(minute_frame, context.get("hour_series")))
+    minute_history = {}
+    for unit, data in series.items():
+        if context.get("embedded") and unit.startswith("m") and unit != "monthly" and len(data) > 300:
+            minute_history[unit] = data
+            series[unit] = data[-300:]
     from .chart_evidence import strategy_evidence
     vectors = strategy_evidence(context)
-    from workbench.chart_workspace import bar_close_time
     intraday = ("m1", "m5", "m15", "m30", "m60")
-    close_dates = {unit: {row['date']: str(bar_close_time(row['date'], unit).date()) for row in data}
+    close_dates = {unit: calendar_close_dates(data, unit)
                    for unit, data in series.items() if unit not in intraday}
     for unit in intraday:
         if unit in series:
@@ -323,6 +349,8 @@ def workspace_boot(store, context):
         "adjustment": adjustment, "timeframe": timeframe, "series": series,
         "displayTimeframe": str(context.get('display_timeframe') or timeframe),
         "startTimeframe": start_timeframe, "live": live,
+        "snapshotHistory": snapshot_history,
+        "minuteHistory": minute_history,
         "seriesCloseDates": close_dates,
         "barClock": bar_clock,
         "axisDates": {unit: _coordinate_dates(data, unit) for unit, data in series.items()},

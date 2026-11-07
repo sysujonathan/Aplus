@@ -92,7 +92,10 @@
     }
     // Rebuild the exposed, possibly forming week/month from the daily prefix.
     // Retain future date slots solely for canonical drawing coordinates.
-    const exposed = aggregate(daily.filter(row => row.date <= cutoff), unit);
+    const firstDailyPeriod = periodKey(daily[0].date, unit);
+    const prefix = complete.filter(row => periodKey(row.date, unit) < firstDailyPeriod &&
+      (closeDates[unit]?.[row.date] || row.date) <= cutoff);
+    const exposed = prefix.concat(aggregate(daily.filter(row => row.date <= cutoff), unit));
     const last = exposed.at(-1)?.date;
     return {rows: [...exposed, ...complete.filter(row => !last || row.date > last)].map(row => ({...row})),
       index: exposed.length - 1};
@@ -101,6 +104,10 @@
     const daily = series.daily || [];
     if (!daily.length || /^m\d+$/.test(unit)) return (series[unit] || []).map(row => closeDates[unit]?.[row.date] || row.date)
       .find(date => date > cutoff) || null;
+    const firstDailyPeriod = periodKey(daily[0].date, unit);
+    const olderClose = (series[unit] || []).filter(row => periodKey(row.date, unit) < firstDailyPeriod)
+      .map(row => closeDates[unit]?.[row.date] || row.date).find(date => date > cutoff);
+    if (olderClose) return olderClose;
     const ends = new Map();
     daily.forEach(row => ends.set(periodKey(row.date, unit), row.date));
     return [...ends.values()].find(date => date > cutoff) || null;

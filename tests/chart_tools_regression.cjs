@@ -460,7 +460,7 @@ context.userObjects=[];context.selectedId=null;context.drawUserObject=realDrawOb
 context.bars=Array.from({length:300},(_,index)=>({date:new Date(Date.UTC(2025,0,index+1)).toISOString().slice(0,10),
   open:39,high:41,low:38,close:40,volume:100}));
 Object.assign(context,{replayIndex:299,replayActive:false,viewCount:204,viewOffset:0,savePrototypeState(){}});
-vm.runInContext(['zoomAround','panChart','panLimits'].map(extract).join('\n'),context);
+vm.runInContext('async '+extract('loadOlderHistoryNearEdge')+'\n'+['zoomAround','panChart','panLimits'].map(extract).join('\n'),context);
 vm.runInContext('calculateEma();renderWorkspace()',context);
 for(const ratio of [.2,.5,.8]){
   const before=context.canvas._view;
