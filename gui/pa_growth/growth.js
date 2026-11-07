@@ -35,6 +35,7 @@
     trialRecord:null, trialReview:{}, context:null, dirtyMetadata:false, bootFailed:false,
     caseSeq:0, imageError:null, atlasCases:[], atlasView:{x:0,y:0,zoom:1}, atlasDrag:null, trialStep:0, trialReveal:0, setupCase:null, setupDraft:null, setupThenStart:false,
   };
+  const cloudTasks=new Map();
   const thumbCache=new Map(), thumbErrors=new Set();
   let thumbBytes=0, thumbWorker=false, thumbPaused=false, thumbGeneration=0;
   const originalCache = new Map();
@@ -67,7 +68,7 @@
     return response;
   }
   function invalidateSecurity(value) {
-    security=value;securitySeq++;
+    security=value;securitySeq++;cloudTasks.clear();
     // Preserve pending local screenshots, but never carry another account's
     // research text, original images, async replies or rendered content forward.
     if(S.overlay==='capture')captureMetadata();
@@ -200,6 +201,60 @@
       } finally { imageWorker = false; }
     })();
   }
+  const clockMs=()=>globalThis.performance?.now?.()??Date.now();
+  const cloudPending=()=>[...cloudTasks.values()].some(t=>t.state==='pending');
+  const cloudFor=id=>cloudTasks.get(id)?.state==='pending';
+  function cloudMetric(operation,stage,start) {
+    const rows=S.cloudTimings||(S.cloudTimings=[]);rows.push({operation,stage,ms:Math.round((clockMs()-start)*1000)/1000});
+    if(rows.length>100)rows.shift();
+  }
+  window.aplusGrowthTimings=()=>[...(S.cloudTimings||[])];
+  function renderCloudActivity() {
+    const host=$('#cloud-activity');if(!host)return;
+    const values=[...cloudTasks.values()],active=values.filter(t=>t.state==='pending'),recent=values.filter(t=>t.state!=='pending').slice(-2);
+    host.innerHTML=[...active,...recent].map(t=>`<div class="cloud-task"><span>${esc(t.title.slice(0,32))} · ${esc(t.message)}</span>${t.publicId?`<button class="link-button" data-action="cloud-view" data-id="${esc(t.publicId)}">查看公共案例</button>`:''}</div>`).join('');
+    $$('[data-action="connect-google"],[data-action="disconnect-google"]').forEach(b=>{if(cloudPending())b.disabled=true;else if(!S.saving)b.disabled=false;});
+  }
+  function repaintCloudCase(c) {
+    if(S.page==='library') {
+      $$('.case-card').filter(n=>n.dataset.id===c.id).forEach(n=>{
+        const row=S.cases.find(v=>v.id===c.id);if(row)n.outerHTML=card(row);else n.remove();
+      });
+      if(!S.boot.recent_case)$$('.resume').forEach(n=>n.remove());
+      const count=$('.results-head > span');if(count)count.textContent=`${S.hasMore?'已显示 ':''}${S.cases.length} 个案例`;
+      requestThumbnails();
+    } else if(!S.overlay&&!S.composing&&(S.case?.id===c.id||['universe','growth'].includes(S.page)))render();
+    if(S.original?.case.id===c.id&&S.overlay==='original') {
+      if(S.original.fromTrial&&!S.trialCase)closeOriginal();else renderOriginal();
+    }
+  }
+  async function runCloud(c,operation,call) {
+    if(cloudFor(c.id)){toast('该案例正在同步，请勿重复提交。');return;}
+    const generation=securitySeq,start=clockMs();
+    const task={state:'pending',title:caseTitle(c),message:operation==='publish'?'正在上传':'正在同步下架状态'};
+    cloudTasks.set(c.id,task);renderCloudActivity();repaintCloudCase(c);
+    const current=()=>generation===securitySeq&&cloudTasks.get(c.id)===task;
+    try {
+      const result=await call();if(!current())return;
+      cloudMetric(operation,'cloud_wait',start);const uiStart=clockMs();
+      if(operation==='publish'&&!result.published)throw Error('未收到云端提交确认');
+      const changed=result.case;
+      if(changed)applyCaseUpdate(changed);
+      if(result.graph)S.graph=result.graph;
+      if(result.public_count!==undefined){S.boot.public_count=result.public_count;S.stats.public_cases=result.public_count;S.stats.contributions=result.contributions;}
+      task.state='done';task.message=operation==='publish'?'已发布':changed?.hidden?'已下架，可在筛选中恢复':'已恢复';
+      if(operation==='publish'){task.publicId=result.case_id;task.needsRefresh=!S.boot.shared_status?.cached;}
+      repaintCloudCase(c);if(changed&&changed.id!==c.id)repaintCloudCase(changed);
+      renderCloudActivity();cloudMetric(operation,'ui_update',uiStart);
+      for(const [id,old]of [...cloudTasks])if(old.state!=='pending'&&[...cloudTasks.values()].filter(t=>t.state!=='pending').length>3)cloudTasks.delete(id);
+    } catch(error) {
+      if(!current())return;
+      task.state='failed';task.message='失败：'+error.message;renderCloudActivity();repaintCloudCase(c);
+      // A conflict may have committed both heads. Read only this cached case;
+      // never reload the user's page or overwrite another editor/viewer.
+      if(operation==='visibility'&&error.kind!=='security')try{const data=await api('get_case',c.id);if(current()){applyCaseUpdate(data.case);repaintCloudCase(data.case);}}catch(_){}
+    }
+  }
   function canLeaveDraft() {
     return S.saving === 0 && S.staging === 0 && S.pending.length === 0 && !S.dirtyMetadata &&
       !Object.values(S.draftText).some(value => String(value || '').trim()) &&
@@ -207,9 +262,9 @@
       !(S.judgment && !S.trialRecord) && !(S.marks.length && !S.trialRecord);
   }
   window.aplusGrowthCanClose = canLeaveDraft;
-  window.aplusGrowthBusy = () => S.saving > 0 || S.staging > 0;
+  window.aplusGrowthBusy = () => S.saving > 0 || S.staging > 0 || cloudPending();
   window.addEventListener('beforeunload', event => {
-    if (!canLeaveDraft()) { event.preventDefault(); event.returnValue = ''; }
+    if (!canLeaveDraft()||cloudPending()) { event.preventDefault(); event.returnValue = ''; }
   });
   async function boot() {
     try {
@@ -244,6 +299,7 @@
   }
   function navigation() {
     const account=$('#shared-account');if(account){const a=S.boot.shared_status;account.innerHTML=a?.connected?`<span class="micro">${esc(a.user.name)}</span><button class="quiet-button" data-action="connect-google">${a.reconnect_required?'重新授权':'切换账号'}</button><button class="quiet-button" data-action="refresh-shared">刷新公共案例</button><button class="quiet-button" data-action="disconnect-google">断开连接</button>`:'<button class="quiet-button" data-action="connect-google">连接 Google 账号</button>'; }
+    renderCloudActivity();
     $('#navigation').innerHTML = navItems.map(([id,label]) => `<button class="${S.page === id || (S.page === 'study' && id === 'library') ? 'active' : ''}" data-action="navigate" data-page="${id}" title="${label}">${icon(id)}<span>${label}</span></button>`).join('');
   }
   function contextBanner() {
@@ -268,7 +324,8 @@
   }
   function caseActions(c,locked=false) {
     const a=S.boot.shared_status||{},shared=c.status==='shared';
-    const edit=!locked&&(!shared||a.writable),reason=locked?'完成当前判断后可管理案例':'需要公共库写入权限';
+    locked=locked||cloudFor(c.id);
+    const edit=!locked&&(!shared||a.writable),reason=cloudFor(c.id)?'该案例正在云端同步':locked?'完成当前判断后可管理案例':'需要公共库写入权限';
     const items=caseAction(c,'edit','编辑资料',edit,reason)+(shared
       ? (a.admin?caseAction(c,'visibility',c.hidden?'恢复案例':'下架公共案例',!locked&&a.writable,reason):'<span class="micro">下架与恢复仅管理员可用</span>')
       : caseAction(c,'publish','发布到公共案例',!locked&&a.connected&&a.writable,locked?reason:'请先连接有写入权限的 Google 账号')+caseAction(c,'delete','从本机案例库移除',!locked,reason));
@@ -297,6 +354,7 @@
   }
   async function caseCommand(command,id) {
     if(S.saving)return;
+    if(cloudFor(id)){toast('该案例正在云端同步，可先研究其他案例。');return;}
     if(S.overlay&&S.overlay!=='original'){toast('先完成当前操作，再管理案例。');return;}
     if(S.original?.fromTrial&&!S.trialRecord){toast('完成当前判断后可管理案例。');return;}
     const seq=++S.caseSeq;
@@ -309,9 +367,9 @@
     S.actionContext={case:c,previousCase:S.case,viewer:S.original?{...S.original}:null};S.case=c;
     if(command==='edit'){editCase();return;}
     if(command==='publish'&&c.status!=='shared'){publishPreview();return;}
+    if(command==='visibility'&&c.status==='shared')return changeVisibility();
     try {
-      if(command==='visibility'&&c.status==='shared')await changeVisibility();
-      else if(command==='delete'&&c.status!=='shared')await deleteLocalCase();
+      if(command==='delete'&&c.status!=='shared')await deleteLocalCase();
       else throw Error('此案例不支持该操作');
     } finally {closeOverlay(true);render();}
   }
@@ -743,14 +801,11 @@
     } catch(e){toast(e.message,true);} finally{S.saving--;}
   }
   async function changeVisibility() {
-    const hidden=!S.case.hidden;
-    if(!window.confirm(`${hidden?'下架':'恢复'}“${caseTitle(S.case)}”？${hidden?'原图、历史与留言会保留。':''}`))return;
-    S.saving++;
-    try {
-      const result=await api('set_public_visibility',S.case.id,S.case.visibility_version,hidden);
-      applyCaseUpdate(result.case);S.sharedChanged=true;render();toast(hidden?'案例已下架':'案例已恢复');
-      try{await refreshData();}catch(e){toast('状态已保存，列表尚未刷新：'+e.message,true);}
-    }catch(e){toast(e.message,true);}finally{S.saving--;}
+    const c=S.case;if(!c)return;const hidden=!c.hidden,expected=c.visibility_version;
+    if(cloudFor(c.id))return;
+    if(!window.confirm(`${hidden?'下架':'恢复'}“${caseTitle(c)}”？${hidden?'原图、历史与留言会保留。':''}`)){closeOverlay(true);render();return;}
+    const work=runCloud(c,'visibility',()=>api('set_public_visibility',c.id,expected,hidden));
+    closeOverlay(true);render();return work;
   }
   async function saveNote() {
     const text = $('#case-note')?.value.trim();
@@ -801,6 +856,14 @@
   }
   function closeOriginal() {
     const original = S.original;
+    if(original?.returnState){
+      const back=original.returnState;
+      S.case=back.case;S.page=back.page;S.imageIndex=back.imageIndex;
+      S.original=back.original;S.overlay=null;$('#overlay-root').innerHTML='';
+      if(S.original)renderOriginal();else render();
+      $('#main').scrollTop=back.scroll;
+      return;
+    }
     S.imageIndex = original?.index || 0;
     S.original = null; S.overlay = null; $('#overlay-root').innerHTML = '';
     if (S.page === 'study' || S.page === 'trial') render();
@@ -955,6 +1018,7 @@
   }
   async function cloudAction(method) {
     if(S.saving) return;
+    if(cloudPending()&&['connect_google','disconnect_google'].includes(method)){toast('云端操作尚未完成，请稍后切换或断开账号。');return;}
     S.saving++;
     if(method==='connect_google')$$('[data-action="connect-google"]').forEach(button=>{button.disabled=true;button.textContent='等待浏览器授权…';});
     try {
@@ -977,14 +1041,9 @@
     overlayHTML(dialog('提交公共案例',`<p>${esc(caseTitle(c))}</p><div class="memory">${esc(c.memory||'')}</div><p class="micro">${esc([c.symbol,c.timeframe,c.market,...(c.keywords||[]),...(c.tags||[])].filter(Boolean).join(' · '))}</p><p class="micro">将共享 ${c.images.length} 张原图、案例描述和标准术语。个人研究与判断留在本机。</p><div class="topic-list">${(c.topic_ids||[]).filter(id=>S.terms.some(t=>t.id===id)).map(id=>`<span class="tag">${esc(topicName(id))}</span>`).join('')}</div><div id="publish-result" class="save-error"></div>`,`<button class="btn" data-action="close-overlay">返回</button><button class="btn primary" data-action="publish-case">确认提交</button>`),'publish');
   }
   async function publishCase() {
-    if(S.saving)return;S.saving++;
-    const button=$('[data-action="publish-case"]');if(button){button.disabled=true;button.textContent='正在上传并校验…';}
-    try {const result=await api('publish_case',S.case.id);if(!result.published)throw Error('未收到云端提交确认');
-      S.publishedCaseId=result.case_id;
-      overlayHTML(dialog('已发布到公共案例',`<p>${esc(caseTitle(S.case))}</p><p class="micro">本机私密原件已保留，个人笔记和试炼判断未公开。</p>`,`<button class="btn" data-action="close-overlay">留在原处</button><button class="btn primary" data-action="view-published">查看公共版本</button>`),'published');
-      try{await api('refresh_shared');await refreshData();render();}catch(e){toast('发布已确认，列表刷新失败：'+e.message,true);}}
-    catch(e){const node=$('#publish-result');if(node)node.textContent=e.message;else toast(e.message,true);}
-    finally{S.saving--;if(button){button.disabled=false;button.textContent='重试提交';}}
+    const c=S.case;if(!c||S.saving||cloudFor(c.id))return;
+    const work=runCloud(c,'publish',()=>api('publish_case',c.id));
+    closeOverlay(true);render();return work;
   }
   async function dispatch(action,element,event) {
     if (S.saving && !['zoom-in','zoom-out','zoom-fit','zoom-native'].includes(action)) return;
@@ -996,6 +1055,17 @@
         menu.hidden=!opening;element.setAttribute('aria-expanded',String(opening));return;
       }
       case 'case-command': return caseCommand(element.dataset.command,element.dataset.id);
+      case 'cloud-view': {
+        const id=element.dataset.id,task=[...cloudTasks.values()].find(t=>t.publicId===id);
+        if(S.overlay&&S.overlay!=='original'&&!closeOverlay())return;
+        const back={case:S.case,page:S.page,imageIndex:S.imageIndex,scroll:$('#main').scrollTop,original:S.original?{...S.original}:null};
+        const generation=securitySeq,seq=++S.caseSeq;
+        if(task?.needsRefresh)await api('refresh_shared');
+        if(generation!==securitySeq||seq!==S.caseSeq)return;
+        await openCase(id,true);
+        if(generation===securitySeq&&S.caseSeq===seq+1&&S.original?.case.id===id)S.original.returnState=back;
+        return;
+      }
       case 'view-published': {
         const id=S.publishedCaseId;closeOverlay(true);if(S.original)closeOriginal();S.scope='public';S.filters={};S.query='';await api('refresh_shared');await refreshData();await navigate('library');return openCase(id,true);
       }

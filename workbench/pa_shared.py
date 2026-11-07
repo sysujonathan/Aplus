@@ -6,7 +6,8 @@ the commit marker: incomplete original uploads never appear as public cases.
 from __future__ import annotations
 
 import base64
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
+from contextvars import ContextVar
 from functools import wraps
 import hashlib
 import io
@@ -14,6 +15,8 @@ import json
 from pathlib import Path
 import re
 import uuid
+import logging
+import time
 from urllib.parse import urlencode, urlparse
 
 from PIL import Image
@@ -28,6 +31,49 @@ FOLDER = '18qe7MkUJTEndpAM9J1H_Y5-mjbh7l5aX'
 MAX_MANIFEST = 256 * 1024
 MAX_CASES = 20_000
 FIELDS = 'id,name,mimeType,parents,trashed,size,shared,md5Checksum,owners(permissionId),properties,capabilities(canAddChildren)'
+_timings = ContextVar('pa_cloud_timings', default=None)
+
+
+@contextmanager
+def collect_timings():
+    if _timings.get() is not None:
+        yield _timings.get()
+        return
+    rows = []
+    token = _timings.set(rows)
+    try:
+        yield rows
+    finally:
+        _timings.reset(token)
+
+
+@contextmanager
+def cloud_stage(stage):
+    # Fixed stage names only: no IDs, account details, notes, tokens or media.
+    start, ok = time.perf_counter(), False
+    try:
+        yield
+        ok = True
+    finally:
+        row = dict(stage=stage, ms=round((time.perf_counter() - start) * 1000, 3), ok=ok)
+        if _timings.get() is not None:
+            _timings.get().append(row)
+        logging.getLogger('aplus.pa.cloud').info('cloud_stage=%s ms=%.3f ok=%s', stage, row['ms'], ok)
+
+
+def timed(stage):
+    def decorate(method):
+        @wraps(method)
+        def call(*args, **kwargs):
+            with cloud_stage(stage):
+                return method(*args, **kwargs)
+        return call
+    return decorate
+
+
+@timed('drive.upload')
+def upload_request(*args, **kwargs):
+    return request(*args, **kwargs)
 
 
 def identifier(value):
@@ -71,6 +117,7 @@ class GoogleDrive:
     def __init__(self, session=None, *, profile=None):
         self.session = session or GoogleSession(profile)
 
+    @timed('drive.rpc')
     def call(self, path, *, data=None, method=None, headers=None, limit=MAX_MANIFEST):
         token = self.session.access_token()
         url = 'https://www.googleapis.com/drive/v3/' + path
@@ -134,11 +181,13 @@ class GoogleDrive:
             raise ValueError('云端文件超过安全上限')
         return self.call('files/' + identifier(file_id) + '?alt=media', limit=limit)[0]
 
+    @timed('drive.put_once')
     def put_once(self, file_id, name, data, mime, kind):
         # Reserve ID before network writes. On timeout/restart, read back that
         # same ID; never PATCH existing files or allocate a new commit on retry.
         try:
-            existing = self.read(file_id, max(len(data), MAX_MANIFEST))
+            with cloud_stage('drive.existing_check'):
+                existing = self.read(file_id, max(len(data), MAX_MANIFEST))
         except DriveError as exc:
             if exc.status != 404:
                 raise
@@ -151,20 +200,30 @@ class GoogleDrive:
         url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id'
         token = self.session.access_token()
         try:
-            _, headers = request(url, method='POST', data=encoded(meta), headers={
-                'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json; charset=UTF-8',
-                'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': str(len(data))})
-            location = headers.get('Location') or headers.get('location', '')
-            parsed = urlparse(location)
-            if parsed.scheme != 'https' or parsed.netloc != 'www.googleapis.com' or not parsed.path.startswith('/upload/drive/'):
-                raise ValueError('Google 上传地址无效')
-            request(location, method='PUT', data=data, headers={
-                'Authorization': 'Bearer ' + token, 'Content-Type': mime, 'Content-Length': str(len(data))})
+            if len(data) <= 5 * 1024 * 1024:
+                boundary = ('aplus-' + uuid.uuid4().hex).encode('ascii')
+                body = (b'--' + boundary + b'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + encoded(meta)
+                        + b'\r\n--' + boundary + b'\r\nContent-Type: ' + mime.encode('ascii') + b'\r\n\r\n' + data
+                        + b'\r\n--' + boundary + b'--\r\n')
+                upload_request(url.replace('uploadType=resumable', 'uploadType=multipart'), method='POST', data=body,
+                               headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'multipart/related; boundary=' + boundary.decode('ascii'),
+                                        'Content-Length': str(len(body))})
+            else:
+                _, headers = upload_request(url, method='POST', data=encoded(meta), headers={
+                    'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json; charset=UTF-8',
+                    'X-Upload-Content-Type': mime, 'X-Upload-Content-Length': str(len(data))})
+                location = headers.get('Location') or headers.get('location', '')
+                parsed = urlparse(location)
+                if parsed.scheme != 'https' or parsed.netloc != 'www.googleapis.com' or not parsed.path.startswith('/upload/drive/'):
+                    raise ValueError('Google 上传地址无效')
+                upload_request(location, method='PUT', data=data, headers={
+                    'Authorization': 'Bearer ' + token, 'Content-Type': mime, 'Content-Length': str(len(data))})
         except DriveError as exc:
             if exc.status != 409:
                 raise
-        if self.read(file_id, max(len(data), MAX_MANIFEST)) != data:
-            raise ValueError('云端文件校验失败，未确认同步成功')
+        with cloud_stage('drive.verify'):
+            if self.read(file_id, max(len(data), MAX_MANIFEST)) != data:
+                raise ValueError('云端文件校验失败，未确认同步成功')
 
 
 class Workspace:
@@ -198,10 +257,12 @@ class Workspace:
                     cache_error=getattr(self.store, '_pa_shared_cache_error', None))
 
     @network_operation
+    @timed('catalogue.refresh')
     def refresh(self):
         user = self.drive.identity()
         key = self.space_key('access') + ':' + user['id']
         epoch = self.get(key, {}).get('epoch')
+        stamp = self.get(self.space_key('catalogue_stamp'))
         try:
             self.drive.identity(True)
             writable = self.drive.check_folder()
@@ -230,26 +291,7 @@ class Workspace:
             if len({c['global_id'] for c in cases}) != len(cases):
                 raise ValueError('云端存在重复的全局案例身份，请核对原提交；未替换本地缓存')
             owners = getattr(self.drive, 'folder_owners', [])
-            events = []
-            old_events = {e['id']: e for e in self.get(self.space_key('collaboration'), [])}
-            for row in self.drive.list_records('collaboration-v1'):
-                old = old_events.get(row['id'])
-                if old and old.get('cloud_md5') and row.get('md5Checksum'):
-                    if old['cloud_md5'] != row['md5Checksum']:
-                        raise ValueError('公共协作记录被改写，未替换有效缓存')
-                    if {'parents', 'owners', 'trashed'} <= row.keys():
-                        # Same bytes still need current folder/author checks,
-                        # including the folder owner for visibility records.
-                        events.append(validate_event(old, row, owners))
-                        continue
-                try:
-                    raw = self.drive.read(row['id'], MAX_MANIFEST)
-                except DriveError as exc:
-                    if exc.status != 404:
-                        raise
-                    self.drive.check_folder()
-                    raise ValueError('一条公共协作记录暂不可读取，请重试刷新；已保留有效缓存') from None
-                events.append(validate_event(json.loads(raw), row, owners))
+            events = self._read_events(self.drive.list_records('collaboration-v1'), owners)
             # Validate every chain before replacing either cache snapshot.
             for case in cases:
                 compose_case(case, events)
@@ -263,12 +305,111 @@ class Workspace:
         with self.store.atomic_write():
             if self.get(key, {}).get('epoch') != epoch:
                 raise ValueError('访问权限已在其他请求中失效，请重新刷新')
+            if self.get(self.space_key('catalogue_stamp')) != stamp:
+                raise ValueError('公共目录已被其他操作更新，未覆盖新缓存，请重新刷新')
             self.set(self.space_key('catalogue'), cases)
             self.set(self.space_key('collaboration'), events)
             self.set(self.space_key('catalogue_stamp'), uuid.uuid4().hex)
             self.set(key, dict(granted=True, epoch=epoch, writable=writable, refreshed=now(), shared=getattr(self.drive, 'folder_shared', None), owners=owners))
         self.store._pa_shared_cache_error = None
         return dict(count=len(cases), status=self.status())
+
+    def _read_events(self, rows, owners):
+        events = []
+        old_events = {e['id']: e for e in self.get(self.space_key('collaboration'), [])}
+        for row in rows:
+            old = old_events.get(row['id'])
+            if old and old.get('cloud_md5') and row.get('md5Checksum'):
+                if old['cloud_md5'] != row['md5Checksum']:
+                    raise ValueError('公共协作记录被改写，未替换有效缓存')
+                if {'parents', 'owners', 'trashed'} <= row.keys():
+                    # Same bytes still need current folder/author checks,
+                    # including the folder owner for visibility records.
+                    events.append(validate_event(old, row, owners))
+                    continue
+            try:
+                raw = self.drive.read(row['id'], MAX_MANIFEST)
+            except DriveError as exc:
+                if exc.status != 404:
+                    raise
+                self.drive.check_folder()
+                raise ValueError('一条公共协作记录暂不可读取，请重试刷新；已保留有效缓存') from None
+            events.append(validate_event(json.loads(raw), row, owners))
+        return events
+
+    @network_operation
+    @timed('catalogue.case_sync')
+    def sync_case(self, case_id, required_event=None):
+        """Refresh one case; legacy events still use the one metadata index.
+
+        Other cases keep their last valid snapshots. This is not a full-library
+        refresh and must not advance the full catalogue's refreshed timestamp.
+        """
+        user = self.drive.identity()
+        key = self.space_key('access') + ':' + user['id']
+        access = self.get(key, {})
+        epoch = access.get('epoch')
+        stamp = self.get(self.space_key('catalogue_stamp'))
+        writable = self.drive.check_folder()
+        owners = getattr(self.drive, 'folder_owners', [])
+        file_id = identifier(case_id[7:]) if isinstance(case_id, str) and case_id.startswith('shared:') else identifier('')
+        try:
+            info = self.drive.info(file_id)
+        except DriveError as exc:
+            if exc.status != 404:
+                raise
+            self.drive.check_folder()
+            raise ValueError('该公共案例暂不可访问，未替换有效缓存') from None
+        old = next((c for c in self.get(self.space_key('catalogue'), []) if c['id'] == case_id), None)
+        if old and old.get('cloud_md5') and info.get('md5Checksum'):
+            if old['cloud_md5'] != info['md5Checksum']:
+                raise ValueError('已有公共案例在云端被修改，未覆盖有效缓存')
+            if (FOLDER not in info.get('parents', []) or info.get('trashed')
+                    or old['contributor']['id'] not in [v.get('permissionId') for v in info.get('owners', [])]):
+                raise ValueError('公共案例目录或贡献身份改变，未覆盖有效缓存')
+            original = old
+        else:
+            original = validate_manifest(json.loads(self.drive.read(file_id, MAX_MANIFEST)), info)
+        events = self._read_events(self.drive.list_records('collaboration-v1'), owners)
+        own = [e for e in events if e['case_id'] == case_id]
+        if required_event and required_event not in {e['id'] for e in own}:
+            raise ValueError('记录已上传，但目录刷新尚未确认；请刷新核对后再操作')
+        value = compose_case(original, own)
+        with self.store.atomic_write():
+            current = self.get(key, {})
+            if current.get('epoch') != epoch:
+                raise ValueError('访问权限已改变，请重新刷新')
+            if self.get(self.space_key('catalogue_stamp')) != stamp:
+                raise ValueError('公共目录已被其他操作更新，未覆盖新缓存，请重新刷新')
+            cases = [c for c in self.get(self.space_key('catalogue'), []) if c['id'] != case_id] + [original]
+            current_events = self.get(self.space_key('collaboration'), [])
+            merged = [e for e in current_events if e['case_id'] != case_id] + own
+            if len(encoded([cases, merged])) > 32 * 1024 * 1024:
+                raise ValueError('公共目录超过缓存上限，未替换有效缓存')
+            self.set(self.space_key('catalogue'), cases)
+            self.set(self.space_key('collaboration'), merged)
+            self.set(self.space_key('catalogue_stamp'), uuid.uuid4().hex)
+            self.set(key, dict(current, writable=writable, owners=owners, shared=getattr(self.drive, 'folder_shared', None)))
+        return self.case(case_id) if access.get('granted') else dict(value, notes=[], trials=[])
+
+    def _cache_published(self, original):
+        # put_once already read back every byte; only cache this verified commit.
+        # Do not grant or restore access based on an upload response.
+        user = self.drive.identity()
+        key = self.space_key('access') + ':' + user['id']
+        access = self.get(key, {})
+        if access.get('granted'):
+            with self.store.atomic_write():
+                if self.get(key, {}).get('epoch') != access.get('epoch'):
+                    raise ValueError('公共访问权限已改变，请刷新')
+                cases = [c for c in self.get(self.space_key('catalogue'), []) if c['id'] != original['id']]
+                cases.insert(0, original)
+                if len({c['global_id'] for c in cases}) != len(cases) or len(encoded([cases, self.get(self.space_key('collaboration'), [])])) > 32 * 1024 * 1024:
+                    raise ValueError('发布已写入，但公共目录身份或缓存上限校验未通过，请核对后刷新')
+                self.set(self.space_key('catalogue'), cases)
+                self.set(self.space_key('catalogue_stamp'), uuid.uuid4().hex)
+            return self.case(original['id'])
+        return dict(compose_case(original, []), notes=[], trials=[])
 
     def _originals(self):
         status = self.status()
@@ -394,10 +535,15 @@ class Workspace:
         return data
 
     @network_operation
+    @timed('collaboration.total')
     def collaborate(self, case_id, kind, expected, value):
         if kind not in ('revision', 'comment', 'visibility'):
             raise ValueError('未知协作操作')
-        self.refresh()  # Online permission + observed stale-version check.
+        if kind == 'visibility':
+            self.drive.identity(True)
+            self.sync_case(case_id)
+        else:
+            self.refresh()  # Online permission + observed stale-version check.
         status = self.status()
         if not status.get('writable'):
             raise ValueError('当前账号只有只读权限')
@@ -435,15 +581,19 @@ class Workspace:
         if len(raw) > MAX_MANIFEST:
             raise ValueError('协作记录超过共享上限，尚未提交')
         self.drive.put_once(file_id, 'collaboration-' + file_id + '.json', raw, 'application/json', 'collaboration-v1')
-        self.refresh()
+        if kind == 'visibility':
+            result = self.sync_case(case_id, file_id)
+        else:
+            self.refresh()
+            result = self.case(case_id)
         if file_id not in {e['id'] for e in self.get(self.space_key('collaboration'), [])}:
             raise ValueError('记录已上传，但目录刷新尚未确认；请刷新核对后再操作')
-        result = self.case(case_id)
         if kind != 'comment' and result[stream + '_conflict']:
             raise ValueError('检测到并发修改，两个版本均已保留；请重新加载并核对历史后保存')
         return dict(case=result)
 
     @network_operation
+    @timed('publish.total')
     def publish(self, case_id):
         user = self.drive.identity(True)
         if not self.drive.check_folder():
@@ -496,13 +646,16 @@ class Workspace:
         if len(raw) > MAX_MANIFEST:
             raise ValueError('案例资料超过共享上限，尚未发布')
         self.drive.put_once(journal['manifest'], 'case-' + case_id + '.json', raw, 'application/json', 'case-v1')
-        info = self.drive.info(journal['manifest'])
-        verified = validate_manifest(json.loads(self.drive.read(journal['manifest'], MAX_MANIFEST)), info)
+        with cloud_stage('publish.confirm'):
+            info = self.drive.info(journal['manifest'])
+            if info.get('md5Checksum') and info['md5Checksum'] != hashlib.md5(raw).hexdigest():
+                raise ValueError('公共提交在核对期间被改写，未确认同步成功')
+            verified = validate_manifest(value, info)
         # A committed cloud case is successful even if a subsequent local
         # refresh fails. Return the immutable ID, not a fake sync of all files.
         journal['committed'] = now()
         self.set(key, journal)
-        return dict(published=True, case_id=verified['id'], uuid=case_id)
+        return dict(published=True, case_id=verified['id'], uuid=case_id, case=self._cache_published(verified))
 
     def personal(self):
         user = self.drive.identity()

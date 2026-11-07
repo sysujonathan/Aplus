@@ -4,9 +4,10 @@ const elements=new Map(),events={};
 const el=k=>{if(!elements.has(k))elements.set(k,{innerHTML:'',style:{},scrollTop:0,focus(){}});return elements.get(k);};
 let requestSerial=0;
 const ctx=vm.createContext({setTimeout,clearTimeout,crypto:{randomUUID:()=>`request-${++requestSerial}`},window:{addEventListener(){}},document:{querySelector:el,querySelectorAll:()=>[],addEventListener:(name,fn)=>events[name]=fn},console});
-const source=fs.readFileSync(require('node:path').join(__dirname,'../gui/pa_growth/growth.js'),'utf8');
-vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,growth,saveComment,card,caseActions,caseCommand,saveMetadata,publishCase,closeOverlay,reloadCase,renderOriginal,dispatch,setQuickHooks:h=>{if(h.refresh)refreshData=h.refresh;if(h.search)search=h.search;if(h.form)readMetadata=h.form;if(h.viewer)renderOriginal=h.viewer;if(h.images)requestVisibleImage=h.images;},setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
-if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')&&!process.argv.includes('--quick-actions')&&!process.argv.includes('--reload-session')) {
+const sourcePath=process.argv.find(v=>v.startsWith('--source='))?.slice(9)||require('node:path').join(__dirname,'../gui/pa_growth/growth.js');
+const source=fs.readFileSync(sourcePath,'utf8');
+vm.runInContext(source.slice(0,source.lastIndexOf('\n  navigation();'))+'window.test={S,navigation,library,study,studyPane,growth,saveComment,card,caseActions,caseCommand,saveMetadata,publishCase,closeOverlay,reloadCase,renderOriginal,dispatch,changeVisibility,cloudAction,invalidateSecurity,cloudTasks:typeof cloudTasks==="undefined"?null:cloudTasks,cloudPending:typeof cloudPending==="undefined"?null:cloudPending,setQuickHooks:h=>{if(h.refresh)refreshData=h.refresh;if(h.search)search=h.search;if(h.form)readMetadata=h.form;if(h.viewer)renderOriginal=h.viewer;if(h.images)requestVisibleImage=h.images;},setApi:fn=>api=fn,setEffects:fn=>{render=fn||(()=>{});toast=()=>{}}};})();',ctx);
+if (!process.argv.includes('--comment-retry')&&!process.argv.includes('--comment-draft')&&!process.argv.includes('--quick-actions')&&!process.argv.includes('--reload-session')&&!process.argv.includes('--cloud-profile')&&!process.argv.includes('--cloud-operations')) {
 const {S,navigation,library,study,studyPane}=ctx.window.test;
 assert.equal(S.page,'library');navigation();
 const nav=el('#navigation').innerHTML;
@@ -108,9 +109,9 @@ ctx.window.confirm=()=>true;
   await caseCommand('edit',publicCase.id);assert.notEqual(S.overlay,'metadata');
   S.boot.shared_status={connected:true,writable:true,admin:false};S.page='library';S.overlay=null;
   await caseCommand('publish',updated.id);await publishCase();
-  const success=el('#overlay-root').innerHTML;assert(success.includes('已发布到公共案例')&&success.includes('view-published'));
-  assert(success.includes('本机私密原件已保留')&&!success.includes('PRIVATE_NOTE')&&!success.includes('PRIVATE_JUDGMENT'));
-  await dispatch('view-published',{},{});assert.equal(S.case.id,publicCase.id);assert.equal(S.overlay,'original');
+  const success=el('#cloud-activity').innerHTML;assert(success.includes('已发布')&&success.includes('cloud-view'));
+  assert(!success.includes('PRIVATE_NOTE')&&!success.includes('PRIVATE_JUDGMENT'));
+  await dispatch('cloud-view',{dataset:{id:publicCase.id}},{});assert.equal(S.case.id,publicCase.id);assert.equal(S.overlay,'original');
   closeOverlay(true);S.original=null;S.overlay=null;S.scope='private';S.case=updated;
   S.cases=[updated];S.boot.recent_case=updated;S.trialCase=updated;S.trialRecord={id:'trial'};
   await caseCommand('delete',updated.id);
@@ -159,5 +160,72 @@ setEffects();setQuickHooks({refresh:async()=>{},search:async()=>{}});ctx.window.
   assert.equal(S.overlay,'metadata');assert(!S.dirtyMetadata);assert.notEqual(S.editSession,oldSession);
   assert(el('#overlay-root').innerHTML.includes('FRESH_A'));
   console.log('editor reload: delayed refresh/get-case cannot replace B; active A reload and unsaved prompt retained');
+})().catch(e=>{console.error(e);process.exitCode=1;});
+}
+
+if(process.argv.includes('--cloud-profile')) {
+const {S,library,publishCase,changeVisibility,setApi,setEffects}=ctx.window.test;
+const c={id:'private',title:'Fixture',status:'private_draft',keywords:[],topic_ids:[],images:[],tags:[]};
+const pub={...c,id:'shared:fixture',status:'shared',contributor:{id:'owner',name:'Fixture owner'},visibility_version:'v0'};
+const calls=[];let uiMs=0;
+setEffects(()=>{const start=performance.now();el('#main').innerHTML=library();uiMs+=performance.now()-start;});
+setApi(async(method)=>{calls.push(method);await new Promise(r=>setTimeout(r,5));
+ if(method==='publish_case')return {published:true,case_id:pub.id,case:pub};
+ if(method==='set_public_visibility')return {case:{...pub,hidden:true}};
+ if(method==='bootstrap')return {cases:[c],public_cases:[pub],stats:{},shared_status:{connected:true,cached:true,writable:true,admin:true}};
+ return {};
+});
+(async()=>{
+ const result={};
+ for(const kind of ['publish','visibility']){
+  Object.assign(S,{page:'library',scope:kind==='publish'?'private':'public',case:kind==='publish'?c:pub,cases:[kind==='publish'?c:pub],boot:{shared_status:{connected:true,cached:true,writable:true,admin:true}},overlay:null,original:null,actionContext:null});
+  calls.length=0;uiMs=0;const start=performance.now();
+  await (kind==='publish'?publishCase():changeVisibility());
+  result[kind]={ms:performance.now()-start,apiCalls:[...calls],htmlRenderMs:uiMs,stages:ctx.window.aplusGrowthTimings?.()||[]};
+ }
+ console.log(JSON.stringify(result));
+})().catch(e=>{console.error(e);process.exitCode=1;});
+ctx.window.confirm=()=>true;
+}
+
+if(process.argv.includes('--cloud-operations')) {
+const t=ctx.window.test,{S,publishCase,changeVisibility,caseCommand,closeOverlay,dispatch,setApi,setEffects,setQuickHooks,cloudTasks,cloudPending,invalidateSecurity,cloudAction}=t;
+const a={id:'A',title:'A',status:'private_draft',keywords:[],topic_ids:[],images:[]};
+const b={...a,id:'shared:B',title:'B',status:'shared',revision_version:'B1',visibility_version:'Bv1',contributor:{id:'owner',name:'Owner'}};
+const pub={...b,id:'shared:A',title:'Public A',revision_version:'A1',visibility_version:'Av1'};
+let release;const calls=[];
+setEffects();setQuickHooks({refresh:async()=>{},search:async()=>{},images:()=>{},viewer:()=>{S.overlay='original';}});
+setApi((method,...args)=>{calls.push([method,...args]);if(['publish_case','set_public_visibility'].includes(method))return new Promise(r=>{release=r;});return Promise.resolve(method==='get_case'?{case:args[0]===b.id?b:pub}:{});});
+ctx.window.confirm=()=>true;
+S.page='library';S.scope='private';S.case=a;S.cases=[a];S.boot={shared_status:{connected:true,cached:true,writable:true,admin:true}};
+(async()=>{
+ const uploading=publishCase();assert.equal(S.saving,0);assert(cloudPending());assert(ctx.window.aplusGrowthBusy());assert.equal(S.overlay,null);
+ const before=calls.length;await publishCase();assert.equal(calls.length,before,'same case cannot submit twice');
+ await cloudAction('disconnect_google');assert(!calls.some(c=>c[0]==='disconnect_google'));
+ await dispatch('navigate',{dataset:{page:'universe'}},{});assert.equal(S.page,'universe');
+ S.page='study';S.case=b;S.original={case:b,index:0,zoom:2,x:8,y:9};S.overlay='original';
+ await caseCommand('edit',b.id);const context=S.actionContext,session=S.editSession,form=el('#overlay-root').innerHTML;
+ release({published:true,case_id:pub.id,case:pub,graph:{nodes:[],edges:[]},public_count:1,contributions:1});await uploading;
+ assert.equal(S.case.id,b.id);assert.equal(S.actionContext,context);assert.equal(S.editSession,session);assert.equal(S.editVersion,'B1');assert.equal(el('#overlay-root').innerHTML,form);
+ assert(el('#cloud-activity').innerHTML.includes('查看公共案例'));assert.equal(cloudTasks.get(a.id).state,'done');
+ let confirms=0;ctx.window.confirm=()=>{confirms++;return false;};
+ assert(closeOverlay());assert.equal(confirms,0);assert.equal(S.original.zoom,2);
+ await caseCommand('edit',b.id);S.dirtyMetadata=true;assert.equal(closeOverlay(),false);assert.equal(S.overlay,'metadata');
+ ctx.window.confirm=()=>true;assert(closeOverlay());assert.equal(S.original.zoom,2);
+ pub.images=[{id:'public-image'}];S.case=b;S.page='study';el('#main').scrollTop=123;
+ await dispatch('cloud-view',{dataset:{id:pub.id}},{});
+ assert.equal(S.original.case.id,pub.id);await dispatch('close-original',{},{});
+ assert.equal(S.case.id,b.id);assert.equal(S.page,'study');assert.equal(S.original.case.id,b.id);
+ assert.equal(S.original.zoom,2);assert.equal(S.original.x,8);assert.equal(el('#main').scrollTop,123);
+ S.overlay=null;S.original=null;S.actionContext=null;S.case=pub;S.cases=[pub,b];S.scope='public';S.page='library';
+ const hiding=changeVisibility();assert(cloudPending());assert.equal(S.saving,0);
+ await caseCommand('edit',b.id);const bContext=S.actionContext,bForm=el('#overlay-root').innerHTML;
+ release({case:{...pub,hidden:true},graph:{nodes:[],edges:[]},public_count:1,contributions:1});await hiding;
+ assert.equal(S.case.id,b.id);assert.equal(S.actionContext,bContext);assert.equal(el('#overlay-root').innerHTML,bForm);
+ assert(!S.cases.some(c=>c.id===pub.id));assert.equal(cloudTasks.get(pub.id).state,'done');
+ closeOverlay(true);S.case={...a,id:'C'};S.overlay=null;
+ const stale=publishCase();invalidateSecurity('new-account');release({published:true,case_id:'shared:C',case:{...pub,id:'shared:C'}});await stale;
+ assert.equal(S.case,null);assert.equal(cloudTasks.size,0);
+ console.log('cloud operations: browsing, per-case admission, late replies, close/draft and account boundaries passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 }
