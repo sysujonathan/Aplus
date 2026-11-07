@@ -105,6 +105,7 @@ def test_consent_timeout_closes_callback_and_preserves_previous_login(tmp_path, 
 
 def test_drive_idempotent_upload_never_patches_existing_or_follows_external_location(monkeypatch):
     drive = GoogleDrive(Session())
+    payload = b'x' * (5 * 1024 * 1024 + 1)  # Large files retain the pinned resumable path.
     calls = []
     def api(url, **kwargs):
         calls.append((url, kwargs.get('method')))
@@ -114,11 +115,11 @@ def test_drive_idempotent_upload_never_patches_existing_or_follows_external_loca
     monkeypatch.setattr(pa_shared, 'request', api)
     monkeypatch.setattr(drive, 'read', lambda *args: (_ for _ in ()).throw(DriveError(404)))
     with pytest.raises(ValueError, match='上传地址'):
-        drive.put_once('reserved', 'sample', b'bytes', 'image/png', 'image-v1')
+        drive.put_once('reserved', 'sample', payload, 'image/png', 'image-v1')
     assert len(calls) == 1
     assert calls[0][0].startswith('https://www.googleapis.com/upload/drive/')
-    monkeypatch.setattr(drive, 'read', lambda *args: b'bytes')
-    drive.put_once('reserved', 'sample', b'bytes', 'image/png', 'image-v1')
+    monkeypatch.setattr(drive, 'read', lambda *args: payload)
+    drive.put_once('reserved', 'sample', payload, 'image/png', 'image-v1')
     assert len(calls) == 1
     with pytest.raises(ValueError, match='冲突'):
         drive.put_once('reserved', 'sample', b'other', 'image/png', 'image-v1')
