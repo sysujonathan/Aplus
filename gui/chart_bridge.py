@@ -235,8 +235,9 @@ def drawing_from_frontend(value, rows):
 def workspace_boot(store, context):
     frame = context["frame"].reset_index(drop=True)
     rows = _bars(frame)
-    source = str((context.get("record") or {}).get("source") or "unknown")
-    adjustment = str((context.get("record") or {}).get("adjustment") or "unknown")
+    record = context.get("record") or {}
+    source = str(record.get("source") or "unknown")
+    adjustment = str(record.get("adjustment") or "unknown")
     key = identity(str(context["code"]), source, adjustment)
     document = store.chart_document(key)
     workspace = context.get('workspace')
@@ -264,6 +265,12 @@ def workspace_boot(store, context):
         match = context.get('shape') or {}
         title = f"形态研究 · {match.get('label','')} · 相似 {match.get('score',100):.1f} · {match.get('start','')}—{match.get('end','')}"
     latest = rows[-1]
+    history_start = record.get("start")
+    older_daily = (
+        {"dataset": record["id"], "start": history_start, "initial": rows[0]["date"]}
+        if context.get("context_kind") == "candidate" and timeframe == "daily" and record.get("id")
+        and history_start and history_start < rows[0]["date"] else None
+    )
     from workbench.prices import tick_size
     try:
         price_step = tick_size(str(context['code']), latest['close'],
@@ -323,6 +330,7 @@ def workspace_boot(store, context):
         "adjustment": adjustment, "timeframe": timeframe, "series": series,
         "displayTimeframe": str(context.get('display_timeframe') or timeframe),
         "startTimeframe": start_timeframe, "live": live,
+        "olderDaily": older_daily,
         "seriesCloseDates": close_dates,
         "barClock": bar_clock,
         "axisDates": {unit: _coordinate_dates(data, unit) for unit, data in series.items()},

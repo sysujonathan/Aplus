@@ -18,7 +18,10 @@ import threading
 import time
 import uuid
 
-from .chart_bridge import ChartBridge, refresh_workspace_boot, workspace_boot
+from .chart_bridge import ChartBridge, _bars, refresh_workspace_boot, workspace_boot
+
+
+DAILY_HISTORY_PAGE = 400
 
 
 def atomic_json(path, value):
@@ -111,6 +114,36 @@ class ChartSessionBridge:
             if self.current is None:
                 raise ValueError('尚未选择真实行情')
             return self.current.save_state(state, expected_revision)
+
+    def read_older_daily(self, before, session_token=None):
+        from workbench.market import load_dataset
+        from .background_status import display_store
+
+        with self._lock:
+            self._check_token(session_token)
+            current = self.current
+            history = current.boot.get('olderDaily') if current else None
+            if (not history or not isinstance(before, str)
+                    or before > history['initial'] or not any(row['date'] == before for row in current.rows)):
+                raise ValueError('当前图表没有可读取的日线历史')
+        frame, record = load_dataset(display_store(self.store), history['dataset'])
+        if any(record.get(field) != current.boot[key] for field, key in (
+            ('code', 'symbol'), ('timeframe', 'timeframe'), ('source', 'source'), ('adjustment', 'adjustment'),
+        )):
+            raise ValueError('日线快照与当前图表不匹配')
+        page = frame.loc[frame.date < before].tail(DAILY_HISTORY_PAGE)
+        rows = _bars(page) if not page.empty else []
+        with self._lock:
+            self._check_token(session_token)
+            if self.current is not current:
+                raise ValueError('图表页面已切换')
+            with current._write_lock:
+                # A page can be requested again if the browser deferred it while editing.
+                prefix = [row for row in rows if row['date'] < current.rows[0]['date']]
+                if prefix:
+                    current.rows = prefix + current.rows
+                    current.boot['bars'] = current.boot['series']['daily'] = current.rows
+        return rows
 
     def create_price_alert(self, value, condition='cross_up', name='', target='price',
                            timeframe=None, ema_length=20, frequency='bar_close', expires=None,
