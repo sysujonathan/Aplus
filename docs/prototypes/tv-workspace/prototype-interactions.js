@@ -280,31 +280,61 @@ function panLimits() {
   return {min:-Math.min(Math.floor(viewCount*.8),future),max:Math.max(0,maxEnd-viewCount)};
 }
 
-let readingOlderDaily = false;
-async function loadOlderDailyNearEdge() {
-  const history = chartBoot.olderDaily;
+let readingOlderHistory = false;
+const historyEnd = new Map();
+const historyEndNotice = new Map();
+
+function showHistoryEnd(unit, before) {
+  if (visibleWindow().begin !== 0 || historyEndNotice.get(unit) === before) return;
+  historyEndNotice.set(unit, before);
+  showToast(/^m\d+$/.test(unit) ? `已到可用分钟行情起点（${before}）` : `已到本地行情起点（${before}）`);
+}
+
+function prependChartHistory(unit, rows, closeDates) {
+  chartBoot.series[unit] = rows.concat(chartBoot.series[unit]);
+  if (unit === 'daily' && chartBoot.baseDailySeries) {
+    chartBoot.baseDailySeries = rows.concat(chartBoot.baseDailySeries);
+  }
+  Object.assign(chartBoot.seriesCloseDates[unit], closeDates ||
+    Object.fromEntries(rows.map(row => [row.date, row.date])));
+  const dates = /^m\d+$/.test(unit) ? null :
+    [...new Set([...(chartBoot.axisDates[unit] || []), ...rows.map(row => row.date)])].sort();
+  repaintCurrentSeries({ prepend: true, axisDates: dates });
+}
+
+async function loadOlderHistoryNearEdge() {
+  if (!chartBoot.embedded || replayActive || draftAnchor || gesture || closingWorkspace ||
+      readingOlderHistory || visibleWindow().begin > 36) return;
+  const unit = activeTimeframeUnit;
+  const before = bars[0].date;
+  if (/^m\d+$/.test(unit)) {
+    const history = chartBoot.minuteHistory?.[unit];
+    const edge = history?.findIndex(row => row.date === before);
+    if (edge > 0) prependChartHistory(unit, history.slice(Math.max(0, edge - 400), edge));
+    else showHistoryEnd(unit, before);
+    return;
+  }
+  const history = chartBoot.snapshotHistory;
   const api = window.pywebview?.api;
-  if (!history || !chartBoot.embedded || !api?.read_older_daily || readingOlderDaily ||
-      activeTimeframeUnit !== 'daily' || replayActive || draftAnchor || closingWorkspace) return;
-  const before = chartBoot.series.daily[0].date;
-  if (before <= history.start || visibleWindow().begin > 36) return;
-  readingOlderDaily = true;
+  if (!history?.initial[unit] || !api?.read_older_history) return;
+  if (before <= history.start || historyEnd.get(unit) === before) {
+    showHistoryEnd(unit, before);
+    return;
+  }
+  readingOlderHistory = true;
   try {
-    const rows = await api.read_older_daily(before, chartBoot.sessionToken);
-    if (activeTimeframeUnit !== 'daily' || replayActive || draftAnchor || gesture || closingWorkspace) return;
-    const daily = chartBoot.series.daily;
-    if (daily[0].date !== before) return;
-    if (!rows.length) { history.start = before; return; }
-    chartBoot.series.daily = rows.concat(daily);
-    if (chartBoot.baseDailySeries) chartBoot.baseDailySeries = rows.concat(chartBoot.baseDailySeries);
-    for (const row of rows) chartBoot.seriesCloseDates.daily[row.date] = row.date;
-    const dates = new Set(chartBoot.axisDates.daily);
-    for (const row of rows) dates.add(row.date);
-    repaintCurrentSeries([...dates].sort());
+    const { rows, closeDates } = await api.read_older_history(unit, before, chartBoot.sessionToken);
+    if (activeTimeframeUnit !== unit || replayActive || draftAnchor || gesture || closingWorkspace ||
+        chartBoot.series[unit][0].date !== before) return;
+    if (rows.length) prependChartHistory(unit, rows, closeDates);
+    else {
+      historyEnd.set(unit, before);
+      showHistoryEnd(unit, before);
+    }
   } catch (_) {
-    if (!closingWorkspace && activeTimeframeUnit === 'daily') showToast('暂时无法补载早期日线，向左再试');
+    if (!closingWorkspace && activeTimeframeUnit === unit) showToast('暂时无法补载早期K线，向左再试');
   } finally {
-    readingOlderDaily = false;
+    readingOlderHistory = false;
   }
 }
 
@@ -1182,7 +1212,7 @@ function zoomAround(factor, ratio, deferred = false) {
   viewOffset = clamp(Math.round(maxEnd-nextCount-begin),limits.min,limits.max);
   if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
   else { renderWorkspace(); saveViewState(); }
-  if (factor > 1) loadOlderDailyNearEdge();
+  if (factor > 1) loadOlderHistoryNearEdge();
 }
 
 function zoomPriceAround(factor, ratio, deferred = false) {
@@ -1213,7 +1243,7 @@ function panChart(barDelta, deferred = false) {
   viewOffset = clamp(viewOffset + Math.round(barDelta), limits.min, limits.max);
   if (deferred) { scheduleWorkspaceRender('all'); scheduleViewStateSave(); }
   else { renderWorkspace(); saveViewState(); }
-  if (barDelta > 0) loadOlderDailyNearEdge();
+  if (barDelta > 0) loadOlderHistoryNearEdge();
 }
 
 function resetChartView() {
@@ -1402,7 +1432,7 @@ canvas.addEventListener('pointerup', event => {
   if (gesture.moved && ['price-scale', 'time-scale', 'pan'].includes(gesture.mode)) saveViewState();
   gesture = null;
   if (seriesRefreshPending) repaintCurrentSeries();
-  if (pannedToOlder) loadOlderDailyNearEdge();
+  if (pannedToOlder) loadOlderHistoryNearEdge();
 });
 
 function cancelChartGesture() {
@@ -1844,9 +1874,14 @@ function applyDailyReference(quote) {
   const daily = base.filter(row => row.date < quote.date).concat({date:quote.date,open:quote.open,
     high:quote.high,low:quote.low,close:quote.price,volume:quote.volume,forming:true});
   for (const unit of ['daily','weekly','monthly']) {
-    const rows = unit !== 'daily' && chartBoot.olderDaily
-      ? daily.filter(row => row.date >= chartBoot.olderDaily.initial) : daily;
-    chartBoot.series[unit] = AplusChartIndicators.aggregate(rows,unit);
+    const initial = chartBoot.snapshotHistory?.initial;
+    const tail = unit !== 'daily' && initial?.daily
+      ? daily.filter(row => row.date >= initial.daily) : daily;
+    const aggregated = AplusChartIndicators.aggregate(tail, unit);
+    chartBoot.series[unit] = unit !== 'daily' && initial?.[unit]
+      ? chartBoot.series[unit].filter(row => row.date < initial[unit])
+          .concat(aggregated.filter(row => row.date >= initial[unit]))
+      : aggregated;
     chartBoot.seriesCloseDates[unit] ||= {};
     for (const row of chartBoot.series[unit]) chartBoot.seriesCloseDates[unit][row.date] ||= row.date;
   }
@@ -1889,7 +1924,7 @@ function switchProductionTimeframe(timeframe, persist = true) {
    Only the tail series is replaced: the viewport anchors to the bar the trader
    was already reading, so a new bar slides the chart left instead of jumping
    back to the right edge or redrawing the whole page. */
-function repaintCurrentSeries(extendedDailyAxis) {
+function repaintCurrentSeries({ prepend = false, axisDates = null } = {}) {
   if (replayActive) return true; // never disturb a frozen replay frame
   // Keep the axis under the pointer stable until a drawing/drag is finished.
   // Apply the cached update on gesture completion, even if polling has stopped.
@@ -1901,8 +1936,8 @@ function repaintCurrentSeries(extendedDailyAxis) {
   if (!Array.isArray(current) || current.length < 1) return true;
   const anchorDate = viewOffset > 0 ? visibleWindow().data[0]?.date : null;
   userObjects.forEach(object => chartCoordinates.capture(object, bars, activeTimeframeUnit));
-  if (extendedDailyAxis) {
-    chartBoot.axisDates.daily = extendedDailyAxis;
+  if (axisDates) {
+    chartBoot.axisDates[activeTimeframeUnit] = axisDates;
     chartCoordinates.configure(chartBoot.axisDates);
   }
   bars.splice(0, bars.length, ...structuredClone(current));
@@ -1911,13 +1946,13 @@ function repaintCurrentSeries(extendedDailyAxis) {
     objects.forEach(object => chartCoordinates.projectObject(object, bars, activeTimeframeUnit))));
   replayIndex = bars.length - 1;
   // Prepending preserves the distance from the right, including future padding.
-  if (!extendedDailyAxis && anchorDate) {
+  if (!prepend && anchorDate) {
     const at = bars.findIndex(row => row.date === anchorDate);
     if (at >= 0) {
       const limits = panLimits();
       viewOffset = clamp(bars.length - viewCount - at, limits.min, limits.max);
     }
-  } else if (!extendedDailyAxis) {
+  } else if (!prepend) {
     viewOffset = 0;
   }
   calculateEma();
@@ -1967,8 +2002,28 @@ window.aplusApplyLiveBars = payload => {
   // All display periods share the existing minute poll.
   Object.entries(payload.series).forEach(([unit, rows]) => {
     if (!Array.isArray(rows) || rows.length < 2) return;
-    chartBoot.seriesCloseDates[unit] = Object.fromEntries(rows.map(row => [row.date, row.date]));
-    chartBoot.series[unit] = rows;
+    let displayed = rows;
+    if (chartBoot.embedded && /^m\d+$/.test(unit)) {
+      chartBoot.minuteHistory ||= {};
+      const previous = chartBoot.minuteHistory[unit] || chartBoot.series[unit] || [];
+      const sameBasis = ['source', 'adjustment'].every(key => !chartBoot.live?.[key] ||
+        !payload.live?.[key] || chartBoot.live[key] === payload.live[key]);
+      const overlaps = sameBasis && (previous.some(row => row.date === rows[0].date) ||
+        rows.some(row => row.date === previous[0]?.date));
+      if (overlaps && rows.at(-1).date < previous.at(-1).date) return;
+      // Retain actual older bars only if the feed overlaps. A gap in the
+      // provider window is not evidence that the two series are continuous.
+      const prefix = overlaps ? previous.filter(row => row.date < rows[0].date) : [];
+      const retained = prefix.concat(rows).slice(-2000);
+      const current = chartBoot.series[unit];
+      const firstShown = overlaps && current?.length > 300 ? current[0].date : null;
+      const keepFrom = firstShown ? retained.findIndex(row => row.date >= firstShown) : -1;
+      const recentFrom = Math.max(0, retained.length - 300);
+      displayed = retained.slice(keepFrom < 0 ? recentFrom : Math.min(keepFrom, recentFrom));
+      chartBoot.minuteHistory[unit] = retained;
+    }
+    chartBoot.seriesCloseDates[unit] = Object.fromEntries(displayed.map(row => [row.date, row.date]));
+    chartBoot.series[unit] = displayed;
   });
   if (payload.live) chartBoot.live = {...(chartBoot.live || {}), ...payload.live,
     minute1Stale: !payload.series.m1?.length};

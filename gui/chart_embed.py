@@ -18,10 +18,13 @@ import threading
 import time
 import uuid
 
-from .chart_bridge import ChartBridge, _bars, refresh_workspace_boot, workspace_boot
+from .chart_bridge import (
+    ChartBridge, HISTORY_PERIOD_RULES, _bars, _resample, calendar_close_dates,
+    refresh_workspace_boot, workspace_boot,
+)
 
 
-DAILY_HISTORY_PAGE = 400
+HISTORY_PAGE = 400
 
 
 def atomic_json(path, value):
@@ -115,35 +118,43 @@ class ChartSessionBridge:
                 raise ValueError('尚未选择真实行情')
             return self.current.save_state(state, expected_revision)
 
-    def read_older_daily(self, before, session_token=None):
+    def read_older_history(self, unit, before, session_token=None):
         from workbench.market import load_dataset
         from .background_status import display_store
 
         with self._lock:
             self._check_token(session_token)
             current = self.current
-            history = current.boot.get('olderDaily') if current else None
-            if (not history or not isinstance(before, str)
-                    or before > history['initial'] or not any(row['date'] == before for row in current.rows)):
-                raise ValueError('当前图表没有可读取的日线历史')
+            history = current.boot.get('snapshotHistory') if current else None
+            initial = history['initial'].get(unit) if history and isinstance(unit, str) else None
+            if (not initial or not isinstance(before, str) or before > initial
+                    or not any(row['date'] == before for row in current.boot['series'][unit])):
+                raise ValueError('当前图表没有可读取的该周期历史')
         frame, record = load_dataset(display_store(self.store), history['dataset'])
         if any(record.get(field) != current.boot[key] for field, key in (
-            ('code', 'symbol'), ('timeframe', 'timeframe'), ('source', 'source'), ('adjustment', 'adjustment'),
-        )):
-            raise ValueError('日线快照与当前图表不匹配')
-        page = frame.loc[frame.date < before].tail(DAILY_HISTORY_PAGE)
+            ('code', 'symbol'), ('source', 'source'), ('adjustment', 'adjustment'),
+        )) or record['timeframe'] not in ('daily', unit):
+            raise ValueError('行情快照与当前图表不匹配')
+        older = frame.loc[frame.date < before]
+        if not older.empty and record['timeframe'] == 'daily' and unit in HISTORY_PERIOD_RULES:
+            older = _resample(older, HISTORY_PERIOD_RULES[unit])
+        page = older.loc[older.date < before].tail(HISTORY_PAGE)
         rows = _bars(page) if not page.empty else []
+        close_dates = calendar_close_dates(rows, unit)
         with self._lock:
             self._check_token(session_token)
             if self.current is not current:
                 raise ValueError('图表页面已切换')
             with current._write_lock:
                 # A page can be requested again if the browser deferred it while editing.
-                prefix = [row for row in rows if row['date'] < current.rows[0]['date']]
+                current_rows = current.boot['series'][unit]
+                prefix = [row for row in rows if row['date'] < current_rows[0]['date']]
                 if prefix:
-                    current.rows = prefix + current.rows
-                    current.boot['bars'] = current.boot['series']['daily'] = current.rows
-        return rows
+                    current.boot['series'][unit] = prefix + current_rows
+                    current.boot['seriesCloseDates'][unit].update(close_dates)
+                    if unit == current.boot['timeframe']:
+                        current.rows = current.boot['bars'] = current.boot['series'][unit]
+        return {'rows': rows, 'closeDates': close_dates}
 
     def create_price_alert(self, value, condition='cross_up', name='', target='price',
                            timeframe=None, ema_length=20, frequency='bar_close', expires=None,
@@ -328,7 +339,7 @@ class EmbeddedChartHost:
             return
         if context and self.workspace:
             context = {**context, 'workspace': self.workspace}
-        boot = workspace_boot(self.store, context) if context else None
+        boot = workspace_boot(self.store, {**context, 'embedded': True}) if context else None
         self._history_identity = boot['identity'] if boot else None
         if boot:
             boot['embedded'] = True

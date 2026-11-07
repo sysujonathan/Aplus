@@ -25,7 +25,7 @@ const context=vm.createContext({structuredClone,console,window:{},
 context.window.pywebview={api:{
   save_state:async (value,revision)=>{calls.push(value);return {revision:revision+1};},
   activate_context:async()=>({token:2}),cancel_context_switch:async()=>{},retry_context_switch:async()=>{}}};
-vm.runInContext('async '+extract('loadOlderDailyNearEdge')+'\n'+['loadPrototypeState','saveViewState','scheduleViewStateSave','savePrototypeState',
+vm.runInContext('async '+extract('loadOlderHistoryNearEdge')+'\n'+['loadPrototypeState','saveViewState','scheduleViewStateSave','savePrototypeState',
   'zoomAround','zoomPriceAround','panChart','resetChartView'].map(extract).join('\n'),context);
 const start=controls.indexOf('window.aplusSwitchContext = async () => {');
 vm.runInContext(controls.slice(start,controls.indexOf('\n};',start)+3),context);
