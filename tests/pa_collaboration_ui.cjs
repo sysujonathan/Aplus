@@ -217,6 +217,18 @@ S.page='library';S.scope='private';S.case=a;S.cases=[a];S.boot={shared_status:{c
  assert.equal(S.original.case.id,pub.id);await dispatch('close-original',{},{});
  assert.equal(S.case.id,b.id);assert.equal(S.page,'study');assert.equal(S.original.case.id,b.id);
  assert.equal(S.original.zoom,2);assert.equal(S.original.x,8);assert.equal(el('#main').scrollTop,123);
+ for(const origin of ['universe','growth']) {
+  S.case=null;S.page=origin;S.original=null;S.overlay=null;el('#main').scrollTop=456;
+  await dispatch('study-open',{dataset:{id:b.id}},{});
+  assert.equal(S.case.id,b.id);assert.equal(S.page,'study');el('#main').scrollTop=123;
+  await dispatch('cloud-view',{dataset:{id:pub.id}},{});
+  assert.equal(S.original.case.id,pub.id);
+  await dispatch('close-original',{},{});
+  assert.equal(S.case.id,b.id);assert.equal(S.page,'study');assert.equal(el('#main').scrollTop,123);
+  await dispatch('study-back',{},{});
+  assert.equal(S.page,origin,'nested return must keep the detail page origin');
+  assert.equal(el('#main').scrollTop,456,'nested return must keep the origin scroll');
+ }
  S.overlay=null;S.original=null;S.actionContext=null;S.case=pub;S.cases=[pub,b];S.scope='public';S.page='library';
  const hiding=changeVisibility();assert(cloudPending());assert.equal(S.saving,0);
  await caseCommand('edit',b.id);const bContext=S.actionContext,bForm=el('#overlay-root').innerHTML;

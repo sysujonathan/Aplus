@@ -859,6 +859,7 @@
     if(original?.returnState){
       const back=original.returnState;
       S.case=back.case;S.page=back.page;S.imageIndex=back.imageIndex;
+      S.returnPage=back.returnPage;S.returnScroll=back.returnScroll;
       S.original=back.original;S.overlay=null;$('#overlay-root').innerHTML='';
       if(S.original)renderOriginal();else render();
       $('#main').scrollTop=back.scroll;
@@ -1058,7 +1059,7 @@
       case 'cloud-view': {
         const id=element.dataset.id,task=[...cloudTasks.values()].find(t=>t.publicId===id);
         if(S.overlay&&S.overlay!=='original'&&!closeOverlay())return;
-        const back={case:S.case,page:S.page,imageIndex:S.imageIndex,scroll:$('#main').scrollTop,original:S.original?{...S.original}:null};
+        const back={case:S.case,page:S.page,imageIndex:S.imageIndex,returnPage:S.returnPage,returnScroll:S.returnScroll,scroll:$('#main').scrollTop,original:S.original?{...S.original}:null};
         const generation=securitySeq,seq=++S.caseSeq;
         if(task?.needsRefresh)await api('refresh_shared');
         if(generation!==securitySeq||seq!==S.caseSeq)return;
