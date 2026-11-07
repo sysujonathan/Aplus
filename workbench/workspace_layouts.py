@@ -64,11 +64,22 @@ def validate_layout(value):
                 raise ValueError('图格标的无效')
             try:
                 required = {'code', 'name', 'observation_id', 'source', 'mode'}
-                optional = {'strategy', 'timeframe', 'market_dataset_id', 'market_asof', 'anchor_asof', 'manual'}
+                optional = {'strategy', 'timeframe', 'market_dataset_id', 'market_asof', 'anchor_asof', 'manual', 'shape'}
                 if not required <= item.keys() or item.keys() - required - optional:
                     raise ValueError('图格标的设置不完整')
                 if code_of(item['code']) != item['code'] or item['mode'] not in ('candidate', 'watch'):
                     raise ValueError('图格标的无效')
+                shape = item.get('shape')
+                if shape is not None:
+                    from datetime import date
+                    import math
+                    if (not isinstance(shape,dict) or not isinstance(shape.get('dataset_id'),str)
+                            or not isinstance(shape.get('end'),str)):
+                        raise ValueError('形态图格缺少真实快照与截止日')
+                    date.fromisoformat(shape['end'])
+                    score = shape.get('score',100)
+                    if type(score) not in (float,int) or not math.isfinite(score) or not 0<=score<=100:
+                        raise ValueError('形态相似度无效')
             except TypeError as exc:
                 raise ValueError('图格标的设置不完整') from exc
         span = pane.get('range')

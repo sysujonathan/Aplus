@@ -16,11 +16,12 @@ from .theme import APP_BG, MUTED
 
 class GrowthHost:
     def __init__(self, parent, store, context=None, on_error=None, on_closed=None, on_return=None,
-                 on_compare=None, on_ready=None):
+                 on_compare=None, on_ready=None, on_shape=None):
         self.parent, self.store = parent, store
         self.on_error, self.on_closed = on_error, on_closed
         self.on_return = on_return
         self.on_compare = on_compare
+        self.on_shape = on_shape
         self.on_ready = on_ready
         self.process = None
         self.closing = False
@@ -54,6 +55,8 @@ class GrowthHost:
                 self.on_return()
             if action.get('compare_case') and self.on_compare:
                 self.on_compare(action['compare_case'])
+            if isinstance(action.get('shape_case'),dict) and self.on_shape:
+                self.on_shape(action['shape_case'])
         if result.get('closeCancelled') and result.get('id') != self._last_cancel:
             self._last_cancel = result.get('id')
             self.closing = False
@@ -111,9 +114,10 @@ class GrowthHost:
 
 
 class GrowthSpacePage(ttk.Frame):
-    def __init__(self, parent, store):
+    def __init__(self, parent, store, on_shape=None):
         super().__init__(parent, width=640, height=480)
         self.store, self.host = store, None
+        self.on_shape = on_shape
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self._status = tk.StringVar(value='正在打开 成长空间…')
@@ -135,7 +139,7 @@ class GrowthSpacePage(ttk.Frame):
             self._loading.place(relx=.5, rely=.5, anchor=tk.CENTER)
             self._loading.lift()
             self.host = GrowthHost(self.canvas, self.store, on_error=self._failed,
-                                   on_ready=self._loading.place_forget)
+                                   on_ready=self._loading.place_forget,on_shape=self.on_shape)
         except Exception as exc:
             self._failed(str(exc))
 
@@ -178,6 +182,19 @@ def open_chart_cases(owner, store, item):
         window.lift()
         window.focus_force()
     host = GrowthHost(canvas, store, context, on_error=error, on_closed=window.destroy,
-                      on_return=return_chart, on_compare=compare_case)
+                      on_return=return_chart, on_compare=compare_case,
+                      on_shape=getattr(owner,'_shape_from_case',None))
     window.protocol('WM_DELETE_WINDOW', host.request_close)
+    return host
+
+
+def open_shape_case(owner,store,case_id):
+    window = tk.Toplevel(owner)
+    window.title('原案例研究')
+    window.geometry('1100x800')
+    canvas = tk.Frame(window,background=APP_BG)
+    canvas.pack(fill=tk.BOTH,expand=True)
+    host = GrowthHost(canvas,store,dict(case_id=case_id),on_closed=window.destroy,
+                      on_shape=getattr(owner,'_shape_from_case',None))
+    window.protocol('WM_DELETE_WINDOW',host.request_close)
     return host

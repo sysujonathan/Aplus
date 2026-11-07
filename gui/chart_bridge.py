@@ -260,6 +260,9 @@ def workspace_boot(store, context):
     context_kind = str(context.get("context_kind") or "candidate")
     title = {"candidate": "策略匹配", "watch": "自选标的",
              "holding": "当前持仓", "closed": "已清仓"}.get(context_kind, "图表分析")
+    if context_kind == 'shape':
+        match = context.get('shape') or {}
+        title = f"形态研究 · {match.get('label','')} · 相似 {match.get('score',100):.1f} · {match.get('start','')}—{match.get('end','')}"
     latest = rows[-1]
     from workbench.prices import tick_size
     try:
@@ -293,7 +296,7 @@ def workspace_boot(store, context):
             close_dates[unit] = {row['date']: row['date'] for row in series[unit]}
     # Each candidate/watch/position selection starts in its base daily/weekly
     # view, even if an older saved view for that symbol was a minute chart.
-    base_start = timeframe if context.get('context_kind') in ('candidate', 'watch', 'holding', 'closed') else ''
+    base_start = timeframe if context.get('context_kind') in ('candidate', 'watch', 'holding', 'closed', 'shape') else ''
     start_timeframe = str(context.get('display_timeframe') or base_start)
     if start_timeframe not in series:
         start_timeframe = ''

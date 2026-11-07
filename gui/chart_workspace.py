@@ -1213,5 +1213,6 @@ def open_chart_workspace(parent, store, **context):
             )
     fallback = dict(context)
     fallback.pop('context_kind', None)
+    fallback.pop('shape', None)
     fallback.pop('minute_interval', None)
     return ChartWorkspaceDialog(parent, store, **fallback)

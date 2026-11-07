@@ -99,6 +99,8 @@ def run_session(session_path):
                                                   {'return_chart': True, 'id': time.time_ns()})
         bridge._compare_case = lambda case_id: atomic_json(session.with_suffix('.actions.json'),
                                                   {'compare_case': case_id, 'id': time.time_ns()})
+        bridge._find_similar = lambda case: atomic_json(session.with_suffix('.actions.json'),
+                                                  {'shape_case':case,'id':time.time_ns()})
         guard = GrowthCloseGuard(window, bridge, status)
         window.events.closing += guard.request
 

@@ -272,7 +272,8 @@
     const items=caseAction(c,'edit','编辑资料',edit,reason)+(shared
       ? (a.admin?caseAction(c,'visibility',c.hidden?'恢复案例':'下架公共案例',!locked&&a.writable,reason):'<span class="micro">下架与恢复仅管理员可用</span>')
       : caseAction(c,'publish','发布到公共案例',!locked&&a.connected&&a.writable,locked?reason:'请先连接有写入权限的 Google 账号')+caseAction(c,'delete','从本机案例库移除',!locked,reason));
-    return `<div class="case-menu-host"><button class="btn small case-menu-trigger" data-action="case-menu" aria-label="案例管理" aria-expanded="false">···</button><div class="case-menu" hidden>${items}</div></div>`;
+    const shape = !locked && S.case?.id===c.id && c.data_kind!=='test' ? '<button class="btn" data-action="shape-similar">寻找相似股票</button>' : '';
+    return `${shape}<div class="case-menu-host"><button class="btn small case-menu-trigger" data-action="case-menu" aria-label="案例管理" aria-expanded="false">···</button><div class="case-menu" hidden>${items}</div></div>`;
   }
   function applyCaseUpdate(c) {
     if(S.actionContext?.case.id===c.id)S.actionContext.updated=c;
@@ -1077,6 +1078,7 @@
       case 'restore-backup': return backupAction(true);
       case 'return-chart': return api('return_chart');
       case 'compare': return api('compare_case',S.case.id);
+      case 'shape-similar': return api('find_similar',S.case.id);
       default: break;
     }
   }
