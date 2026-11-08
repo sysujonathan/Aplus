@@ -210,7 +210,7 @@ function renderChannelSettings(object) {
 function renderTrendSettings(object) {
   const host=document.querySelector('#toolSpecificSettings');
   const ends=key=>`<select class="endpoint-choice" data-setting="${key}" title="${key==='startStyle'?'起点':'终点'}样式" aria-label="${key==='startStyle'?'起点':'终点'}样式">${[['none',key==='startStyle'?'○—':'—○'],['arrow',key==='startStyle'?'←':'→']].map(([value,label])=>`<option value="${value}" ${(object[key]||(key==='endStyle'&&object.type==='arrow'?'arrow':'none'))===value?'selected':''}>${label}</option>`).join('')}</select>`;
-  host.innerHTML=`${commonLineSettings(object,'线形图').replace('</div>',`${ends('startStyle')}${ends('endStyle')}</div>`)}
+  host.innerHTML=`${commonLineSettings(object,'线形图',ends('startStyle')+ends('endStyle'))}
     ${object.type==='trend'?'<label>延伸<select data-trend-extend><option value="none">不要扩大</option><option value="left">向左延伸</option><option value="right">向右延伸</option><option value="both">双向延伸</option></select></label>':''}
     <label><input type="checkbox" data-setting="showMidpoint" ${object.showMidpoint?'checked':''}>中点</label>
     <label><input type="checkbox" data-setting="priceLabels" ${object.priceLabels?'checked':''}>价格标签</label>
@@ -408,10 +408,11 @@ function drawAttachedText(ctx,view,object) {
 
 // One geometry is shared by rendering, text placement, and all six handles.
 function channelGeometry(object) {
-  const a=object.a,b=object.b||a,slope=(b.value-a.value)/((b.index-a.index)||1);
+  const a=object.a,b=object.b||a,degenerate=b.index===a.index;
+  const slope=degenerate?0:(b.value-a.value)/(b.index-a.index);
   const c=object.c||{index:a.index,value:a.value+Math.max(.01,Math.abs(b.value-a.value)*.34)};
   const delta=c.value-(a.value+slope*(c.index-a.index));
-  return {a,b,c,slope,delta,at:index=>a.value+slope*(index-a.index)};
+  return {a,b,c,slope,delta,degenerate,at:index=>a.value+slope*(index-a.index)};
 }
 
 function drawingTextLayout(view,object) {

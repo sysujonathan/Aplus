@@ -133,7 +133,7 @@ function sizeCanvas(target, width, height, ratio) {
 }
 const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offset:0, ema_width:1.5, ema_alpha:1,
   ema_color:'#ff9800', chart_type:'candles', magnet:true, strategy_visible:true, drawings_visible:true,
-  horizontal_grid:true, vertical_grid:true,
+  horizontal_grid:true, vertical_grid:true, cursor_mode:'cross',
   ema_daily:true, ema_weekly:true, ema_monthly:true, indicators_visible:true,
   lock_drawings:false, hide_scope:'drawings', favorites_visible:true, sidebar_open:false,
   ema_smoothing:'none', ema_smooth_length:14, ema_bb_deviation:2, ema_smooth_color:'#fdd835',
@@ -144,6 +144,7 @@ const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offs
 let indicatorSettings = {...indicatorDefaults,
   ...Object.fromEntries(Object.entries(chartBoot.settings || {}).filter(([key]) => key in indicatorDefaults)),
   ...Object.fromEntries(Object.entries(initialPrototypeState.indicators || {}).filter(([key]) => key in indicatorDefaults))};
+indicatorSettings.cursor_mode=preferredChartCursor();
 let indicatorUndoStack = [];
 let indicatorRedoStack = [];
 let emaSmoothing = {values:[],upper:[],lower:[]};
@@ -925,9 +926,13 @@ function drawUserObject(ctx, view, object, draft = false) {
       drawFibLevelText(ctx,object,level,level.levelIndex,startX,endX,selectedObjectNow,draft);
     });
   } else if (object.type === 'channel') {
-    const slope = (b.value-object.a.value)/((b.index-object.a.index)||1);
-    const c = object.c || {index:object.a.index,value:object.a.value+Math.max(.01, Math.abs(b.value-object.a.value)*.34)};
-    const delta = c.value - (object.a.value+slope*(c.index-object.a.index));
+    const geometry=channelGeometry(object),{slope,delta}=geometry;
+    if(geometry.degenerate){
+      // Aggregation can temporarily project distinct dates onto one bar. Keep
+      // the anchors, but never invent an extended slope or mutate saved dates.
+      ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+      registerSegment(object.id,ax,ay,bx,by);
+    }else{
     const startIndex=object.extendLeft?view.begin:object.a.index;
     const endIndex=object.extendRight?view.end+view.futureSpace:b.index;
     const cx1=xGlobal(startIndex),cx2=xGlobal(endIndex);
@@ -943,6 +948,7 @@ function drawUserObject(ctx, view, object, draft = false) {
       ctx.beginPath(); ctx.moveTo(cx1, y1); ctx.lineTo(cx2, y2); ctx.stroke();
       registerSegment(object.id, cx1, y1, cx2, y2);
     });
+    }
   } else if (object.type === 'long' || object.type === 'short') {
     const entry = object.a.value;
     const target = b.value;
@@ -1022,6 +1028,7 @@ function drawSelectionHandles(ctx, object, ax, ay, bx, by) {
       {x:bx,y:v.y(g.b.value+g.delta),handle:'channel-b'},
       {x:v.xGlobal(mid),y:v.y(g.at(mid)),handle:'channel-mid-0'},
       {x:v.xGlobal(mid),y:v.y(g.at(mid)+g.delta),handle:'channel-mid-1'}];
+    if(g.degenerate)points=[{x:ax,y:ay,handle:'a'},{x:bx,y:by,handle:'b'}];
   }
   points.forEach(({ x, y: yy, handle }) => {
     ctx.beginPath(); ctx.arc(x, yy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -1102,7 +1109,7 @@ function startTool(type, button) {
   if(type==='ruler')selectObject(null);
   if (['cross'].includes(type)) {
     activeDrawingTool = null; draftAnchor = null; draftCursor = null; draftPoints = [];
-    setChartCursor('cross',false);
+    setChartCursor('cross');
   } else if (toolNames[type]) {
     activeDrawingTool = type; draftAnchor = null; draftCursor = null; draftPoints = [];
   } else if (type === 'zoom' || type === 'zoomOut') {
@@ -1139,7 +1146,7 @@ function exitDrawingMode() {
   document.querySelectorAll('[data-favorite], .tool[data-tool]:not(.magnet):not([data-tool="lock"])').forEach(item => item.classList.remove('active'));
   document.querySelector('[data-tool="cross"]').classList.add('active');
   canvas.classList.remove('drawing');
-  setChartCursor('arrow',false);
+  setChartCursor(preferredChartCursor(),false);
   if (typeof seriesRefreshPending !== 'undefined' && seriesRefreshPending) repaintCurrentSeries();
 }
 
@@ -1157,6 +1164,7 @@ function placeDrawing(point) {
     draftCursor = snapped; renderWorkspace('overlay'); return;
   }
   if (activeDrawingTool === 'channel' && draftPoints.length < 2) {
+    if(snapped.index===draftAnchor.index){showToast('通道起点和终点需要位于不同K线');return;}
     draftPoints = [structuredClone(draftAnchor), snapped];
     draftCursor = snapped; renderWorkspace('overlay'); showToast('点击第三点设置平行通道宽度'); return;
   }
@@ -1301,7 +1309,12 @@ function updateCrosshair(point) {
   updateReadout(row||view.rows.at(-1));
 }
 
+function preferredChartCursor(value=indicatorSettings.cursor_mode) {
+  return ['cross','dot','arrow','highlight'].includes(value)?value:'cross';
+}
+
 function setChartCursor(mode,persist=true) {
+  if(!['cross','dot','arrow','highlight','eraser'].includes(mode))mode='cross';
   cursorMode=mode;canvas.dataset.cursor=mode;
   const button=document.querySelector('[data-tool="cross"]');
   const names={cross:'十字线',dot:'圆点',arrow:'箭头',highlight:'荧光笔',eraser:'橡皮擦'};
@@ -1310,7 +1323,8 @@ function setChartCursor(mode,persist=true) {
   button.querySelector('use')?.setAttribute('href',`#${glyph[mode]||'i-cross'}`);
   crosshair.classList.remove('show');
   const indicator=document.querySelector('#cursorIndicator');if(indicator)indicator.hidden=true;
-  if(persist){indicatorSettings.cursor_mode=mode;savePrototypeState();}
+  // Eraser is armed only for this session; never reopen into click-to-delete.
+  if(persist&&mode!=='eraser'&&indicatorSettings.cursor_mode!==mode){indicatorSettings.cursor_mode=mode;savePrototypeState();}
 }
 
 function updateDrawingTextHint(point) {
@@ -1378,8 +1392,9 @@ function moveObjectFromOriginal(object, original, start, point, handle) {
         else{object.a={...original.a,value:original.a.value+shift};object.b={...original.b,value:original.b.value+shift};}
       }else{
         const key=handle.endsWith('a')?'a':'b';
+        if(snapped.index===original[key==='a'?'b':'a'].index)return false;
         object[key]={...edited(original[key]),value:snapped.value-(handle.startsWith('channel-')?g.delta:0)};
-        const slope=(object.b.value-object.a.value)/((object.b.index-object.a.index)||1);
+        const slope=(object.b.value-object.a.value)/(object.b.index-object.a.index);
         object.c={...g.c,value:object.a.value+slope*(g.c.index-object.a.index)+g.delta};
       }
       return;
@@ -1501,14 +1516,17 @@ canvas.addEventListener('pointerup', event => {
     event.clientX > gesture.startX;
   const point = eventPoint(event);
   if(gesture.mode==='ruler'){
-    rulerMeasurement.b=snapDrawingPoint(point);exitDrawingMode();flushWorkspaceRender('overlay');
+    rulerMeasurement.b=snapDrawingPoint(point);
+    if(!gesture.moved||(rulerMeasurement.a.index===rulerMeasurement.b.index&&rulerMeasurement.a.value===rulerMeasurement.b.value))rulerMeasurement=null;
+    exitDrawingMode();flushWorkspaceRender('overlay');
   } else if (gesture.mode === 'draw' && !gesture.moved) placeDrawing(point);
   else if (gesture.mode === 'select' && !gesture.moved) selectObject(gesture.objectId, point.x, point.y);
   else if (gesture.mode === 'pan' && !gesture.moved) selectObject(hitObject(point.x, point.y), point.x, point.y);
   else if (gesture.mode === 'zoom-box') {
     if (gesture.moved) applyZoomSelection(gesture.start, point, gesture.zoomOut);
     else { hideZoomSelection(); showToast('拖框选择需要放大或缩小的区域'); }
-  } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && gesture.moved) {
+  } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && gesture.moved &&
+      JSON.stringify(userObjects.find(item=>item.id===gesture.objectId))!==JSON.stringify(gesture.original)) {
     undoStack.push(gesture.before);indicatorUndoStack.push(structuredClone(indicatorSettings));
     if(undoStack.length>30){undoStack.shift();indicatorUndoStack.shift();}
     redoStack = [];indicatorRedoStack=[]; updateUndoButtons(); flushWorkspaceRender('overlay'); savePrototypeState(); updateObjectTree();
@@ -1533,16 +1551,17 @@ function cancelChartGesture() {
 canvas.addEventListener('pointercancel', cancelChartGesture);
 canvas.addEventListener('contextmenu',event=>{
   event.preventDefault();
-  if(activeDrawingTool||draftAnchor||gesture||rulerMeasurement){
-    event.stopPropagation();cancelChartGesture();rulerMeasurement=null;exitDrawingMode();renderWorkspace('overlay');
+  if(activeDrawingTool||draftAnchor||gesture||rulerMeasurement||cursorMode==='eraser'){
+    event.stopPropagation();cancelChartGesture();exitDrawingMode();setChartCursor('arrow');renderWorkspace('overlay');
   }
 });
 document.addEventListener('pointerdown',event=>{
   if(rulerMeasurement&&event.target!==canvas){rulerMeasurement=null;renderWorkspace('overlay');}
 });
-canvas.addEventListener('mouseleave', () => {
+canvas.addEventListener('mouseleave', event => {
   crosshair.classList.remove('show');
-  for(const id of ['cursorIndicator','drawingTextHint','drawingTextTooltip']){const item=document.querySelector(`#${id}`);if(item)item.hidden=true;}
+  const hint=document.querySelector('#drawingTextHint');
+  for(const id of ['cursorIndicator','drawingTextHint','drawingTextTooltip']){const item=document.querySelector(`#${id}`);if(item&&!(item===hint&&hint.contains(event.relatedTarget)))item.hidden=true;}
   updateReadout(bars[Math.min(replayIndex, bars.length - 1)]);
 });
 canvas.addEventListener('wheel', event => {
@@ -1658,6 +1677,9 @@ document.querySelector('#drawingTextHint')?.addEventListener('click',event=>{
   selectedId=event.currentTarget.dataset.objectId;lastObjectTab='text';openObjectSettings();
   event.currentTarget.hidden=true;document.querySelector('#drawingTextSettings textarea')?.focus();
 });
+document.querySelector('#drawingTextHint')?.addEventListener('mouseleave',event=>{
+  if(event.relatedTarget!==canvas)event.currentTarget.hidden=true;
+});
 const cursorMenu=document.createElement('div');cursorMenu.className='chart-context-menu cursor-menu';cursorMenu.id='cursorMenu';
 cursorMenu.setAttribute('role','menu');
 for(const [mode,label,glyph] of [['cross','十字线','i-cross'],['dot','圆点','i-dot'],['arrow','箭头','i-pointer'],['highlight','荧光笔','i-highlight'],['eraser','橡皮擦','i-eraser']]){
@@ -1675,8 +1697,8 @@ cursorMenuButton?.addEventListener('click',()=>{
 document.addEventListener('pointerdown',event=>{if(!cursorMenu.contains(event.target)&&event.target!==cursorMenuButton&&!cursorMenuButton?.contains(event.target))cursorMenu.classList.remove('show');});
 window.addEventListener('resize',()=>document.querySelectorAll('.modal.show').forEach(fitWorkspaceModal));
 
-function commonLineSettings(object, label = '线条') {
-  return `<div class="setting-row line-setting-row"><span>${object.type==='ray'?'线形图':label}</span><span class="stroke-preview-button" data-stroke-preview="line"><i class="stroke-preview-color" style="background:${object.color||'#2962ff'}"></i><i class="stroke-preview-line" style="border-top-width:${object.width||1}px;border-top-style:${object.dash||'solid'}"></i><input type="color" data-setting="color" data-stroke-width="width" data-stroke-dash="dash" value="${object.color||'#2962ff'}" aria-label="${object.type==='ray'?'射线':label}颜色、粗细和线型"></span></div>`;
+function commonLineSettings(object, label = '线条', endpoints = '') {
+  return `<div class="setting-row line-setting-row"><span>${object.type==='ray'?'线形图':label}</span><span class="stroke-preview-button" data-stroke-preview="line"><i class="stroke-preview-color" style="background:${object.color||'#2962ff'}"></i><i class="stroke-preview-line" style="border-top-width:${object.width||1}px;border-top-style:${object.dash||'solid'}"></i><input type="color" data-setting="color" data-stroke-width="width" data-stroke-dash="dash" value="${object.color||'#2962ff'}" aria-label="${object.type==='ray'?'射线':label}颜色、粗细和线型"></span>${endpoints}</div>`;
 }
 
 function paletteSettings(object) {
@@ -1833,9 +1855,12 @@ function renderCoordinateSettings(object) {
     if(!Number.isFinite(value)||(isIndex?(!Number.isInteger(value)||value-1<limits.min||value-1>limits.max):value<=0)){
       showToast('请输入有效的价格或K线序号');return;
     }
-    rememberObjects();
     const pointKey = control.dataset.coordinatePoint;
     const point = pointKey.startsWith('point:') ? object.points[Number(pointKey.split(':')[1])] : object[pointKey];
+    if(object.type==='channel'&&isIndex&&['a','b'].includes(pointKey)&&value-1===object[pointKey==='a'?'b':'a'].index){
+      control.value=Math.round(point.index)+1;showToast('通道起点和终点需要位于不同K线');return;
+    }
+    rememberObjects();
     point[control.dataset.coordinateField] = control.dataset.coordinateField === 'index' ? value-1 : value;
     if (control.dataset.coordinateField === 'index') delete point.date;
     if(object.type==='path'){object.a=object.points[0];object.b=object.points.at(-1);}
@@ -2756,6 +2781,10 @@ document.querySelectorAll('.panel-tabs button[data-panel]').forEach(button => bu
 function restoreIndicatorSettings(snapshot) {
   Object.keys(indicatorSettings).filter(key=>!(key in snapshot)).forEach(key=>delete indicatorSettings[key]);
   Object.assign(indicatorSettings,snapshot);
+  if(typeof setChartCursor==='function'){
+    indicatorSettings.cursor_mode=preferredChartCursor();
+    setChartCursor(indicatorSettings.cursor_mode,false);
+  }
 }
 
 document.querySelector('#undoAction').addEventListener('click', () => {
@@ -2911,11 +2940,12 @@ window.addEventListener('keydown', event => {
     const menus=document.querySelectorAll('.chart-context-menu.show');
     if(menus.length){menus.forEach(menu=>menu.classList.remove('show'));return;}
     if(!modalOpen&&!editingText&&finishPath()){event.preventDefault();return;}
+    const cancellingTool=Boolean(activeDrawingTool||gesture||rulerMeasurement||cursorMode==='eraser');
     cancelChartGesture();
     rulerMeasurement=null;
     draftAnchor = null; draftCursor = null; draftPoints = []; activeDrawingTool = null; hideZoomSelection();
     if(objectSettingsSnapshot)closeObjectSettings(true);else closeWorkspaceModal();
-    exitDrawingMode();renderWorkspace('overlay');
+    exitDrawingMode();if(cancellingTool)setChartCursor('arrow');renderWorkspace('overlay');
   }
   if (!editingText && (event.key === 'Delete' || event.key === 'Backspace') && selectedId && !document.querySelector('#modalBackdrop').classList.contains('show')) {event.preventDefault();document.querySelector('#quickDelete').click();}
 });
@@ -2934,7 +2964,7 @@ function fitSelectedToolbar() {
 const workspaceResize = new ResizeObserver(() => {fitFavoriteToolbar();fitSelectedToolbar();scheduleWorkspaceRender('all');});
 workspaceResize.observe(wrap);
 applyProductionContext();
-setChartCursor(['cross','dot','arrow','highlight','eraser'].includes(indicatorSettings.cursor_mode)?indicatorSettings.cursor_mode:'cross',false);
+setChartCursor(preferredChartCursor(),false);
 if(!chartBoot.production && initialPrototypeState.timeframe && initialPrototypeState.timeframe!=='daily')
   switchProductionTimeframe(initialPrototypeState.timeframe,false);
 // Start in the requested unit after applyProductionContext restored drawings.

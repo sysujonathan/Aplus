@@ -42,5 +42,10 @@ def test_main_window_can_shrink_horizontally_without_fixed_aspect(tmp_path, desk
             assert window.winfo_height() == height
             assert window.chart.winfo_width() > 200
             assert window.chart.winfo_height() > 100
+        window.geometry('800x520')
+        window.update()
+        assert (window.winfo_width(), window.winfo_height()) == (800, 520)
+        assert window.chart.winfo_width() > 200
+        assert window.chart.winfo_height() > 100
     finally:
         window.destroy()

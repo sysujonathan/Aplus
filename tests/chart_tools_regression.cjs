@@ -254,6 +254,18 @@ assert.deepEqual(paths[2].points,[[0,20],[10,30]]);
 assert.equal(handles.length,6,'parallel channel exposes four corners and two width handles');
 assert.ok(handles.some(h=>h.handle==='channel-mid-1'&&h.x===5&&h.y===25));
 assert.ok(handles.some(h=>h.handle==='channel-mid-0'&&h.x===5&&h.y===15));
+// Weekly/monthly projection may collapse two original dates. Never manufacture
+// an extended slope or modify canonical anchors just to make it drawable.
+context.collapsedChannel=structuredClone(context.channel);
+context.collapsedChannel.id='collapsed';context.collapsedChannel.a.date='2026-10-20';
+context.collapsedChannel.b={index:0,value:20,date:'2026-10-22'};
+context.collapsedChannel.extendLeft=true;context.collapsedChannel.extendRight=true;
+const collapsedBefore=JSON.stringify(context.collapsedChannel);
+paths=[];handles=[];context.selectedId='collapsed';
+vm.runInContext('drawUserObject(ctx,testView,collapsedChannel)',context);
+assert.deepEqual(paths.filter(p=>p.points.length).map(p=>p.points),[[[0,10],[0,20]]]);
+assert.equal(handles.length,2);assert.equal(JSON.stringify(context.collapsedChannel),collapsedBefore);
+context.selectedId='channel';
 const originalChannel={type:'channel',a:{index:0,value:10},b:{index:2,value:20},c:{index:0,value:15}};
 for(const [handle,value,expected] of [['channel-mid-0',17,3],['channel-mid-1',18,3]]){
   const edited=structuredClone(originalChannel);

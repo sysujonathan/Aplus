@@ -29,7 +29,7 @@ context.chartCoordinates=context.window.AplusChartCoordinates;
 context.chartCoordinates.configure(context.chartBoot.axisDates);
 context.window.pywebview={api:{save_state:async(state,revision)=>{states.push(structuredClone(state));return{revision:revision+1};}}};
 vm.runInContext(['clamp','visibleWindow','panLimits','periodLabel','savePrototypeState','rememberObjects','ensureFibSettings',
- 'loadFibTemplate','objectVisibleAtTimeframe','drawingVisibleInWorkspace','normalizeDrawingPrice','snapDrawingPoint','exitDrawingMode',
+ 'loadFibTemplate','objectVisibleAtTimeframe','drawingVisibleInWorkspace','normalizeDrawingPrice','snapDrawingPoint','preferredChartCursor','exitDrawingMode',
  'placeDrawing','finishPath','moveObjectFromOriginal','switchProductionTimeframe','repaintCurrentSeries'].map(extract).join('\n'),context);
 const c=context.chartCoordinates,call=code=>vm.runInContext(code,context);
 const signatures=()=>JSON.stringify(context.userObjects.map(o=>({id:o.id,type:o.type,a:[o.a.date,o.a.value],b:[o.b.date,o.b.value],

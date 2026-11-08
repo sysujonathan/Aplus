@@ -210,7 +210,8 @@ def run(folder):
             if count==6:
                 for mode in ('ruler','zoom','cross'):
                     if mode=='cross':
-                        # The cursor group now remembers Arrow after drawing.
+                        # The cursor group remembers the chosen mode after drawing;
+                        # explicitly select Cross for the next fixture.
                         # Choose Cross explicitly from its real native menu.
                         tools.menu('cross');root.update();tools.popup._entries[0][2].invoke()
                     else:tools.buttons[mode][0].invoke()

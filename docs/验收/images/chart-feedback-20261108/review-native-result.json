@@ -1,0 +1,33 @@
+{
+  "workflow": {
+    "channelStages": 3,
+    "channelHandles": 6,
+    "rejectSameBar": true,
+    "textHintBoundary": true,
+    "rightCancelPhases": 3,
+    "temporaryRuler": true,
+    "cursorModes": 5,
+    "endpointLayout": true,
+    "modalBounds": true,
+    "objects": 2
+  },
+  "reopened": true,
+  "cursorReopened": [
+    "cross",
+    "dot",
+    "arrow",
+    "highlight"
+  ],
+  "width-480": {
+    "width": 125,
+    "height": 69,
+    "backing": 250
+  },
+  "width-800": {
+    "width": 445,
+    "height": 344.5,
+    "backing": 890
+  },
+  "ok": true,
+  "failures": []
+}
