@@ -416,3 +416,284 @@ def test_unscoped_legacy_cache_and_grant_are_preserved_but_not_activated(tmp_pat
     assert w.refresh()['count'] == 0
     assert w.get('pa_shared_catalogue') == [{'id': 'shared:old-file'}]
     assert w.get('pa_shared_access:a')['granted']
+
+
+class CloudHTTP:
+    """Tiny in-process Drive HTTP fixture; optional fixed RTT, never real Google."""
+    def __init__(self, latency=0):
+        self.files, self.pending, self.counts = {}, {}, {}
+        self.latency, self.lose_ack = latency, False
+
+    def __call__(self, url, *, data=None, method=None, headers=None, limit=None):
+        import hashlib
+        import time
+        from urllib.parse import urlparse, parse_qs
+        from email.parser import BytesParser
+        from email.policy import default
+        from workbench.pa_shared import encoded
+        parsed = urlparse(url)
+        assert parsed.hostname == 'www.googleapis.com'
+        query = parse_qs(parsed.query)
+        file_id = parsed.path.rsplit('/', 1)[-1]
+        method = method or ('POST' if data is not None else 'GET')
+        kind = 'upload' if '/upload/' in url else ('read' if query.get('alt') == ['media'] else
+                'allocate' if file_id == 'generateIds' else 'identity' if file_id == 'about' else
+                'folder' if file_id == FOLDER else 'list' if file_id == 'files' else 'info')
+        self.counts[kind] = self.counts.get(kind, 0) + 1
+        if self.latency:
+            time.sleep(self.latency)
+        def info(key):
+            if key == FOLDER:
+                return dict(id=FOLDER, mimeType='application/vnd.google-apps.folder', trashed=False,
+                            owners=[dict(permissionId='owner')], shared=True, capabilities=dict(canAddChildren=True))
+            if key not in self.files:
+                raise DriveError(404)
+            value = self.files[key]
+            return dict(value['meta'], owners=[dict(permissionId='owner')], trashed=False,
+                        size=str(len(value['data'])), md5Checksum=hashlib.md5(value['data']).hexdigest())
+        def commit(meta, body):
+            if meta['id'] in self.files:
+                raise DriveError(409)
+            hook = getattr(self, 'before_commit', None)
+            if hook: hook(meta)
+            self.files[meta['id']] = dict(meta=meta, data=body)
+            hook = getattr(self, 'after_commit', None)
+            if hook: hook(meta)
+            if self.lose_ack:
+                self.lose_ack = False
+                raise ConnectionError('fixture: uploaded, acknowledgement lost')
+            return encoded(dict(id=meta['id'])), {}
+        if kind == 'identity':
+            return encoded(dict(user=dict(permissionId='owner'))), {}
+        if kind == 'allocate':
+            return encoded(dict(ids=[uuid.uuid4().hex for _ in range(int(query['count'][0]))])), {}
+        if kind == 'upload':
+            if query.get('uploadType') == ['multipart']:
+                message = BytesParser(policy=default).parsebytes(('Content-Type: '+headers['Content-Type']+'\r\n\r\n').encode()+data)
+                parts = list(message.iter_parts())
+                return commit(json.loads(parts[0].get_payload(decode=True)), parts[1].get_payload(decode=True))
+            if method == 'POST':
+                meta = json.loads(data)
+                self.pending[meta['id']] = meta
+                return b'', dict(Location='https://www.googleapis.com/upload/drive/v3/session/'+meta['id'])
+            return commit(self.pending[file_id], data)
+        if kind == 'list':
+            wanted = 'collaboration-v1' if 'collaboration-v1' in query['q'][0] else 'case-v1'
+            return encoded(dict(files=[info(k) for k,v in list(self.files.items()) if v['meta']['properties']['aplus_kind']==wanted])), {}
+        if kind == 'read':
+            info(file_id)
+            return self.files[file_id]['data'], {}
+        return encoded(info(file_id)), {}
+
+
+def measured_cloud_flow(root, images=1, optimized=False):
+    """One single/double image case, with stage timings and a fixed 5 ms RTT."""
+    from unittest.mock import patch
+    from workbench import pa_shared
+    from workbench.pa_shared import collect_timings
+    import time
+    class Session:
+        def load(self):
+            return dict(user=dict(id='owner', name='Fixture owner'))
+        def access_token(self):
+            return 'fixture-not-a-user-token'
+    store = Store(root)
+    case, _ = make_case(store)
+    if images == 2:
+        image = io.BytesIO()
+        Image.new('RGB', (60, 40), 'red').save(image, 'PNG')
+        store.pa_save_case([dict(name='second.png', data=image.getvalue())], case_id=case['id'])
+    http = CloudHTTP(.005)
+    bridge = GrowthBridge(store)
+    bridge._drive = GoogleDrive(Session())
+    result = {}
+    with patch.object(pa_shared, 'request', http):
+        assert bridge.refresh_shared()['ok']
+        for kind in ('publish', 'visibility'):
+            http.counts = {}
+            with collect_timings() as rows:
+                start = time.perf_counter()
+                if kind == 'publish':
+                    value = bridge.publish_case(case['id'])
+                    assert value['ok'], value
+                    case_id = value['case_id']
+                    if not optimized:
+                        assert bridge.refresh_shared()['ok']
+                        assert bridge.bootstrap()['ok']
+                else:
+                    c = store.pa_shared('case', case_id, drive=bridge._drive)
+                    value = bridge.set_public_visibility(case_id, c['visibility_version'], True)
+                    assert value['ok'], value
+                    if not optimized:
+                        assert bridge.bootstrap()['ok']
+                result[kind] = dict(ms=round((time.perf_counter()-start)*1000, 2), requests=dict(http.counts), timings=rows)
+    return result
+
+
+class CloudTestSession:
+    def __init__(self):
+        self.user = 'owner'
+    def load(self):
+        return dict(user=dict(id=self.user, name='Fixture owner'))
+    def access_token(self):
+        return 'fixture-not-a-user-token'
+
+
+def cloud_test_bridge(root, http):
+    store = Store(root)
+    bridge = GrowthBridge(store)
+    bridge._drive = GoogleDrive(CloudTestSession())
+    assert bridge.refresh_shared()['ok']
+    return bridge
+
+
+@pytest.mark.parametrize('images', [1, 2])
+def test_cloud_publish_exact_bytes_retry_and_stage_privacy(tmp_path, monkeypatch, caplog, images):
+    from workbench import pa_shared
+    http = CloudHTTP()
+    monkeypatch.setattr(pa_shared, 'request', http)
+    caplog.set_level('INFO', logger='aplus.pa.cloud')
+    bridge = cloud_test_bridge(tmp_path, http)
+    c, original = make_case(bridge._store)
+    originals = [original]
+    if images == 2:
+        photo = io.BytesIO()
+        Image.new('RGB', (60, 40), 'red').save(photo, 'PNG')
+        originals.append(photo.getvalue())
+        bridge._store.pa_save_case([dict(name='second.png', data=originals[-1])], case_id=c['id'])
+    http.lose_ack = True
+    assert not bridge.publish_case(c['id'])['ok']
+    assert not http.files or not any(v['meta']['properties']['aplus_kind']=='case-v1' for v in http.files.values())
+    value = bridge.publish_case(c['id'])
+    assert value['ok'] and value['published']
+    before = copy.deepcopy(http.files)
+    assert bridge.publish_case(c['id'])['case_id'] == value['case_id']
+    assert http.files == before and len(http.files) == images + 2
+    uploaded = [v['data'] for v in http.files.values() if v['meta']['properties']['aplus_kind']=='image-v1']
+    assert sorted(uploaded) == sorted(originals)
+    manifest = next(json.loads(v['data']) for v in http.files.values() if v['meta']['properties']['aplus_kind']=='case-v1')
+    assert 'notes' not in manifest and 'trials' not in manifest
+    assert value['case']['id'] == value['case_id']
+    assert all(set(r)=={'stage','ms','ok'} for r in value['timings'])
+    logs = '\n'.join(r.getMessage() for r in caplog.records)
+    assert 'fixture-not-a-user-token' not in logs and '不许上传' not in logs and c['id'] not in logs
+    # Even after exact put_once readback, changed final metadata cannot seed
+    # the cache with stale bytes under a newer checksum.
+    info, checks = bridge._drive.info, []
+    def changed_final(file_id):
+        row = info(file_id)
+        if file_id == value['case_id'][7:]:
+            checks.append(file_id)
+            if len(checks) == 2:  # Existing retry read, then final confirmation.
+                row = dict(row, md5Checksum='0' * 32)
+        return row
+    monkeypatch.setattr(bridge._drive, 'info', changed_final)
+    rejected = bridge.publish_case(c['id'])
+    assert not rejected['ok'] and '改写' in rejected['error']
+    assert http.files == before
+
+
+def test_cloud_publication_does_not_hold_browsing_lock_or_allow_same_case_and_account_changes(tmp_path, monkeypatch):
+    from workbench import pa_shared
+    http = CloudHTTP()
+    monkeypatch.setattr(pa_shared, 'request', http)
+    bridge = cloud_test_bridge(tmp_path, http)
+    a, _ = make_case(bridge._store)
+    b, _ = make_case(bridge._store, color='red')
+    entered, release = threading.Event(), threading.Event()
+    def hold(meta):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+    http.before_commit = hold
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future = pool.submit(bridge.publish_case, a['id'])
+        try:
+            assert entered.wait(5)
+            read = pool.submit(bridge.search_cases, 'ETH', {'scope':'private'})
+            assert read.result(timeout=1)['ok']  # Must complete before releasing upload.
+            assert bridge.get_case(b['id'])['ok']
+            assert not bridge.publish_case(a['id'])['ok']
+            assert not bridge.update_case(a['id'], {'title':'changed'})['ok']
+            assert not bridge.disconnect_google()['ok']
+            assert not bridge.connect_google()['ok']
+            assert bridge.update_case(b['id'], {'title':'other case'})['ok']
+        finally:
+            release.set()
+        assert future.result(timeout=5)['ok']
+    assert not bridge._cloud_cases
+
+
+def test_visibility_case_sync_retains_concurrent_heads_and_denial_safety(tmp_path, monkeypatch):
+    from workbench import pa_shared
+    http = CloudHTTP()
+    monkeypatch.setattr(pa_shared, 'request', http)
+    a = cloud_test_bridge(tmp_path/'a', http)
+    c, _ = make_case(a._store)
+    public = a.publish_case(c['id'])['case_id']
+    b = cloud_test_bridge(tmp_path/'b', http)
+    version = a._public('case', public)['visibility_version']
+    barrier = threading.Barrier(2)
+    def sync(meta):
+        if meta['properties']['aplus_kind']=='collaboration-v1':
+            barrier.wait(timeout=5)
+    http.before_commit = http.after_commit = sync
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda pair: pair[0].set_public_visibility(public, version, pair[1]), [(a, True), (b, False)]))
+    assert all(not r['ok'] and '并发' in r['error'] for r in responses)
+    for bridge in (a,b):
+        value = bridge._public('case', public)
+        assert value['hidden'] and value['visibility_conflict'] and len(value['visibility_heads']) == 2
+    http.before_commit = http.after_commit = None
+    workspace = Workspace(a._store, a._drive)
+    records = a._drive.list_records
+    def newer_snapshot(kind):
+        rows = records(kind)
+        workspace.set(workspace.space_key('catalogue_stamp'), 'newer-local-snapshot')
+        return rows
+    with monkeypatch.context() as scoped:
+        scoped.setattr(a._drive, 'list_records', newer_snapshot)
+        with pytest.raises(ValueError, match='公共目录已被其他操作更新'):
+            workspace.sync_case(public)
+    assert workspace.get(workspace.space_key('catalogue_stamp')) == 'newer-local-snapshot'
+    original = http.__call__
+    class DenyFolder:
+        def __call__(self, url, **kwargs):
+            if FOLDER in url and '/files/' in url:
+                raise DriveError(403)
+            return original(url, **kwargs)
+    monkeypatch.setattr(pa_shared, 'request', DenyFolder())
+    result = a.set_public_visibility(public, a._public('case', public)['visibility_version'], False)
+    assert not result['ok'] and result['error_kind']=='security'
+    assert not a._public('status')['cached'] and a._store.pa_case(c['id'])
+
+
+def test_cloud_operation_ui_and_close_guard(tmp_path):
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from gui.growth_shell import GrowthCloseGuard
+    node = shutil.which('node')
+    assert node
+    result = subprocess.run([node, str(Path(__file__).with_name('pa_collaboration_ui.cjs')), '--cloud-operations'],
+                            capture_output=True, text=True, encoding='utf-8', timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
+    class Bridge:
+        _lock = threading.RLock()
+        _cloud_cases = {'upload'}
+    class Window:
+        destroyed = False
+        def evaluate_js(self, script):
+            return False if script==GrowthCloseGuard.BUSY_SCRIPT else dict(busy=False,safe=True)
+        def create_confirmation_dialog(self, *args):
+            pytest.fail('Pending cloud work must not ask to discard a saved case')
+        def destroy(self):
+            self.destroyed = True
+    window, bridge = Window(), Bridge()
+    guard = GrowthCloseGuard(window, bridge, tmp_path/'close.json')
+    guard.WAIT_SECONDS, guard.POLL_SECONDS = .025, .002
+    guard._finish()
+    assert not window.destroyed and not guard.allowed
+    bridge._cloud_cases.clear()
+    guard._finish()
+    assert window.destroyed and guard.allowed

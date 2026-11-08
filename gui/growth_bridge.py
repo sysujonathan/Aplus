@@ -47,6 +47,15 @@ def guarded(method):
             try:
                 if getattr(self, '_closing', False):
                     raise ValueError('成长空间正在关闭，请重新打开后操作')
+                if self._cloud_cases:
+                    if method.__name__ in ('connect_google', 'disconnect_google'):
+                        raise ValueError('云端操作尚未完成，请完成后再切换或断开账号')
+                    case_id = args[0] if args else None
+                    if method.__name__ == 'save_capture' and len(args) > 2:
+                        case_id = (args[2] or {}).get('case_id')
+                    if (method.__name__ in ('update_case', 'delete_case', 'set_trial_setup', 'revise_public_case', 'save_capture')
+                            and case_id in self._cloud_cases):
+                        raise ValueError('该案例正在云端同步，请完成后再修改资料')
                 return self._invoke(method, args, kwargs)
             except Exception as exc:
                 result = {'ok': False, 'error': str(exc) or '操作失败，请重试'}
@@ -54,6 +63,52 @@ def guarded(method):
                     result['error_kind'] = 'offline'
                 self._security_error(result, exc)
                 return result
+    call._growth_api = True
+    return call
+
+
+def cloud_write(method):
+    """Use pywebview's existing request thread, never hold the browsing lock.
+
+    Serialize cloud writes only. The active set also protects close/account
+    changes, including when a page has already discarded an old response.
+    """
+    @wraps(method)
+    def call(self, case_id, *args):
+        admitted = False
+        try:
+            with self._lock:
+                if getattr(self, '_closing', False):
+                    raise ValueError('成长空间正在关闭')
+                if case_id in self._cloud_cases:
+                    raise ValueError('该案例正在云端同步，请勿重复提交')
+                security = self._security()
+                self._cloud_cases.add(case_id)
+                admitted = True
+            from workbench.pa_shared import collect_timings, cloud_stage
+            session = getattr(self._drive, 'session', None)
+            with collect_timings() as timings:
+                with session.operation() if isinstance(session, GoogleSession) else nullcontext():
+                    with cloud_stage('bridge.queue'):
+                        self._cloud_lock.acquire()
+                    try:
+                        if security != self._security():
+                            raise SessionChanged()
+                        result = self._invoke(method, (case_id, *args), {})
+                        result['timings'] = list(timings)
+                        return result
+                    finally:
+                        self._cloud_lock.release()
+        except Exception as exc:
+            result = {'ok': False, 'error': str(exc) or '云端操作失败，请重试'}
+            if isinstance(exc, ConnectionError):
+                result['error_kind'] = 'offline'
+            self._security_error(result, exc)
+            return result
+        finally:
+            if admitted:
+                with self._lock:
+                    self._cloud_cases.discard(case_id)
     call._growth_api = True
     return call
 
@@ -187,6 +242,8 @@ class GrowthBridge:
         self._thumbnails = {}
         self._thumbnail_size = 0
         self._lock = threading.RLock()
+        self._cloud_lock = threading.Lock()
+        self._cloud_cases = set()
         self._window = None
         from workbench.pa_shared import GoogleDrive
         self._drive = GoogleDrive(profile=store.root)
@@ -287,9 +344,17 @@ class GrowthBridge:
         self._thumbnail_size = 0
         return self._public('refresh')
 
-    @guarded
+    def _cloud_summary(self, result):
+        from workbench.pa_shared import cloud_stage
+        with cloud_stage('bridge.summary'):
+            cases = self._public('catalogue')
+            user = self._public('status').get('user', {}).get('id')
+            return dict(result, graph=graph(cases), public_count=len(cases),
+                        contributions=sum(c['contributor']['id'] == user for c in cases))
+
+    @cloud_write
     def publish_case(self, case_id):
-        return self._public('publish', case_id)
+        return self._cloud_summary(self._public('publish', case_id))
 
     @guarded
     def mark_studied(self, case_id):
@@ -575,9 +640,9 @@ class GrowthBridge:
     def comment_public_case(self, case_id, text, request_id):
         return self._public('collaborate', case_id, 'comment', request_id, text)
 
-    @guarded
+    @cloud_write
     def set_public_visibility(self, case_id, expected, hidden):
-        return self._public('collaborate', case_id, 'visibility', expected, hidden)
+        return self._cloud_summary(self._public('collaborate', case_id, 'visibility', expected, hidden))
 
     @guarded
     def delete_case(self, case_id):

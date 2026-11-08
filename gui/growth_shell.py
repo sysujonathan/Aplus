@@ -42,11 +42,11 @@ class GrowthCloseGuard:
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise TimeoutError('图片或保存操作仍在处理中，请稍后再关闭')
+                    raise TimeoutError('图片、保存或云端操作仍在处理中，请稍后再关闭')
                 # A committed Save may still await its JS promise callback.
                 # Never offer to discard it, and let queued API calls acquire
                 # the bridge lock while the page acknowledges their results.
-                if self.window.evaluate_js(self.BUSY_SCRIPT):
+                if self.window.evaluate_js(self.BUSY_SCRIPT) or getattr(self.bridge, '_cloud_cases', None):
                     time.sleep(min(self.POLL_SECONDS, remaining))
                     continue
                 if not self.bridge._lock.acquire(timeout=remaining):
@@ -57,7 +57,7 @@ class GrowthCloseGuard:
                     state = self.window.evaluate_js(self.STATE_SCRIPT)
                     if not isinstance(state, dict):
                         raise RuntimeError('页面尚未确认关闭状态，请稍后重试')
-                    if state.get('busy'):
+                    if state.get('busy') or getattr(self.bridge, '_cloud_cases', None):
                         continue
                     if not state.get('safe') and not self.window.create_confirmation_dialog(
                         '尚有未保存内容', '图片或文字尚未保存。确定离开并放弃这些修改？'):
