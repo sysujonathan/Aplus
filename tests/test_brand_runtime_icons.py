@@ -91,10 +91,13 @@ def test_shortcuts_use_versioned_icon_but_keep_stable_launch_target():
 def test_compiled_launcher_contains_exact_approved_ico_frames(tmp_path):
     compiler=Path(os.environ['WINDIR'])/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     executable=tmp_path/'Aplus.exe'
+    # Hosted Windows exceeded the old 30s compilation budget. This is an icon
+    # integrity check, not a compiler speed benchmark; retain a bounded timeout
+    # and validate every resource in the freshly compiled executable below.
     subprocess.run([str(compiler),'/nologo','/target:winexe','/reference:System.Windows.Forms.dll',
         '/reference:System.Web.Extensions.dll','/win32icon:'+str(ROOT/'icon_aplus.ico'),
         '/out:'+str(executable),str(ROOT/'packaging/Launcher.cs')],
-        capture_output=True,check=True,timeout=30)
+        capture_output=True,check=True,timeout=120)
     raw=(ROOT/'icon_aplus.ico').read_bytes();count=struct.unpack_from('<H',raw,4)[0]
     expected=[]
     for i in range(count):

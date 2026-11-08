@@ -41,7 +41,7 @@ jobs:
         shell: pwsh
         run: |
           $compiler = Join-Path $env:RUNNER_TEMP 'inno-setup.exe'
-          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $compiler
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $compiler -MaximumRetryCount 3 -RetryIntervalSec 10
           $signature = Get-AuthenticodeSignature $compiler
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B.V.') { throw 'Compiler signature mismatch' }
           $destination = Join-Path $env:RUNNER_TEMP 'Inno'

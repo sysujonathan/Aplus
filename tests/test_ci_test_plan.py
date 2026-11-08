@@ -176,6 +176,81 @@ def test_workflow_required_name_triggers_and_actual_execution_are_not_skipped():
     assert 'github.run_id' in workflow['concurrency']['group']
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows PowerShell signature validation')
+@pytest.mark.parametrize('scenario', ['recovers', 'exhausted', 'unsigned'])
+def test_compiler_download_retries_http_failures_but_never_bypasses_verification(tmp_path, scenario):
+    """Exercise the actual workflow command against transient/permanent HTTP 503.
+
+    Only the URL and waiting interval change in this isolated test. The retry
+    budget, downloaded bytes and signature gate use real PowerShell behavior.
+    """
+    import os
+    import shutil
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    pwsh = shutil.which('pwsh')
+    assert pwsh, 'PowerShell 7 is required on the Windows acceptance runner'
+    workflow = yaml.load((ROOT / '.github/workflows/checks.yml').read_text(encoding='utf-8'),
+                         Loader=yaml.BaseLoader)
+    compiler = next(step for step in workflow['jobs']['test']['steps']
+                    if 'APLUS_ISCC=' in step.get('run', ''))
+    script = compiler['run']
+    download = next(line for line in script.splitlines() if line.startswith('Invoke-WebRequest '))
+    assert '-MaximumRetryCount 3 -RetryIntervalSec 10' in download
+    url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe'
+    assert url in download
+    requests = []
+    payload = b'Isolated deliberately unsigned compiler fixture'
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            failed = scenario == 'exhausted' or (scenario == 'recovers' and len(requests) < 2)
+            status = 503 if failed else 200
+            requests.append((self.path, status))
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        if scenario != 'unsigned':
+            script = '\n'.join(line for line in script.splitlines()
+                               if line.startswith(('$compiler =', 'Invoke-WebRequest ')))
+        script = script.replace(url, f'http://127.0.0.1:{server.server_port}/compiler.exe')
+        script = script.replace('-RetryIntervalSec 10', '-RetryIntervalSec 1')
+        environment = dict(os.environ, RUNNER_TEMP=str(tmp_path), GITHUB_ENV=str(tmp_path / 'github-env'))
+        result = subprocess.run([pwsh, '-NoProfile', '-NonInteractive', '-Command',
+                                 "$ErrorActionPreference = 'Stop';\n" + script],
+                                env=environment, capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', timeout=30)
+        assert len(requests) == {'recovers': 3, 'exhausted': 4, 'unsigned': 1}[scenario]
+        if scenario == 'recovers':
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert (tmp_path / 'inno-setup.exe').read_bytes() == payload
+        else:
+            assert result.returncode != 0, result.stdout + result.stderr
+            if scenario == 'unsigned':
+                assert 'Compiler signature mismatch' in result.stdout + result.stderr
+            else:
+                # PowerShell may print the HTTP response body rather than the
+                # numeric code. Inspect the served statuses, not localized text.
+                assert all(status == 503 for _, status in requests)
+        assert not (tmp_path / 'Inno').exists(), 'unsigned fixture must never execute'
+        assert not (tmp_path / 'github-env').exists(), 'failed verification must not expose a compiler'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+
 @pytest.mark.parametrize('paths,lane', [
     # Real representative PR file sets (54, 74, 76, 93, 102).
     (['gui/usage_help.py'], 'help'),
