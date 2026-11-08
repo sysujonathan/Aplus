@@ -133,7 +133,7 @@ function drawAxisPriceTags(ctx,view, countdown = '') {
 }
 function configureDrawingTabs(object) {
   const position=['long','short'].includes(object.type);
-  const text=['trend','ray','channel','rectangle','up','down','arrow'].includes(object.type);
+  const text=['trend','ray','channel','rectangle','path','up','down','arrow'].includes(object.type);
   document.querySelector('#objectModal').style.width=object.type==='fib'?'458px':position?'432px':'380px';
   document.querySelector('#objectTabs [data-tab="inputs"]').hidden=!position;
   document.querySelector('#objectTabs [data-tab="coordinates"]').hidden=position||object.type==='path';
@@ -209,8 +209,8 @@ function renderChannelSettings(object) {
 }
 function renderTrendSettings(object) {
   const host=document.querySelector('#toolSpecificSettings');
-  const ends=key=>`<select data-setting="${key}" aria-label="${key==='startStyle'?'起点':'终点'}样式">${[['none','普通'],['arrow','箭头']].map(([value,label])=>`<option value="${value}" ${(object[key]||(key==='endStyle'&&object.type==='arrow'?'arrow':'none'))===value?'selected':''}>${label}</option>`).join('')}</select>`;
-  host.innerHTML=`${commonLineSettings(object)}<div class="setting-row"><span>起点／终点</span>${ends('startStyle')}${ends('endStyle')}</div>
+  const ends=key=>`<select class="endpoint-choice" data-setting="${key}" title="${key==='startStyle'?'起点':'终点'}样式" aria-label="${key==='startStyle'?'起点':'终点'}样式">${[['none',key==='startStyle'?'○—':'—○'],['arrow',key==='startStyle'?'←':'→']].map(([value,label])=>`<option value="${value}" ${(object[key]||(key==='endStyle'&&object.type==='arrow'?'arrow':'none'))===value?'selected':''}>${label}</option>`).join('')}</select>`;
+  host.innerHTML=`${commonLineSettings(object,'线形图',ends('startStyle')+ends('endStyle'))}
     ${object.type==='trend'?'<label>延伸<select data-trend-extend><option value="none">不要扩大</option><option value="left">向左延伸</option><option value="right">向右延伸</option><option value="both">双向延伸</option></select></label>':''}
     <label><input type="checkbox" data-setting="showMidpoint" ${object.showMidpoint?'checked':''}>中点</label>
     <label><input type="checkbox" data-setting="priceLabels" ${object.priceLabels?'checked':''}>价格标签</label>
@@ -392,22 +392,92 @@ function drawPositionStats(ctx,object,result,x1,x2,y) {
 }
 
 function drawAttachedText(ctx,view,object) {
-  const a={x:view.xGlobal(object.a.index),y:view.y(object.a.value)},b={x:view.xGlobal((object.b||object.a).index),y:view.y((object.b||object.a).value)};
-  const defaults=drawingTextDefaults(object);
-  const horizontal=object.textAlign||defaults.horizontal,vertical=object.textVertical||defaults.vertical,size=Number(object.fontSize||defaults.fontSize);
-  let px=horizontal==='left'?Math.min(a.x,b.x):horizontal==='right'?Math.max(a.x,b.x):(a.x+b.x)/2;
-  let py=(a.y+b.y)/2;
-  if(object.type==='ray'){px=horizontal==='right'?view.width-view.right-6:horizontal==='left'?a.x+6:(a.x+view.width-view.right)/2;py=a.y;}
-  if(['up','down'].includes(object.type)){px=a.x;py=a.y+(object.type==='up'?20:-20);}
-  if(object.type==='rectangle')py=vertical==='top'?Math.min(a.y,b.y)+6:vertical==='bottom'?Math.max(a.y,b.y)-6:(a.y+b.y)/2;
-  else py+=vertical==='top'?-6:vertical==='bottom'?6:0;
+  const {px,py,angle,horizontal,baseline,size}=drawingTextLayout(view,object);
   ctx.save();ctx.globalAlpha=(object.textAlpha??1)*(object.alpha??1);ctx.fillStyle=object.textColor||object.color;
   ctx.font=`${object.textItalic?'italic ':''}${object.textBold?'bold ':''}${size}px "Microsoft YaHei",sans-serif`;
-  ctx.textAlign=horizontal;ctx.textBaseline=object.type==='rectangle'?(vertical==='top'?'top':vertical==='bottom'?'bottom':'middle')
-    :vertical==='top'?'bottom':vertical==='bottom'?'top':'middle';
+  ctx.translate(px,py);ctx.rotate(angle);ctx.textAlign=horizontal;ctx.textBaseline=baseline;
   const lines=String(object.text).split('\n');
-  lines.forEach((line,n)=>ctx.fillText(line,px,py+n*(size+3)));
+  const textOffset=baseline==='bottom'?-(lines.length-1)*(size+3):baseline==='middle'?-(lines.length-1)*(size+3)/2:0;
+  lines.forEach((line,n)=>ctx.fillText(line,0,textOffset+n*(size+3)));
   const width=Math.max(...lines.map(line=>ctx.measureText(line).width));
-  const left=horizontal==='left'?px:horizontal==='right'?px-width:px-width/2;
-  registerRect(object.id,left,py-size,left+width,py+lines.length*(size+3));ctx.restore();
+  const left=horizontal==='left'?0:horizontal==='right'?-width:-width/2;
+  const top=textOffset+(baseline==='top'?0:baseline==='middle'?-size/2:-size);
+  const corners=[[left,top],[left+width,top],[left+width,top+lines.length*(size+3)],[left,top+lines.length*(size+3)]];
+  registerPolygon(object.id,corners.map(([x,y])=>[px+x*Math.cos(angle)-y*Math.sin(angle),py+x*Math.sin(angle)+y*Math.cos(angle)]));ctx.restore();
+}
+
+// One geometry is shared by rendering, text placement, and all six handles.
+function channelGeometry(object) {
+  const a=object.a,b=object.b||a,degenerate=b.index===a.index;
+  const slope=degenerate?0:(b.value-a.value)/(b.index-a.index);
+  const c=object.c||{index:a.index,value:a.value+Math.max(.01,Math.abs(b.value-a.value)*.34)};
+  const delta=c.value-(a.value+slope*(c.index-a.index));
+  return {a,b,c,slope,delta,degenerate,at:index=>a.value+slope*(index-a.index)};
+}
+
+function drawingTextLayout(view,object) {
+  const defaults=drawingTextDefaults(object),horizontal=object.textAlign||defaults.horizontal;
+  const vertical=object.textVertical||defaults.vertical,size=Number(object.fontSize||defaults.fontSize);
+  let a={x:view.xGlobal(object.a.index),y:view.y(object.a.value)};
+  let b={x:view.xGlobal((object.b||object.a).index),y:view.y((object.b||object.a).value)};
+  if(object.type==='path'&&object.points?.length>1){
+    a={x:view.xGlobal(object.points[0].index),y:view.y(object.points[0].value)};
+    b={x:view.xGlobal(object.points.at(-1).index),y:view.y(object.points.at(-1).value)};
+  }
+  let angle=0,baseline=vertical==='top'?'bottom':vertical==='bottom'?'top':'middle';
+  let px=(a.x+b.x)/2,py=(a.y+b.y)/2,align=horizontal;
+  const marker=['up','down'].includes(object.type)||object.arrow_marker_version;
+  if(marker){
+    px=a.x;py=a.y;
+    if(object.arrow_marker_version){
+      // Text belongs outside the tail, never over the arrowhead or shaft.
+      if(Math.abs(b.x-a.x)>=Math.abs(b.y-a.y)){
+        align=b.x>=a.x?'right':'left';px+=b.x>=a.x?-8:8;baseline='middle';
+      }else{align='center';py+=b.y>=a.y?-8:8;baseline=b.y>=a.y?'bottom':'top';}
+    }else{
+      const scale=(object.size||30)/28;
+      py+=(object.type==='up'?1:-1)*(25*scale+6);baseline=object.type==='up'?'top':'bottom';
+      align='center';
+    }
+  }else if(object.type==='rectangle'){
+    px=horizontal==='left'?Math.min(a.x,b.x)+6:horizontal==='right'?Math.max(a.x,b.x)-6:px;
+    py=vertical==='top'?Math.min(a.y,b.y)+6:vertical==='bottom'?Math.max(a.y,b.y)-6:py;
+    baseline=vertical==='top'?'top':vertical==='bottom'?'bottom':'middle';
+  }else{
+    if(object.type==='ray')b={x:view.width-view.right-6,y:a.y};
+    if(object.type==='channel'){
+      const g=channelGeometry(object),mid=(g.a.index+g.b.index)/2;
+      const baseIsTop=view.y(g.at(mid))<view.y(g.at(mid)+g.delta);
+      const offset=vertical==='middle'?g.delta/2:(vertical==='top')===baseIsTop?0:g.delta;
+      a.y=view.y(g.a.value+offset);b.y=view.y(g.b.value+offset);
+    }
+    // Left/right refer to the visible line, even when drawn right to left.
+    if(a.x>b.x)[a,b]=[b,a];
+    const t=horizontal==='left'?0:horizontal==='right'?1:.5;
+    px=a.x+(b.x-a.x)*t;py=a.y+(b.y-a.y)*t;
+    angle=Math.atan2(b.y-a.y,b.x-a.x);
+    const offset=vertical==='top'?-6:vertical==='bottom'?6:0;
+    px-=Math.sin(angle)*offset;py+=Math.cos(angle)*offset;
+  }
+  return {px,py,angle,horizontal:align,baseline,size};
+}
+
+function drawRulerMeasurement(ctx,view,a,b) {
+  const ax=view.xGlobal(a.index),bx=view.xGlobal(b.index),ay=view.y(a.value),by=view.y(b.value);
+  const color=b.value>=a.value?'#2962ff':'#f23645';
+  ctx.save();ctx.setLineDash([]);ctx.strokeStyle=color;ctx.fillStyle=color;
+  ctx.globalAlpha=.18;ctx.fillRect(ax,ay,bx-ax,by-ay);ctx.globalAlpha=1;ctx.lineWidth=1;
+  ctx.strokeRect(ax,ay,bx-ax,by-ay);
+  const mx=(ax+bx)/2,my=(ay+by)/2;
+  ctx.beginPath();ctx.moveTo(ax,my);ctx.lineTo(bx,my);ctx.moveTo(mx,ay);ctx.lineTo(mx,by);ctx.stroke();
+  if(Math.abs(bx-ax)>12){drawArrowHead(ctx,bx,my,ax,my);drawArrowHead(ctx,ax,my,bx,my);}
+  if(Math.abs(by-ay)>12){drawArrowHead(ctx,mx,by,mx,ay);drawArrowHead(ctx,mx,ay,mx,by);}
+  const change=b.value-a.value,percent=a.value?change/a.value*100:0;
+  const lines=[`${chartPrice(change)} (${percent.toFixed(2)}%)`,`${Math.abs(Math.round(b.index-a.index))}根K线`];
+  ctx.font='12px Segoe UI';
+  const w=Math.max(...lines.map(text=>ctx.measureText(text).width))+20;
+  const x=clamp(mx-w/2,view.left,Math.max(view.left,view.width-view.right-w));
+  const y=clamp(Math.min(ay,by)-48,view.top,Math.max(view.top,view.height-view.bottom-44));
+  ctx.fillRect(x,y,w,44);ctx.fillStyle='#fff';ctx.font='12px Segoe UI';ctx.textAlign='center';ctx.textBaseline='middle';
+  lines.forEach((line,i)=>ctx.fillText(line,x+w/2,y+13+i*18));ctx.restore();
 }

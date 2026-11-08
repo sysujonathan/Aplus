@@ -27,7 +27,7 @@ const ctx=new Proxy({
 const elements=new Map();
 function element(key){if(!elements.has(key))elements.set(key,{style:{},classList:{toggle(){}},textContent:''});return elements.get(key);}
 const view={left:0,width:100,right:0,top:0,bottom:0,height:100,y:v=>v,xGlobal:i=>i};
-const context=vm.createContext({structuredClone,console,window:{},ctx,testView:view,selectedId:null,hitRegions:[],
+const context=vm.createContext({structuredClone,console,window:{},ctx,testView:view,selectedId:null,hitRegions:[],rulerMeasurement:null,
   onePointTools:new Set(['ray','up','down','text']),canvas:{_view:view},
   registerRect(){},registerSegment(){},registerHandle:(id,handle,x,y)=>handles.push({handle,x,y}),
   indicatorSettings:{ema_length:2,ema_source:'close'},ema:[],activeTimeframeUnit:'daily',
@@ -243,14 +243,82 @@ const prefix=mtfDaily.slice(0,3),prefixWeekly=indicators.aggregate(prefix,'weekl
 const blindMtf=indicators.mergeTimeframe(indicators.average(prefixWeekly.map(row=>row.close),2),prefixWeekly,prefix,
   'weekly','daily',mtfCloses,'2026-01-07',false);
 assert.deepEqual(Array.from(blindMtf),[null,null,30]);
-vm.runInContext(['dashPattern','drawUserObject','drawSelectionHandles','arrowMarkerPoints','drawArrowHead','calculateEma','clamp','visibleWindow','objectVisibleAtTimeframe','timeAxisTicks'].map(extract).join('\n'),context);
+vm.runInContext(['dashPattern','drawUserObject','drawSelectionHandles','arrowMarkerPoints','drawArrowHead','calculateEma','clamp','visibleWindow','objectVisibleAtTimeframe','timeAxisTicks','registerPolygon'].map(extract).join('\n'),context);
 context.channel={id:'channel',type:'channel',a:{index:0,value:10},b:{index:10,value:20},c:{index:5,value:22},color:'#fff',width:2,fill:false};
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);
 assert.deepEqual(paths.slice(0,3).map(p=>p.points),[[[0,10],[10,20]],[[0,13.5],[10,23.5]],[[0,17],[10,27]]]);
 paths=[];context.channel.c.value=25;context.selectedId='channel';
+handles=[];
 vm.runInContext('drawUserObject(ctx,testView,channel)',context);
 assert.deepEqual(paths[2].points,[[0,20],[10,30]]);
-assert.ok(handles.some(h=>h.handle==='c'&&h.x===5&&h.y===25));
+assert.equal(handles.length,6,'parallel channel exposes four corners and two width handles');
+assert.ok(handles.some(h=>h.handle==='channel-mid-1'&&h.x===5&&h.y===25));
+assert.ok(handles.some(h=>h.handle==='channel-mid-0'&&h.x===5&&h.y===15));
+// Weekly/monthly projection may collapse two original dates. Never manufacture
+// an extended slope or modify canonical anchors just to make it drawable.
+context.collapsedChannel=structuredClone(context.channel);
+context.collapsedChannel.id='collapsed';context.collapsedChannel.a.date='2026-10-20';
+context.collapsedChannel.b={index:0,value:20,date:'2026-10-22'};
+context.collapsedChannel.extendLeft=true;context.collapsedChannel.extendRight=true;
+const collapsedBefore=JSON.stringify(context.collapsedChannel);
+paths=[];handles=[];context.selectedId='collapsed';
+vm.runInContext('drawUserObject(ctx,testView,collapsedChannel)',context);
+assert.deepEqual(paths.filter(p=>p.points.length).map(p=>p.points),[[[0,10],[0,20]]]);
+assert.equal(handles.length,2);assert.equal(JSON.stringify(context.collapsedChannel),collapsedBefore);
+context.selectedId='channel';
+const originalChannel={type:'channel',a:{index:0,value:10},b:{index:2,value:20},c:{index:0,value:15}};
+for(const [handle,value,expected] of [['channel-mid-0',17,3],['channel-mid-1',18,3]]){
+  const edited=structuredClone(originalChannel);
+  context.moveObjectFromOriginal(edited,originalChannel,{}, {index:1,value,y:value},handle);
+  assert.equal(context.channelGeometry(edited).delta,expected,'middle handles change only separation');
+  assert.equal(edited.b.value-edited.a.value,10,'width edits preserve the angle');
+}
+for(const handle of ['a','b','channel-a','channel-b']){
+  const edited=structuredClone(originalChannel);
+  context.moveObjectFromOriginal(edited,originalChannel,{}, {index:1,value:18,y:18},handle);
+  assert.equal(context.channelGeometry(edited).delta,5,'corner edits preserve parallel separation');
+}
+assert.deepEqual(originalChannel.a,{index:0,value:10},'editing must not mutate the undo snapshot');
+const screen={...view,y:value=>100-value};
+for(const reversed of [false,true]){
+  const channel=structuredClone(originalChannel);if(reversed)channel.c.value=5;
+  const label=context.drawingTextLayout(screen,{...channel,textVertical:'top',textAlign:'left'});
+  assert.ok(label.py<Math.min(screen.y(channel.a.value),screen.y(channel.c.value)),
+    'top text follows the visually upper boundary, regardless of third-point direction');
+  assert.ok(Math.abs(label.angle-Math.atan2(-10,2))<1e-10);
+}
+const textTrace=[];
+const textCtx=new Proxy({save(){},restore(){},translate:(...p)=>textTrace.push(['translate',...p]),
+  rotate:a=>textTrace.push(['rotate',a]),measureText:()=>({width:50}),fillText:(...p)=>textTrace.push(['text',...p])},
+  {get:(o,k)=>o[k]||(()=>{})});
+context.drawAttachedText(textCtx,screen,{id:'text-line',type:'trend',a:{index:0,value:10},b:{index:2,value:20},text:'沿线文本'});
+assert.ok(textTrace.some(([kind,angle])=>kind==='rotate'&&Math.abs(angle-Math.atan2(-10,2))<1e-10),
+  'attached text is rotated in the real renderer, not just repositioned');
+for(const type of ['up','down']){
+  paths=[];context.selectedId=null;
+  context.drawUserObject(ctx,view,{id:type,type,a:{index:10,value:20},color:'#fff',size:28});
+  assert.deepEqual(paths[0].points[0],[10,20],'marker tip is its stored anchor');
+  const label=context.drawingTextLayout(view,{type,a:{index:10,value:20},size:28});
+  assert.ok(type==='up'?label.py>45:label.py< -5,'marker text stays beyond its tail');
+}
+const bigArrowLabel=context.drawingTextLayout(view,{type:'arrow',arrow_marker_version:1,a:{index:10,value:20},b:{index:30,value:20}});
+assert.ok(bigArrowLabel.px<10,'big-arrow text is outside its starting point');
+for(const type of ['long','short']){
+  paths=[];context.selectedId=null;context.replayIndex=1;
+  context.drawUserObject(ctx,view,{id:type,type,a:{index:0,value:40},b:{index:2,value:50},stop:30,color:'#fff',alwaysShowStats:false});
+  assert.ok(paths.some(p=>JSON.stringify(p.points)===JSON.stringify([[0,40],[1,41]])),
+    'position direction ends at the latest covered close, respecting the replay prefix');
+  assert.ok(!paths.some(p=>p.points.some(([x,y])=>y===9999)),'hidden future close must never enter the position arrow');
+}
+context.replayIndex=2;
+const measureRects=[],measureLines=[];
+const measureCtx=new Proxy({save(){},restore(){},fillRect:(...r)=>measureRects.push(r),strokeRect(){},setLineDash(){},
+  beginPath(){},moveTo:(...p)=>measureLines.push(p),lineTo:(...p)=>measureLines.push(p),stroke(){},
+  measureText:()=>({width:80}),fillText(){}},{get:(o,k)=>o[k]||(()=>{})});
+context.drawRulerMeasurement(measureCtx,{...view,top:0,bottom:0}, {index:10,value:20},{index:40,value:60});
+assert.deepEqual(measureRects[0],[10,20,30,40],'ruler fills the measured rectangle');
+assert.ok(measureLines.some(p=>p[0]===10&&p[1]===40)&&measureLines.some(p=>p[0]===25&&p[1]===20),
+  'ruler has both horizontal and vertical measurement axes');
 handles=[];
 context.drawSelectionHandles(ctx,{id:'rect-handles',type:'rectangle'},10,20,30,40);
 assert.equal(handles.length,8,'rectangle must expose four corners and four edge controls');

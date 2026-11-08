@@ -153,7 +153,6 @@ window.aplusFlushAndClose=()=>window.pywebview.api.finish_close();</script>''', 
     html = html.replace('</body>', '<script src="workspace-controls.js"></script></body>')
     from workbench.branding import application_icon
     shutil.copyfile(application_icon(), target / 'app.ico')
-    html = html.replace('<div class="chart-watermark">A+</div>', '<div class="chart-watermark"><img src="app.ico" alt="APLUS" width="34" height="34"></div>')
     if boot.get('embedded'):
         html = html.replace('<body>', '<body class="embedded">')
     # The same slot reloads after switching symbols. Give changed assets new
@@ -191,7 +190,7 @@ def run_session(session_path):
         page, generated = _materialize_page(session, bridge.bootstrap())
         title = 'A++ 主图' if embedded else f"A++ 图表工作区 · {payload['boot']['name']} {payload['boot']['displaySymbol']}"
         window = webview.create_window(title, page.as_uri(), js_api=bridge, width=1500, height=940,
-                                       min_size=(200, 200) if embedded else (980, 620),
+                                       min_size=(200, 200) if embedded else (480, 360),
                                        frameless=embedded, easy_drag=False, hidden=embedded,
                                        background_color="#0b0b0b")
         close_guard = ChartCloseGuard(window, bridge)

@@ -464,7 +464,13 @@ class AfterhoursPage(ttk.Frame):
                   for key in columns}
         total = sum(widths.values())
         if not self._list_expanded:
-            self.review.columnconfigure(0, minsize=min(total+32, round(self.review.winfo_width()*.62)))
+            # A smaller desktop must not let the list consume the chart's
+            # readable width. Long list columns already have their scrollbar.
+            preview_minimum = round(360 * self.winfo_fpixels('1i') / 96)
+            review_width = self.review.winfo_width()
+            self.review.columnconfigure(1, minsize=preview_minimum)
+            self.review.columnconfigure(0, minsize=min(
+                total+32, round(review_width*.62), max(0, review_width-preview_minimum)))
         available = max(1, self.tree.winfo_width()-20)
         factor = max(1, available/total) if self._list_expanded else 1
         for key, width in widths.items():

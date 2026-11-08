@@ -209,8 +209,16 @@ def run(folder):
             wait(lambda:(host._last_workspace_state or {}).get('chartType')=='candles','candles icon command')
             if count==6:
                 for mode in ('ruler','zoom','cross'):
-                    tools.buttons[mode][0].invoke()
+                    if mode=='cross':
+                        # The cursor group remembers the chosen mode after drawing;
+                        # explicitly select Cross for the next fixture.
+                        # Choose Cross explicitly from its real native menu.
+                        tools.menu('cross');root.update();tools.popup._entries[0][2].invoke()
+                    else:tools.buttons[mode][0].invoke()
                     wait(lambda:(host._last_workspace_state or {}).get('tool')==mode,'rail command '+mode)
+                for offset,mode in enumerate(('cursor-dot','cursor-arrow','cursor-highlight','cursor-eraser'),1):
+                    tools.menu('cross');root.update();tools.popup._entries[offset][2].invoke()
+                    wait(lambda:(host._last_workspace_state or {}).get('tool')==mode,'cursor command '+mode)
                 for name,state in [('lock','locked'),('magnet','magnet'),('eye','hidden')]:
                     old=bool(host._last_workspace_state[state])
                     for value in (not old,old):

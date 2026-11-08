@@ -85,7 +85,7 @@ class AplusMainWindow(ttk.Window):
         self.service = service
         self.store = store
         self.geometry("1600x1000")
-        self.minsize(1280, 760)
+        self.minsize(800, 520)
         try:
             self.state('zoomed')
         except tk.TclError:

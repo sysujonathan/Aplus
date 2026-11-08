@@ -26,6 +26,33 @@ def collect_destroyed_desktop_on_main_thread():
     gc.collect()
 
 
+@pytest.mark.native_process
+def test_small_desktop_reserves_readable_preview_width(tmp_path):
+    import ttkbootstrap as ttk
+    from gui.afterhours import AfterhoursPage
+
+    root = ttk.Window(themename='darkly')
+    root.tk.call('tk', 'scaling', 96 / 72)
+    root.maxsize(1028, 740)
+    root.geometry('1028x740')
+    page = AfterhoursPage(root, store=Store(tmp_path / 'small-desktop'))
+    page.pack(fill=tk.BOTH, expand=True)
+    try:
+        root.update()
+        scale = page.winfo_fpixels('1i') / 96
+        assert page.preview_host.winfo_width() >= round(360 * scale)
+        assert page.tree.winfo_width() > 350
+        assert .25 < page.list_host.winfo_width() / page.review.winfo_width() < .65
+        page._toggle_list()
+        root.update()
+        assert page.list_host.winfo_width() / page.review.winfo_width() > .95
+        page._toggle_list()
+        root.update()
+        assert page.preview_host.winfo_width() >= round(360 * scale)
+    finally:
+        root.destroy()
+
+
 @pytest.mark.skipif(os.name != 'nt', reason='Actual Windows desktop layout')
 @pytest.mark.native_process
 def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_bars, h2_spec):

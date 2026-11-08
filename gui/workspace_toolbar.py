@@ -16,7 +16,8 @@ FAVORITES = (
 FAVORITE_CHOICES = (*FAVORITES, ('text','文字'), ('smile','图标'), ('ruler','测量'),
                     ('zoom','框选放大'), ('zoomOut','框选缩小'))
 GROUPS = {
-    'cross': [('十字光标','cross'),('点状光标',None),('箭头光标',None)],
+    'cross': [('十字线','cross'),('圆点','cursor-dot'),('箭头','cursor-arrow'),
+              ('荧光笔','cursor-highlight'),('橡皮擦','cursor-eraser')],
     'trend': [('线',),('趋势线','trend'),('射线',None),('信息线',None),('延长线',None),('趋势角度',None),
               ('水平线',None),('水平射线','ray'),('垂直线',None),('横线',None),
               ('通道',),('平行通道','channel'),('回归趋势',None),('平顶/平底',None),('不相交通道',None),

@@ -23,7 +23,7 @@ const focusIndex = index => {
 const toolNames = {
   fib: '斐波那契回撤', long: '多头仓位', ray: '水平射线', trend: '趋势线',
   short: '空头仓位', rectangle: '矩形', up: '向上箭头', down: '向下箭头',
-  arrow: '箭头标记', path: '路径', channel: '平行通道', text: '文字', ruler: '价格范围'
+  arrow: '箭头标记', path: '路径', channel: '平行通道', text: '文字', ruler: '测量'
 };
 const onePointTools = new Set(['ray', 'up', 'down', 'text']);
 const fibLevelDefaults = [
@@ -52,6 +52,8 @@ let draftAnchor = null;
 let draftCursor = null;
 let draftPoints = [];
 let pendingDrawingText = null;
+let rulerMeasurement = null;
+let cursorMode = 'cross';
 let selectedId = null;
 let gesture = null;
 let seriesRefreshPending = false;
@@ -131,7 +133,7 @@ function sizeCanvas(target, width, height, ratio) {
 }
 const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offset:0, ema_width:1.5, ema_alpha:1,
   ema_color:'#ff9800', chart_type:'candles', magnet:true, strategy_visible:true, drawings_visible:true,
-  horizontal_grid:true, vertical_grid:true,
+  horizontal_grid:true, vertical_grid:true, cursor_mode:'cross',
   ema_daily:true, ema_weekly:true, ema_monthly:true, indicators_visible:true,
   lock_drawings:false, hide_scope:'drawings', favorites_visible:true, sidebar_open:false,
   ema_smoothing:'none', ema_smooth_length:14, ema_bb_deviation:2, ema_smooth_color:'#fdd835',
@@ -142,6 +144,7 @@ const indicatorDefaults = {ema:true, ema_length:20, ema_source:'close', ema_offs
 let indicatorSettings = {...indicatorDefaults,
   ...Object.fromEntries(Object.entries(chartBoot.settings || {}).filter(([key]) => key in indicatorDefaults)),
   ...Object.fromEntries(Object.entries(initialPrototypeState.indicators || {}).filter(([key]) => key in indicatorDefaults))};
+indicatorSettings.cursor_mode=preferredChartCursor();
 let indicatorUndoStack = [];
 let indicatorRedoStack = [];
 let emaSmoothing = {values:[],upper:[],lower:[]};
@@ -667,7 +670,7 @@ function renderWorkspace(mode = 'all') {
     visibleObjects.filter(item=>item!==selectedDrawing).forEach(item=>drawUserObject(overlay,canvas._view,item));
     if(selectedDrawing)drawUserObject(overlay,canvas._view,selectedDrawing);
     if (draftAnchor && draftCursor) drawUserObject(overlay, canvas._view, {
-      id: 'draft', type: activeDrawingTool, a: draftAnchor,
+      id: 'draft', type: activeDrawingTool==='channel'&&draftPoints.length<2?'trend':activeDrawingTool, a: draftAnchor,
       b: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftPoints[1] : draftCursor,
       c: activeDrawingTool === 'channel' && draftPoints.length > 1 ? draftCursor : undefined,
       points: activeDrawingTool === 'path' ? [...draftPoints, draftCursor] : undefined,
@@ -676,6 +679,7 @@ function renderWorkspace(mode = 'all') {
       color: activeDrawingTool === 'arrow' ? '#f23645' : '#2962ff', width: 2, dash: 'solid', alpha: 1, visible: true
     }, true);
   }
+  if(rulerMeasurement)drawRulerMeasurement(overlay,canvas._view,rulerMeasurement.a,rulerMeasurement.b);
   overlay.restore();
 }
 
@@ -922,9 +926,13 @@ function drawUserObject(ctx, view, object, draft = false) {
       drawFibLevelText(ctx,object,level,level.levelIndex,startX,endX,selectedObjectNow,draft);
     });
   } else if (object.type === 'channel') {
-    const slope = (b.value-object.a.value)/((b.index-object.a.index)||1);
-    const c = object.c || {index:object.a.index,value:object.a.value+Math.max(.01, Math.abs(b.value-object.a.value)*.34)};
-    const delta = c.value - (object.a.value+slope*(c.index-object.a.index));
+    const geometry=channelGeometry(object),{slope,delta}=geometry;
+    if(geometry.degenerate){
+      // Aggregation can temporarily project distinct dates onto one bar. Keep
+      // the anchors, but never invent an extended slope or mutate saved dates.
+      ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+      registerSegment(object.id,ax,ay,bx,by);
+    }else{
     const startIndex=object.extendLeft?view.begin:object.a.index;
     const endIndex=object.extendRight?view.end+view.futureSpace:b.index;
     const cx1=xGlobal(startIndex),cx2=xGlobal(endIndex);
@@ -940,6 +948,7 @@ function drawUserObject(ctx, view, object, draft = false) {
       ctx.beginPath(); ctx.moveTo(cx1, y1); ctx.lineTo(cx2, y2); ctx.stroke();
       registerSegment(object.id, cx1, y1, cx2, y2);
     });
+    }
   } else if (object.type === 'long' || object.type === 'short') {
     const entry = object.a.value;
     const target = b.value;
@@ -951,6 +960,12 @@ function drawUserObject(ctx, view, object, draft = false) {
     ctx.fillStyle = object.stopColor || '#f23645'; if(object.showStop !== false)ctx.fillRect(x1, y(entry), x2 - x1, y(stop) - y(entry));
     ctx.globalAlpha = object.strokeAlpha ?? object.alpha ?? 1; ctx.strokeStyle = object.color; ctx.setLineDash([]);
     [target, entry, stop].forEach(value => { ctx.beginPath(); ctx.moveTo(x1, y(value)); ctx.lineTo(x2, y(value)); ctx.stroke(); });
+    const last=Math.min(replayIndex,bars.length-1,Math.floor(Math.max(object.a.index,b.index)));
+    if(last>=Math.ceil(Math.min(object.a.index,b.index))&&bars[last]){
+      const closeX=xGlobal(last),closeY=y(bars[last].close);
+      ctx.beginPath();ctx.moveTo(ax,y(entry));ctx.lineTo(closeX,closeY);ctx.stroke();
+      if(Math.hypot(closeX-ax,closeY-y(entry))>12)drawArrowHead(ctx,ax,y(entry),closeX,closeY);
+    }
     registerRect(object.id, x1, Math.min(y(target), y(stop)), x2, Math.max(y(target), y(stop)));
     if(!draft && (selectedObjectNow || (object.alwaysShowStats ?? !object.position_version))){
       const result=AplusPositionMetrics.metrics(object,bars,replayIndex,chartBoot.priceStep||NaN);
@@ -958,9 +973,9 @@ function drawUserObject(ctx, view, object, draft = false) {
     }
   } else if (object.type === 'up' || object.type === 'down') {
     const scale=(object.size||30)/28, direction=object.type==='up'?1:-1;
-    ctx.beginPath();[[0,-13],[-11,0],[-4,0],[-4,12],[4,12],[4,0],[11,0]].forEach(([x,v],i)=>i?ctx.lineTo(ax+x*scale,ay+v*scale*direction):ctx.moveTo(ax+x*scale,ay+v*scale*direction));
+    ctx.beginPath();[[0,-13],[-11,0],[-4,0],[-4,12],[4,12],[4,0],[11,0]].forEach(([x,v],i)=>i?ctx.lineTo(ax+x*scale,ay+(v+13)*scale*direction):ctx.moveTo(ax+x*scale,ay+(v+13)*scale*direction));
     ctx.closePath();ctx.fill();ctx.stroke();
-    registerRect(object.id, ax - 14, ay - 18, ax + 14, ay + 14);
+    registerRect(object.id, ax-14*scale, Math.min(ay,ay+26*scale*direction),ax+14*scale,Math.max(ay,ay+26*scale*direction));
   } else if (object.type === 'text') {
     ctx.font = '13px Segoe UI'; ctx.textAlign = 'left'; ctx.fillText(object.text || '笔记', ax, ay);
     registerRect(object.id, ax, ay - 16, ax + 38, ay + 5);
@@ -1006,7 +1021,15 @@ function drawSelectionHandles(ctx, object, ax, ay, bx, by) {
     {x:ax,y:(ay+by)/2,handle:'rect-a-x'}, {x:bx,y:(ay+by)/2,handle:'rect-b-x'},
     {x:(ax+bx)/2,y:ay,handle:'rect-a-y'}, {x:(ax+bx)/2,y:by,handle:'rect-b-y'}
   );
-  if (object.type === 'channel' && object.c) points.push({x:canvas._view.xGlobal(object.c.index), y:canvas._view.y(object.c.value), handle:'c'});
+  if (object.type === 'channel') {
+    const g=channelGeometry(object),v=canvas._view,mid=(g.a.index+g.b.index)/2;
+    points=[{x:ax,y:ay,handle:'a'},{x:bx,y:by,handle:'b'},
+      {x:ax,y:v.y(g.a.value+g.delta),handle:'channel-a'},
+      {x:bx,y:v.y(g.b.value+g.delta),handle:'channel-b'},
+      {x:v.xGlobal(mid),y:v.y(g.at(mid)),handle:'channel-mid-0'},
+      {x:v.xGlobal(mid),y:v.y(g.at(mid)+g.delta),handle:'channel-mid-1'}];
+    if(g.degenerate)points=[{x:ax,y:ay,handle:'a'},{x:bx,y:by,handle:'b'}];
+  }
   points.forEach(({ x, y: yy, handle }) => {
     ctx.beginPath(); ctx.arc(x, yy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     registerHandle(object.id, handle, x, yy);
@@ -1057,6 +1080,11 @@ function selectObject(id, x, y, refreshTree = true) {
 function objectAtSelection() { return userObjects.find(item => item.id === selectedId); }
 
 function startTool(type, button) {
+  rulerMeasurement=null;
+  for(const id of ['drawingTextHint','drawingTextTooltip']){const hint=document.querySelector(`#${id}`);if(hint)hint.hidden=true;}
+  if(type?.startsWith('cursor-')&&['dot','arrow','highlight','eraser'].includes(type.slice(7))){
+    exitDrawingMode();setChartCursor(type.slice(7));return true;
+  }
   if (type === 'smile') {
     if (typeof window.openChartIconPicker !== 'function') return false;
     exitDrawingMode();
@@ -1078,8 +1106,10 @@ function startTool(type, button) {
     return;
   }
   pendingDrawingText = null;
+  if(type==='ruler')selectObject(null);
   if (['cross'].includes(type)) {
     activeDrawingTool = null; draftAnchor = null; draftCursor = null; draftPoints = [];
+    setChartCursor('cross');
   } else if (toolNames[type]) {
     activeDrawingTool = type; draftAnchor = null; draftCursor = null; draftPoints = [];
   } else if (type === 'zoom' || type === 'zoomOut') {
@@ -1088,7 +1118,7 @@ function startTool(type, button) {
   document.querySelectorAll('.tool[data-tool]:not(.magnet):not([data-tool="lock"]), [data-favorite]').forEach(item => item.classList.remove('active'));
   if (button) button.classList.add('active');
   canvas.classList.toggle('drawing', Boolean(activeDrawingTool));
-  const instruction = type === 'path' ? '依次单击转折点，双击完成' : (type === 'zoom' || type === 'zoomOut') ? '在图上拖框选择区域' : onePointTools.has(type)||['long','short'].includes(type) ? '在图上单击放置' : '依次单击起点和终点';
+  const instruction = type === 'ruler' ? '按住拖动测量；右键或点击外部结束' : type === 'path' ? '依次单击转折点，双击完成' : (type === 'zoom' || type === 'zoomOut') ? '在图上拖框选择区域' : onePointTools.has(type)||['long','short'].includes(type) ? '在图上单击放置' : '依次单击起点和终点';
   showToast(activeDrawingTool ? `${toolNames[type] || button?.title}：${instruction}` : `${button?.title || '十字光标'}已选择`);
   renderWorkspace('overlay');
 }
@@ -1116,6 +1146,7 @@ function exitDrawingMode() {
   document.querySelectorAll('[data-favorite], .tool[data-tool]:not(.magnet):not([data-tool="lock"])').forEach(item => item.classList.remove('active'));
   document.querySelector('[data-tool="cross"]').classList.add('active');
   canvas.classList.remove('drawing');
+  setChartCursor(preferredChartCursor(),false);
   if (typeof seriesRefreshPending !== 'undefined' && seriesRefreshPending) repaintCurrentSeries();
 }
 
@@ -1133,6 +1164,7 @@ function placeDrawing(point) {
     draftCursor = snapped; renderWorkspace('overlay'); return;
   }
   if (activeDrawingTool === 'channel' && draftPoints.length < 2) {
+    if(snapped.index===draftAnchor.index){showToast('通道起点和终点需要位于不同K线');return;}
     draftPoints = [structuredClone(draftAnchor), snapped];
     draftCursor = snapped; renderWorkspace('overlay'); showToast('点击第三点设置平行通道宽度'); return;
   }
@@ -1261,7 +1293,7 @@ function updateCrosshair(point) {
   hoverPoint=inPlot?point:null;
   canvas.classList.toggle('price-scale', point.x > view.width - view.right && point.y < view.height - 39);
   canvas.classList.toggle('time-scale', point.y > view.height - view.bottom && point.y < view.height - 39 && point.x < view.width - view.right);
-  if (!inPlot) { crosshair.classList.remove('show'); return; }
+  if (!inPlot) { crosshair.classList.remove('show');const indicator=document.querySelector('#cursorIndicator');if(indicator)indicator.hidden=true;return; }
   const index=Math.round(point.index);
   const row=index>=0&&index<=replayIndex?bars[index]:null;
   let date;
@@ -1270,7 +1302,44 @@ function updateCrosshair(point) {
   crosshair.style.setProperty('--cy', `${point.y}px`);
   document.querySelector('#crossPrice').textContent = chartPrice(point.value);
   document.querySelector('#crossDate').textContent = date;
-  crosshair.classList.add('show');updateReadout(row||view.rows.at(-1));
+  crosshair.classList.toggle('show',cursorMode==='cross'||Boolean(activeDrawingTool));
+  const indicator=document.querySelector('#cursorIndicator');
+  if(indicator){indicator.hidden=!['dot','highlight'].includes(cursorMode)||Boolean(activeDrawingTool);
+    indicator.style.left=`${point.x}px`;indicator.style.top=`${point.y}px`;indicator.dataset.mode=cursorMode;}
+  updateReadout(row||view.rows.at(-1));
+}
+
+function preferredChartCursor(value=indicatorSettings.cursor_mode) {
+  return ['cross','dot','arrow','highlight'].includes(value)?value:'cross';
+}
+
+function setChartCursor(mode,persist=true) {
+  if(!['cross','dot','arrow','highlight','eraser'].includes(mode))mode='cross';
+  cursorMode=mode;canvas.dataset.cursor=mode;
+  const button=document.querySelector('[data-tool="cross"]');
+  const names={cross:'十字线',dot:'圆点',arrow:'箭头',highlight:'荧光笔',eraser:'橡皮擦'};
+  button.title=names[mode]||names.cross;
+  const glyph={cross:'i-cross',dot:'i-dot',arrow:'i-pointer',highlight:'i-highlight',eraser:'i-eraser'};
+  button.querySelector('use')?.setAttribute('href',`#${glyph[mode]||'i-cross'}`);
+  crosshair.classList.remove('show');
+  const indicator=document.querySelector('#cursorIndicator');if(indicator)indicator.hidden=true;
+  // Eraser is armed only for this session; never reopen into click-to-delete.
+  if(persist&&mode!=='eraser'&&indicatorSettings.cursor_mode!==mode){indicatorSettings.cursor_mode=mode;savePrototypeState();}
+}
+
+function updateDrawingTextHint(point) {
+  const hint=document.querySelector('#drawingTextHint'),tooltip=document.querySelector('#drawingTextTooltip');
+  if(!hint||!tooltip)return;
+  hint.hidden=true;tooltip.hidden=true;
+  if(activeDrawingTool||gesture)return;
+  const region=hitRegion(point.x,point.y),object=userObjects.find(item=>item.id===region?.id);
+  if(!object||!['trend','ray','channel','rectangle','path','arrow','up','down'].includes(object.type))return;
+  if(object.text){tooltip.textContent=object.text;tooltip.style.left=`${clamp(point.x+12,4,Math.max(4,wrap.clientWidth-230))}px`;
+    tooltip.style.top=`${clamp(point.y+16,4,Math.max(4,wrap.clientHeight-80))}px`;tooltip.hidden=false;return;}
+  const layout=drawingTextLayout(canvas._view,object);
+  hint.dataset.objectId=object.id;
+  hint.style.left=`${clamp(layout.px-42,4,Math.max(4,wrap.clientWidth-100))}px`;
+  hint.style.top=`${clamp(layout.py-24,4,Math.max(4,wrap.clientHeight-65))}px`;hint.hidden=false;
 }
 
 function showZoomSelection(start, end) {
@@ -1314,6 +1383,22 @@ function moveObjectFromOriginal(object, original, start, point, handle) {
     const edited = old => ({ ...snapped,
       date: Math.round(snapped.index) === Math.round(old.index) && old.date
         ? old.date : chartCoordinates.dateAt(bars, snapped.index, activeTimeframeUnit) });
+    if(original.type==='channel'&&['a','b','channel-a','channel-b','channel-mid-0','channel-mid-1'].includes(handle)){
+      const g=channelGeometry(original);
+      if(handle.startsWith('channel-mid-')){
+        const offset=handle.endsWith('1')?g.delta:0;
+        const shift=snapped.value-(g.at(snapped.index)+offset);
+        if(handle.endsWith('1'))object.c={...g.c,value:g.c.value+shift};
+        else{object.a={...original.a,value:original.a.value+shift};object.b={...original.b,value:original.b.value+shift};}
+      }else{
+        const key=handle.endsWith('a')?'a':'b';
+        if(snapped.index===original[key==='a'?'b':'a'].index)return false;
+        object[key]={...edited(original[key]),value:snapped.value-(handle.startsWith('channel-')?g.delta:0)};
+        const slope=(object.b.value-object.a.value)/(object.b.index-object.a.index);
+        object.c={...g.c,value:object.a.value+slope*(g.c.index-object.a.index)+g.delta};
+      }
+      return;
+    }
     if (handle === 'a') object.a = edited(original.a);
     else if (handle === 'b') object.b = edited(original.b || original.a);
     else if (handle === 'right') object.b = {...edited(original.b),value:original.b.value};
@@ -1351,9 +1436,18 @@ function moveObjectFromOriginal(object, original, start, point, handle) {
 
 canvas.addEventListener('pointerdown', event => {
   const view = canvas._view;
+  if(event.button!==0||!view)return;
   const point = eventPoint(event);
+  rulerMeasurement=null;
   canvas.setPointerCapture(event.pointerId);
-  if (point.x > view.width - view.right && point.y < view.height - 39) {
+  if(activeDrawingTool==='ruler'){
+    const a=snapDrawingPoint(point);rulerMeasurement={a,b:{...a}};
+    gesture={mode:'ruler',start:point,startX:event.clientX,startY:event.clientY,moved:false};
+  } else if(cursorMode==='eraser'&&!activeDrawingTool){
+    const id=hitObject(point.x,point.y);
+    if(userObjects.some(item=>item.id===id&&!item.locked)&&!indicatorSettings.lock_drawings){selectedId=id;deleteSelectedDrawing();}
+    gesture=null;return;
+  } else if (point.x > view.width - view.right && point.y < view.height - 39) {
     gesture = { mode: 'price-scale', startX: event.clientX, startY: event.clientY, startZoom: priceZoom, moved: false };
   } else if (point.y > view.height - view.bottom && point.y < view.height - 39 && point.x < view.width - view.right) {
     gesture = { mode: 'time-scale', startX: event.clientX, startCount: viewCount, moved: false };
@@ -1387,14 +1481,17 @@ canvas.addEventListener('pointerdown', event => {
 });
 
 canvas.addEventListener('pointermove', event => {
+  if(!canvas._view)return;
   const point = eventPoint(event);
   updateCrosshair(point);
   if (draftAnchor && activeDrawingTool) { draftCursor = snapDrawingPoint(point); scheduleWorkspaceRender('overlay'); }
-  if (!gesture) {if(objectAtSelection()?.type==='fib')scheduleWorkspaceRender('overlay');return;}
+  if (!gesture) {if(objectAtSelection()?.type==='fib')scheduleWorkspaceRender('overlay');updateDrawingTextHint(point);return;}
   const dx = event.clientX - gesture.startX;
   const dy = event.clientY - gesture.startY;
   gesture.moved ||= Math.abs(dx) + Math.abs(dy) > 4;
-  if (gesture.mode === 'price-scale') {
+  if(gesture.mode==='ruler'){
+    rulerMeasurement.b=snapDrawingPoint(point);scheduleWorkspaceRender('overlay');
+  } else if (gesture.mode === 'price-scale') {
     priceZoom = clamp(gesture.startZoom * Math.exp(-dy / 105), .45, 7);
     scheduleWorkspaceRender('all');
   } else if (gesture.mode === 'time-scale') {
@@ -1413,17 +1510,23 @@ canvas.addEventListener('pointermove', event => {
 });
 
 canvas.addEventListener('pointerup', event => {
+  if(event.button!==0)return;
   if (!gesture) return;
   const pannedToOlder = gesture.mode === 'pan' && gesture.moved &&
     event.clientX > gesture.startX;
   const point = eventPoint(event);
-  if (gesture.mode === 'draw' && !gesture.moved) placeDrawing(point);
+  if(gesture.mode==='ruler'){
+    rulerMeasurement.b=snapDrawingPoint(point);
+    if(!gesture.moved||(rulerMeasurement.a.index===rulerMeasurement.b.index&&rulerMeasurement.a.value===rulerMeasurement.b.value))rulerMeasurement=null;
+    exitDrawingMode();flushWorkspaceRender('overlay');
+  } else if (gesture.mode === 'draw' && !gesture.moved) placeDrawing(point);
   else if (gesture.mode === 'select' && !gesture.moved) selectObject(gesture.objectId, point.x, point.y);
   else if (gesture.mode === 'pan' && !gesture.moved) selectObject(hitObject(point.x, point.y), point.x, point.y);
   else if (gesture.mode === 'zoom-box') {
     if (gesture.moved) applyZoomSelection(gesture.start, point, gesture.zoomOut);
     else { hideZoomSelection(); showToast('拖框选择需要放大或缩小的区域'); }
-  } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && gesture.moved) {
+  } else if ((gesture.mode === 'object-move' || gesture.mode === 'object-handle') && gesture.moved &&
+      JSON.stringify(userObjects.find(item=>item.id===gesture.objectId))!==JSON.stringify(gesture.original)) {
     undoStack.push(gesture.before);indicatorUndoStack.push(structuredClone(indicatorSettings));
     if(undoStack.length>30){undoStack.shift();indicatorUndoStack.shift();}
     redoStack = [];indicatorRedoStack=[]; updateUndoButtons(); flushWorkspaceRender('overlay'); savePrototypeState(); updateObjectTree();
@@ -1436,6 +1539,7 @@ canvas.addEventListener('pointerup', event => {
 });
 
 function cancelChartGesture() {
+  rulerMeasurement=null;
   const overlayOnly=gesture?.mode==='object-move'||gesture?.mode==='object-handle';
   if(gesture?.before)userObjects=gesture.before;
   if(gesture?.mode==='price-scale')priceZoom=gesture.startZoom;
@@ -1445,7 +1549,21 @@ function cancelChartGesture() {
   if (typeof seriesRefreshPending !== 'undefined' && seriesRefreshPending) repaintCurrentSeries();
 }
 canvas.addEventListener('pointercancel', cancelChartGesture);
-canvas.addEventListener('mouseleave', () => { crosshair.classList.remove('show'); updateReadout(bars[Math.min(replayIndex, bars.length - 1)]); });
+canvas.addEventListener('contextmenu',event=>{
+  event.preventDefault();
+  if(activeDrawingTool||draftAnchor||gesture||rulerMeasurement||cursorMode==='eraser'){
+    event.stopPropagation();cancelChartGesture();exitDrawingMode();setChartCursor('arrow');renderWorkspace('overlay');
+  }
+});
+document.addEventListener('pointerdown',event=>{
+  if(rulerMeasurement&&event.target!==canvas){rulerMeasurement=null;renderWorkspace('overlay');}
+});
+canvas.addEventListener('mouseleave', event => {
+  crosshair.classList.remove('show');
+  const hint=document.querySelector('#drawingTextHint');
+  for(const id of ['cursorIndicator','drawingTextHint','drawingTextTooltip']){const item=document.querySelector(`#${id}`);if(item&&!(item===hint&&hint.contains(event.relatedTarget)))item.hidden=true;}
+  updateReadout(bars[Math.min(replayIndex, bars.length - 1)]);
+});
 canvas.addEventListener('wheel', event => {
   event.preventDefault();
   const view = canvas._view;
@@ -1533,13 +1651,54 @@ document.querySelector('#selectedDragHandle').addEventListener('click',event=>ev
 
 function openWorkspaceModal(id) {
   document.querySelectorAll('.modal').forEach(modal => modal.classList.remove('show'));
-  document.querySelector(`#${id}`).classList.add('show');
+  const modal=document.querySelector(`#${id}`);
+  modal.style.position='';modal.style.left='';modal.style.top='';
+  modal.classList.add('show');
   document.querySelector('#modalBackdrop').classList.add('show');
 }
 function closeWorkspaceModal() { document.querySelector('#modalBackdrop').classList.remove('show'); }
 
-function commonLineSettings(object, label = '线条') {
-  return `<div class="setting-row line-setting-row"><span>${object.type==='ray'?'线形图':label}</span><span class="stroke-preview-button" data-stroke-preview="line"><i class="stroke-preview-color" style="background:${object.color||'#2962ff'}"></i><i class="stroke-preview-line" style="border-top-width:${object.width||1}px;border-top-style:${object.dash||'solid'}"></i><input type="color" data-setting="color" data-stroke-width="width" data-stroke-dash="dash" value="${object.color||'#2962ff'}" aria-label="${object.type==='ray'?'射线':label}颜色、粗细和线型"></span></div>`;
+function fitWorkspaceModal(modal) {
+  if(modal.style.position!=='fixed')return;
+  const rect=modal.getBoundingClientRect();
+  modal.style.left=`${clamp(rect.left,4,Math.max(4,innerWidth-rect.width-4))}px`;
+  modal.style.top=`${clamp(rect.top,4,Math.max(4,innerHeight-rect.height-4))}px`;
+}
+document.querySelectorAll('.modal > header').forEach(header=>header.addEventListener('pointerdown',event=>{
+  if(event.button!==0||event.target.closest('button,input,select'))return;
+  const modal=header.closest('.modal'),rect=modal.getBoundingClientRect(),x=event.clientX,y=event.clientY;
+  event.preventDefault();header.setPointerCapture(event.pointerId);
+  modal.style.position='fixed';modal.style.left=`${rect.left}px`;modal.style.top=`${rect.top}px`;
+  const move=e=>{modal.style.left=`${rect.left+e.clientX-x}px`;modal.style.top=`${rect.top+e.clientY-y}px`;fitWorkspaceModal(modal);};
+  const end=()=>{header.removeEventListener('pointermove',move);header.removeEventListener('pointerup',end);header.removeEventListener('pointercancel',end);};
+  header.addEventListener('pointermove',move);header.addEventListener('pointerup',end);header.addEventListener('pointercancel',end);
+}));
+document.querySelector('#drawingTextHint')?.addEventListener('click',event=>{
+  selectedId=event.currentTarget.dataset.objectId;lastObjectTab='text';openObjectSettings();
+  event.currentTarget.hidden=true;document.querySelector('#drawingTextSettings textarea')?.focus();
+});
+document.querySelector('#drawingTextHint')?.addEventListener('mouseleave',event=>{
+  if(event.relatedTarget!==canvas)event.currentTarget.hidden=true;
+});
+const cursorMenu=document.createElement('div');cursorMenu.className='chart-context-menu cursor-menu';cursorMenu.id='cursorMenu';
+cursorMenu.setAttribute('role','menu');
+for(const [mode,label,glyph] of [['cross','十字线','i-cross'],['dot','圆点','i-dot'],['arrow','箭头','i-pointer'],['highlight','荧光笔','i-highlight'],['eraser','橡皮擦','i-eraser']]){
+  const choice=document.createElement('button');choice.type='button';choice.setAttribute('role','menuitemradio');choice.dataset.cursorMode=mode;
+  choice.innerHTML=`<svg><use href="#${glyph}"/></svg><span>${label}</span>`;
+  choice.onclick=()=>{exitDrawingMode();setChartCursor(mode);cursorMenu.classList.remove('show');};cursorMenu.append(choice);
+}
+document.body.append(cursorMenu);
+const cursorMenuButton=document.querySelector('#cursorMenuButton');
+cursorMenuButton?.addEventListener('click',()=>{
+  const rect=cursorMenuButton.getBoundingClientRect();cursorMenu.classList.toggle('show');
+  cursorMenu.style.left=`${Math.min(rect.right+4,innerWidth-180)}px`;cursorMenu.style.top=`${Math.min(rect.top,innerHeight-230)}px`;
+  cursorMenu.querySelectorAll('[data-cursor-mode]').forEach(button=>button.setAttribute('aria-checked',String(button.dataset.cursorMode===cursorMode)));
+});
+document.addEventListener('pointerdown',event=>{if(!cursorMenu.contains(event.target)&&event.target!==cursorMenuButton&&!cursorMenuButton?.contains(event.target))cursorMenu.classList.remove('show');});
+window.addEventListener('resize',()=>document.querySelectorAll('.modal.show').forEach(fitWorkspaceModal));
+
+function commonLineSettings(object, label = '线条', endpoints = '') {
+  return `<div class="setting-row line-setting-row"><span>${object.type==='ray'?'线形图':label}</span><span class="stroke-preview-button" data-stroke-preview="line"><i class="stroke-preview-color" style="background:${object.color||'#2962ff'}"></i><i class="stroke-preview-line" style="border-top-width:${object.width||1}px;border-top-style:${object.dash||'solid'}"></i><input type="color" data-setting="color" data-stroke-width="width" data-stroke-dash="dash" value="${object.color||'#2962ff'}" aria-label="${object.type==='ray'?'射线':label}颜色、粗细和线型"></span>${endpoints}</div>`;
 }
 
 function paletteSettings(object) {
@@ -1696,9 +1855,12 @@ function renderCoordinateSettings(object) {
     if(!Number.isFinite(value)||(isIndex?(!Number.isInteger(value)||value-1<limits.min||value-1>limits.max):value<=0)){
       showToast('请输入有效的价格或K线序号');return;
     }
-    rememberObjects();
     const pointKey = control.dataset.coordinatePoint;
     const point = pointKey.startsWith('point:') ? object.points[Number(pointKey.split(':')[1])] : object[pointKey];
+    if(object.type==='channel'&&isIndex&&['a','b'].includes(pointKey)&&value-1===object[pointKey==='a'?'b':'a'].index){
+      control.value=Math.round(point.index)+1;showToast('通道起点和终点需要位于不同K线');return;
+    }
+    rememberObjects();
     point[control.dataset.coordinateField] = control.dataset.coordinateField === 'index' ? value-1 : value;
     if (control.dataset.coordinateField === 'index') delete point.date;
     if(object.type==='path'){object.a=object.points[0];object.b=object.points.at(-1);}
@@ -2619,6 +2781,10 @@ document.querySelectorAll('.panel-tabs button[data-panel]').forEach(button => bu
 function restoreIndicatorSettings(snapshot) {
   Object.keys(indicatorSettings).filter(key=>!(key in snapshot)).forEach(key=>delete indicatorSettings[key]);
   Object.assign(indicatorSettings,snapshot);
+  if(typeof setChartCursor==='function'){
+    indicatorSettings.cursor_mode=preferredChartCursor();
+    setChartCursor(indicatorSettings.cursor_mode,false);
+  }
 }
 
 document.querySelector('#undoAction').addEventListener('click', () => {
@@ -2774,10 +2940,12 @@ window.addEventListener('keydown', event => {
     const menus=document.querySelectorAll('.chart-context-menu.show');
     if(menus.length){menus.forEach(menu=>menu.classList.remove('show'));return;}
     if(!modalOpen&&!editingText&&finishPath()){event.preventDefault();return;}
+    const cancellingTool=Boolean(activeDrawingTool||gesture||rulerMeasurement||cursorMode==='eraser');
     cancelChartGesture();
+    rulerMeasurement=null;
     draftAnchor = null; draftCursor = null; draftPoints = []; activeDrawingTool = null; hideZoomSelection();
     if(objectSettingsSnapshot)closeObjectSettings(true);else closeWorkspaceModal();
-    startTool('cross', document.querySelector('[data-tool="cross"]'));
+    exitDrawingMode();if(cancellingTool)setChartCursor('arrow');renderWorkspace('overlay');
   }
   if (!editingText && (event.key === 'Delete' || event.key === 'Backspace') && selectedId && !document.querySelector('#modalBackdrop').classList.contains('show')) {event.preventDefault();document.querySelector('#quickDelete').click();}
 });
@@ -2796,6 +2964,7 @@ function fitSelectedToolbar() {
 const workspaceResize = new ResizeObserver(() => {fitFavoriteToolbar();fitSelectedToolbar();scheduleWorkspaceRender('all');});
 workspaceResize.observe(wrap);
 applyProductionContext();
+setChartCursor(preferredChartCursor(),false);
 if(!chartBoot.production && initialPrototypeState.timeframe && initialPrototypeState.timeframe!=='daily')
   switchProductionTimeframe(initialPrototypeState.timeframe,false);
 // Start in the requested unit after applyProductionContext restored drawings.

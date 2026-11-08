@@ -80,7 +80,7 @@
     }
     if (kind==='tool') {
       if (value==='smile') return startTool(value) === true;
-      if (!['cross','zoom','zoomOut','magnet','lock','text',...Object.keys(toolNames)].includes(value)) return false;
+      if (!['cross','cursor-dot','cursor-arrow','cursor-highlight','cursor-eraser','zoom','zoomOut','magnet','lock','text',...Object.keys(toolNames)].includes(value)) return false;
       startTool(value, document.querySelector(`[data-tool="${value}"]`) || document.querySelector(`[data-favorite="${value}"]`)); return true;
     }
     if(kind==='visibility') {
@@ -191,7 +191,7 @@
       indicatorSettings[key]===false;
     return {identity:chartBoot.identity,symbol:chartBoot.symbol,timeframe:activeTimeframeUnit,
       chartType:indicatorSettings.chart_type==='line'?'line':'candles',
-      asof:bars.at(-1)?.date,tool:activeDrawingTool||'cross',magnet:magnetEnabled,
+      asof:bars.at(-1)?.date,tool:activeDrawingTool||(typeof cursorMode==='undefined'||cursorMode==='cross'?'cross':`cursor-${cursorMode}`),magnet:magnetEnabled,
       locked:Boolean(indicatorSettings.lock_drawings),hidden,
       removeLocked:Boolean(indicatorSettings.remove_locked),
       drawingCount:userObjects.length,indicatorCount:indicatorSettings.ema?1:0,
