@@ -86,6 +86,12 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
             assert tools.favorites.place_info()['in'] is grid.host
             assert all(button.winfo_ismapped() for button in (controls.symbol,controls.compare_button,controls.layout_button))
             assert tools.buttons['trend'][-1].cget('image')
+            tools.menu('cross');root.update()
+            assert [entry[1] for entry in tools.popup._entries] == [
+                'cross', 'cursor-dot', 'cursor-arrow', 'cursor-highlight', 'cursor-eraser']
+            assert all(entry[2].cget('state') == 'normal' for entry in tools.popup._entries)
+            tools.popup._entries[2][2].invoke()
+            assert grid._slots[0]._embedded.calls[-1] == ('tool', 'cursor-arrow')
             assert controls.period_buttons['m5'].cget('state')=='disabled'
             controls.period_buttons['weekly'].invoke()
             assert grid._slots[0]._embedded.calls[-1]==('timeframe','weekly')

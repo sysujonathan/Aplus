@@ -23,7 +23,7 @@ const states=[],context=vm.createContext({window:{},structuredClone,console,
  fibVisibilityDefaults:{minutes:{enabled:true,min:1,max:59},hours:{enabled:true,min:1,max:24},days:{enabled:true,min:1,max:366},weeks:{enabled:true,min:1,max:52},months:{enabled:true,min:1,max:12}},
  canvas:{_view:{high:12,low:8,plotHeight:500,candleWidth:8},classList:{remove(){}}},
  renderWorkspace(){},updateObjectTree(){},showToast(){},selectObject(){},updateUndoButtons(){},updateReadout(){},chartPrice:String,
- calculateEma(){},refreshSeriesTitle(){}});
+ calculateEma(){},refreshSeriesTitle(){},setChartCursor(){}});
 vm.runInContext(fs.readFileSync(path.join(assets,'chart-coordinates.js'),'utf8'),context);
 context.chartCoordinates=context.window.AplusChartCoordinates;
 context.chartCoordinates.configure(context.chartBoot.axisDates);

@@ -32,6 +32,13 @@ const api=context.window;
 assert.equal(context.userObjects[0].shareScope.kind,'global','legacy scope is preserved');
 assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'channel'}),true);
 assert.equal(context.lastTool,'channel');
+for(const mode of ['dot','arrow','highlight','eraser']){
+  assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'cursor-'+mode}),true);
+  assert.equal(context.lastTool,'cursor-'+mode,'the native rail reaches the active renderer');
+  context.cursorMode=mode;context.activeDrawingTool=null;
+  assert.equal(api.aplusWorkspaceState().tool,'cursor-'+mode,'the rail receives the actual cursor state');
+}
+context.cursorMode='cross';
 assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'unknown'}),false);
 assert.equal(api.aplusWorkspaceCommand({kind:'tool',value:'smile'}),false,'a picker that did not open must not report success');
 api.aplusWorkspaceSaveStarted();

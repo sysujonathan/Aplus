@@ -1,0 +1,25 @@
+{
+  "workflow": {
+    "channelStages": 3,
+    "channelHandles": 6,
+    "rightCancelPhases": 3,
+    "temporaryRuler": true,
+    "cursorModes": 5,
+    "endpointLayout": true,
+    "modalBounds": true,
+    "objects": 2
+  },
+  "reopened": true,
+  "width-520": {
+    "width": 165,
+    "height": 468.5,
+    "backing": 330
+  },
+  "width-840": {
+    "width": 485,
+    "height": 504.5,
+    "backing": 970
+  },
+  "ok": true,
+  "failures": []
+}
