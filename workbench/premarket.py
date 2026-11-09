@@ -141,13 +141,30 @@ def run_premarket(service, job, spec):
                                                   errors=result['errors'][:3])
             return result, status, message
 
+        target = end
         sync_spec = dict(source=source, boards=list(spec['boards']), start=spec['start'],
-                         end=end, force=False, scan_timeframe=spec['timeframe'], resume=True,
+                         end=target, force=False, scan_timeframe=spec['timeframe'], resume=True,
                          full_history=spec.get('full_history', False))
         result, status, message = stage('sync', sync_spec, '更新')
         if status in ('failed','cancelled'):
             notice(source, '失败' if status=='failed' else '已停止', message=message, force=True)
             return
+        # A full-market sync can run across the completed-date boundary
+        # (19:00 Asia/Shanghai): the newest claimable trading day may advance
+        # while this source downloads. The separate GUI entries re-resolve
+        # completed_date() at every click, so a one-click run must do the
+        # same before scanning; otherwise it silently scans the day that was
+        # current at submit time. One bounded resume pass fetches only the
+        # new tail (resume=True), then the scan targets the advanced day.
+        advanced = min(spec.get('end') or completed_date(), completed_date())
+        if advanced > target:
+            result, status, message = stage('sync', dict(sync_spec, end=advanced), '更新')
+            if status in ('failed','cancelled'):
+                notice(source, '失败' if status=='failed' else '已停止', message=message, force=True)
+                return
+            target = advanced
+        with notice_lock:
+            receipt['asof'] = target
         notice(source, '等待扫描', 0, 0, force=True)
         # A slow vendor never holds this lock while waiting on its network.
         with scan_lock:
@@ -157,7 +174,7 @@ def run_premarket(service, job, spec):
             ids = [r['id'] for r in latest_datasets(proxy.store,source)
                    if r['timeframe']=='daily' and board_of(r['code']) in spec['boards']]
             result, status, message = stage('scan', dict(source=source, boards=list(spec['boards']),
-                datasets=ids, strategies=list(spec['strategies']), timeframes=[spec['timeframe']], asof=end), '扫描')
+                datasets=ids, strategies=list(spec['strategies']), timeframes=[spec['timeframe']], asof=target), '扫描')
         notice(source, '完成' if status=='completed' else '部分完成' if status=='partial' else '已停止' if status=='cancelled' else '未完成',
                message=message, force=True)
 
@@ -165,6 +182,9 @@ def run_premarket(service, job, spec):
         futures = [pool.submit(work, s) for s in spec['sources']]
         for future in futures:
             future.result()
+    targets = [i['asof'] for i in report['sources'].values() if i.get('asof')]
+    if targets:
+        report['asof'] = max(targets)
     report['complete'] = all(i.get('scan_status') == 'completed' for i in report['sources'].values())
     report['errors'] = [dict(source=s, error=i.get('message','未完成')) for s,i in report['sources'].items()
                         if i.get('scan_status') != 'completed']

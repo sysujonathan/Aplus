@@ -200,6 +200,67 @@ def test_cold_daily_weekly_audit_and_scan_parse_same_snapshot_once(store, monkey
         service.pool.shutdown()
 
 
+def test_premarket_advances_target_day_when_completed_date_moves_during_sync(store, monkeypatch):
+    """Regression: one-click froze its target day at submit time.
+
+    A full-market sync can cross the 19:00 completed-date boundary while it
+    downloads. The separate GUI entries re-resolve completed_date() at every
+    click, so after the boundary they fetch and scan the new day; the
+    one-click run kept the submit-time day and silently scanned stale data
+    while reporting completion. The sync stage must re-resolve the target
+    day before scanning and fetch the new tail first.
+    """
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    calls = []
+    def sync(self, job, spec):
+        calls.append(('sync', spec['end']))
+        clock['day'] = '2026-11-09'  # Boundary crossed during the download.
+        return dict(success=1)
+    def scan(self, job, spec):
+        calls.append(('scan', spec['asof']))
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        spec = dict(sources=['baostock'], boards=['沪深主板'], strategies=['STRATEGY_3K'],
+                    timeframe='daily', start='2024-01-01')
+        row = wait_for(store, service.submit('premarket', spec))
+        assert row['status'] == 'completed', row['result']
+        result = json.loads(row['result'])
+        assert calls == [('sync', '2026-11-06'), ('sync', '2026-11-09'), ('scan', '2026-11-09')]
+        assert result['asof'] == '2026-11-09'
+        assert result['sources']['baostock']['asof'] == '2026-11-09'
+        assert result['sources']['baostock']['scan_result']['asof'] == '2026-11-09'
+    finally:
+        service.pool.shutdown()
+
+
+def test_premarket_keeps_single_sync_pass_when_target_day_does_not_move(store, monkeypatch):
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    calls = []
+    def sync(self, job, spec):
+        calls.append(('sync', spec['end']))
+        return dict(success=1)
+    def scan(self, job, spec):
+        calls.append(('scan', spec['asof']))
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        spec = dict(sources=['baostock'], boards=['沪深主板'], strategies=['STRATEGY_3K'],
+                    timeframe='daily', start='2024-01-01')
+        row = wait_for(store, service.submit('premarket', spec))
+        assert row['status'] == 'completed', row['result']
+        assert calls == [('sync', '2026-11-06'), ('scan', '2026-11-06')]
+        assert json.loads(row['result'])['asof'] == '2026-11-06'
+    finally:
+        service.pool.shutdown()
+
+
 @pytest.mark.skipif(os.name!='nt', reason='Windows Tk layout')
 @pytest.mark.parametrize('scale',[1.0,1.5,2.0])
 def test_split_button_keeps_original_width_and_source_choices_persist(store, scale):
