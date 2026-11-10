@@ -31,6 +31,19 @@ def right_list_width(window_width, scale=1):
     return max(round(330*scale), min(round(390*scale), round(width * 0.225)))
 
 
+class _StartupWatchPanel(WatchPanel):
+    """Build with saved view settings, but defer the expensive initial rows."""
+    def __init__(self, *args, **kwargs):
+        self._all_rows = []
+        self._defer_reload = True
+        super().__init__(*args, **kwargs)
+        self._defer_reload = False
+
+    def reload(self):
+        if not self._defer_reload:
+            return super().reload()
+
+
 class AplusMainWindow(ttk.Window):
     def __init__(self, service=None, store=None, enable_tray=False):
         from workbench.branding import APPLICATION_TITLE, apply_window_icon
@@ -99,11 +112,11 @@ class AplusMainWindow(ttk.Window):
         self._case_comparisons = []
         self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
         self._build_ui()
-        self._load_strategies()
         self._shape_last_run = None
         if self.service is not None:
             self.after(1000,self._poll_shape_results)
-        self.after_idle(self.chart.restore_saved_layout)
+        # Let Tk map/paint the shell before running each initial data stage.
+        self.after_idle(lambda: self.after(0, self._startup_watch))
         import sys
         if getattr(sys, 'frozen', False):
             from .installed_update import InstalledVersionController as VersionController
@@ -118,6 +131,18 @@ class AplusMainWindow(ttk.Window):
         from .chart_alerts import ChartAlertMonitor
         self.chart_alert_monitor = ChartAlertMonitor(self, self.store)
         self.chart_alert_monitor.start()
+
+    def _startup_watch(self):
+        if self._closing:
+            return
+        self.watch.reload()
+        self.after_idle(lambda: self.after(0, self._startup_candidates))
+
+    def _startup_candidates(self):
+        if self._closing:
+            return
+        self._load_strategies()  # Original callbacks select/render the same first page.
+        self.after_idle(self.chart.restore_saved_layout)
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
@@ -210,7 +235,7 @@ class AplusMainWindow(ttk.Window):
         ttk.Separator(self.list_pane, orient=tk.HORIZONTAL).grid(
             row=1, column=0, sticky=tk.EW, pady=8
         )
-        self.watch = WatchPanel(
+        self.watch = _StartupWatchPanel(
             self.list_pane,
             self.store,
             on_select=self.on_watch_selected,

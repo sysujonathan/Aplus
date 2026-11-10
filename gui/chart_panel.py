@@ -24,6 +24,52 @@ from .theme import (
 from workbench.workspace_layouts import SHAPES as _LAYOUT_SHAPES
 
 
+# Process-wide, bounded calculation reuse. Rendering and H2 display plans stay
+# mode-specific. Copies keep renderers/workspace consumers out of cached frames.
+_calculation_cache = {}
+
+
+def _observation_calculation(store, observation, market_dataset_id=None, market_asof=None):
+    from copy import deepcopy
+    from .data import load_observation_candles
+    from workbench.market import load_dataset
+    from workbench.strategies import catalog, prepare, calculate
+    from workbench.scan_cache import file_state, engine_inputs
+    from workbench.store import dumps
+
+    spec = catalog(store)[observation['strategy']]
+    did = market_dataset_id or observation.get('dataset_id')
+    records = store.rows('SELECT * FROM datasets WHERE id=?', (did,)) if did else []
+    record = records[0] if records else None
+    cutoff = (market_asof or (record or {}).get('end')) if market_dataset_id else observation['asof']
+    key = None
+    if record and record.get('path'):
+        key = (str(store.root), dumps(observation), dumps(record),
+               file_state((store.root / record['path'],)), engine_inputs(),
+               spec.id, spec.version, dumps(spec.params), spec.cls,
+               file_state((spec.file,)), observation['timeframe'], str(cutoff)[:10])
+    if key is not None and key in _calculation_cache:
+        return (*deepcopy(_calculation_cache[key]), spec, key)
+    frame, original_record, payload = load_observation_candles(store, observation.get('id'))
+    if frame is None:
+        raise ValueError('该观察无可用行情快照')
+    record = original_record
+    if market_dataset_id:
+        frame, record = load_dataset(store, market_dataset_id)
+        cutoff = market_asof or (record or {}).get('end')
+    bars = prepare(frame, observation['timeframe'], str(cutoff)[:10])
+    instance, calculated = calculate(spec, bars)
+    result = (record, payload, bars, instance, calculated)
+    # Do not publish under an identity that changed while reading/calculating.
+    if key is not None and (key[3] == file_state((store.root / record['path'],))
+                            and key[4] == engine_inputs()
+                            and key[9] == file_state((spec.file,))):
+        if len(_calculation_cache) >= 32:
+            _calculation_cache.pop(next(iter(_calculation_cache)))
+        _calculation_cache[key] = deepcopy(result)
+    return (*result, spec, key)
+
+
 def layout_shape(count):
     """返回多图布局的行列；支持专注单图和 4/6/9 格。"""
     return _LAYOUT_SHAPES.get(int(count), _LAYOUT_SHAPES[4])
@@ -485,25 +531,14 @@ class ChartPanel(native_ttk.Frame):
         from .background_status import display_store
         store = display_store(store)
         cache = getattr(self, "_image_cache", None)
-        cache_key = (observation_id, market_dataset_id or "", mode, market_asof, anchor_asof)
-        cached = cache.get(cache_key) if isinstance(cache, dict) else None
-        if cached is not None:
-            self._image, self._code, self._tf, title = cached
-            self._title_var.set(title)
-            self._tv_btn.configure(state=tk.NORMAL)
-            if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
-            self._analysis_btn.configure(state=tk.NORMAL)
-            self._fit_image()
-            self._show_interactive()
-            return
-        from .data import load_observation_candles, code_names
-        from workbench.market import load_dataset
-        from workbench.strategies import catalog, prepare, calculate
         try:
-            frame, record, payload = load_observation_candles(store, observation_id)
-            if frame is None:
-                raise ValueError("该观察无可用行情快照")
             observation = store.rows("SELECT * FROM observations WHERE id=?", (observation_id,))[0]
+            observation = {**observation, 'id': observation_id}
+            record, payload, bars, instance, calculated, spec, calculation_key = _observation_calculation(
+                store, observation, market_dataset_id if mode == 'watch' else None, market_asof)
+            cache_key = (calculation_key, observation_id, mode, anchor_asof)
+            cached = cache.get(cache_key) if isinstance(cache, dict) and calculation_key is not None else None
+            from .data import code_names
             # 早期迁入 Aplus 的观察记录可能只在 observations 表保存日期，
             # payload 内没有 asof/setup_date。绘图层补齐只读上下文，保证
             # 专属标注仍锚定这笔历史信号，而不是误取窗口内另一笔信号。
@@ -513,19 +548,6 @@ class ChartPanel(native_ttk.Frame):
                     payload.setdefault(key, observation[key])
             self._code = observation["code"]
             self._tf = observation["timeframe"]
-            if mode == "watch" and market_dataset_id:
-                # observation 仍是关注原因和参数来源；只把绘图行情推进到
-                # 该股票在 Aplus 正式行情源中的最新不可变快照。
-                frame, record = load_dataset(store, market_dataset_id)
-            spec = catalog(store)[observation["strategy"]]
-            # 候选严格停在信号日；关注标的随正式行情向前推进。
-            cutoff = (
-                (market_asof or (record or {}).get("end"))
-                if mode == "watch" and market_dataset_id
-                else observation["asof"]
-            )
-            bars = prepare(frame, self._tf, str(cutoff)[:10])
-            instance, calculated = calculate(spec, bars)
             from workbench.h2_plan import display_plan, is_h2, STATE_LABELS
             h2 = spec.id == 'STRATEGY_GAP_H2' and is_h2(instance.get_metadata())
             if h2:
@@ -536,7 +558,7 @@ class ChartPanel(native_ttk.Frame):
             # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
             from .chart_embed import EmbeddedChartHost
             interactive_ready = getattr(self, '_interactive', False) is True and EmbeddedChartHost.available()
-            self._image = None if interactive_ready else render_chart(
+            self._image = cached[0] if cached is not None else None if interactive_ready else render_chart(
                 calculated,
                 payload,
                 "",
@@ -713,25 +735,19 @@ class ChartPanel(native_ttk.Frame):
 
     def _rebuild_workspace_context(self):
         """Rebuild context when the lightweight image cache was used."""
-        from .data import load_observation_candles, code_names
-        from workbench.market import load_dataset
-        from workbench.strategies import catalog, prepare, calculate
+        from .data import code_names
+        from .background_status import display_store
+        store = display_store(self.store)
         request = self._workspace_request
-        frame, record, payload = load_observation_candles(self.store, request['observation_id'])
-        if frame is None:
-            raise ValueError('该观察无可用行情快照')
-        observation = self.store.rows('SELECT * FROM observations WHERE id=?',
-                                      (request['observation_id'],))[0]
+        observation = store.rows('SELECT * FROM observations WHERE id=?',
+                                 (request['observation_id'],))[0]
+        observation = {**observation, 'id': request['observation_id']}
+        record, payload, bars, instance, calculated, spec, _ = _observation_calculation(
+            store, observation, request['market_dataset_id'] if request['mode'] == 'watch' else None,
+            request['market_asof'])
         payload = dict(payload or {})
-        for key in ('asof','setup_date'):
-            if observation.get(key): payload.setdefault(key,observation[key])
-        if request['mode']=='watch' and request['market_dataset_id']:
-            frame,record=load_dataset(self.store,request['market_dataset_id'])
-        cutoff=((request['market_asof'] or (record or {}).get('end'))
-                if request['mode']=='watch' and request['market_dataset_id'] else observation['asof'])
-        spec=catalog(self.store)[observation['strategy']]
-        bars=prepare(frame,observation['timeframe'],str(cutoff)[:10])
-        instance,calculated=calculate(spec,bars)
+        for key in ('asof', 'setup_date'):
+            if observation.get(key): payload.setdefault(key, observation[key])
         from workbench.h2_plan import display_plan, is_h2
         if spec.id == 'STRATEGY_GAP_H2' and is_h2(instance.get_metadata()):
             payload = display_plan(
