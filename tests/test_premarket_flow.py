@@ -200,6 +200,172 @@ def test_cold_daily_weekly_audit_and_scan_parse_same_snapshot_once(store, monkey
         service.pool.shutdown()
 
 
+def test_premarket_advances_target_day_when_completed_date_moves_during_sync(store, monkeypatch):
+    """Regression: one-click froze its target day at submit time.
+
+    A full-market sync can cross the 19:00 completed-date boundary while it
+    downloads. The separate GUI entries re-resolve completed_date() at every
+    click, so after the boundary they fetch and scan the new day; the
+    one-click run kept the submit-time day and silently scanned stale data
+    while reporting completion. The sync stage must re-resolve the target
+    day before scanning and fetch the new tail first.
+    """
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    calls = []
+    def sync(self, job, spec):
+        calls.append(('sync', spec['end']))
+        clock['day'] = '2026-11-09'  # Boundary crossed during the download.
+        return dict(success=1)
+    def scan(self, job, spec):
+        calls.append(('scan', spec['asof']))
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        spec = dict(sources=['baostock'], boards=['沪深主板'], strategies=['STRATEGY_3K'],
+                    timeframe='daily', start='2024-01-01')
+        row = wait_for(store, service.submit('premarket', spec))
+        assert row['status'] == 'completed', row['result']
+        result = json.loads(row['result'])
+        assert calls == [('sync', '2026-11-06'), ('sync', '2026-11-09'), ('scan', '2026-11-09')]
+        assert result['asof'] == '2026-11-09'
+        assert result['sources']['baostock']['asof'] == '2026-11-09'
+        assert result['sources']['baostock']['scan_result']['asof'] == '2026-11-09'
+    finally:
+        service.pool.shutdown()
+
+
+def test_premarket_keeps_single_sync_pass_when_target_day_does_not_move(store, monkeypatch):
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    calls = []
+    def sync(self, job, spec):
+        calls.append(('sync', spec['end']))
+        return dict(success=1)
+    def scan(self, job, spec):
+        calls.append(('scan', spec['asof']))
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        spec = dict(sources=['baostock'], boards=['沪深主板'], strategies=['STRATEGY_3K'],
+                    timeframe='daily', start='2024-01-01')
+        row = wait_for(store, service.submit('premarket', spec))
+        assert row['status'] == 'completed', row['result']
+        assert calls == [('sync', '2026-11-06'), ('scan', '2026-11-06')]
+        assert json.loads(row['result'])['asof'] == '2026-11-06'
+    finally:
+        service.pool.shutdown()
+
+
+def test_premarket_marks_source_partial_when_its_asof_lags_top_level(store, monkeypatch):
+    """Multi-source divergence must not hide behind the top-level asof.
+
+    The fast source syncs and scans the old day before the boundary; the
+    slow source crosses it during its sync, advances and scans the new
+    day. report['asof'] is the newest day, but the fast source only ever
+    scanned the old one, so it (and the top-level receipt) must read
+    partial instead of completed.
+    """
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    fast_scanned = threading.Event()
+    def sync(self, job, spec):
+        if spec['source'] == 'baostock' and spec['end'] == '2026-11-06':
+            assert fast_scanned.wait(20), '测试未等到快源扫描'
+            clock['day'] = '2026-11-09'  # Boundary crossed during slow sync.
+        return dict(success=1)
+    def scan(self, job, spec):
+        if spec['source'] == 'tickflow':
+            fast_scanned.set()
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        row = wait_for(store, service.submit('premarket', multi_spec()))
+        result = json.loads(row['result'])
+        assert row['status'] == 'partial', result
+        assert result['asof'] == '2026-11-09'
+        assert result['complete'] is False
+        fast = result['sources']['tickflow']
+        assert fast['asof'] == '2026-11-06'
+        assert fast['scan_status'] == 'partial'
+        assert '2026-11-06' in fast['message']
+        slow = result['sources']['baostock']
+        assert slow['asof'] == '2026-11-09'
+        assert slow['scan_status'] == 'completed'
+        assert any(e['source'] == 'tickflow' for e in result['errors'])
+    finally:
+        service.pool.shutdown()
+
+
+def test_premarket_advance_resync_preserves_first_sync_partial_evidence(store, monkeypatch):
+    """The bounded re-sync after a boundary advance must merge receipts.
+
+    The first sync ends partial (one stock errored); the advance triggers
+    a small clean re-sync. The parent receipt must keep the first pass's
+    partial status and error evidence, with counts merged, instead of
+    being overwritten by the second pass's clean result.
+    """
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    def sync(self, job, spec):
+        if spec['end'] == '2026-11-06':
+            clock['day'] = '2026-11-09'
+            return dict(success=3, errors=[dict(code='sh.600001', error='首轮同步失败样本')])
+        return dict(success=1)
+    def scan(self, job, spec):
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        spec = dict(sources=['baostock'], boards=['沪深主板'], strategies=['STRATEGY_3K'],
+                    timeframe='daily', start='2024-01-01')
+        row = wait_for(store, service.submit('premarket', spec))
+        result = json.loads(row['result'])
+        source = result['sources']['baostock']
+        assert source['asof'] == '2026-11-09'
+        assert source['sync_status'] == 'partial'
+        merged = source['sync_result']
+        assert merged['error_count'] == 1
+        assert any(e.get('error') == '首轮同步失败样本' for e in merged['errors'])
+        assert merged['success'] == 4  # 3 from pass one + 1 from the re-sync.
+        assert len(source['sync_jobs']) == 2
+    finally:
+        service.pool.shutdown()
+
+
+def test_premarket_pinned_spec_end_is_never_exceeded_when_clock_advances(store, monkeypatch):
+    """A user-pinned spec['end'] caps the target day even past the boundary."""
+    clock = {'day': '2026-11-06'}
+    monkeypatch.setattr('workbench.premarket.completed_date', lambda: clock['day'])
+    calls = []
+    def sync(self, job, spec):
+        calls.append(('sync', spec['end']))
+        clock['day'] = '2026-11-09'
+        return dict(success=1)
+    def scan(self, job, spec):
+        calls.append(('scan', spec['asof']))
+        return dict(asof=spec['asof'], success=1, signals=0)
+    monkeypatch.setattr(Service, '_sync', sync)
+    monkeypatch.setattr(Service, '_scan', scan)
+    service = Service(store)
+    try:
+        spec = dict(sources=['baostock'], boards=['沪深主板'], strategies=['STRATEGY_3K'],
+                    timeframe='daily', start='2024-01-01', end='2026-11-06')
+        row = wait_for(store, service.submit('premarket', spec))
+        assert row['status'] == 'completed', row['result']
+        assert calls == [('sync', '2026-11-06'), ('scan', '2026-11-06')]
+        assert json.loads(row['result'])['asof'] == '2026-11-06'
+    finally:
+        service.pool.shutdown()
+
+
 @pytest.mark.skipif(os.name!='nt', reason='Windows Tk layout')
 @pytest.mark.parametrize('scale',[1.0,1.5,2.0])
 def test_split_button_keeps_original_width_and_source_choices_persist(store, scale):
