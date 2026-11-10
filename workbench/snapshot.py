@@ -19,7 +19,7 @@ import csv
 import html
 import hashlib
 import math
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 import sqlite3
 from collections import Counter
@@ -34,6 +34,7 @@ from .strategies import scan_engine_version, verify_frozen
 SNAPSHOT_SCHEMA_VERSION = 1
 SNAPSHOT_KIND = "aplus-premarket-snapshot"
 MAX_EXCLUDED_IN_HTML = 100
+_CST = timezone(timedelta(hours=8))  # A 股交易日时区
 
 
 class ReadOnlyStore:
@@ -307,7 +308,7 @@ def build_snapshot(store, asof):
                 error.get("category") or "unknown" for error in scan_errors
             )),
         },
-        "observation_ids": list(dict.fromkeys(scan_result.get("observation_ids") or [])),
+        "observation_ids": [hit["observation_id"] for hit in hits],
         "hits": hits,
         "excluded": excluded,
         "notes": notes,
@@ -515,11 +516,12 @@ def load_snapshot(path, *, today=None):
     if len(hit_ids) != len(set(hit_ids)) or set(hit_ids) != set(ids):
         raise ValueError("快照命中集与收据 observation_ids 不一致")
     day = date.fromisoformat(data["asof"])
-    current = date.fromisoformat(today or datetime.now(timezone.utc).date().isoformat())
+    current = (date.fromisoformat(today.isoformat() if isinstance(today, date) else today)
+               if today is not None else datetime.now(_CST).date())
     generated = datetime.fromisoformat(data["generated_at"])
     if generated.tzinfo is None:
         raise ValueError("快照生成时间缺少时区")
-    if not 0 <= (current - day).days <= 7 or not 0 <= (current - generated.date()).days <= 7:
+    if not 0 <= (current - day).days <= 7 or not 0 <= (current - generated.astimezone(_CST).date()).days <= 7:
         raise ValueError("快照过期或日期在未来")
     for oid, relative in data["charts"].items():
         if oid not in ids or not isinstance(relative, str) or Path(relative).is_absolute() or ".." in Path(relative).parts:

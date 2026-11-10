@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 import json
 import os
 import logging
@@ -155,6 +156,20 @@ def code_names(store):
 _candidate_sources = {}
 
 
+def snapshot_inputs():
+    """Snapshot file state and URL for the pipeline cache when merging #128."""
+    directory = os.environ.get("APLUS_SNAPSHOT_DIR")
+    state = ()
+    if directory:
+        path = Path(directory).expanduser() / "snapshot.json"
+        try:
+            stat = path.stat()
+            state = (str(path), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            state = (str(path), None, None)
+    return (state, os.environ.get("APLUS_SNAPSHOT_URL", ""))
+
+
 def candidate_source_status(store):
     return _candidate_sources.get(str(store.root), "本地扫描")
 
@@ -180,7 +195,7 @@ def _snapshot_candidates(store, timeframe, source, asof_filter):
     if snapshot["timeframe"] != timeframe or (source and source != snapshot["source"]):
         raise ValueError("快照来源或周期与当前候选页不符")
     if asof_filter:
-        parts = snapshot["asof"].split("-")
+        parts = date.fromisoformat(snapshot["asof"]).isoformat().split("-")
         if any(str(value) != parts[i] for i, value in enumerate(asof_filter) if value):
             raise ValueError("快照日期与当前候选页不符")
     grouped = {}
