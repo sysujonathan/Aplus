@@ -2,7 +2,7 @@
 /* Aplus 盘前 PWA service worker：
    - 应用外壳（页面/manifest/图标）缓存优先，装过一次后离线也能打开；
    - data/ 下的快照数据永远走网络（no-store），不许拿昨天的候选冒充今天的。 */
-const SHELL_CACHE = "aplus-mobile-shell-v1";
+const SHELL_CACHE = "aplus-mobile-shell-v2";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (event) => {
