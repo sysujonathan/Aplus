@@ -438,6 +438,11 @@ class ToolBar(ttk.Frame):
         )
         self.timing_label.configure(justify=tk.RIGHT)
         self.timing_label.pack(anchor=tk.E, fill=tk.X)
+        self._candidate_origin_var = tk.StringVar(value="本地扫描")
+        ttk.Label(self.status_panel, textvariable=self._candidate_origin_var,
+                  foreground=_LABEL_FG).pack(anchor=tk.E)
+        self._candidate_origin_poll = None
+        self._refresh_candidate_origin()
         self._status_tips = [ToolTip(label, text='', wraplength=900) for label in
                              (self.status_label, self.timing_label)]
         self._layout_traces = [
@@ -455,6 +460,12 @@ class ToolBar(ttk.Frame):
         if self.winfo_exists():
             self._responsive()
 
+    def _refresh_candidate_origin(self):
+        from .data import candidate_source_status
+        if self.store is not None:
+            self._candidate_origin_var.set(candidate_source_status(self.store))
+        self._candidate_origin_poll = self.after(500, self._refresh_candidate_origin)
+
     def _cancel_responsive(self, event):
         if event.widget is not self:
             return
@@ -469,7 +480,8 @@ class ToolBar(ttk.Frame):
         for reader in (self._source_reader, self._status_reader, self._job_reader):
             if reader:
                 reader.close()
-        for poll in (self._source_poll, self._status_poll, self._job_poll):
+        for poll in (self._source_poll, self._status_poll, self._job_poll,
+                     self._candidate_origin_poll):
             if poll:
                 self.after_cancel(poll)
 

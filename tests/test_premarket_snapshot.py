@@ -13,6 +13,7 @@ from workbench.snapshot import (
     render_html,
     write_snapshot,
 )
+from workbench.strategies import scan_engine_version
 from workbench.store import dumps
 
 ASOF = "2026-11-09"
@@ -34,7 +35,7 @@ def _seed(store, *, sources=("tickflow",), hits=True):
         "reused": 4,
         "calculated": 8,
         "observation_ids": ["obs-1", "obs-2"] if hits else [],
-        "engine_version": "engine-test-version",
+        "engine_version": scan_engine_version(),
         "strategy_versions": {"STRATEGY_GAP_H2": "v-gap-h2", "MTR_MASTER": "v-mtr"},
         "coverage": {"expected": 5, "ready": 3, "suspended": 0, "gaps": 2},
         "errors": [
@@ -107,7 +108,7 @@ def test_build_snapshot_happy_path(store):
     assert snapshot["source"] == "tickflow"
     assert snapshot["boards"] == ["沪深主板"]
     assert snapshot["complete"] is False
-    assert snapshot["engine_version"] == "engine-test-version"
+    assert snapshot["engine_version"] == scan_engine_version()
     assert snapshot["frozen_digest"]
     assert snapshot["jobs"] == {"premarket": "pm-1", "sync": "sync-1", "scan": "scan-1"}
     assert snapshot["timing_seconds"] == {"sync": 10.5, "scan": 60.25}
@@ -251,7 +252,7 @@ def test_rescan_without_hits_empties_snapshot(store):
     scan2 = {
         "asof": ASOF, "success": 12, "signals": 0, "no_signal": 12,
         "reused": 0, "calculated": 12, "observation_ids": [],
-        "engine_version": "engine-test-version",
+        "engine_version": scan_engine_version(),
         "strategy_versions": {"STRATEGY_GAP_H2": "v-gap-h2", "MTR_MASTER": "v-mtr"},
         "coverage": {"expected": 5, "ready": 5, "suspended": 0, "gaps": 0},
         "errors": [],
@@ -341,3 +342,146 @@ def test_export_cli_leaves_database_untouched(store, tmp_path, monkeypatch):
         version = db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
     assert version == "8"
+
+
+def _client_package(store, tmp_path, monkeypatch):
+    from workbench.market import save_dataset
+    import pandas as pd
+    import numpy as np
+
+    _seed(store)
+    x = np.arange(180)
+    prices = 20 + np.sin(x / 4) + x / 100
+    frame = pd.DataFrame(dict(date=pd.bdate_range(end=ASOF, periods=180).strftime('%Y-%m-%d'),
+                              open=prices, high=prices + .5, low=prices - .5,
+                              close=prices + .1, volume=10000.))
+    for oid, code in [('obs-1', 'sh.601919'), ('obs-2', 'sh.600853')]:
+        dataset = save_dataset(store, code, frame, 'tickflow', 'qfq')
+        store.execute('UPDATE observations SET dataset_id=? WHERE id=?', (dataset, oid))
+    payload = json.loads(store.rows("SELECT payload FROM observations WHERE id='obs-2'")[0]['payload'])
+    payload.update(rating={'letter': 'A', 'score': 82}, score=71.5)
+    store.execute("UPDATE observations SET payload=? WHERE id='obs-2'", (dumps(payload),))
+    out = write_snapshot(ReadOnlyStore(store.root), ASOF, tmp_path / 'client-package')
+    monkeypatch.setenv('APLUS_SNAPSHOT_DIR', str(out))
+    monkeypatch.delenv('APLUS_SNAPSHOT_URL', raising=False)
+    return out
+
+
+def test_snapshot_candidates_exact_receipt_prices_and_rating(store, tmp_path, monkeypatch):
+    from gui.data import load_candidates, candidate_source_status
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    # Independent receipt from the DB, not reconstructed from snapshot hits.
+    receipt = json.loads(store.rows("SELECT result FROM jobs WHERE id='scan-1'")[0]['result'])
+    groups = load_candidates(store, source='tickflow', asof_filter=tuple(ASOF.split('-')))
+    rows = [row for group in groups.values() for row in group]
+    assert {r['observation_id'] for r in rows} == set(receipt['observation_ids'])
+    for row in rows:
+        original = json.loads(store.rows('SELECT payload FROM observations WHERE id=?',
+                                        (row['observation_id'],))[0]['payload'])
+        for key in ('entry', 'stop', 'target', 'sl1_plan_price', 'mm_target', 'rating', 'score'):
+            assert row['payload'].get(key) == original.get(key)
+    rated = next(h for h in snapshot['hits'] if h['observation_id'] == 'obs-2')
+    assert rated['plan']['rating'] == {'letter': 'A', 'score': 82}
+    assert rated['plan']['score'] == 71.5
+    assert '服务端快照' in candidate_source_status(store)
+    assert snapshot['generated_at'] in candidate_source_status(store)
+
+
+def test_snapshot_package_charts_match_manifest(store, tmp_path, monkeypatch):
+    # Packaging boundary test: rendering is independently exercised below.
+    from gui import chart_renderer
+    from PIL import Image
+    monkeypatch.setattr(chart_renderer, 'render_chart',
+                        lambda *a, **kw: Image.new('RGB', (64, 64)))
+    from PIL import Image
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    assert snapshot['chart_errors'] == {}
+    assert set(snapshot['charts']) == set(snapshot['observation_ids'])
+    for relative in snapshot['charts'].values():
+        with Image.open(out / relative) as image:
+            image.verify()
+
+
+def test_single_chart_failure_is_recorded(store, tmp_path, monkeypatch):
+    from gui import chart_renderer
+    from PIL import Image
+    real = lambda *a, **kw: Image.new('RGB', (64, 64))
+    def render(*args, **kwargs):
+        if kwargs['code'] == 'sh.601919':
+            raise RuntimeError('injected chart failure')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(chart_renderer, 'render_chart', render)
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    assert set(snapshot['charts']) == {'obs-2'}
+    assert snapshot['chart_errors'] == {'obs-1': 'injected chart failure'}
+
+
+@pytest.mark.parametrize('fault, message', [
+    ('sha', 'SHA'), ('ids', 'observation_ids'),
+    ('engine', '版本锚'), ('frozen', '版本锚'), ('expired', '过期'),
+    ('structure', '结构'),
+])
+def test_bad_snapshot_rejected_and_visible_local_fallback(store, tmp_path, monkeypatch, caplog, fault, message):
+    from gui.data import load_candidates, candidate_source_status
+    from workbench.snapshot import snapshot_digest
+    out = _client_package(store, tmp_path, monkeypatch)
+    path = out / 'snapshot.json'
+    data = json.loads(path.read_text())
+    if fault == 'sha':
+        data['sha256'] = '0' * 64
+    else:
+        if fault == 'ids': data['hits'][0]['observation_id'] = 'outside-receipt'
+        elif fault == 'engine': data['engine_version'] = 'wrong-engine'
+        elif fault == 'frozen': data['frozen_digest'] = 'wrong-frozen'
+        elif fault == 'expired': data['asof'] = '2000-01-01'
+        elif fault == 'structure': data['hits'][0] = []
+        data['sha256'] = snapshot_digest(data)  # Reach the intended check, beyond SHA.
+    path.write_text(dumps(data))
+    with pytest.raises(ValueError, match=message):
+        load_snapshot(path)
+    monkeypatch.delenv('APLUS_SNAPSHOT_DIR')
+    local = load_candidates(store, source='tickflow')
+    monkeypatch.setenv('APLUS_SNAPSHOT_DIR', str(out))
+    assert load_candidates(store, source='tickflow') == local
+    assert message in candidate_source_status(store)
+    assert '回退本地扫描' in caplog.text
+
+
+def test_snapshot_http_and_directory_use_same_validation(store, tmp_path, monkeypatch):
+    from gui import data
+    from contextlib import contextmanager
+    out = _client_package(store, tmp_path, monkeypatch)
+    expected = data.load_candidates(store, source='tickflow')
+    @contextmanager
+    def response(address, timeout):
+        assert address == 'http://snapshot.test/serve/snapshot.json'
+        assert timeout == 10
+        with (out / 'snapshot.json').open('rb') as stream:
+            yield stream
+    monkeypatch.setattr(data, 'urlopen', response)
+    monkeypatch.delenv('APLUS_SNAPSHOT_DIR')
+    monkeypatch.setenv('APLUS_SNAPSHOT_URL', 'http://snapshot.test/serve')
+    assert data.load_candidates(store, source='tickflow') == expected
+
+
+def test_real_snapshot_chart_rendering(store, tmp_path, monkeypatch):
+    pytest.importorskip('mplfinance')
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    assert snapshot['chart_errors'] == {}
+    assert len(snapshot['charts']) == 2
+
+
+def test_snapshot_candidates_need_no_local_observations(store, tmp_path, monkeypatch):
+    from gui.data import load_candidates
+    out = _client_package(store, tmp_path, monkeypatch)
+    class EmptyClient:
+        root = tmp_path / 'empty-client'
+        def rows(self, *args, **kwargs):
+            pytest.fail('valid snapshot candidates must not query local observations')
+    groups = load_candidates(EmptyClient(), source='tickflow')
+    ids = {r['observation_id'] for rows in groups.values() for r in rows}
+    assert ids == set(load_snapshot(out / 'snapshot.json')['observation_ids'])
