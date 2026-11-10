@@ -28,7 +28,8 @@ def validate_spec(spec):
 
 def run_premarket(service, job, spec):
     validate_spec(spec)
-    end = min(spec.get('end') or completed_date(), completed_date())
+    submit_completed = completed_date()
+    end = min(spec.get('end') or submit_completed, submit_completed)
     stop = service.cancel_flags[job]
     report = dict(sources={}, asof=end, complete=False, errors=[])
     notice_lock, scan_lock = threading.Lock(), threading.Lock()
@@ -97,6 +98,7 @@ def run_premarket(service, job, spec):
             proxy.store.event(child, '一键盘前子任务', parent=job, source=source)
             with notice_lock:
                 receipt[kind+'_job'] = child
+                receipt.setdefault(kind+'_jobs', []).append(child)
             started = time.monotonic()
             metrics_before = proxy.store.metrics()
             try:
@@ -125,20 +127,47 @@ def run_premarket(service, job, spec):
             proxy.store.execute('UPDATE jobs SET status=?,finished=?,message=?,result=? WHERE id=?',
                                 (status, now(), message, dumps(result), child))
             with notice_lock:
-                receipt[kind+'_seconds'] = elapsed
-                receipt[kind+'_status'] = status
-                receipt[kind+'_result'] = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery') if k in result}
+                summary = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery') if k in result}
                 if result.get('resume'):
-                    receipt[kind+'_result']['resume'] = resume_summary(result['resume'])
+                    summary['resume'] = resume_summary(result['resume'])
                 if kind == 'scan':
                     audits = result.get('coverage_by_timeframe', {}) or {'current': result.get('coverage', {})}
                     excluded = {g['code'] for a in audits.values() for g in a.get('gaps', [])}
-                    receipt[kind+'_result']['not_scanned_count'] = len(excluded)
-                if result.get('errors'):
-                    # Full diagnostics already live in the child receipt.
-                    # Do not rewrite thousands of stock errors every .5s.
-                    receipt[kind+'_result'].update(error_count=len(result['errors']),
-                                                  errors=result['errors'][:3])
+                    summary['not_scanned_count'] = len(excluded)
+                previous = receipt.get(kind+'_result')
+                if previous is None:
+                    receipt[kind+'_seconds'] = elapsed
+                    receipt[kind+'_status'] = status
+                    if result.get('errors'):
+                        # Full diagnostics already live in the child receipt.
+                        # Do not rewrite thousands of stock errors every .5s.
+                        summary.update(error_count=len(result['errors']),
+                                       errors=result['errors'][:3])
+                else:
+                    # A second bounded pass of the same stage (the target-day
+                    # advance re-sync) merges into the first pass's receipt
+                    # instead of overwriting it: numeric counts add up, the
+                    # worse status wins, and a clean tail pass never erases
+                    # the first pass's partial status or error evidence.
+                    rank = {'completed': 0, 'partial': 1, 'failed': 2, 'cancelled': 3}
+                    prior_status = receipt.get(kind+'_status', 'completed')
+                    receipt[kind+'_status'] = max((prior_status, status),
+                                                  key=lambda s: rank.get(s, 1))
+                    receipt[kind+'_seconds'] = receipt.get(kind+'_seconds', 0.0) + elapsed
+                    for key in ('success', 'signals', 'reused', 'calculated', 'stage_reused', 'skipped'):
+                        if isinstance(previous.get(key), (int, float)) and isinstance(summary.get(key), (int, float)):
+                            summary[key] = previous[key] + summary[key]
+                    if isinstance(previous.get('local_io'), dict) and isinstance(summary.get('local_io'), dict):
+                        merged_io = dict(previous['local_io'])
+                        for key, value in summary['local_io'].items():
+                            merged_io[key] = round(merged_io.get(key, 0) + value, 4)
+                        summary['local_io'] = merged_io
+                    new_errors = list(result.get('errors') or [])
+                    total_errors = previous.get('error_count', len(previous.get('errors', []))) + len(new_errors)
+                    if total_errors:
+                        summary.update(error_count=total_errors,
+                                       errors=(list(previous.get('errors', [])) + new_errors)[:6])
+                receipt[kind+'_result'] = summary
             return result, status, message
 
         target = end
@@ -156,7 +185,8 @@ def run_premarket(service, job, spec):
         # same before scanning; otherwise it silently scans the day that was
         # current at submit time. One bounded resume pass fetches only the
         # new tail (resume=True), then the scan targets the advanced day.
-        advanced = min(spec.get('end') or completed_date(), completed_date())
+        now_completed = completed_date()
+        advanced = min(spec.get('end') or now_completed, now_completed)
         if advanced > target:
             result, status, message = stage('sync', dict(sync_spec, end=advanced), '更新')
             if status in ('failed','cancelled'):
@@ -185,6 +215,18 @@ def run_premarket(service, job, spec):
     targets = [i['asof'] for i in report['sources'].values() if i.get('asof')]
     if targets:
         report['asof'] = max(targets)
+        # Divergence honesty: sources run in parallel, so a fast source may
+        # legitimately have scanned the pre-boundary day while a slow one
+        # crossed the boundary and scanned the new day. The top-level asof
+        # (max) must not dress the lagging source up as current: mark it
+        # partial with the reason instead of letting complete=True hide it.
+        for item in report['sources'].values():
+            if item.get('asof') and item['asof'] != report['asof']:
+                item['asof_mismatch'] = True
+                item['scan_status'] = 'partial'
+                item['phase'] = '部分完成'
+                item['message'] = (f"该源仅扫到 {item['asof']}，最新源已到 {report['asof']}，"
+                                   '该源结果不完整')
     report['complete'] = all(i.get('scan_status') == 'completed' for i in report['sources'].values())
     report['errors'] = [dict(source=s, error=i.get('message','未完成')) for s,i in report['sources'].items()
                         if i.get('scan_status') != 'completed']
