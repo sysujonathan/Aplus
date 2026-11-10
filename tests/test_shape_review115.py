@@ -203,7 +203,8 @@ def test_skipped_templates_are_visible_from_result_history(tmp_path):
         runner.tracked();status=wait_for_shape(runner)
         dialog._refresh_history();dialog._display_run(status['run_id']);root.update()
         assert str(dialog.skipped_button['state'])=='normal'
-        assert '未运行模板 1' in dialog.status.get()
+        assert '没有兼容的跟踪模板' in status['message']
+        assert '1个模板未运行' in status['message']
         detail,text=dialog._show_skipped_templates()
         assert old['name'] in text.get('1.0','end') and '来源不同' in text.get('1.0','end')
         dialog._resume();resumed=wait_for_shape(runner)
