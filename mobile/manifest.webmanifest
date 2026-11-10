@@ -1,0 +1,1 @@
+{"background_color":"#0d1117","description":"服务端每晚匹配好的盘前候选，手机上打开就看：候选、计划价位、K 线图。","display":"standalone","icons":[{"purpose":"any","sizes":"192x192","src":"icon-192.png","type":"image/png"},{"purpose":"any","sizes":"512x512","src":"icon-512.png","type":"image/png"}],"lang":"zh-CN","name":"Aplus 盘前","scope":".","short_name":"Aplus盘前","start_url":".","theme_color":"#0d1117"}
