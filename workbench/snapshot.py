@@ -1,7 +1,9 @@
 """Export a dated premarket result as a client-consumable snapshot.
 
-只读导出：只读 Store（observations / jobs / meta / 目录清单），不写数据库、
-不碰策略、不改 schema、不联网。产物是「服务端备好、客户端只取」的最小形态：
+只读导出：经 ReadOnlyStore（SQLite mode=ro，不运行 Store 初始化/迁移）
+读取 observations / jobs / 目录清单，不写数据库、不碰策略、不改 schema、
+不联网。命中只认所选盘前扫描回执的 observation_ids（含合法复用结果），
+不按日期扫 observations 表。产物是「服务端备好、客户端只取」的最小形态：
 
   snapshot.json  结构化快照（机器消费；含策略版本锚定与覆盖口径）
   index.html     同内容的可读清单（人直接打开看，不依赖任何外部资源）
@@ -11,21 +13,44 @@
 """
 from __future__ import annotations
 
+import contextlib
 import csv
 import html
 import json
+import sqlite3
 from collections import Counter
 from pathlib import Path
 
-from .market import completed_date
+from .market import board_of, completed_date
+from .scan_receipt import receipt_for_read
 from .sources import directory_file, market_source
-from .store import dumps, now
+from .store import dumps, now, resolve_runtime_root
 from .strategies import scan_engine_version, verify_frozen
 
 SNAPSHOT_SCHEMA_VERSION = 1
 SNAPSHOT_KIND = "aplus-premarket-snapshot"
-MAX_EXCLUDED_IN_JSON = 603
 MAX_EXCLUDED_IN_HTML = 100
+
+
+class ReadOnlyStore:
+    """Read-only store adapter: SQLite mode=ro, no Store init or migration.
+
+    构造 Store() 会建表、迁移 schema_version 并生成迁移备份；导出链路只许
+    读，因此这里只提供 rows() 与 root/path，连接串带 mode=ro，物理上
+    无法写入（只读挂载副本也能打开）。
+    """
+
+    def __init__(self, root=None):
+        self.root = resolve_runtime_root(root)
+        self.path = self.root / "workbench.sqlite3"
+        if not self.path.is_file():
+            raise ValueError(f"运行目录 {self.root} 下没有 workbench.sqlite3，无法导出快照")
+
+    def rows(self, sql, args=()):
+        uri = self.path.resolve().as_uri() + "?mode=ro"
+        with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=30)) as db:
+            db.row_factory = sqlite3.Row
+            return [dict(row) for row in db.execute(sql, args)]
 
 # observation payload 里除入场/止损/目标外，快照原样带出的计划字段。
 # 只白名单、不透传：payload 未来新增字段不会悄悄进入分发面。
@@ -92,6 +117,63 @@ def _job_result(store, job_id, what):
     return _read_json(rows[0]["result"], f"{what}任务 {job_id} 回执")
 
 
+def _scan_result(store, job_id):
+    """Full scan report for a job; rebuilds bounded progress receipts."""
+    rows = store.rows("SELECT result FROM jobs WHERE id=?", (job_id,))
+    if not rows:
+        raise ValueError(f"扫描任务 {job_id} 的回执不存在")
+    return receipt_for_read(store, job_id, rows[0]["result"])
+
+
+def _receipt_hits(store, scan_result, *, scan_job, source, spec):
+    """Hits bound to the selected scan receipt's effective observation ids.
+
+    The receipt's observation_ids are the scan's effective hit set (freshly
+    calculated plus legitimately reused results). Anything else sharing the
+    asof date — another source/board/timeframe/strategy, or a superseded
+    revision — never enters the snapshot. Ids whose rows fall outside the
+    selected scope are dropped and counted, never shipped silently.
+    """
+    if "observation_ids" not in scan_result:
+        raise ValueError(
+            f"扫描任务 {scan_job} 回执缺少 observation_ids，"
+            "无法把命中绑定到所选扫描；请重跑扫描后再导出"
+        )
+    ids = list(dict.fromkeys(scan_result.get("observation_ids") or []))
+    if not ids:
+        return [], 0
+    rows_by_id = {}
+    for offset in range(0, len(ids), 500):
+        batch = ids[offset:offset + 500]
+        placeholders = ",".join("?" for _ in batch)
+        for row in store.rows(
+            "SELECT o.id, o.code, o.strategy, o.version, o.setup_date, o.payload,"
+            " o.timeframe, d.source AS dataset_source FROM observations o"
+            f" LEFT JOIN datasets d ON d.id = o.dataset_id WHERE o.id IN ({placeholders})",
+            batch,
+        ):
+            rows_by_id[row["id"]] = row
+    timeframe = spec.get("timeframe")
+    strategies = set(spec.get("strategies") or [])
+    boards = set(spec.get("boards") or [])
+    kept, dropped = [], 0
+    for oid in ids:
+        row = rows_by_id.get(oid)
+        if (
+            row is None
+            or (timeframe and row["timeframe"] != timeframe)
+            or (strategies and row["strategy"] not in strategies)
+            or (boards and board_of(row["code"]) not in boards)
+            or (row.get("dataset_source") is not None
+                and row["dataset_source"] != source)
+        ):
+            dropped += 1
+            continue
+        kept.append(row)
+    kept.sort(key=lambda row: (row["strategy"], row["code"]))
+    return kept, dropped
+
+
 def _excluded(scan_result):
     """Canonical excluded list, from the scan receipt (categories + reasons)."""
     excluded = []
@@ -136,22 +218,28 @@ def build_snapshot(store, asof):
         raise ValueError(f"快照 v1 只支持单数据源盘前结果，当前为 {sources}")
     source = sources[0]
     source_report = (report.get("sources") or {}).get(source) or {}
-    scan_result = _job_result(store, source_report["scan_job"], "扫描") if source_report.get("scan_job") else {}
+    scan_result = _scan_result(store, source_report["scan_job"]) if source_report.get("scan_job") else {}
     sync_result = _job_result(store, source_report["sync_job"], "同步") if source_report.get("sync_job") else {}
     coverage = scan_result.get("coverage") or {}
     scan_errors = scan_result.get("errors") or []
     excluded = _excluded(scan_result)
 
-    rows = store.rows(
-        "SELECT code, strategy, version, setup_date, payload FROM observations "
-        "WHERE asof=? ORDER BY strategy, code",
-        (asof,),
-    )
     names = _names(store, source)
-    hits = [_hit(row, names) for row in rows]
+    hits, dropped_hits = [], 0
+    if source_report.get("scan_job"):
+        hit_rows, dropped_hits = _receipt_hits(
+            store, scan_result,
+            scan_job=source_report["scan_job"], source=source, spec=spec,
+        )
+        hits = [_hit(row, names) for row in hit_rows]
 
     complete = bool(report.get("complete"))
     notes = []
+    if dropped_hits:
+        notes.append(
+            f"扫描回执含 {dropped_hits} 条范围外或已不存在的命中，未纳入快照"
+            "（命中只认所选扫描回执的 observation_ids 并校验范围）。"
+        )
     if not complete:
         notes.append(
             "部分完成：本周期可扫描 "
@@ -204,7 +292,7 @@ def build_snapshot(store, asof):
             )),
         },
         "hits": hits,
-        "excluded": excluded[:MAX_EXCLUDED_IN_JSON],
+        "excluded": excluded,
         "notes": notes,
     }
 
