@@ -277,7 +277,7 @@ def build_snapshot(store, asof):
         "boards": spec.get("boards") or [],
         "strategies": spec.get("strategies") or [],
         "timeframe": spec.get("timeframe"),
-        "engine_version": scan_result.get("engine_version") or scan_engine_version(),
+        "engine_version": scan_result.get("engine_version") or scan_engine_version(include_frozen=False),
         "frozen_digest": verify_frozen(),
         "strategy_versions": scan_result.get("strategy_versions") or {},
         "complete": complete,
@@ -487,7 +487,9 @@ def load_snapshot(path, *, today=None):
             raise ValueError(f"快照字段 {key} 缺少或类型错误")
     if data.get("sha256") != snapshot_digest(data):
         raise ValueError("快照 SHA 校验失败")
-    if data["engine_version"] != scan_engine_version() or data["frozen_digest"] != verify_frozen():
+    # Service scan receipts exclude frozen files; verify their digest separately.
+    if (data["engine_version"] != scan_engine_version(include_frozen=False)
+            or data["frozen_digest"] != verify_frozen()):
         raise ValueError("快照版本锚不符")
     ids = data["observation_ids"]
     if not all(isinstance(oid, str) and oid for oid in ids) or len(set(ids)) != len(ids):

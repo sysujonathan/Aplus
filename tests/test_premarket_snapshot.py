@@ -36,7 +36,7 @@ def _seed(store, *, sources=("tickflow",), hits=True):
         "reused": 4,
         "calculated": 8,
         "observation_ids": ["obs-1", "obs-2"] if hits else [],
-        "engine_version": scan_engine_version(),
+        "engine_version": scan_engine_version(include_frozen=False),
         "strategy_versions": {"STRATEGY_GAP_H2": "v-gap-h2", "MTR_MASTER": "v-mtr"},
         "coverage": {"expected": 5, "ready": 3, "suspended": 0, "gaps": 2},
         "errors": [
@@ -109,7 +109,7 @@ def test_build_snapshot_happy_path(store):
     assert snapshot["source"] == "tickflow"
     assert snapshot["boards"] == ["沪深主板"]
     assert snapshot["complete"] is False
-    assert snapshot["engine_version"] == scan_engine_version()
+    assert snapshot["engine_version"] == scan_engine_version(include_frozen=False)
     assert snapshot["frozen_digest"]
     assert snapshot["jobs"] == {"premarket": "pm-1", "sync": "sync-1", "scan": "scan-1"}
     assert snapshot["timing_seconds"] == {"sync": 10.5, "scan": 60.25}
@@ -263,7 +263,7 @@ def test_rescan_without_hits_empties_snapshot(store):
     scan2 = {
         "asof": ASOF, "success": 12, "signals": 0, "no_signal": 12,
         "reused": 0, "calculated": 12, "observation_ids": [],
-        "engine_version": scan_engine_version(),
+        "engine_version": scan_engine_version(include_frozen=False),
         "strategy_versions": {"STRATEGY_GAP_H2": "v-gap-h2", "MTR_MASTER": "v-mtr"},
         "coverage": {"expected": 5, "ready": 5, "suspended": 0, "gaps": 0},
         "errors": [],
@@ -445,8 +445,9 @@ def test_bad_snapshot_rejected_and_visible_local_fallback(store, tmp_path, monke
         data['sha256'] = '0' * 64
     else:
         if fault == 'ids': data['hits'][0]['observation_id'] = 'outside-receipt'
-        elif fault == 'engine': data['engine_version'] = 'wrong-engine'
-        elif fault == 'frozen': data['frozen_digest'] = 'wrong-frozen'
+        elif fault in ('engine', 'frozen'):
+            key = 'engine_version' if fault == 'engine' else 'frozen_digest'
+            data[key] = ('0' if data[key][0] != '0' else '1') + data[key][1:]
         elif fault == 'expired': data['asof'] = '2000-01-01'
         elif fault == 'structure': data['hits'][0] = []
         data['sha256'] = snapshot_digest(data)  # Reach the intended check, beyond SHA.
@@ -575,3 +576,11 @@ def test_snapshot_basic_iso_asof_candidates(store, tmp_path, monkeypatch):
     path.write_text(dumps(data), encoding='utf-8')
     assert load_candidates(store, source='tickflow', asof_filter=tuple(ASOF.split('-')))
     assert '服务端快照' in candidate_source_status(store)
+
+
+def test_missing_receipt_engine_uses_same_snapshot_anchor(store, tmp_path):
+    _seed(store)
+    _patch_scan_result(store, engine_version=None)
+    out = write_snapshot(store, ASOF, tmp_path / "fallback-anchor")
+    assert load_snapshot(out / "snapshot.json")["engine_version"] == scan_engine_version(
+        include_frozen=False)
