@@ -29,6 +29,17 @@ def test_period_switch_requests_missing_prefix_but_not_pre_ipo_dates(store, sour
     assert ordinary_update_codes(store, source, ['沪深主板'], day, start=short.date.iloc[0]) == []
 
 
+@pytest.mark.parametrize('source', ['baostock', 'tickflow', 'tencent'])
+def test_old_coverage_for_another_dataset_cannot_hide_missing_prefix(store, source):
+    data = bars(1800)
+    start, day, ids = seeded(store, data, source)
+    short = data.iloc[-540:].reset_index(drop=True)
+    save_dataset(store, 'sh.600000', short, source, ADJUSTMENTS[source])
+    # Successful coverage belongs to the old full snapshot, not the new short one.
+    save_coverage(store, 'sh.600000', ids[0], start, day, source)
+    assert ordinary_update_codes(store, source, ['沪深主板'], day, start=start) == ['sh.600000']
+
+
 def test_weekly_resume_extends_daily_history_once_and_then_reuses_it(store, monkeypatch):
     from workbench.service import Service
     from workbench.readiness import audit_scope

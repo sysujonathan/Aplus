@@ -31,6 +31,13 @@ _calculation_cache = {}
 _calculation_lock = threading.Lock()
 
 
+def _shape_selected(panel):
+    # The selection is historical even while its asynchronous boot is pending.
+    request = getattr(panel, '_workspace_request', None)
+    return ((getattr(panel, '_workspace_context', None) or {}).get('context_kind') == 'shape'
+            or isinstance(request, dict) and request.get('shape') is not None)
+
+
 def _observation_calculation(store, observation, market_dataset_id=None, market_asof=None):
     from copy import deepcopy
     from .data import load_observation_candles
@@ -363,7 +370,7 @@ class ChartPanel(native_ttk.Frame):
         reader, so a late answer for the previous symbol is discarded instead
         of being drawn on the new one.
         """
-        if (getattr(self,'_workspace_context',None) or {}).get('context_kind') == 'shape':
+        if _shape_selected(self):
             on = False
         if not on:
             self._intraday_on = False
@@ -394,7 +401,7 @@ class ChartPanel(native_ttk.Frame):
 
     def _intraday_tick(self):
         self._intraday_after = None
-        if (getattr(self,'_workspace_context',None) or {}).get('context_kind') == 'shape':
+        if _shape_selected(self):
             return  # Saved dated research must not silently advance to live bars.
         if not self._intraday_on or not self.winfo_exists():
             return
@@ -446,7 +453,7 @@ class ChartPanel(native_ttk.Frame):
     def _publish_intraday(self, frame):
         # Both same-symbol cache replay and late poller/hourly replies enter
         # here. A dated shape session must never receive any minute transport.
-        if (getattr(self,'_workspace_context',None) or {}).get('context_kind') == 'shape':
+        if _shape_selected(self):
             return
         from workbench.live_minutes import (chart_minute_series, expected_minute_close,
                                             live_metadata, minute_rows)
@@ -578,6 +585,8 @@ class ChartPanel(native_ttk.Frame):
         self._code, self._tf = context['code'], context['timeframe']
         self._image = result['image']
         self._workspace_context = context
+        if context.get('context_kind') == 'shape':
+            self._accept_intraday(False)
         self._title_var.set(result['title'])
         self._tv_btn.configure(state=tk.NORMAL)
         if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
@@ -641,6 +650,7 @@ class ChartPanel(native_ttk.Frame):
         self._history_btn.pack_forget()
         self.store, self._code, self._tf = store, item.code, 'daily'
         self._workspace_request = {'shape': item.shape}
+        self._accept_intraday(False)
         self._observation_id = item.observation_id
         options = dict(interactive=self._interactive is True and EmbeddedChartHost.available(),
                        workspace=getattr(self, '_workspace_descriptor', None))
