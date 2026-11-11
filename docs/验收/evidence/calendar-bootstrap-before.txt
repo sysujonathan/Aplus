@@ -1,0 +1,4 @@
+phase=before; end=2026-11-12; provider=sentinel (no network)
+2024-11-11: BLOCKED before provider: 2024 年缺少已核验历史交易日历；请迁入已有 trading_calendar.json，不能把缺数据当休市
+2019-01-01: BLOCKED before provider: 2019 年缺少已核验历史交易日历；请迁入已有 trading_calendar.json，不能把缺数据当休市
+2016-01-01: BLOCKED before provider: 2016 年缺少已核验历史交易日历；请迁入已有 trading_calendar.json，不能把缺数据当休市

@@ -170,7 +170,7 @@ def extend_exchange_calendar(store,start,end,job=None,source='baostock'):
     last=date.fromisoformat(end)
     while cursor<=last:
         if cursor.year not in SCHEDULES:
-            raise ValueError(f'{cursor.year} 年缺少已核验历史交易日历；请迁入已有 trading_calendar.json，不能把缺数据当休市')
+            raise ValueError(f'{cursor.year} 年缺少已核验历史交易日历；请将同步起始日期改为已收录年份（2024–2026）；如需该年历史，请在 BaoStock 可用时同步取得日历，或迁入覆盖该年的已核验 trading_calendar.json；不能把缺数据当休市')
         if is_trading_day(cursor):
             days.add(cursor.isoformat())
         cursor+=timedelta(days=1)
