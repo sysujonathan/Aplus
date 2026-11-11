@@ -182,13 +182,19 @@ def test_completed_migration_copies_swept_receipts_kept(state):
     done2 = _migration_attempt(home, 'attempt-b', 'completed')
     rolled = _migration_attempt(home, 'attempt-c', 'rolled_back')
     damaged = _migration_attempt(home, 'attempt-d', 'completed', bad_shadow=True)
+    latest_before = (done2 / 'migration' / 'original.sqlite3').read_bytes()
     result = rotation.rotate_backups(home, install_root=root, runtime=runtime)
     assert result['blocked'] is None
-    for attempt in (done1, done2):
-        assert not (attempt / 'migration' / 'original.sqlite3').exists()
-        assert not (attempt / 'migration' / 'shadow').exists()
-        assert (attempt / 'migration' / 'receipt.json').exists()
-        assert (attempt / 'receipt.json').exists()
+    # Older completed attempt: copies swept, receipts kept.
+    assert not (done1 / 'migration' / 'original.sqlite3').exists()
+    assert not (done1 / 'migration' / 'shadow').exists()
+    assert (done1 / 'migration' / 'receipt.json').exists()
+    assert (done1 / 'receipt.json').exists()
+    # Latest completed attempt is that update's rollback original: retained.
+    assert (done2 / 'migration' / 'original.sqlite3').read_bytes() == latest_before
+    assert (done2 / 'migration' / 'shadow' / 'workbench.sqlite3').exists()
+    assert result['skipped']['updates/attempt-b/migration'] == (
+        'latest completed migration retained as rollback copy')
     assert (rolled / 'migration' / 'original.sqlite3').exists()
     assert (damaged / 'migration' / 'original.sqlite3').exists()
     assert 'updates/attempt-d/migration' in result['skipped']

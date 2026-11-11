@@ -131,6 +131,7 @@ def _sweep_migrations(home, result):
     updates = home / 'updates'
     if not updates.is_dir() or _linked(updates):
         return
+    eligible = []
     for attempt in sorted(updates.iterdir()):
         migration = attempt / 'migration'
         if not attempt.is_dir() or _linked(attempt) or not migration.is_dir():
@@ -153,13 +154,31 @@ def _sweep_migrations(home, result):
                 raise ValueError('original hash mismatch')
             if file_sha256(shadow) != plan.get('migrated_sha256'):
                 raise ValueError('shadow hash mismatch')
+        except (OSError, ValueError) as exc:
+            result['skipped'][label] = str(exc)
+            continue
+        try:
+            stamp = (attempt / 'receipt.json').stat().st_mtime
+        except OSError:
+            stamp = 0.0
+        eligible.append((stamp, attempt.name, label, migration, original, shadow))
+    if not eligible:
+        return
+    # The most recent completed attempt's migration copies are that update's
+    # rollback original; the handoff contract keeps them. Only older attempts
+    # are swept, so accumulation still converges one update later.
+    eligible.sort()
+    *older, newest = eligible
+    result['skipped'][newest[2]] = 'latest completed migration retained as rollback copy'
+    for _stamp, _name, label, migration, original, shadow in older:
+        try:
             freed = original.stat().st_size + shadow.stat().st_size
             original.unlink()
             shadow.unlink()
             (migration / 'shadow').rmdir()
             result['removed'].append(label)
             result['freed'] = result.get('freed', 0) + freed
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
             result['skipped'][label] = str(exc)
 
 
