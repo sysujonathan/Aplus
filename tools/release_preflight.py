@@ -23,6 +23,15 @@ def release_api(path):
         return json.load(response)
 
 
+def _main_advanced(api,head,current):
+    """True only when current main is strictly ahead of head (head is an
+    ancestor). Any API trouble answers False so admission fails closed."""
+    try:
+        return api(f'/compare/{head}...{current}').get('status')=='ahead'
+    except Exception:
+        return False
+
+
 def preflight(event_name,event,ref,repository,head,*,api=release_api,opener=urlopen):
     if not re.fullmatch('[0-9a-f]{40}',head):raise ValueError('Build commit must be a full SHA')
     if repository!=REPO or ref!='refs/heads/main':
@@ -36,7 +45,18 @@ def preflight(event_name,event,ref,repository,head,*,api=release_api,opener=urlo
             raise ValueError('Upstream event is not this exact official main push acceptance')
     elif event_name!='workflow_dispatch':
         raise ValueError('Release event is not supported')
-    if api('/commits/main')['sha']!=head or not acceptance(head,api):
+    current=api('/commits/main')['sha']
+    if current!=head:
+        # A late workflow_run for an older accepted main whose head main has
+        # since advanced past is a normal, expected event: admit it as a
+        # no-op skip (build=false) instead of failing the release workflow
+        # and impersonating a broken release. The stale head itself never
+        # builds. Anything else — dispatch, a diverged/rewound main, an
+        # unverifiable ancestry — still fails closed below.
+        if event_name=='workflow_run' and _main_advanced(api,head,current):
+            return dict(build=False,commit=head,skipped='stale accepted main superseded; skipped')
+        raise ValueError('Exact current main has not passed its latest push acceptance')
+    if not acceptance(head,api):
         raise ValueError('Exact current main has not passed its latest push acceptance')
     try:
         api('/releases/latest')
@@ -57,7 +77,10 @@ def main():
                      os.environ['GITHUB_REPOSITORY'],head)
     with args.output.open('a',encoding='utf-8',newline='\n') as stream:
         stream.write('build='+str(result['build']).lower()+'\ncommit='+head+'\n')
-    print('Accepted main needs a release' if result['build'] else 'This exact main is already released; no duplicate build')
+    if result.get('skipped'):
+        print(result['skipped'])
+    else:
+        print('Accepted main needs a release' if result['build'] else 'This exact main is already released; no duplicate build')
 
 
 if __name__=='__main__':main()
