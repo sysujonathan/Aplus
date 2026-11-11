@@ -90,7 +90,8 @@ def continue_sync(service, job, spec):
     raw['transport_retry_budget'] = {'used': False}
     service.check_stop(job)
     warm = certified_scope(store, source, asof)
-    increment_codes = ordinary_update_codes(store, source, spec['boards'], asof) if warm else []
+    increment_codes = ordinary_update_codes(store, source, spec['boards'], asof,
+                                            start=spec['start']) if warm else []
     ordinary = bool(increment_codes)
     cooling = ProviderGuard(store, source).state().get('until', 0) > time.time()
     # Metadata only chooses the request planner, never authorizes a scan.
@@ -176,7 +177,7 @@ def continue_sync(service, job, spec):
     return result
 
 
-def ordinary_update_codes(store, source, boards, asof):
+def ordinary_update_codes(store, source, boards, asof, *, start=None):
     """Cheap routing hint. No price parsing, gap certification or scan approval."""
     import pandas as pd
     from .market import select_board_codes
@@ -187,14 +188,30 @@ def ordinary_update_codes(store, source, boards, asof):
     directory = pd.read_csv(directory_file(store, source), dtype=str)
     statuses = dict(zip(directory.code, directory.tradeStatus)) if 'tradeStatus' in directory else {}
     records = {r['code']: r for r in latest_datasets(store, source) if r['timeframe'] == 'daily'}
+    # Coverage records describe the successfully requested interval, including
+    # pre-IPO dates. Dataset.start alone is the first returned candle and would
+    # repeatedly redownload young listings. A daily -> weekly switch can need
+    # an older prefix even when today's directory and daily tail are complete.
+    if source == 'baostock':
+        coverage = {r['code']: r for r in store.rows('SELECT * FROM sync_coverage')}
+    else:
+        coverage = {r['code']: r for row in store.rows(
+            'SELECT value FROM meta WHERE key LIKE ?', ('sync_coverage:'+source+':%',))
+            for r in [json.loads(row['value'])]}
     unchanged = set(unchanged_repairs(store, source, day, records))
     codes = []
     for code in select_board_codes(directory, boards):
-        if code in unchanged or (code in IDENTITIES and day >= IDENTITIES[code][0]):
+        if code in IDENTITIES and day >= IDENTITIES[code][0]:
             continue
         if str(statuses.get(code)) == '0':
             continue
         record = records.get(code)
-        if not record or (record['end'] < day and tail_pending(store, code, record['end'], day, source, calendar=calendar)):
+        state = coverage.get(code)
+        prefix = bool(start and record and
+                      (state['start'] if state and state['dataset_id'] == record['id'] else record['start']) > start)
+        # A previously unchanged interior-gap repair does not cover a newly
+        # requested older interval. Keep its suppression for the same input.
+        if prefix or (code not in unchanged and (not record or
+                (record['end'] < day and tail_pending(store, code, record['end'], day, source, calendar=calendar)))):
             codes.append(code)
     return codes

@@ -37,7 +37,8 @@ class _Cancellation:
         return True
 
 
-def load_chart(store, service, code, source, timeframe, phase, check):
+def load_chart(store, service, code, source, timeframe, phase, check, *,
+               interactive=False, workspace=None, name=''):
     """Worker values contain no Tk owners, including references via closures."""
     check()
     if phase == 'fetch':
@@ -59,9 +60,25 @@ def load_chart(store, service, code, source, timeframe, phase, check):
     # Funds use a 0.001 tick; the frame carries the confirmed instrument so the
     # renderer never has to guess it from price digits.
     instrument_type = frame.attrs.get('instrument_type')
-    image = render_chart(bars, {}, '', {}, code=code, instrument_type=instrument_type)
+    image = None
+    if not interactive:
+        from .observation_chart import _preview_lock
+        with _preview_lock:
+            check()
+            image = render_chart(bars, {}, '', {}, code=code, instrument_type=instrument_type)
+    context = dict(frame=frame, record=record, code=code, name=name, timeframe='daily', payload={},
+                   display_timeframe=timeframe, metadata={}, strategy_type='', context_kind='watch',
+                   instrument_type=instrument_type)
+    boot = None
+    if interactive:
+        from .chart_bridge import workspace_boot
+        from .background_status import display_store
+        embedded = {**context, 'embedded': True}
+        if workspace:
+            embedded['workspace'] = workspace
+        boot = workspace_boot(display_store(store), embedded)
     check()
-    return dict(frame=frame, record=record, image=image, instrument_type=instrument_type,
+    return dict(frame=frame, record=record, image=image, instrument_type=instrument_type, boot=boot,
                 refresh=(phase == 'local' and record['end'] < chart_day()
                          and record.get('checked_through', '') < chart_day()))
 
@@ -75,7 +92,13 @@ class WatchChartController:
         source = item.source
         code = item.code
         self.timeframe = timeframe
-        self.reader = LatestRefresh(lambda phase, check: load_chart(store, service, code, source, timeframe, phase, check))
+        from .chart_embed import EmbeddedChartHost
+        interactive = getattr(panel, '_interactive', False) is True and EmbeddedChartHost.available()
+        workspace = getattr(panel, '_workspace_descriptor', None)
+        name = item.name
+        self.reader = LatestRefresh(lambda phase, check: load_chart(
+            store, service, code, source, timeframe, phase, check,
+            interactive=interactive, workspace=workspace, name=name))
         self.poll_id = None
         self.closed = False
         self.shown = False
@@ -100,7 +123,7 @@ class WatchChartController:
         _, phase, data, error = reply
         panel = self.panel
         if error:
-            if panel._image is None:
+            if panel._image is None and not self.shown:
                 panel.chart_label.configure(image='', text=f'K图暂未取得：{error}\n可稍后点击“更新K线”。')
             else:
                 panel.readout.set(f'保留已有K图；本次更新未完成：{error}')
@@ -119,7 +142,10 @@ class WatchChartController:
             panel._workspace_request = {'manual': True}
             panel._analysis_btn.configure(state=tk.NORMAL)
             if getattr(panel, '_interactive', False):
-                panel._show_interactive(refresh_history=self.shown)
+                if data.get('boot') is None:
+                    panel._show_interactive(refresh_history=self.shown)
+                else:
+                    panel._show_interactive(refresh_history=self.shown, prepared_boot=data['boot'])
                 self.shown = True
             else:
                 panel._fit_image()

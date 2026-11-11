@@ -1,6 +1,7 @@
 """工程 A K 线与量能的石墨主题呈现；仅读取新工程快照。"""
 from __future__ import annotations
 import time
+import threading
 import tkinter as tk
 from tkinter import ttk as native_ttk
 import ttkbootstrap as ttk
@@ -27,6 +28,7 @@ from workbench.workspace_layouts import SHAPES as _LAYOUT_SHAPES
 # Process-wide, bounded calculation reuse. Rendering and H2 display plans stay
 # mode-specific. Copies keep renderers/workspace consumers out of cached frames.
 _calculation_cache = {}
+_calculation_lock = threading.Lock()
 
 
 def _observation_calculation(store, observation, market_dataset_id=None, market_asof=None):
@@ -48,8 +50,9 @@ def _observation_calculation(store, observation, market_dataset_id=None, market_
                file_state((store.root / record['path'],)), engine_inputs(),
                spec.id, spec.version, dumps(spec.params), spec.cls,
                file_state((spec.file,)), observation['timeframe'], str(cutoff)[:10])
-    if key is not None and key in _calculation_cache:
-        return (*deepcopy(_calculation_cache[key]), spec, key)
+    with _calculation_lock:
+        if key is not None and key in _calculation_cache:
+            return (*deepcopy(_calculation_cache[key]), spec, key)
     frame, original_record, payload = load_observation_candles(store, observation.get('id'))
     if frame is None:
         raise ValueError('该观察无可用行情快照')
@@ -64,9 +67,10 @@ def _observation_calculation(store, observation, market_dataset_id=None, market_
     if key is not None and (key[3] == file_state((store.root / record['path'],))
                             and key[4] == engine_inputs()
                             and key[9] == file_state((spec.file,))):
-        if len(_calculation_cache) >= 32:
-            _calculation_cache.pop(next(iter(_calculation_cache)))
-        _calculation_cache[key] = deepcopy(result)
+        with _calculation_lock:
+            if len(_calculation_cache) >= 32:
+                _calculation_cache.pop(next(iter(_calculation_cache)))
+            _calculation_cache[key] = deepcopy(result)
     return (*result, spec, key)
 
 
@@ -139,6 +143,8 @@ class ChartPanel(native_ttk.Frame):
         self._embedded = None
         self._interactive = interactive
         self._manual_controller = None
+        self._observation_reader = None
+        self._observation_poll = None
         # Live intraday reader. Only the active tile polls, so a four-tile page
         # still costs one request per cycle instead of four.
         self._intraday_on = False
@@ -236,7 +242,7 @@ class ChartPanel(native_ttk.Frame):
             self._analysis_btn.pack_forget()
             self.readout_frame.grid_remove()
 
-    def _show_interactive(self, *, refresh_history=False):
+    def _show_interactive(self, *, refresh_history=False, prepared_boot=None):
         if not self._interactive or not self.store:
             return
         from .chart_embed import EmbeddedChartHost
@@ -247,7 +253,9 @@ class ChartPanel(native_ttk.Frame):
         if refresh_history and self._embedded is not None and not self._embedded.closed():
             try:
                 context = self._workspace_context or self._rebuild_workspace_context()
-                if not self._embedded.push_history(context):
+                accepted = (self._embedded.push_history(context) if prepared_boot is None else
+                            self._embedded.push_history(context, prepared_boot=prepared_boot))
+                if not accepted:
                     raise ValueError('当前图表会话尚不能接收日K刷新')
                 if self._embedded.ready():
                     self.readout_frame.grid_remove()
@@ -267,7 +275,10 @@ class ChartPanel(native_ttk.Frame):
             self.header.grid()
             self.readout_frame.grid()
             self.readout.set('正在切换图表…')
-            self._embedded.show(context)
+            if prepared_boot is None:
+                self._embedded.show(context)
+            else:
+                self._embedded.show(context, prepared_boot=prepared_boot)
             # A fresh page has a new token even when the code did not change.
             # Re-send the already read minutes, including while the market is shut.
             self._intraday_sent = None
@@ -526,96 +537,72 @@ class ChartPanel(native_ttk.Frame):
         if store is None or observation_id is None:
             self.show_placeholder()
             return
-        # Keep the real Store on self for explicitly saved workspace edits,
-        # but reading candles must not wait to write a "read file" DB event.
-        from .background_status import display_store
-        store = display_store(store)
-        cache = getattr(self, "_image_cache", None)
-        try:
-            observation = store.rows("SELECT * FROM observations WHERE id=?", (observation_id,))[0]
-            observation = {**observation, 'id': observation_id}
-            record, payload, bars, instance, calculated, spec, calculation_key = _observation_calculation(
-                store, observation, market_dataset_id if mode == 'watch' else None, market_asof)
-            cache_key = (calculation_key, observation_id, mode, anchor_asof)
-            cached = cache.get(cache_key) if isinstance(cache, dict) and calculation_key is not None else None
-            from .data import code_names
-            # 早期迁入 Aplus 的观察记录可能只在 observations 表保存日期，
-            # payload 内没有 asof/setup_date。绘图层补齐只读上下文，保证
-            # 专属标注仍锚定这笔历史信号，而不是误取窗口内另一笔信号。
-            payload = dict(payload or {})
-            for key in ("asof", "setup_date"):
-                if observation.get(key):
-                    payload.setdefault(key, observation[key])
-            self._code = observation["code"]
-            self._tf = observation["timeframe"]
-            from workbench.h2_plan import display_plan, is_h2, STATE_LABELS
-            h2 = spec.id == 'STRATEGY_GAP_H2' and is_h2(instance.get_metadata())
-            if h2:
-                payload = display_plan(spec, bars, payload, self._code,
-                                       observation.get('setup_date') or observation['asof'], mode)
-            name = code_names(store).get(self._code, "")
-            period = "周K" if self._tf == "weekly" else "日K"
-            # 股票、策略和周期合并到标题条，图内不再占一行标题，把空间留给 K 线。
-            from .chart_embed import EmbeddedChartHost
-            interactive_ready = getattr(self, '_interactive', False) is True and EmbeddedChartHost.available()
-            self._image = cached[0] if cached is not None else None if interactive_ready else render_chart(
-                calculated,
-                payload,
-                "",
-                instance.get_metadata(),
-                strategy=instance,
-                strategy_type=observation["strategy"],
-                code=self._code,
-                instrument_type=bars.attrs.get('instrument_type'),
-            )
-            self._workspace_context = dict(
-                frame=calculated, record={**(record or {}), 'timeframe': self._tf}, code=self._code,
-                name=name, timeframe=self._tf, payload=payload, metadata=instance.get_metadata(),
-                strategy=instance, strategy_type=observation['strategy'],
-                instrument_type=bars.attrs.get('instrument_type'), title='', context_kind=mode,
-            )
-            chart_identity = f"{self._code}  {name}".rstrip()
-            if mode == "watch":
-                current_day = str(bars.date.iloc[-1])[:10]
-                signal_day = str(anchor_asof or observation["asof"])[:10]
-                title = (
-                    f"{chart_identity}  ·  {spec.name} · {period}"
-                    f" · 行情 {current_day} · 信号 {signal_day}"
-                )
-                if h2:
-                    signal_day = payload.get('h2_setup_date', signal_day)
-                    title = (f"{chart_identity}  ·  {spec.name} · {period}"
-                             f" · 行情 {current_day} · 机会起始 {signal_day}")
-                    title += (f" · 明日计划基于{payload['plan_asof']}收盘"
-                              if payload.get('pending_state') == 'PENDING'
-                              else f" · {STATE_LABELS[payload['pending_state']]}")
-                else:
-                    title += " · 计划线来自信号日"
-            else:
-                title = f"{chart_identity}  ·  {spec.name} · {period}"
-            self._title_var.set(title)
-            if isinstance(cache, dict):
-                cache[cache_key] = (
-                    self._image,
-                    self._code,
-                    self._tf,
-                    self._title_var.get(),
-                )
-                if len(cache) > 72:
-                    cache.pop(next(iter(cache)))
-            self._tv_btn.configure(state=tk.NORMAL)
-            if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
-            self._analysis_btn.configure(state=tk.NORMAL)
-            self._fit_image()
+        from .observation_chart import load_observation_chart
+        from .chart_embed import EmbeddedChartHost
+        interactive = self._interactive is True and EmbeddedChartHost.available()
+        options = dict(interactive=interactive, workspace=getattr(self, '_workspace_descriptor', None))
+        request = (store, dict(self._workspace_request), options)
+        ChartPanel._prepare_selection(self, load_observation_chart, request)
+
+    def _prepare_selection(self, loader, request):
+        if self._interactive is True:
+            from .background_status import LatestRefresh
+            if self._observation_reader is None:
+                self._observation_reader = LatestRefresh(
+                    lambda value, check: value[0](*value[1:], check=check))
+            self._observation_reader.submit((loader, *request))
+            self._observation_poll = self.after(30, self._poll_observation)
+        else:
+            try:
+                ChartPanel._apply_observation(self, loader(*request))
+            except Exception as exc:
+                ChartPanel._observation_error(self, exc)
+
+    def _poll_observation(self):
+        self._observation_poll = None
+        reply = self._observation_reader.poll()
+        if reply is None:
+            self._observation_poll = self.after(30, self._poll_observation)
+            return
+        _, _, result, error = reply
+        if error:
+            self._observation_error(error)
+        else:
+            try:
+                self._apply_observation(result)
+            except Exception as exc:
+                self._observation_error(exc)
+
+    def _apply_observation(self, result):
+        context = result['context']
+        self._code, self._tf = context['code'], context['timeframe']
+        self._image = result['image']
+        self._workspace_context = context
+        self._title_var.set(result['title'])
+        self._tv_btn.configure(state=tk.NORMAL)
+        if hasattr(self, '_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
+        self._analysis_btn.configure(state=tk.NORMAL)
+        self._fit_image()
+        if result['boot'] is not None:
+            self._show_interactive(prepared_boot=result['boot'])
+        else:
             self._show_interactive()
-        except Exception as exc:
-            self._code = None
-            self._image = self._photo = None
-            self._title_var.set("加载失败")
-            self.chart_label.configure(image="", text=f"图表加载失败：{exc}")
-            self._analysis_btn.configure(state=tk.DISABLED)
+
+    def _observation_error(self, error):
+        self._code = None
+        self._image = self._photo = None
+        self._title_var.set('加载失败')
+        self.chart_label.configure(image='', text=f'图表加载失败：{error}')
+        self._analysis_btn.configure(state=tk.DISABLED)
 
     def _cancel_manual(self):
+        reader = getattr(self, '_observation_reader', None)
+        if reader is not None:
+            reader.invalidate()
+        poll = getattr(self, '_observation_poll', None)
+        if poll is not None:
+            self.after_cancel(poll)
+            self._observation_poll = None
         controller = getattr(self, '_manual_controller', None)
         if controller is not None:
             controller.close()
@@ -626,6 +613,8 @@ class ChartPanel(native_ttk.Frame):
     def _destroy_manual(self, event):
         if event.widget is self:
             self._cancel_manual()
+            if self._observation_reader is not None:
+                self._observation_reader.close()
 
     def _refresh_manual(self):
         self._intraday_attempted = False
@@ -646,40 +635,16 @@ class ChartPanel(native_ttk.Frame):
 
     def show_shape(self, store, item):
         """Read the saved candidate prefix, never infer a formal strategy signal."""
-        from workbench.market import load_dataset
-        from .chart_renderer import render_chart
-        shape = item.shape
+        from .observation_chart import load_shape_chart
+        from .chart_embed import EmbeddedChartHost
         self.show_placeholder(item.name or item.code)
         self._history_btn.pack_forget()
-        self.store, self._code, self._tf = store,item.code,'daily'
-        try:
-            frame, record = load_dataset(store,shape['dataset_id'])
-            if record['code'] != item.code or record['source'] != item.source or record['timeframe'] != 'daily':
-                raise ValueError('形态图格与行情身份不一致')
-            if shape.get('sha256') and record['sha256'] != shape['sha256']:
-                raise ValueError('形态候选快照身份不一致')
-            frame = frame[frame.date <= shape['end']].copy()
-            if frame.empty:
-                raise ValueError('匹配截止日之前没有行情')
-            bars = frame.tail(300).copy()
-            bars['ema20'] = frame.close.ewm(span=20,adjust=False).mean().tail(300)
-            self._image = render_chart(bars,{},'',{},code=item.code)
-            self._title_var.set(f"{item.code} {item.name} · {shape.get('label','形态模板')}"
-                                f" · 相似 {shape.get('score',100):.1f} · 截至 {shape['end']} · 研究")
-            self._workspace_context = dict(frame=frame,record=record,code=item.code,name=item.name,
-                timeframe='daily',payload={},metadata={},strategy_type='',context_kind='shape',
-                shape=dict(label=shape.get('label'),score=shape.get('score'),start=shape.get('start'),end=shape['end']))
-            self._workspace_request = {'shape':shape}
-            self._observation_id = item.observation_id
-            self._tv_btn.configure(state=tk.NORMAL)
-            self._analysis_btn.configure(state=tk.NORMAL)
-            if hasattr(self,'_cases_btn'): self._cases_btn.configure(state=tk.NORMAL)
-            if self._interactive:
-                self._show_interactive()
-            else:
-                self._fit_image()
-        except Exception as exc:
-            self.chart_label.configure(text=f'形态行情暂未显示：{exc}')
+        self.store, self._code, self._tf = store, item.code, 'daily'
+        self._workspace_request = {'shape': item.shape}
+        self._observation_id = item.observation_id
+        options = dict(interactive=self._interactive is True and EmbeddedChartHost.available(),
+                       workspace=getattr(self, '_workspace_descriptor', None))
+        self._prepare_selection(load_shape_chart, (store, item, options))
 
     def _open_cases(self):
         self._activate()

@@ -680,12 +680,12 @@ def test_late_manual_chart_cannot_replace_new_selection(tmp_path, monkeypatch):
     monkeypatch.setattr(watch_chart, 'chart_day', lambda: '2026-10-16')
     original = watch_chart.load_chart
     entered, release = threading.Event(), threading.Event()
-    def blocked(store, service, code, source, timeframe, phase, check):
+    def blocked(store, service, code, source, timeframe, phase, check, **options):
         if code == 'sz.000001':
             entered.set()
             release.wait(3)
         check()
-        return original(store, service, code, source, timeframe, phase, check)
+        return original(store, service, code, source, timeframe, phase, check, **options)
     monkeypatch.setattr(watch_chart, 'load_chart', blocked)
     root = tk.Tk()
     try:

@@ -327,19 +327,22 @@ class EmbeddedChartHost:
         self._timer = None
         self._started = None
         self._queued_context = None
+        self._queued_boot = None
 
     @staticmethod
     def available():
         from .chart_shell import webview_available
         return os.name == 'nt' and webview_available() and os.environ.get('APLUS_TK_CHART_FALLBACK') != '1'
 
-    def show(self, context):
+    def show(self, context, *, prepared_boot=None):
         if self.closing and not self.closed():
             self._queued_context = context
+            self._queued_boot = prepared_boot
             return
         if context and self.workspace:
             context = {**context, 'workspace': self.workspace}
-        boot = workspace_boot(self.store, {**context, 'embedded': True}) if context else None
+        boot = (prepared_boot if prepared_boot is not None else
+                workspace_boot(self.store, {**context, 'embedded': True}) if context else None)
         self._history_identity = boot['identity'] if boot else None
         if boot:
             boot['embedded'] = True
@@ -394,11 +397,11 @@ class EmbeddedChartHost:
         atomic_json(self.live, dict(id=uuid.uuid4().hex, token=self.token, **payload))
         return True
 
-    def push_history(self, context):
+    def push_history(self, context, *, prepared_boot=None):
         """Refresh this manual watch's daily history without replacing its page."""
         if self.closed() or self.closing or context.get('context_kind') != 'watch' or context.get('strategy_type'):
             return False
-        boot = workspace_boot(self.store, context)
+        boot = prepared_boot if prepared_boot is not None else workspace_boot(self.store, context)
         if boot['identity'] != self._history_identity:
             return False
         # Market data only: saved drawings/settings/baselines never travel here.
@@ -482,9 +485,13 @@ class EmbeddedChartHost:
             return
         if self.closed() and self.closing and self._queued_context is not None:
             context, self._queued_context = self._queued_context, None
+            boot, self._queued_boot = self._queued_boot, None
             self.cleanup()
             self.closing = False
-            self.show(context)
+            if boot is None:
+                self.show(context)
+            else:
+                self.show(context, prepared_boot=boot)
             return
         if self.closed() and self.closing:
             self.cleanup()
@@ -495,6 +502,7 @@ class EmbeddedChartHost:
 
     def request_close(self):
         self._queued_context = None
+        self._queued_boot = None
         if not self.closing:
             self.token += 1
         self.closing = True

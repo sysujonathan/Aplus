@@ -43,6 +43,9 @@ class WorkspaceControls:
         self.sync = {key: tk.BooleanVar(value=self.current['sync'][key]) for key in SYNC_KEYS}
         self.scope = tk.StringVar(value=self.current.get('drawingScope', 'pane'))
         self._save_timer = None
+        self._autosave_reader = None
+        self._autosave_pending = False
+        self._autosave_next = None
         self._restoring = False
         self._enabled = False
         self.top = tk.Frame(grid,autostyle=False,background=APP_BG,padx=5,pady=3)
@@ -499,9 +502,9 @@ class WorkspaceControls:
             return
         if self._save_timer:
             self.grid.after_cancel(self._save_timer)
-        self._save_timer = self.grid.after(700, self.save)
+        self._save_timer = self.grid.after(700, self._save_background)
 
-    def save(self):
+    def _layout_payload(self):
         self._save_timer = None
         if self._load_error:
             self.caption.set('原布局设置未覆盖，请恢复设置备份后重试；图表仍可使用')
@@ -518,14 +521,70 @@ class WorkspaceControls:
         self.current['panes'] = panes
         self.current['rows'], self.current['columns'] = self.grid._shape
         self.current['active'] = self.grid._active_slot
+        from copy import deepcopy
+        return deepcopy({'layouts':self.layouts, 'active':self.current['id'], 'toolbar':self.toolbar_preferences()})
+
+    def _save_background(self):
+        payload = self._layout_payload()
+        if payload is None or not self.store:
+            return
+        if self._autosave_pending:
+            self._autosave_next = payload  # Keep only the most recent view.
+            return
+        if self._autosave_reader is None:
+            from .background_status import LatestRefresh
+            store = self.store
+            self._autosave_reader = LatestRefresh(
+                lambda value, check: store.save_ui_preferences('chart_layouts', value[0], value[1]))
+        # Never invalidate a writer: even a superseded write must acknowledge
+        # its committed revision before the next snapshot may be submitted.
+        self._autosave_reader.submit((payload, self.revision))
+        self._autosave_pending = True
+        self.caption.set('正在后台保存布局，图表可继续操作')
+        self.grid.after(50, self._poll_autosave)
+
+    def _poll_autosave(self):
+        if not self._autosave_pending:
+            return
+        reply = self._autosave_reader.poll()
+        if reply is None:
+            self.grid.after(50, self._poll_autosave)
+            return
+        self._autosave_pending = False
+        _, _, result, error = reply
+        if error:
+            self._autosave_next = None
+            self.caption.set('布局未保存：' + str(error))
+            return
+        self.revision = result['revision']
+        self.caption.set(f'{self.current["name"]} · 已自动保存 · 活动图格 {self.grid._active_slot+1}')
+        if self._autosave_next is not None:
+            self._autosave_next = None
+            self._save_background()  # Capture current UI state after the ACK.
+
+    def _saving_layout(self):
+        if getattr(self, '_autosave_pending', False):
+            self.caption.set('布局正在后台保存，请稍后再管理布局；图表可继续操作')
+            return True
+        return False
+
+    def save(self):
+        # Explicit layout operations keep their original synchronous contract,
+        # but cannot race an auto-save's optimistic revision.
+        if self._saving_layout():
+            return False
+        payload = self._layout_payload()
+        if payload is None:
+            return False
         if self.store:
             try:
-                result = self.store.save_ui_preferences('chart_layouts',
-                    {'layouts':self.layouts, 'active':self.current['id'], 'toolbar':self.toolbar_preferences()}, self.revision)
+                result = self.store.save_ui_preferences('chart_layouts', payload, self.revision)
                 self.revision = result['revision']
                 self.caption.set(f'{self.current["name"]} · 已自动保存 · 活动图格 {self.grid._active_slot+1}')
             except Exception as exc:
                 self.caption.set('布局未保存：' + str(exc))
+                return False
+        return True
 
     def toolbar_preferences(self):
         toolbar=getattr(self,'drawing_tools',None)
@@ -656,10 +715,11 @@ class WorkspaceControls:
                 messagebox.showerror('布局无效',str(exc),parent=self.grid)
 
     def new(self, copy):
+        if self._saving_layout(): return
         name = simpledialog.askstring('复制布局' if copy else '新建布局','名称：',parent=self.grid)
         if not name:
             return
-        self.save()
+        if self.save() is False: return
         try:
             layout = new_layout(name,*self.grid._shape)
         except ValueError as exc:
@@ -689,6 +749,7 @@ class WorkspaceControls:
         self.open_layout(layout['id'], save_previous=False)
 
     def rename(self):
+        if self._saving_layout(): return
         name = simpledialog.askstring('重命名布局','名称：',initialvalue=self.current['name'],parent=self.grid)
         if name:
             try:
@@ -698,6 +759,7 @@ class WorkspaceControls:
                 messagebox.showerror('布局无效',str(exc),parent=self.grid)
 
     def delete(self):
+        if self._saving_layout(): return
         if len(self.layouts)==1:
             messagebox.showinfo('保留默认布局','至少保留一个布局。',parent=self.grid); return
         if messagebox.askyesno('归档布局','归档当前布局？布局和画线均保留，仍可从布局菜单重新打开。',parent=self.grid):
@@ -710,8 +772,9 @@ class WorkspaceControls:
             self.save();self._layout_menu()
 
     def open_layout(self, identity, save_previous=True):
+        if self._saving_layout(): return
         if save_previous and self.current['id'] != identity:
-            self.save()
+            if self.save() is False: return
         layout = next(v for v in self.layouts if v['id']==identity)
         self._restoring = True
         self.current = layout
