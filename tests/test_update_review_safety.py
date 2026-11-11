@@ -80,7 +80,9 @@ def tray_window():
         _tray_actions=queue.SimpleQueue(), _tray_icon=Mock(), toolbar=SimpleNamespace(_job_id=None),
         service=Mock(), after=Mock(), destroy=Mock(), deiconify=Mock(),
         state=Mock(), lift=Mock(), focus_force=Mock())
-    for name in ('_poll_tray_actions', '_show_from_tray', '_exit_from_tray'):
+    for name in ('_poll_tray_actions', '_show_from_tray', '_exit_from_tray',
+               '_begin_exit_flush', '_poll_exit_flush', '_finish_exit',
+               '_abort_exit', '_resume_embedded_charts'):
         setattr(window, name, MethodType(getattr(AplusMainWindow, name), window))
     return window
 
@@ -155,7 +157,9 @@ w=ttk.Window(themename='darkly'); w.withdraw()
 w._closing=False; w._update_pending=True; w._tray_actions=queue.SimpleQueue()
 w._tray_icon=Mock(); w.toolbar=SimpleNamespace(_job_id=None)
 w.service=Mock(); w.store=SimpleNamespace(root=Path(sys.argv[1]))
-for name in ('_poll_tray_actions','_show_from_tray','_exit_from_tray'):
+for name in ('_poll_tray_actions','_show_from_tray','_exit_from_tray',
+               '_begin_exit_flush','_poll_exit_flush','_finish_exit',
+               '_abort_exit','_resume_embedded_charts'):
     setattr(w,name,MethodType(getattr(AplusMainWindow,name),w))
 c=VersionController(w,w,root=Path(sys.argv[1]))
 w.after_cancel(c.poll_id)  # Schedule this controller once, not a second poll loop.

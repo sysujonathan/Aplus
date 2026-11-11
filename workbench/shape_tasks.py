@@ -57,12 +57,18 @@ class ShapeTasks:
             if self.active:
                 self.active[1].set()
 
-    def close(self):
+    def close(self, wait=True):
         with self.lock:
             self.closed = True
             self.pending_tracked = False
         self.cancel()
-        self.pool.shutdown(wait=True)
+        if wait:
+            self.pool.shutdown(wait=True)
+        else:
+            # Cooperative cancellation is already requested above; pending
+            # futures are dropped and running ones finish on daemon
+            # threads without blocking the caller (window teardown).
+            self.pool.shutdown(wait=False, cancel_futures=True)
 
     def _run(self, identifier, event, templates, asof, source, checkpoint, skipped_templates):
         def check():
