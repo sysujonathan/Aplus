@@ -1,6 +1,7 @@
 """工程 A 桌面布局，使用 Aplus Service/Store 后端。"""
 from __future__ import annotations
 
+import logging
 import os
 import queue
 import tkinter as tk
@@ -666,10 +667,13 @@ class AplusMainWindow(ttk.Window):
             self._watchdog.stop()
         runner = vars(self.service).get('_shape_tasks') if self.service is not None else None
         if runner is not None:
-            # Issue #132: window teardown must not synchronously wait for
-            # background workers; close() already requested cooperative
-            # cancellation, unfinished work is abandoned to daemon threads.
-            runner.close(wait=False)
+            # Window teardown returns promptly, but Python still joins running
+            # executor workers at process exit. Keep an explicit snapshot.
+            self._unfinished_shape_tasks = runner.close(wait=False)
+            if self._unfinished_shape_tasks:
+                logging.getLogger(__name__).warning(
+                    '窗口关闭时形态任务仍在运行；已请求取消，进程退出须等待任务收尾：%s',
+                    ', '.join(self._unfinished_shape_tasks))
         super().destroy()
 
     def _close_for_version_update(self, on_failure=None):
