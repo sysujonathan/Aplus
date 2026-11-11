@@ -19,6 +19,7 @@ class ShapeTasks:
         self.cache = FrameCache()
         self.lock = threading.Lock()
         self.active = None
+        self.futures = {}
         self.closed = False
         self.pending_tracked = False
         old = read_meta(self.store,'shape_task',{})
@@ -49,7 +50,9 @@ class ShapeTasks:
                 spec=dict(templates=templates,asof=asof,source=source,skipped_templates=skipped_templates),checkpoint=checkpoint,
                 skipped_templates=skipped_templates,
                 message='等待盘前任务完成后在本地匹配'+skipped_summary(skipped_templates),created=now(),progress=0,total=0))
-            self.pool.submit(self._run,identifier,event,templates,asof,source,checkpoint,skipped_templates)
+            self.futures = {key: future for key, future in self.futures.items() if not future.done()}
+            self.futures[identifier] = self.pool.submit(
+                self._run,identifier,event,templates,asof,source,checkpoint,skipped_templates)
             return identifier
 
     def cancel(self):
@@ -58,6 +61,12 @@ class ShapeTasks:
                 self.active[1].set()
 
     def close(self, wait=True):
+        """Request cancellation; return IDs still running at the shutdown snapshot.
+
+        wait=False only releases the caller. Executor workers are non-daemon
+        and Python joins them at interpreter exit, even after the window closes.
+        A worker ignoring cancellation can therefore delay process exit.
+        """
         with self.lock:
             self.closed = True
             self.pending_tracked = False
@@ -65,10 +74,10 @@ class ShapeTasks:
         if wait:
             self.pool.shutdown(wait=True)
         else:
-            # Cooperative cancellation is already requested above; pending
-            # futures are dropped and running ones finish on daemon
-            # threads without blocking the caller (window teardown).
+            # Cancel queued futures; running work must finish cooperatively.
             self.pool.shutdown(wait=False, cancel_futures=True)
+        with self.lock:
+            return tuple(key for key, future in self.futures.items() if future.running())
 
     def _run(self, identifier, event, templates, asof, source, checkpoint, skipped_templates):
         def check():
