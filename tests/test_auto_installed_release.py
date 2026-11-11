@@ -73,6 +73,10 @@ def test_other_events_branches_and_repositories_are_rejected(event,ref,repo):
 def test_latest_exact_main_push_acceptance_cannot_be_replaced_by_other_green(change):
     good,_=authority()
     def api(path):
+        if change=='main_moved' and path.startswith('/compare/'):
+            # main moved but NOT past this head (rewound/diverged): not the
+            # benign stale case, admission must still fail closed.
+            return dict(status='diverged')
         result=good(path)
         if path=='/commits/main' and change=='main_moved':return dict(sha='a'*40)
         if path.startswith('/actions/runs?'):
@@ -84,6 +88,47 @@ def test_latest_exact_main_push_acceptance_cannot_be_replaced_by_other_green(cha
                 result['workflow_runs'].append(newer)
         return result
     with pytest.raises(ValueError):gate.preflight('workflow_run',upstream(),'refs/heads/main',gate.REPO,HEAD,api=api)
+
+
+NEWER='a'*40
+
+
+def _stale_authority(compare_status='ahead'):
+    good,_=authority()
+    def api(path):
+        if path=='/commits/main':return dict(sha=NEWER)
+        if path.startswith('/compare/'):return dict(status=compare_status)
+        if path=='/releases/latest':raise AssertionError('stale skip must not consult releases')
+        return good(path)
+    return api
+
+
+def test_stale_accepted_main_run_is_skipped_not_failed():
+    # Issue #133: a delayed workflow_run for an older accepted main, with
+    # real main already advanced past it, is admitted as a no-op skip —
+    # identity green, build=false, nothing published — not a failure.
+    result=gate.preflight('workflow_run',upstream(),'refs/heads/main',gate.REPO,HEAD,api=_stale_authority())
+    assert result['build'] is False
+    assert result['commit']==HEAD
+    assert result['skipped']=='stale accepted main superseded; skipped'
+
+
+def test_stale_skip_fails_closed_when_ancestry_unverifiable():
+    with pytest.raises(ValueError):
+        gate.preflight('workflow_run',upstream(),'refs/heads/main',gate.REPO,HEAD,api=_stale_authority('diverged'))
+    def broken(path):
+        if path.startswith('/compare/'):raise HTTPError('https://api.github.com',500,'Server Error',{},None)
+        return _stale_authority()(path)
+    with pytest.raises(ValueError):
+        gate.preflight('workflow_run',upstream(),'refs/heads/main',gate.REPO,HEAD,api=broken)
+
+
+def test_dispatch_with_moved_main_still_fails():
+    api,_=authority()
+    def moved(path):
+        if path=='/commits/main':return dict(sha=NEWER)
+        return api(path)
+    with pytest.raises(ValueError):gate.preflight('workflow_dispatch',{},'refs/heads/main',gate.REPO,HEAD,api=moved)
 
 
 def test_dispatch_still_requires_current_main_acceptance_and_network_errors_fail_closed():
@@ -106,6 +151,20 @@ def test_preflight_cli_writes_actual_gate_outputs(tmp_path,monkeypatch):
     monkeypatch.setattr(sys,'argv',['preflight','--output',str(output)])
     gate.main()
     assert output.read_text()=='build=true\ncommit='+HEAD+'\n'
+
+
+def test_preflight_cli_stale_run_writes_build_false(tmp_path,monkeypatch,capsys):
+    api=_stale_authority();real=gate.preflight
+    monkeypatch.setattr(gate,'preflight',lambda *args:real(*args,api=api,opener=lambda *a,**k:io.BytesIO(b'{}')))
+    monkeypatch.setattr(gate.subprocess,'check_output',lambda *a,**k:HEAD)
+    event=tmp_path/'event.json';event.write_text(json.dumps(upstream()))
+    for key,value in dict(GITHUB_EVENT_PATH=str(event),GITHUB_EVENT_NAME='workflow_run',
+        GITHUB_REF='refs/heads/main',GITHUB_REPOSITORY=gate.REPO).items():monkeypatch.setenv(key,value)
+    output=tmp_path/'outputs'
+    monkeypatch.setattr(sys,'argv',['preflight','--output',str(output)])
+    gate.main()
+    assert output.read_text()=='build=false\ncommit='+HEAD+'\n'
+    assert 'stale accepted main superseded; skipped' in capsys.readouterr().out
 
 
 def test_workflow_keeps_build_read_only_and_publishes_only_its_successful_artifact():
