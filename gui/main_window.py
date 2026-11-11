@@ -576,14 +576,28 @@ class AplusMainWindow(ttk.Window):
     def _abort_exit(self):
         self._closing = False
         self._exit_hosts = None
+        failure = getattr(self, "_exit_failure", None)
+        self._exit_completion = self._exit_failure = None
         self._resume_embedded_charts()
         if self._tray_icon is not None:
             # Tray polling stopped when the exit began; a refused exit
             # must restore a fully usable tray.
             self.after(200, self._poll_tray_actions)
+        if failure is not None:
+            failure()
 
     def _finish_exit(self):
         self._exit_hosts = None
+        completion = getattr(self, "_exit_completion", None)
+        self._exit_completion = None
+        if completion is not None:
+            try:
+                completion()
+            except Exception:
+                self._abort_exit()
+                return
+            self._exit_failure = None
+            return
         if self.toolbar._job_id and self.service is not None:
             try:
                 self.service.cancel(self.toolbar._job_id)
@@ -658,11 +672,22 @@ class AplusMainWindow(ttk.Window):
             runner.close(wait=False)
         super().destroy()
 
-    def _close_for_version_update(self):
-        """Only called after Service has atomically reserved an idle update."""
-        if not getattr(self, '_flush_embedded_charts', lambda: True)():
-            raise RuntimeError('图表尚未确认保存，不能退出更新')
+    def _close_for_version_update(self, on_failure=None):
+        """Keep the update reservation until the shared chart ACK gate finishes."""
+        if self._closing:
+            return
         self._closing = True
+        self._exit_completion = self._finish_version_update
+        self._exit_failure = on_failure
+        try:
+            self._begin_exit_flush()
+        except Exception:
+            self._abort_exit()
+            if on_failure is None:
+                raise
+
+    def _finish_version_update(self):
+        """Only reached after every chart has confirmed its final save."""
         # The update was reserved while idle; never let a stray task turn
         # this into an unbounded wait on the Tk thread (Issue #132).
         self.service.pool.shutdown(wait=False, cancel_futures=True)

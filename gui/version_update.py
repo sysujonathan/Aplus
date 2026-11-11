@@ -122,7 +122,8 @@ class VersionController:
             folder, deadline = self.waiting
             if (folder / "ready.json").exists() and not (folder / 'receipt.json').exists():
                 self.waiting = None
-                self.window._close_for_version_update()
+                self.window._close_for_version_update(
+                    on_failure=lambda: self._cancel_chart_close(folder))
                 return
             if (folder / "receipt.json").exists() or time.monotonic() > deadline:
                 write_json(folder / 'cancelled.json', {'cancelled': True})
@@ -138,6 +139,17 @@ class VersionController:
                 messagebox.showerror("未更新", "更新没有开始，当前版本继续使用。\n"
                                      "请重新打开“版本更新”后再试；若仍失败，请联系维护者。",
                                      parent=self.window)
+        self.poll_id = self.window.after(200, self.poll)
+
+    def _cancel_chart_close(self, folder):
+        # Revoke helper permission before releasing the idle-update mutex.
+        write_json(folder / 'cancelled.json', {'cancelled': True})
+        self.window._update_pending = False
+        self.window.deiconify()
+        if self.reserved:
+            self.window.service.release_code_update()
+            self.reserved = False
+        messagebox.showerror("未更新", "图表尚未确认保存，当前版本继续使用。", parent=self.window)
         self.poll_id = self.window.after(200, self.poll)
 
     def maybe_show_notice(self):
