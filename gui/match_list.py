@@ -86,7 +86,7 @@ class MatchList(CandidateTabs):
         self._choose(None)
 
     def load_from_store(self,store,timeframe='daily',asof_filter=None,source='baostock',notify=True):
-        from .data import load_candidates, code_names, data_inputs
+        from .data import load_candidates, code_names, data_inputs, snapshot_inputs
         from workbench.scan_cache import engine_inputs, file_state
         from workbench.sources import market_source
         self._timeframe, self._source = timeframe,source
@@ -101,7 +101,8 @@ class MatchList(CandidateTabs):
                                                 for i, part in enumerate(asof_filter)))] if timeframe == 'daily' else []
         artifacts = file_state(store.root / r['path'] for r in shape_receipts)
         key = (str(store.root), tuple(asof_filter or ()), source, timeframe,
-               repr(receipts), repr(shape_receipts), artifacts, data_inputs(store), engine_inputs(), tuple(self._labels.items()))
+               repr(receipts), repr(shape_receipts), artifacts, data_inputs(store), engine_inputs(), tuple(self._labels.items()),
+               snapshot_inputs())
         cached = getattr(self, '_pipeline_cache', None)
         if cached is not None and cached[0] == key:
             from copy import deepcopy
