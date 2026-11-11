@@ -1,6 +1,7 @@
 """工程 A 桌面布局，使用 Aplus Service/Store 后端。"""
 from __future__ import annotations
 
+import os
 import queue
 import tkinter as tk
 from tkinter import font as tkfont
@@ -131,6 +132,25 @@ class AplusMainWindow(ttk.Window):
         from .chart_alerts import ChartAlertMonitor
         self.chart_alert_monitor = ChartAlertMonitor(self, self.store)
         self.chart_alert_monitor.start()
+        # Responsiveness watchdog (Issue #132): the ticker only beats a
+        # heartbeat; a daemon thread records main-thread stacks on stalls.
+        self._watchdog = None
+        self._exit_poll_id = None
+        self._exit_hosts = None
+        if os.environ.get('APLUS_RESPONSIVENESS_WATCHDOG', '1') != '0':
+            from .responsiveness import ResponsivenessWatchdog
+            self._watchdog = ResponsivenessWatchdog()
+            self._watchdog.start()
+            self._watchdog_tick()
+
+    def _watchdog_tick(self):
+        if self._watchdog is None:
+            return
+        self._watchdog.beat()
+        try:
+            self.after(100, self._watchdog_tick)
+        except Exception:
+            pass
 
     def _startup_watch(self):
         if self._closing:
@@ -495,13 +515,75 @@ class AplusMainWindow(ttk.Window):
         self.after(200, self._poll_tray_actions)
 
     def _exit_from_tray(self):
-        """托盘“退出”才是真正关闭；运行任务先请求安全停止。"""
+        """托盘“退出”才是真正关闭；运行任务先请求安全停止。
+
+        Issue #132: the chart close handshake is an after()-driven state
+        machine, never a busy wait on the Tk thread — the window stays
+        responsive while charts acknowledge, a refusal restores the
+        session, and the 15s timeout warns and restores instead of
+        freezing the window as "not responding".
+        """
         if self._closing or getattr(self, "_update_pending", False):
             return
         self._closing = True
-        if not getattr(self, '_flush_embedded_charts', lambda: True)():
-            self._closing = False
+        self._begin_exit_flush()
+
+    def _begin_exit_flush(self):
+        import time
+        chart = getattr(self, 'chart', None)
+        hosts = chart.embedded_hosts() if chart else []
+        page = getattr(self, '_pages', {}).get('growth')
+        if page is not None and page.host is not None:
+            hosts.append(page.host)
+        hosts.extend(getattr(self, '_case_comparisons', []))
+        self._exit_hosts = hosts
+        live = [host for host in hosts if not host.closed()]
+        if not live:
+            self._finish_exit()
             return
+        for host in live:
+            host.request_close()
+        self._exit_started = time.monotonic()
+        self._exit_deadline = self._exit_started + 15
+        self._exit_poll_id = self.after(50, self._poll_exit_flush)
+
+    def _poll_exit_flush(self):
+        import time
+        self._exit_poll_id = None
+        if not self._closing or not self.winfo_exists():
+            return
+        hosts = self._exit_hosts or []
+        live = [host for host in hosts if not host.closed()]
+        if not live:
+            for host in hosts:
+                host.cleanup()
+            self._finish_exit()
+            return
+        now = time.monotonic()
+        refused = any(not host.closing for host in live)
+        if refused and now - self._exit_started > .3:
+            # A chart declined to close (unsaved work or fault): restore
+            # the session exactly like the synchronous guard did.
+            self._abort_exit()
+            return
+        if now >= self._exit_deadline:
+            messagebox.showwarning('图表暂未关闭',
+                '图表关闭确认未完成，可能是通信中断或分析尚未保存。主窗口已保留，请查看图表提示后重试。', parent=self)
+            self._abort_exit()
+            return
+        self._exit_poll_id = self.after(50, self._poll_exit_flush)
+
+    def _abort_exit(self):
+        self._closing = False
+        self._exit_hosts = None
+        self._resume_embedded_charts()
+        if self._tray_icon is not None:
+            # Tray polling stopped when the exit began; a refused exit
+            # must restore a fully usable tray.
+            self.after(200, self._poll_tray_actions)
+
+    def _finish_exit(self):
+        self._exit_hosts = None
         if self.toolbar._job_id and self.service is not None:
             try:
                 self.service.cancel(self.toolbar._job_id)
@@ -560,9 +642,20 @@ class AplusMainWindow(ttk.Window):
                     slot._show_interactive()
 
     def destroy(self):
+        if getattr(self, '_exit_poll_id', None) is not None:
+            try:
+                self.after_cancel(self._exit_poll_id)
+            except Exception:
+                pass
+            self._exit_poll_id = None
+        if getattr(self, '_watchdog', None) is not None:
+            self._watchdog.stop()
         runner = vars(self.service).get('_shape_tasks') if self.service is not None else None
         if runner is not None:
-            runner.close()
+            # Issue #132: window teardown must not synchronously wait for
+            # background workers; close() already requested cooperative
+            # cancellation, unfinished work is abandoned to daemon threads.
+            runner.close(wait=False)
         super().destroy()
 
     def _close_for_version_update(self):
@@ -570,7 +663,9 @@ class AplusMainWindow(ttk.Window):
         if not getattr(self, '_flush_embedded_charts', lambda: True)():
             raise RuntimeError('图表尚未确认保存，不能退出更新')
         self._closing = True
-        self.service.pool.shutdown(wait=True)
+        # The update was reserved while idle; never let a stray task turn
+        # this into an unbounded wait on the Tk thread (Issue #132).
+        self.service.pool.shutdown(wait=False, cancel_futures=True)
         if self._tray_icon is not None:
             try:
                 self._tray_icon.stop()
