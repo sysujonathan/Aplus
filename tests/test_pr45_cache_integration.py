@@ -25,6 +25,18 @@ from gui.candidate_tabs import collapse_candidate_rows
 
 FIXTURES = Path(__file__).parent/'fixtures/pr47_v363'
 ARCHIVED = {
+    'core/formatter.py':'ff4388c93a465ad75cd1365163c3c6cfa224e18dece8b8613814cccf04d9deea',
+    'core/strategies/awil_strategy.py':'d84c5a19de70934c4a060e1498b54124aeea898864613aea21c8d3d5664323a2',
+    'core/strategies/base.py':'c5b4dadf7a574aff6544fa10a3ca88f172f26cf4846082ceadb387e8d3e648d2',
+    'core/strategies/gap_h2_enhanced_strategy.py':'61387386bb2558e33543c1e1bb818b6cce10288e654a871036c6fdc37635f386',
+    'core/strategies/gap_h2_strategy.py':'57e61feb07991feabca85b556ca3a6e5e66eb5258d6f3c4a58a16d753237a248',
+    'core/strategies/gap_pinbar_strategy.py':'53f79f022e95aa52ab1351bc7285b7942664f25f66860fcd8f1c101cd4a1b9bf',
+    'core/strategies/monthly_range_break_strategy.py':'80bfcd8eae3ab527e8a625f33da811ae1e5726f23977c805643a7ff201144ac4',
+    'core/strategies/structural_gap_strategy.py':'5d3627b27719bdcd8306692919e392951eadf3808a7a6820910934c55d0780c2',
+    'core/strategies/three_k_strategy.py':'cb7a908ecc18396b6617988e633a28963a257b3ffa27c31bcec8eee14e8ba9ee',
+    'config/rating_factors.json':'508d42deb24f90dfe9836da854c964c6b53e344cea156dbd81e192d1cff182c0',
+    'core/rating.py':'81b34141c6d797cd467ee62f27064a07466cb5b438e52d4b0513005728ca8ca5',
+    'core/rating_core.py':'5fd4d32414a3d1a428f43d218c3281e261b8489017ca5ece6704ffe276de91a2',
     'core/strategies/mtr_strategy.py':'68720522848c2fffc4bff505de77716a5256d48a88161a8d03bd19f7415e406a',
     'core/strategies/mtr_structural_v35.py':'9705da38307f6b68f6bcc1a9b5672765721074ef0a24977c963a8c3bdfd9f31e',
     'frozen_manifest.json':'8efd4dcc9d2e3e83d90ab48bb33a1b0d78cd188b337f6e99277517b1d26e3217',
@@ -106,7 +118,7 @@ def old_scan(tmp_path,source,with_signal):
         shutil.copytree(ROOT/folder,code/folder,ignore=shutil.ignore_patterns('__pycache__'))
     for path,expected in ARCHIVED.items():
         text = (FIXTURES/(path.replace('/','__')+'.txt')).read_text(encoding='utf-8')
-        content = text.replace('\n','\r\n').encode() if path.startswith('core/') else text.encode()
+        content = text.replace('\n','\r\n').encode() if path.startswith('core/') or path == 'config/rating_factors.json' else text.encode()
         assert digest(content) == expected, path
         (code/path).write_bytes(content)
     runtime = tmp_path/'isolated-runtime'
@@ -119,7 +131,11 @@ def old_scan(tmp_path,source,with_signal):
 
 @pytest.mark.parametrize('source',['baostock','tickflow','tencent'])
 @pytest.mark.parametrize('with_signal',[False,True])
-def test_v363_actual_cache_recalculates_mtr_only_and_preserves_history(tmp_path,monkeypatch,source,with_signal):
+def test_v363_actual_cache_recalculates_changed_only_and_preserves_history(tmp_path,monkeypatch,source,with_signal):
+    """Issue #145, Vance approval 2026-11-11: rating removal expands the
+    recalculation set from {MTR} to {MTR, 3K, GAP H2}; strategies unchanged
+    by approved updates still reuse their historical cache.
+    """
     store,baseline = old_scan(tmp_path,source,with_signal)
     spec = baseline['spec']; did = spec['datasets'][0]; day = spec['asof']
     before = store.rows('SELECT * FROM observations')
@@ -129,10 +145,13 @@ def test_v363_actual_cache_recalculates_mtr_only_and_preserves_history(tmp_path,
     assert entries['MTR_MASTER'].cls.get_metadata()['strategy_revision'] == 'V36.4'
     versions = calculation_versions([entries[k] for k in IDS])
     assert versions['MTR_MASTER'] != baseline['versions']['MTR_MASTER']
-    assert all(versions[k] == baseline['versions'][k] for k in IDS[1:])
+    # Issue #145 approved rating removal advances the non-MTR byte identities.
+    approved = json.loads((FIXTURES.parent/'rating_removal_cache_versions.json').read_text(encoding='utf-8'))['values']
+    assert {k: versions[k] for k in IDS[1:]} == approved['calculation_versions']
     assert scan_engine_version(include_frozen=False) != baseline['engine']  # PR45 output guard remains bound.
     compatible = compatible_engines([entries[k] for k in IDS])
-    assert compatible == {k:baseline['engine'] for k in IDS[1:]}
+    # The pre-PR45 alias also binds the approved current shared engine sources.
+    assert compatible == approved['compatible_engines']
     # No new complete judgment yet: archived MTR history is NOT called no-signal.
     assert load_candidates(store,'daily',source,tuple(day.split('-')))['MTR_MASTER'][0]['observation_id']==old_mtr['id']
     set_pattern(monkeypatch,with_signal)
@@ -149,8 +168,8 @@ def test_v363_actual_cache_recalculates_mtr_only_and_preserves_history(tmp_path,
         row = wait_for(store,service.submit('scan',spec))
         report = json.loads(row['result'])
         assert row['status']=='completed',row['result']
-        assert calls == ['MTR_MASTER']
-        assert report['calculated']==1 and report['reused']==2
+        assert calls == ['MTR_MASTER', 'STRATEGY_3K', 'STRATEGY_GAP_H2']
+        assert report['calculated']==3 and report['reused']==0
         assert not report.get('stage_reused')
         grouped = load_candidates(store,'daily',source,tuple(day.split('-')))
         if with_signal:

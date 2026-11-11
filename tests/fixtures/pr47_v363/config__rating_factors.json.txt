@@ -1,0 +1,2992 @@
+{
+  "generated": "2026-07-27 21:38:08",
+  "methodology": {
+    "model": "unified Buy-Stop entry + initial stop + risk_mult R target",
+    "risk_mult": 2.0,
+    "costs_bps": {
+      "stamp_sell": 5.0,
+      "commission_both": 3.0,
+      "slippage_both": 0.0
+    },
+    "train_ratio": 0.6,
+    "lookahead": "rating computed on df.iloc[:idx+1]; exits use post-signal data only"
+  },
+  "strategies": {
+    "structural_gap_daily": {
+      "n_signals": 6455,
+      "lifecycle_dist": {
+        "WIN": {
+          "n": 2111,
+          "pct": 32.7
+        },
+        "LOSS": {
+          "n": 2627,
+          "pct": 40.7
+        },
+        "INVALIDATED": {
+          "n": 1241,
+          "pct": 19.23
+        },
+        "VOIDED": {
+          "n": 459,
+          "pct": 7.11
+        },
+        "TIMEOUT": {
+          "n": 14,
+          "pct": 0.22
+        },
+        "HOLDING": {
+          "n": 2,
+          "pct": 0.03
+        },
+        "PENDING": {
+          "n": 1,
+          "pct": 0.02
+        }
+      },
+      "regime_strat_net": {
+        "range": {
+          "win_rate": 44.34,
+          "n": 2156,
+          "ci_lo": 42.26,
+          "ci_hi": 46.45,
+          "net_ev_R": -0.12
+        },
+        "bull": {
+          "win_rate": 44.73,
+          "n": 2582,
+          "ci_lo": 42.82,
+          "ci_hi": 46.66,
+          "net_ev_R": 0.109
+        }
+      },
+      "n_traded": 4738,
+      "train_date_cut": "2025-05-20",
+      "n_train": 2846,
+      "n_test": 1892,
+      "overall_net_win_rate": 44.55,
+      "overall_net_ev_R": 0.005,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 53.98,
+          "n": 113,
+          "wins": 61,
+          "ci_lo": 44.81,
+          "ci_hi": 62.89,
+          "net_ev_R": -0.069
+        },
+        "A": {
+          "win_rate": 50.58,
+          "n": 690,
+          "wins": 349,
+          "ci_lo": 46.86,
+          "ci_hi": 54.3,
+          "net_ev_R": -0.001
+        },
+        "B": {
+          "win_rate": 42.54,
+          "n": 1415,
+          "wins": 602,
+          "ci_lo": 39.99,
+          "ci_hi": 45.14,
+          "net_ev_R": -0.118
+        },
+        "C": {
+          "win_rate": 43.04,
+          "n": 1436,
+          "wins": 618,
+          "ci_lo": 40.5,
+          "ci_hi": 45.61,
+          "net_ev_R": -0.009
+        },
+        "D": {
+          "win_rate": 44.37,
+          "n": 1084,
+          "wins": 481,
+          "ci_lo": 41.44,
+          "ci_hi": 47.35,
+          "net_ev_R": 0.194
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 76.47,
+          "n": 17,
+          "wins": 13,
+          "ci_lo": 52.74,
+          "ci_hi": 90.45,
+          "net_ev_R": 0.334
+        },
+        "A": {
+          "win_rate": 63.64,
+          "n": 44,
+          "wins": 28,
+          "ci_lo": 48.87,
+          "ci_hi": 76.22,
+          "net_ev_R": 0.399
+        },
+        "B": {
+          "win_rate": 53.2,
+          "n": 250,
+          "wins": 133,
+          "ci_lo": 47.01,
+          "ci_hi": 59.29,
+          "net_ev_R": 0.12
+        },
+        "C": {
+          "win_rate": 47.81,
+          "n": 799,
+          "wins": 382,
+          "ci_lo": 44.36,
+          "ci_hi": 51.28,
+          "net_ev_R": 0.073
+        },
+        "D": {
+          "win_rate": 46.68,
+          "n": 782,
+          "wins": 365,
+          "ci_lo": 43.2,
+          "ci_hi": 50.18,
+          "net_ev_R": 0.261
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 76.47,
+          "n": 17,
+          "wins": 13,
+          "ci_lo": 52.74,
+          "ci_hi": 90.45,
+          "net_ev_R": 0.334
+        },
+        "A": {
+          "win_rate": 63.64,
+          "n": 44,
+          "wins": 28,
+          "ci_lo": 48.87,
+          "ci_hi": 76.22,
+          "net_ev_R": 0.399
+        },
+        "B": {
+          "win_rate": 53.2,
+          "n": 250,
+          "wins": 133,
+          "ci_lo": 47.01,
+          "ci_hi": 59.29,
+          "net_ev_R": 0.12
+        },
+        "C": {
+          "win_rate": 47.81,
+          "n": 799,
+          "wins": 382,
+          "ci_lo": 44.36,
+          "ci_hi": 51.28,
+          "net_ev_R": 0.073
+        },
+        "D": {
+          "win_rate": 46.68,
+          "n": 782,
+          "wins": 365,
+          "ci_lo": 43.2,
+          "ci_hi": 50.18,
+          "net_ev_R": 0.261
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 58.01,
+          "n": 181,
+          "wins": 105,
+          "ci_lo": 50.73,
+          "ci_hi": 64.96,
+          "net_ev_R": 0.172
+        },
+        "A": {
+          "win_rate": 52.37,
+          "n": 718,
+          "wins": 376,
+          "ci_lo": 48.71,
+          "ci_hi": 56.0,
+          "net_ev_R": 0.181
+        },
+        "B": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": 44.31,
+          "n": 993,
+          "wins": 440,
+          "ci_lo": 41.25,
+          "ci_hi": 47.42,
+          "net_ev_R": 0.155
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          70.0
+        ],
+        [
+          "A",
+          60.0
+        ],
+        [
+          "B",
+          40.0
+        ],
+        [
+          "C",
+          20.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 41.75,
+          "train_miss_wr": 42.17,
+          "n_hit": 2412,
+          "n_miss": 434
+        },
+        "回调速度": {
+          "train_hit_wr": 42.72,
+          "train_miss_wr": 38.29,
+          "n_hit": 2261,
+          "n_miss": 585
+        },
+        "缺口宽度%": {
+          "train_hit_wr": 45.25,
+          "train_miss_wr": 40.96,
+          "n_hit": 568,
+          "n_miss": 2278
+        },
+        "连阴数": {
+          "train_hit_wr": 41.97,
+          "train_miss_wr": 39.91,
+          "n_hit": 2623,
+          "n_miss": 223
+        },
+        "时间衰减": {
+          "train_hit_wr": 41.81,
+          "train_miss_wr": null,
+          "n_hit": 2846,
+          "n_miss": 0
+        }
+      },
+      "year_strat_net": {
+        "2023": {
+          "win_rate": 44.19,
+          "n": 1455,
+          "ci_lo": 41.66,
+          "ci_hi": 46.76,
+          "net_ev_R": -0.162
+        },
+        "2024": {
+          "win_rate": 39.07,
+          "n": 1121,
+          "ci_lo": 36.26,
+          "ci_hi": 41.96,
+          "net_ev_R": -0.039
+        },
+        "2025": {
+          "win_rate": 49.08,
+          "n": 1461,
+          "ci_lo": 46.52,
+          "ci_hi": 51.64,
+          "net_ev_R": 0.223
+        },
+        "2026": {
+          "win_rate": 44.65,
+          "n": 701,
+          "ci_lo": 41.01,
+          "ci_hi": 48.35,
+          "net_ev_R": -0.034
+        }
+      }
+    },
+    "gap_pinbar_daily": {
+      "n_signals": 355,
+      "lifecycle_dist": {
+        "WIN": {
+          "n": 91,
+          "pct": 25.63
+        },
+        "LOSS": {
+          "n": 178,
+          "pct": 50.14
+        },
+        "INVALIDATED": {
+          "n": 78,
+          "pct": 21.97
+        },
+        "VOIDED": {
+          "n": 8,
+          "pct": 2.25
+        }
+      },
+      "regime_strat_net": {
+        "bull": {
+          "win_rate": 36.18,
+          "n": 152,
+          "ci_lo": 28.97,
+          "ci_hi": 44.08,
+          "net_ev_R": 0.095
+        },
+        "range": {
+          "win_rate": 30.77,
+          "n": 117,
+          "ci_lo": 23.13,
+          "ci_hi": 39.63,
+          "net_ev_R": -0.199
+        }
+      },
+      "n_traded": 269,
+      "train_date_cut": "2025-07-15",
+      "n_train": 162,
+      "n_test": 107,
+      "overall_net_win_rate": 33.83,
+      "overall_net_ev_R": -0.033,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 39.58,
+          "n": 96,
+          "wins": 38,
+          "ci_lo": 30.38,
+          "ci_hi": 49.59,
+          "net_ev_R": 0.155
+        },
+        "A": {
+          "win_rate": 23.53,
+          "n": 68,
+          "wins": 16,
+          "ci_lo": 15.03,
+          "ci_hi": 34.86,
+          "net_ev_R": -0.36
+        },
+        "B": {
+          "win_rate": 40.62,
+          "n": 32,
+          "wins": 13,
+          "ci_lo": 25.52,
+          "ci_hi": 57.74,
+          "net_ev_R": 0.297
+        },
+        "C": {
+          "win_rate": 32.88,
+          "n": 73,
+          "wins": 24,
+          "ci_lo": 23.19,
+          "ci_hi": 44.27,
+          "net_ev_R": -0.12
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 33.33,
+          "n": 6,
+          "wins": 2,
+          "ci_lo": 9.68,
+          "ci_hi": 70.0,
+          "net_ev_R": 0.275
+        },
+        "A": {
+          "win_rate": 34.62,
+          "n": 26,
+          "wins": 9,
+          "ci_lo": 19.41,
+          "ci_hi": 53.78,
+          "net_ev_R": -0.072
+        },
+        "B": {
+          "win_rate": 40.91,
+          "n": 22,
+          "wins": 9,
+          "ci_lo": 23.26,
+          "ci_hi": 61.27,
+          "net_ev_R": 0.442
+        },
+        "C": {
+          "win_rate": 28.3,
+          "n": 53,
+          "wins": 15,
+          "ci_lo": 17.97,
+          "ci_hi": 41.57,
+          "net_ev_R": -0.237
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 33.33,
+          "n": 6,
+          "wins": 2,
+          "ci_lo": 9.68,
+          "ci_hi": 70.0,
+          "net_ev_R": 0.275
+        },
+        "A": {
+          "win_rate": 34.62,
+          "n": 26,
+          "wins": 9,
+          "ci_lo": 19.41,
+          "ci_hi": 53.78,
+          "net_ev_R": -0.072
+        },
+        "B": {
+          "win_rate": 40.91,
+          "n": 22,
+          "wins": 9,
+          "ci_lo": 23.26,
+          "ci_hi": 61.27,
+          "net_ev_R": 0.442
+        },
+        "C": {
+          "win_rate": 28.3,
+          "n": 53,
+          "wins": 15,
+          "ci_lo": 17.97,
+          "ci_hi": 41.57,
+          "net_ev_R": -0.237
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 29.79,
+          "n": 47,
+          "wins": 14,
+          "ci_lo": 18.65,
+          "ci_hi": 43.98,
+          "net_ev_R": -0.199
+        },
+        "A": {
+          "win_rate": 38.64,
+          "n": 44,
+          "wins": 17,
+          "ci_lo": 25.72,
+          "ci_hi": 53.38,
+          "net_ev_R": 0.312
+        },
+        "B": {
+          "win_rate": 25.0,
+          "n": 16,
+          "wins": 4,
+          "ci_lo": 10.18,
+          "ci_hi": 49.5,
+          "net_ev_R": -0.462
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          95.0
+        ],
+        [
+          "A",
+          85.0
+        ],
+        [
+          "B",
+          65.0
+        ],
+        [
+          "C",
+          45.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 34.57,
+          "train_miss_wr": null,
+          "n_hit": 162,
+          "n_miss": 0
+        },
+        "回调速度": {
+          "train_hit_wr": 32.33,
+          "train_miss_wr": 44.83,
+          "n_hit": 133,
+          "n_miss": 29
+        },
+        "缺口宽度%": {
+          "train_hit_wr": 36.36,
+          "train_miss_wr": 34.11,
+          "n_hit": 33,
+          "n_miss": 129
+        },
+        "连阴数": {
+          "train_hit_wr": 33.33,
+          "train_miss_wr": 38.89,
+          "n_hit": 126,
+          "n_miss": 36
+        },
+        "时间衰减": {
+          "train_hit_wr": 34.57,
+          "train_miss_wr": null,
+          "n_hit": 162,
+          "n_miss": 0
+        },
+        "Pinbar下影比": {
+          "train_hit_wr": 34.57,
+          "train_miss_wr": null,
+          "n_hit": 162,
+          "n_miss": 0
+        },
+        "EMA20刺破回收": {
+          "train_hit_wr": 34.57,
+          "train_miss_wr": null,
+          "n_hit": 162,
+          "n_miss": 0
+        }
+      },
+      "year_strat_net": {
+        "2023": {
+          "win_rate": 32.5,
+          "n": 80,
+          "ci_lo": 23.24,
+          "ci_hi": 43.36,
+          "net_ev_R": -0.192
+        },
+        "2024": {
+          "win_rate": 37.88,
+          "n": 66,
+          "ci_lo": 27.15,
+          "ci_hi": 49.94,
+          "net_ev_R": 0.104
+        },
+        "2025": {
+          "win_rate": 34.88,
+          "n": 86,
+          "ci_lo": 25.65,
+          "ci_hi": 45.41,
+          "net_ev_R": 0.088
+        },
+        "2026": {
+          "win_rate": 27.03,
+          "n": 37,
+          "ci_lo": 15.4,
+          "ci_hi": 42.98,
+          "net_ev_R": -0.214
+        }
+      }
+    },
+    "gap_h2_daily": {
+      "n_signals": 3579,
+      "lifecycle_dist": {
+        "WIN": {
+          "n": 927,
+          "pct": 25.9
+        },
+        "LOSS": {
+          "n": 1282,
+          "pct": 35.82
+        },
+        "INVALIDATED": {
+          "n": 1298,
+          "pct": 36.27
+        },
+        "VOIDED": {
+          "n": 66,
+          "pct": 1.84
+        },
+        "TIMEOUT": {
+          "n": 5,
+          "pct": 0.14
+        },
+        "PENDING": {
+          "n": 1,
+          "pct": 0.03
+        }
+      },
+      "regime_strat_net": {
+        "bull": {
+          "win_rate": 43.42,
+          "n": 1306,
+          "ci_lo": 40.75,
+          "ci_hi": 46.12,
+          "net_ev_R": 0.208
+        },
+        "range": {
+          "win_rate": 39.87,
+          "n": 903,
+          "ci_lo": 36.72,
+          "ci_hi": 43.1,
+          "net_ev_R": -0.105
+        }
+      },
+      "n_traded": 2209,
+      "train_date_cut": "2025-04-15",
+      "n_train": 1326,
+      "n_test": 883,
+      "overall_net_win_rate": 41.96,
+      "overall_net_ev_R": 0.08,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 38.96,
+          "n": 77,
+          "wins": 30,
+          "ci_lo": 28.84,
+          "ci_hi": 50.13,
+          "net_ev_R": -0.014
+        },
+        "A": {
+          "win_rate": 44.39,
+          "n": 196,
+          "wins": 87,
+          "ci_lo": 37.61,
+          "ci_hi": 51.39,
+          "net_ev_R": -0.065
+        },
+        "B": {
+          "win_rate": 39.71,
+          "n": 680,
+          "wins": 270,
+          "ci_lo": 36.1,
+          "ci_hi": 43.43,
+          "net_ev_R": -0.066
+        },
+        "C": {
+          "win_rate": 42.44,
+          "n": 648,
+          "wins": 275,
+          "ci_lo": 38.69,
+          "ci_hi": 46.28,
+          "net_ev_R": 0.113
+        },
+        "D": {
+          "win_rate": 43.59,
+          "n": 608,
+          "wins": 265,
+          "ci_lo": 39.7,
+          "ci_hi": 47.56,
+          "net_ev_R": 0.265
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 66.67,
+          "n": 6,
+          "wins": 4,
+          "ci_lo": 30.0,
+          "ci_hi": 90.32,
+          "net_ev_R": 1.22
+        },
+        "A": {
+          "win_rate": 52.0,
+          "n": 25,
+          "wins": 13,
+          "ci_lo": 33.5,
+          "ci_hi": 69.97,
+          "net_ev_R": 0.017
+        },
+        "B": {
+          "win_rate": 42.86,
+          "n": 105,
+          "wins": 45,
+          "ci_lo": 33.81,
+          "ci_hi": 52.41,
+          "net_ev_R": 0.109
+        },
+        "C": {
+          "win_rate": 49.84,
+          "n": 321,
+          "wins": 160,
+          "ci_lo": 44.41,
+          "ci_hi": 55.28,
+          "net_ev_R": 0.255
+        },
+        "D": {
+          "win_rate": 48.59,
+          "n": 426,
+          "wins": 207,
+          "ci_lo": 43.88,
+          "ci_hi": 53.33,
+          "net_ev_R": 0.411
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 66.67,
+          "n": 6,
+          "wins": 4,
+          "ci_lo": 30.0,
+          "ci_hi": 90.32,
+          "net_ev_R": 1.22
+        },
+        "A": {
+          "win_rate": 52.0,
+          "n": 25,
+          "wins": 13,
+          "ci_lo": 33.5,
+          "ci_hi": 69.97,
+          "net_ev_R": 0.017
+        },
+        "B": {
+          "win_rate": 42.86,
+          "n": 105,
+          "wins": 45,
+          "ci_lo": 33.81,
+          "ci_hi": 52.41,
+          "net_ev_R": 0.109
+        },
+        "C": {
+          "win_rate": 49.84,
+          "n": 321,
+          "wins": 160,
+          "ci_lo": 44.41,
+          "ci_hi": 55.28,
+          "net_ev_R": 0.255
+        },
+        "D": {
+          "win_rate": 48.59,
+          "n": 426,
+          "wins": 207,
+          "ci_lo": 43.88,
+          "ci_hi": 53.33,
+          "net_ev_R": 0.411
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 54.22,
+          "n": 83,
+          "wins": 45,
+          "ci_lo": 43.55,
+          "ci_hi": 64.51,
+          "net_ev_R": 0.356
+        },
+        "A": {
+          "win_rate": 53.73,
+          "n": 134,
+          "wins": 72,
+          "ci_lo": 45.3,
+          "ci_hi": 61.95,
+          "net_ev_R": 0.495
+        },
+        "B": {
+          "win_rate": 50.99,
+          "n": 151,
+          "wins": 77,
+          "ci_lo": 43.09,
+          "ci_hi": 58.84,
+          "net_ev_R": 0.407
+        },
+        "C": {
+          "win_rate": 43.28,
+          "n": 201,
+          "wins": 87,
+          "ci_lo": 36.62,
+          "ci_hi": 50.2,
+          "net_ev_R": 0.165
+        },
+        "D": {
+          "win_rate": 47.13,
+          "n": 314,
+          "wins": 148,
+          "ci_lo": 41.68,
+          "ci_hi": 52.66,
+          "net_ev_R": 0.272
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          70.0
+        ],
+        [
+          "A",
+          50.0
+        ],
+        [
+          "B",
+          30.0
+        ],
+        [
+          "C",
+          20.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 36.92,
+          "train_miss_wr": 38.17,
+          "n_hit": 650,
+          "n_miss": 676
+        },
+        "回调速度": {
+          "train_hit_wr": 38.9,
+          "train_miss_wr": 32.21,
+          "n_hit": 1059,
+          "n_miss": 267
+        },
+        "缺口宽度%": {
+          "train_hit_wr": 41.7,
+          "train_miss_wr": 36.61,
+          "n_hit": 247,
+          "n_miss": 1079
+        },
+        "连阴数": {
+          "train_hit_wr": 37.52,
+          "train_miss_wr": 37.96,
+          "n_hit": 1218,
+          "n_miss": 108
+        },
+        "时间衰减": {
+          "train_hit_wr": 37.56,
+          "train_miss_wr": null,
+          "n_hit": 1326,
+          "n_miss": 0
+        },
+        "缺口全程存活": {
+          "train_hit_wr": 37.56,
+          "train_miss_wr": null,
+          "n_hit": 1326,
+          "n_miss": 0
+        },
+        "两腿对称性": {
+          "train_hit_wr": 34.67,
+          "train_miss_wr": 42.68,
+          "n_hit": 848,
+          "n_miss": 478
+        }
+      },
+      "year_strat_net": {
+        "2023": {
+          "win_rate": 37.56,
+          "n": 647,
+          "ci_lo": 33.91,
+          "ci_hi": 41.35,
+          "net_ev_R": -0.183
+        },
+        "2024": {
+          "win_rate": 38.62,
+          "n": 593,
+          "ci_lo": 34.78,
+          "ci_hi": 42.6,
+          "net_ev_R": 0.065
+        },
+        "2025": {
+          "win_rate": 47.41,
+          "n": 713,
+          "ci_lo": 43.76,
+          "ci_hi": 51.07,
+          "net_ev_R": 0.327
+        },
+        "2026": {
+          "win_rate": 45.7,
+          "n": 256,
+          "ci_lo": 39.71,
+          "ci_hi": 51.82,
+          "net_ev_R": 0.09
+        }
+      }
+    },
+    "mtr_daily": {
+      "n_signals": 89932,
+      "lifecycle_dist": {
+        "WIN": {
+          "n": 41505,
+          "pct": 46.15
+        },
+        "LOSS": {
+          "n": 44253,
+          "pct": 49.21
+        },
+        "INVALIDATED": {
+          "n": 2685,
+          "pct": 2.99
+        },
+        "HOLDING": {
+          "n": 1162,
+          "pct": 1.29
+        },
+        "PENDING": {
+          "n": 327,
+          "pct": 0.36
+        }
+      },
+      "regime_strat_net": {
+        "range": {
+          "win_rate": 34.28,
+          "n": 21590,
+          "ci_lo": 33.65,
+          "ci_hi": 34.92,
+          "net_ev_R": -0.271
+        },
+        "bull": {
+          "win_rate": 53.15,
+          "n": 64168,
+          "ci_lo": 52.76,
+          "ci_hi": 53.53,
+          "net_ev_R": 0.148
+        }
+      },
+      "n_traded": 85758,
+      "train_date_cut": "2025-06-30",
+      "n_train": 51929,
+      "n_test": 33829,
+      "overall_net_win_rate": 48.4,
+      "overall_net_ev_R": 0.042,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 49.61,
+          "n": 10238,
+          "wins": 5079,
+          "ci_lo": 48.64,
+          "ci_hi": 50.58,
+          "net_ev_R": 0.059
+        },
+        "A": {
+          "win_rate": 48.36,
+          "n": 27215,
+          "wins": 13162,
+          "ci_lo": 47.77,
+          "ci_hi": 48.96,
+          "net_ev_R": 0.034
+        },
+        "B": {
+          "win_rate": 48.81,
+          "n": 15408,
+          "wins": 7521,
+          "ci_lo": 48.02,
+          "ci_hi": 49.6,
+          "net_ev_R": 0.064
+        },
+        "C": {
+          "win_rate": 47.65,
+          "n": 21288,
+          "wins": 10143,
+          "ci_lo": 46.98,
+          "ci_hi": 48.32,
+          "net_ev_R": 0.031
+        },
+        "D": {
+          "win_rate": 48.24,
+          "n": 11609,
+          "wins": 5600,
+          "ci_lo": 47.33,
+          "ci_hi": 49.15,
+          "net_ev_R": 0.039
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 47.59,
+          "n": 4341,
+          "wins": 2066,
+          "ci_lo": 46.11,
+          "ci_hi": 49.08,
+          "net_ev_R": 0.019
+        },
+        "A": {
+          "win_rate": 48.23,
+          "n": 11057,
+          "wins": 5333,
+          "ci_lo": 47.3,
+          "ci_hi": 49.16,
+          "net_ev_R": 0.038
+        },
+        "B": {
+          "win_rate": 48.06,
+          "n": 5924,
+          "wins": 2847,
+          "ci_lo": 46.79,
+          "ci_hi": 49.33,
+          "net_ev_R": 0.066
+        },
+        "C": {
+          "win_rate": 47.4,
+          "n": 8057,
+          "wins": 3819,
+          "ci_lo": 46.31,
+          "ci_hi": 48.49,
+          "net_ev_R": 0.027
+        },
+        "D": {
+          "win_rate": 48.83,
+          "n": 4450,
+          "wins": 2173,
+          "ci_lo": 47.36,
+          "ci_hi": 50.3,
+          "net_ev_R": 0.078
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 47.68,
+          "n": 4341,
+          "wins": 2070,
+          "ci_lo": 46.2,
+          "ci_hi": 49.17,
+          "net_ev_R": 0.019
+        },
+        "A": {
+          "win_rate": 48.45,
+          "n": 11057,
+          "wins": 5357,
+          "ci_lo": 47.52,
+          "ci_hi": 49.38,
+          "net_ev_R": 0.038
+        },
+        "B": {
+          "win_rate": 48.24,
+          "n": 5924,
+          "wins": 2858,
+          "ci_lo": 46.97,
+          "ci_hi": 49.52,
+          "net_ev_R": 0.066
+        },
+        "C": {
+          "win_rate": 47.66,
+          "n": 8057,
+          "wins": 3840,
+          "ci_lo": 46.57,
+          "ci_hi": 48.75,
+          "net_ev_R": 0.027
+        },
+        "D": {
+          "win_rate": 49.03,
+          "n": 4450,
+          "wins": 2182,
+          "ci_lo": 47.57,
+          "ci_hi": 50.5,
+          "net_ev_R": 0.078
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 48.0,
+          "n": 33829,
+          "wins": 16238,
+          "ci_lo": 47.47,
+          "ci_hi": 48.53,
+          "net_ev_R": 0.043
+        },
+        "A": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "B": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          70.0
+        ],
+        [
+          "A",
+          65.0
+        ],
+        [
+          "B",
+          61.0
+        ],
+        [
+          "C",
+          56.0
+        ]
+      ],
+      "factor_stats_train": {
+        "七维综合评分": {
+          "train_hit_wr": 48.66,
+          "train_miss_wr": null,
+          "n_hit": 51929,
+          "n_miss": 0
+        }
+      },
+      "year_strat_net": {
+        "2023": {
+          "win_rate": 34.85,
+          "n": 8563,
+          "ci_lo": 33.85,
+          "ci_hi": 35.86,
+          "net_ev_R": -0.262
+        },
+        "2024": {
+          "win_rate": 42.12,
+          "n": 23768,
+          "ci_lo": 41.49,
+          "ci_hi": 42.74,
+          "net_ev_R": -0.004
+        },
+        "2025": {
+          "win_rate": 59.64,
+          "n": 40400,
+          "ci_lo": 59.16,
+          "ci_hi": 60.12,
+          "net_ev_R": 0.237
+        },
+        "2026": {
+          "win_rate": 33.91,
+          "n": 13027,
+          "ci_lo": 33.1,
+          "ci_hi": 34.72,
+          "net_ev_R": -0.277
+        }
+      }
+    },
+    "three_k_daily": {
+      "n_signals": 443,
+      "lifecycle_dist": {
+        "WIN": {
+          "n": 213,
+          "pct": 48.08
+        },
+        "LOSS": {
+          "n": 185,
+          "pct": 41.76
+        },
+        "INVALIDATED": {
+          "n": 45,
+          "pct": 10.16
+        }
+      },
+      "regime_strat_net": {
+        "range": {
+          "win_rate": 50.33,
+          "n": 151,
+          "ci_lo": 42.45,
+          "ci_hi": 58.2,
+          "net_ev_R": -0.081
+        },
+        "bull": {
+          "win_rate": 55.47,
+          "n": 247,
+          "ci_lo": 49.23,
+          "ci_hi": 61.53,
+          "net_ev_R": 0.142
+        }
+      },
+      "n_traded": 398,
+      "train_date_cut": "2025-06-24",
+      "n_train": 240,
+      "n_test": 158,
+      "overall_net_win_rate": 53.52,
+      "overall_net_ev_R": 0.057,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 52.41,
+          "n": 374,
+          "wins": 196,
+          "ci_lo": 47.35,
+          "ci_hi": 57.42,
+          "net_ev_R": 0.049
+        },
+        "A": {
+          "win_rate": 68.18,
+          "n": 22,
+          "wins": 15,
+          "ci_lo": 47.32,
+          "ci_hi": 83.64,
+          "net_ev_R": 0.194
+        },
+        "B": {
+          "win_rate": 100.0,
+          "n": 2,
+          "wins": 2,
+          "ci_lo": 34.24,
+          "ci_hi": 100.0,
+          "net_ev_R": 0.091
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 56.76,
+          "n": 148,
+          "wins": 84,
+          "ci_lo": 48.7,
+          "ci_hi": 64.47,
+          "net_ev_R": 0.191
+        },
+        "A": {
+          "win_rate": 70.0,
+          "n": 10,
+          "wins": 7,
+          "ci_lo": 39.68,
+          "ci_hi": 89.22,
+          "net_ev_R": 0.317
+        },
+        "B": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 56.76,
+          "n": 148,
+          "wins": 84,
+          "ci_lo": 48.7,
+          "ci_hi": 64.47,
+          "net_ev_R": 0.191
+        },
+        "A": {
+          "win_rate": 70.0,
+          "n": 10,
+          "wins": 7,
+          "ci_lo": 39.68,
+          "ci_hi": 89.22,
+          "net_ev_R": 0.317
+        },
+        "B": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 69.57,
+          "n": 46,
+          "wins": 32,
+          "ci_lo": 55.19,
+          "ci_hi": 80.92,
+          "net_ev_R": 0.112
+        },
+        "A": {
+          "win_rate": 60.0,
+          "n": 65,
+          "wins": 39,
+          "ci_lo": 47.86,
+          "ci_hi": 71.03,
+          "net_ev_R": 0.108
+        },
+        "B": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "C": {
+          "win_rate": 41.86,
+          "n": 43,
+          "wins": 18,
+          "ci_lo": 28.38,
+          "ci_hi": 56.67,
+          "net_ev_R": 0.357
+        },
+        "D": {
+          "win_rate": 50.0,
+          "n": 4,
+          "wins": 2,
+          "ci_lo": 15.0,
+          "ci_hi": 85.0,
+          "net_ev_R": 0.979
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          100.0
+        ],
+        [
+          "A",
+          100.0
+        ],
+        [
+          "B",
+          100.0
+        ],
+        [
+          "C",
+          88.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 50.0,
+          "train_miss_wr": 51.04,
+          "n_hit": 48,
+          "n_miss": 192
+        },
+        "缺口保持开放": {
+          "train_hit_wr": 50.83,
+          "train_miss_wr": null,
+          "n_hit": 240,
+          "n_miss": 0
+        },
+        "陷阱过滤通过": {
+          "train_hit_wr": 49.11,
+          "train_miss_wr": 75.0,
+          "n_hit": 224,
+          "n_miss": 16
+        },
+        "非买入高潮": {
+          "train_hit_wr": 49.74,
+          "train_miss_wr": 55.32,
+          "n_hit": 193,
+          "n_miss": 47
+        },
+        "三连阳动能": {
+          "train_hit_wr": 50.0,
+          "train_miss_wr": 50.89,
+          "n_hit": 16,
+          "n_miss": 224
+        },
+        "盈亏比RR": {
+          "train_hit_wr": 22.41,
+          "train_miss_wr": 59.89,
+          "n_hit": 58,
+          "n_miss": 182
+        }
+      },
+      "year_strat_net": {
+        "2023": {
+          "win_rate": 53.01,
+          "n": 83,
+          "ci_lo": 42.38,
+          "ci_hi": 63.38,
+          "net_ev_R": -0.065
+        },
+        "2024": {
+          "win_rate": 46.61,
+          "n": 118,
+          "ci_lo": 37.86,
+          "ci_hi": 55.58,
+          "net_ev_R": -0.066
+        },
+        "2025": {
+          "win_rate": 63.57,
+          "n": 129,
+          "ci_lo": 54.98,
+          "ci_hi": 71.37,
+          "net_ev_R": 0.333
+        },
+        "2026": {
+          "win_rate": 47.06,
+          "n": 68,
+          "ci_lo": 35.67,
+          "ci_hi": 58.76,
+          "net_ev_R": -0.101
+        }
+      }
+    },
+    "awil_daily": {
+      "n_signals": 544,
+      "lifecycle_dist": {
+        "LOSS": {
+          "n": 331,
+          "pct": 60.85
+        },
+        "WIN": {
+          "n": 189,
+          "pct": 34.74
+        },
+        "HOLDING": {
+          "n": 2,
+          "pct": 0.37
+        },
+        "INVALIDATED": {
+          "n": 22,
+          "pct": 4.04
+        }
+      },
+      "regime_strat_net": {
+        "bull": {
+          "win_rate": 39.44,
+          "n": 360,
+          "ci_lo": 34.53,
+          "ci_hi": 44.58,
+          "net_ev_R": 0.039
+        },
+        "range": {
+          "win_rate": 29.38,
+          "n": 160,
+          "ci_lo": 22.87,
+          "ci_hi": 36.85,
+          "net_ev_R": -0.255
+        }
+      },
+      "n_traded": 520,
+      "train_date_cut": "2025-03-04",
+      "n_train": 313,
+      "n_test": 207,
+      "overall_net_win_rate": 36.35,
+      "overall_net_ev_R": -0.052,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 37.93,
+          "n": 348,
+          "wins": 132,
+          "ci_lo": 32.99,
+          "ci_hi": 43.13,
+          "net_ev_R": -0.009
+        },
+        "A": {
+          "win_rate": 30.3,
+          "n": 132,
+          "wins": 40,
+          "ci_lo": 23.11,
+          "ci_hi": 38.61,
+          "net_ev_R": -0.218
+        },
+        "B": {
+          "win_rate": 42.5,
+          "n": 40,
+          "wins": 17,
+          "ci_lo": 28.51,
+          "ci_hi": 57.81,
+          "net_ev_R": 0.128
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 39.72,
+          "n": 141,
+          "wins": 56,
+          "ci_lo": 32.02,
+          "ci_hi": 47.96,
+          "net_ev_R": 0.016
+        },
+        "A": {
+          "win_rate": 39.13,
+          "n": 46,
+          "wins": 18,
+          "ci_lo": 26.39,
+          "ci_hi": 53.54,
+          "net_ev_R": 0.012
+        },
+        "B": {
+          "win_rate": 35.0,
+          "n": 20,
+          "wins": 7,
+          "ci_lo": 18.12,
+          "ci_hi": 56.71,
+          "net_ev_R": -0.131
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 39.72,
+          "n": 141,
+          "wins": 56,
+          "ci_lo": 32.02,
+          "ci_hi": 47.96,
+          "net_ev_R": 0.016
+        },
+        "A": {
+          "win_rate": 39.13,
+          "n": 46,
+          "wins": 18,
+          "ci_lo": 26.39,
+          "ci_hi": 53.54,
+          "net_ev_R": 0.012
+        },
+        "B": {
+          "win_rate": 35.0,
+          "n": 20,
+          "wins": 7,
+          "ci_lo": 18.12,
+          "ci_hi": 56.71,
+          "net_ev_R": -0.131
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 50.0,
+          "n": 20,
+          "wins": 10,
+          "ci_lo": 29.93,
+          "ci_hi": 70.07,
+          "net_ev_R": 0.353
+        },
+        "A": {
+          "win_rate": 35.29,
+          "n": 34,
+          "wins": 12,
+          "ci_lo": 21.49,
+          "ci_hi": 52.09,
+          "net_ev_R": -0.068
+        },
+        "B": {
+          "win_rate": 34.85,
+          "n": 66,
+          "wins": 23,
+          "ci_lo": 24.48,
+          "ci_hi": 46.89,
+          "net_ev_R": -0.122
+        },
+        "C": {
+          "win_rate": 41.38,
+          "n": 87,
+          "wins": 36,
+          "ci_lo": 31.61,
+          "ci_hi": 51.88,
+          "net_ev_R": 0.041
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          94.0
+        ],
+        [
+          "A",
+          88.0
+        ],
+        [
+          "B",
+          82.0
+        ],
+        [
+          "C",
+          76.0
+        ]
+      ],
+      "factor_stats_train": {
+        "实体占比": {
+          "train_hit_wr": 34.44,
+          "train_miss_wr": 36.36,
+          "n_hit": 302,
+          "n_miss": 11
+        },
+        "回调速度": {
+          "train_hit_wr": 32.48,
+          "train_miss_wr": 40.51,
+          "n_hit": 234,
+          "n_miss": 79
+        },
+        "EMA磁力距离": {
+          "train_hit_wr": 34.29,
+          "train_miss_wr": 100.0,
+          "n_hit": 312,
+          "n_miss": 1
+        },
+        "回撤深度": {
+          "train_hit_wr": 34.52,
+          "train_miss_wr": 33.33,
+          "n_hit": 310,
+          "n_miss": 3
+        },
+        "两腿对称性": {
+          "train_hit_wr": 36.55,
+          "train_miss_wr": 32.74,
+          "n_hit": 145,
+          "n_miss": 168
+        },
+        "下影支撑回收": {
+          "train_hit_wr": 34.85,
+          "train_miss_wr": 34.41,
+          "n_hit": 66,
+          "n_miss": 247
+        }
+      },
+      "year_strat_net": {
+        "2023": {
+          "win_rate": 28.89,
+          "n": 90,
+          "ci_lo": 20.54,
+          "ci_hi": 38.96,
+          "net_ev_R": -0.268
+        },
+        "2024": {
+          "win_rate": 36.49,
+          "n": 211,
+          "ci_lo": 30.29,
+          "ci_hi": 43.18,
+          "net_ev_R": -0.024
+        },
+        "2025": {
+          "win_rate": 43.62,
+          "n": 149,
+          "ci_lo": 35.92,
+          "ci_hi": 51.65,
+          "net_ev_R": 0.128
+        },
+        "2026": {
+          "win_rate": 30.0,
+          "n": 70,
+          "ci_lo": 20.54,
+          "ci_hi": 41.54,
+          "net_ev_R": -0.239
+        }
+      }
+    },
+    "structural_gap_weekly": {
+      "n_signals": 5249,
+      "lifecycle_dist": {
+        "LOSS": {
+          "n": 1555,
+          "pct": 29.62
+        },
+        "WIN": {
+          "n": 2189,
+          "pct": 41.7
+        },
+        "VOIDED": {
+          "n": 584,
+          "pct": 11.13
+        },
+        "INVALIDATED": {
+          "n": 902,
+          "pct": 17.18
+        },
+        "TIMEOUT": {
+          "n": 9,
+          "pct": 0.17
+        },
+        "HOLDING": {
+          "n": 9,
+          "pct": 0.17
+        },
+        "PENDING": {
+          "n": 1,
+          "pct": 0.02
+        }
+      },
+      "regime_strat_net": {
+        "bull": {
+          "win_rate": 62.63,
+          "n": 3096,
+          "ci_lo": 60.91,
+          "ci_hi": 64.32,
+          "net_ev_R": 0.392
+        },
+        "bear": {
+          "win_rate": 29.56,
+          "n": 159,
+          "ci_lo": 23.02,
+          "ci_hi": 37.07,
+          "net_ev_R": -0.452
+        },
+        "range": {
+          "win_rate": 41.51,
+          "n": 489,
+          "ci_lo": 37.23,
+          "ci_hi": 45.93,
+          "net_ev_R": -0.079
+        }
+      },
+      "n_traded": 3744,
+      "train_date_cut": "2019-09-06",
+      "n_train": 2251,
+      "n_test": 1493,
+      "overall_net_win_rate": 58.47,
+      "overall_net_ev_R": 0.295,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 70.97,
+          "n": 658,
+          "wins": 467,
+          "ci_lo": 67.39,
+          "ci_hi": 74.31,
+          "net_ev_R": 0.253
+        },
+        "A": {
+          "win_rate": 63.61,
+          "n": 643,
+          "wins": 409,
+          "ci_lo": 59.82,
+          "ci_hi": 67.24,
+          "net_ev_R": 0.379
+        },
+        "B": {
+          "win_rate": 60.06,
+          "n": 1302,
+          "wins": 782,
+          "ci_lo": 57.38,
+          "ci_hi": 62.69,
+          "net_ev_R": 0.389
+        },
+        "C": {
+          "win_rate": 47.26,
+          "n": 766,
+          "wins": 362,
+          "ci_lo": 43.75,
+          "ci_hi": 50.8,
+          "net_ev_R": 0.146
+        },
+        "D": {
+          "win_rate": 45.07,
+          "n": 375,
+          "wins": 169,
+          "ci_lo": 40.11,
+          "ci_hi": 50.13,
+          "net_ev_R": 0.198
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 63.56,
+          "n": 118,
+          "wins": 75,
+          "ci_lo": 54.58,
+          "ci_hi": 71.69,
+          "net_ev_R": 0.047
+        },
+        "A": {
+          "win_rate": 49.12,
+          "n": 114,
+          "wins": 56,
+          "ci_lo": 40.13,
+          "ci_hi": 58.18,
+          "net_ev_R": -0.04
+        },
+        "B": {
+          "win_rate": 48.12,
+          "n": 451,
+          "wins": 217,
+          "ci_lo": 43.54,
+          "ci_hi": 52.72,
+          "net_ev_R": 0.062
+        },
+        "C": {
+          "win_rate": 43.34,
+          "n": 503,
+          "wins": 218,
+          "ci_lo": 39.08,
+          "ci_hi": 47.7,
+          "net_ev_R": 0.016
+        },
+        "D": {
+          "win_rate": 43.97,
+          "n": 307,
+          "wins": 135,
+          "ci_lo": 38.53,
+          "ci_hi": 49.57,
+          "net_ev_R": 0.167
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 63.56,
+          "n": 118,
+          "wins": 75,
+          "ci_lo": 54.58,
+          "ci_hi": 71.69,
+          "net_ev_R": 0.047
+        },
+        "A": {
+          "win_rate": 49.12,
+          "n": 114,
+          "wins": 56,
+          "ci_lo": 40.13,
+          "ci_hi": 58.18,
+          "net_ev_R": -0.04
+        },
+        "B": {
+          "win_rate": 48.12,
+          "n": 451,
+          "wins": 217,
+          "ci_lo": 43.54,
+          "ci_hi": 52.72,
+          "net_ev_R": 0.062
+        },
+        "C": {
+          "win_rate": 43.34,
+          "n": 503,
+          "wins": 218,
+          "ci_lo": 39.08,
+          "ci_hi": 47.7,
+          "net_ev_R": 0.016
+        },
+        "D": {
+          "win_rate": 43.97,
+          "n": 307,
+          "wins": 135,
+          "ci_lo": 38.53,
+          "ci_hi": 49.57,
+          "net_ev_R": 0.167
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 55.9,
+          "n": 322,
+          "wins": 180,
+          "ci_lo": 50.44,
+          "ci_hi": 61.22,
+          "net_ev_R": 0.036
+        },
+        "A": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "B": {
+          "win_rate": 46.88,
+          "n": 337,
+          "wins": 158,
+          "ci_lo": 41.62,
+          "ci_hi": 52.22,
+          "net_ev_R": 0.07
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": 43.53,
+          "n": 834,
+          "wins": 363,
+          "ci_lo": 40.2,
+          "ci_hi": 46.91,
+          "net_ev_R": 0.064
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          80.0
+        ],
+        [
+          "A",
+          70.0
+        ],
+        [
+          "B",
+          50.0
+        ],
+        [
+          "C",
+          40.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 65.59,
+          "train_miss_wr": 68.5,
+          "n_hit": 1851,
+          "n_miss": 400
+        },
+        "回调速度": {
+          "train_hit_wr": 67.59,
+          "train_miss_wr": 49.46,
+          "n_hit": 2067,
+          "n_miss": 184
+        },
+        "缺口宽度%": {
+          "train_hit_wr": 68.86,
+          "train_miss_wr": 63.03,
+          "n_hit": 1188,
+          "n_miss": 1063
+        },
+        "连阴数": {
+          "train_hit_wr": 66.54,
+          "train_miss_wr": 53.85,
+          "n_hit": 2173,
+          "n_miss": 78
+        },
+        "时间衰减": {
+          "train_hit_wr": 66.1,
+          "train_miss_wr": null,
+          "n_hit": 2251,
+          "n_miss": 0
+        }
+      },
+      "year_strat_net": {
+        "2011": {
+          "win_rate": 22.22,
+          "n": 9,
+          "ci_lo": 6.32,
+          "ci_hi": 54.74,
+          "net_ev_R": -0.726
+        },
+        "2012": {
+          "win_rate": 54.17,
+          "n": 24,
+          "ci_lo": 35.07,
+          "ci_hi": 72.11,
+          "net_ev_R": 0.065
+        },
+        "2013": {
+          "win_rate": 50.8,
+          "n": 187,
+          "ci_lo": 43.69,
+          "ci_hi": 57.88,
+          "net_ev_R": -0.004
+        },
+        "2014": {
+          "win_rate": 65.56,
+          "n": 601,
+          "ci_lo": 61.67,
+          "ci_hi": 69.25,
+          "net_ev_R": 0.519
+        },
+        "2015": {
+          "win_rate": 76.62,
+          "n": 1082,
+          "ci_lo": 74.0,
+          "ci_hi": 79.04,
+          "net_ev_R": 0.633
+        },
+        "2016": {
+          "win_rate": 34.78,
+          "n": 46,
+          "ci_lo": 22.68,
+          "ci_hi": 49.23,
+          "net_ev_R": -0.262
+        },
+        "2017": {
+          "win_rate": 51.83,
+          "n": 191,
+          "ci_lo": 44.78,
+          "ci_hi": 58.81,
+          "net_ev_R": 0.271
+        },
+        "2018": {
+          "win_rate": 16.22,
+          "n": 37,
+          "ci_lo": 7.65,
+          "ci_hi": 31.14,
+          "net_ev_R": -0.72
+        },
+        "2019": {
+          "win_rate": 48.8,
+          "n": 125,
+          "ci_lo": 40.2,
+          "ci_hi": 57.47,
+          "net_ev_R": 0.233
+        },
+        "2020": {
+          "win_rate": 60.43,
+          "n": 369,
+          "ci_lo": 55.36,
+          "ci_hi": 65.29,
+          "net_ev_R": 0.494
+        },
+        "2021": {
+          "win_rate": 37.6,
+          "n": 258,
+          "ci_lo": 31.91,
+          "ci_hi": 43.65,
+          "net_ev_R": -0.295
+        },
+        "2022": {
+          "win_rate": 23.26,
+          "n": 43,
+          "ci_lo": 13.15,
+          "ci_hi": 37.74,
+          "net_ev_R": -0.654
+        },
+        "2023": {
+          "win_rate": 24.71,
+          "n": 85,
+          "ci_lo": 16.76,
+          "ci_hi": 34.83,
+          "net_ev_R": -0.528
+        },
+        "2024": {
+          "win_rate": 38.28,
+          "n": 128,
+          "ci_lo": 30.32,
+          "ci_hi": 46.93,
+          "net_ev_R": -0.093
+        },
+        "2025": {
+          "win_rate": 55.2,
+          "n": 346,
+          "ci_lo": 49.93,
+          "ci_hi": 60.36,
+          "net_ev_R": 0.269
+        },
+        "2026": {
+          "win_rate": 38.97,
+          "n": 213,
+          "ci_lo": 32.67,
+          "ci_hi": 45.66,
+          "net_ev_R": -0.213
+        }
+      }
+    },
+    "gap_pinbar_weekly": {
+      "n_signals": 175,
+      "lifecycle_dist": {
+        "LOSS": {
+          "n": 64,
+          "pct": 36.57
+        },
+        "WIN": {
+          "n": 62,
+          "pct": 35.43
+        },
+        "VOIDED": {
+          "n": 4,
+          "pct": 2.29
+        },
+        "INVALIDATED": {
+          "n": 44,
+          "pct": 25.14
+        },
+        "HOLDING": {
+          "n": 1,
+          "pct": 0.57
+        }
+      },
+      "regime_strat_net": {
+        "bear": {
+          "win_rate": 15.38,
+          "n": 13,
+          "ci_lo": 4.33,
+          "ci_hi": 42.24,
+          "net_ev_R": -0.275
+        },
+        "bull": {
+          "win_rate": 56.52,
+          "n": 92,
+          "ci_lo": 46.33,
+          "ci_hi": 66.19,
+          "net_ev_R": 0.664
+        },
+        "range": {
+          "win_rate": 38.1,
+          "n": 21,
+          "ci_lo": 20.75,
+          "ci_hi": 59.12,
+          "net_ev_R": 0.151
+        }
+      },
+      "n_traded": 126,
+      "train_date_cut": "2020-08-14",
+      "n_train": 76,
+      "n_test": 50,
+      "overall_net_win_rate": 49.21,
+      "overall_net_ev_R": 0.482,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 55.41,
+          "n": 74,
+          "wins": 41,
+          "ci_lo": 44.09,
+          "ci_hi": 66.18,
+          "net_ev_R": 0.475
+        },
+        "A": {
+          "win_rate": 37.93,
+          "n": 29,
+          "wins": 11,
+          "ci_lo": 22.69,
+          "ci_hi": 56.0,
+          "net_ev_R": 0.339
+        },
+        "B": {
+          "win_rate": 44.44,
+          "n": 9,
+          "wins": 4,
+          "ci_lo": 18.88,
+          "ci_hi": 73.34,
+          "net_ev_R": 0.234
+        },
+        "C": {
+          "win_rate": 42.86,
+          "n": 14,
+          "wins": 6,
+          "ci_lo": 21.38,
+          "ci_hi": 67.41,
+          "net_ev_R": 0.971
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 50.0,
+          "n": 22,
+          "wins": 11,
+          "ci_lo": 30.72,
+          "ci_hi": 69.28,
+          "net_ev_R": 0.566
+        },
+        "A": {
+          "win_rate": 23.08,
+          "n": 13,
+          "wins": 3,
+          "ci_lo": 8.18,
+          "ci_hi": 50.26,
+          "net_ev_R": -0.062
+        },
+        "B": {
+          "win_rate": 33.33,
+          "n": 6,
+          "wins": 2,
+          "ci_lo": 9.68,
+          "ci_hi": 70.0,
+          "net_ev_R": 0.08
+        },
+        "C": {
+          "win_rate": 44.44,
+          "n": 9,
+          "wins": 4,
+          "ci_lo": 18.88,
+          "ci_hi": 73.34,
+          "net_ev_R": 1.175
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 50.0,
+          "n": 22,
+          "wins": 11,
+          "ci_lo": 30.72,
+          "ci_hi": 69.28,
+          "net_ev_R": 0.566
+        },
+        "A": {
+          "win_rate": 23.08,
+          "n": 13,
+          "wins": 3,
+          "ci_lo": 8.18,
+          "ci_hi": 50.26,
+          "net_ev_R": -0.062
+        },
+        "B": {
+          "win_rate": 33.33,
+          "n": 6,
+          "wins": 2,
+          "ci_lo": 9.68,
+          "ci_hi": 70.0,
+          "net_ev_R": 0.08
+        },
+        "C": {
+          "win_rate": 44.44,
+          "n": 9,
+          "wins": 4,
+          "ci_lo": 18.88,
+          "ci_hi": 73.34,
+          "net_ev_R": 1.175
+        },
+        "D": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 40.0,
+          "n": 15,
+          "wins": 6,
+          "ci_lo": 19.82,
+          "ci_hi": 64.25,
+          "net_ev_R": 0.451
+        },
+        "A": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "B": {
+          "win_rate": 53.33,
+          "n": 15,
+          "wins": 8,
+          "ci_lo": 30.12,
+          "ci_hi": 75.19,
+          "net_ev_R": 0.788
+        },
+        "C": {
+          "win_rate": null,
+          "n": 0,
+          "wins": 0,
+          "ci_lo": null,
+          "ci_hi": null,
+          "net_ev_R": null
+        },
+        "D": {
+          "win_rate": 30.0,
+          "n": 20,
+          "wins": 6,
+          "ci_lo": 14.55,
+          "ci_hi": 51.9,
+          "net_ev_R": 0.205
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          95.0
+        ],
+        [
+          "A",
+          85.0
+        ],
+        [
+          "B",
+          85.0
+        ],
+        [
+          "C",
+          55.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 55.26,
+          "train_miss_wr": null,
+          "n_hit": 76,
+          "n_miss": 0
+        },
+        "回调速度": {
+          "train_hit_wr": 58.21,
+          "train_miss_wr": 33.33,
+          "n_hit": 67,
+          "n_miss": 9
+        },
+        "缺口宽度%": {
+          "train_hit_wr": 46.88,
+          "train_miss_wr": 61.36,
+          "n_hit": 32,
+          "n_miss": 44
+        },
+        "连阴数": {
+          "train_hit_wr": 54.55,
+          "train_miss_wr": 60.0,
+          "n_hit": 66,
+          "n_miss": 10
+        },
+        "时间衰减": {
+          "train_hit_wr": 55.26,
+          "train_miss_wr": null,
+          "n_hit": 76,
+          "n_miss": 0
+        },
+        "Pinbar下影比": {
+          "train_hit_wr": 55.26,
+          "train_miss_wr": null,
+          "n_hit": 76,
+          "n_miss": 0
+        },
+        "EMA20刺破回收": {
+          "train_hit_wr": 55.26,
+          "train_miss_wr": null,
+          "n_hit": 76,
+          "n_miss": 0
+        }
+      },
+      "year_strat_net": {
+        "2012": {
+          "win_rate": 25.0,
+          "n": 4,
+          "ci_lo": 4.56,
+          "ci_hi": 69.94,
+          "net_ev_R": -0.181
+        },
+        "2013": {
+          "win_rate": 25.0,
+          "n": 4,
+          "ci_lo": 4.56,
+          "ci_hi": 69.94,
+          "net_ev_R": -0.266
+        },
+        "2014": {
+          "win_rate": 61.29,
+          "n": 31,
+          "ci_lo": 43.82,
+          "ci_hi": 76.27,
+          "net_ev_R": 0.459
+        },
+        "2015": {
+          "win_rate": 92.86,
+          "n": 14,
+          "ci_lo": 68.53,
+          "ci_hi": 98.73,
+          "net_ev_R": 1.41
+        },
+        "2016": {
+          "win_rate": 25.0,
+          "n": 4,
+          "ci_lo": 4.56,
+          "ci_hi": 69.94,
+          "net_ev_R": 0.546
+        },
+        "2017": {
+          "win_rate": 22.22,
+          "n": 9,
+          "ci_lo": 6.32,
+          "ci_hi": 54.74,
+          "net_ev_R": -0.519
+        },
+        "2018": {
+          "win_rate": 0.0,
+          "n": 2,
+          "ci_lo": 0.0,
+          "ci_hi": 65.76,
+          "net_ev_R": -1.007
+        },
+        "2019": {
+          "win_rate": 100.0,
+          "n": 4,
+          "ci_lo": 51.01,
+          "ci_hi": 100.0,
+          "net_ev_R": 3.07
+        },
+        "2020": {
+          "win_rate": 40.0,
+          "n": 10,
+          "ci_lo": 16.82,
+          "ci_hi": 68.73,
+          "net_ev_R": 0.348
+        },
+        "2021": {
+          "win_rate": 25.0,
+          "n": 12,
+          "ci_lo": 8.89,
+          "ci_hi": 53.23,
+          "net_ev_R": -0.148
+        },
+        "2022": {
+          "win_rate": 0.0,
+          "n": 3,
+          "ci_lo": 0.0,
+          "ci_hi": 56.15,
+          "net_ev_R": -1.007
+        },
+        "2023": {
+          "win_rate": 33.33,
+          "n": 3,
+          "ci_lo": 6.15,
+          "ci_hi": 79.23,
+          "net_ev_R": 0.526
+        },
+        "2024": {
+          "win_rate": 60.0,
+          "n": 5,
+          "ci_lo": 23.07,
+          "ci_hi": 88.24,
+          "net_ev_R": 2.352
+        },
+        "2025": {
+          "win_rate": 41.67,
+          "n": 12,
+          "ci_lo": 19.33,
+          "ci_hi": 68.05,
+          "net_ev_R": 0.201
+        },
+        "2026": {
+          "win_rate": 55.56,
+          "n": 9,
+          "ci_lo": 26.66,
+          "ci_hi": 81.12,
+          "net_ev_R": 0.695
+        }
+      }
+    },
+    "gap_h2_weekly": {
+      "n_signals": 2048,
+      "lifecycle_dist": {
+        "WIN": {
+          "n": 683,
+          "pct": 33.35
+        },
+        "LOSS": {
+          "n": 557,
+          "pct": 27.2
+        },
+        "INVALIDATED": {
+          "n": 728,
+          "pct": 35.55
+        },
+        "VOIDED": {
+          "n": 76,
+          "pct": 3.71
+        },
+        "PENDING": {
+          "n": 1,
+          "pct": 0.05
+        },
+        "HOLDING": {
+          "n": 3,
+          "pct": 0.15
+        }
+      },
+      "regime_strat_net": {
+        "bull": {
+          "win_rate": 60.02,
+          "n": 998,
+          "ci_lo": 56.95,
+          "ci_hi": 63.02,
+          "net_ev_R": 0.518
+        },
+        "bear": {
+          "win_rate": 29.17,
+          "n": 72,
+          "ci_lo": 19.94,
+          "ci_hi": 40.51,
+          "net_ev_R": -0.359
+        },
+        "range": {
+          "win_rate": 37.06,
+          "n": 170,
+          "ci_lo": 30.16,
+          "ci_hi": 44.53,
+          "net_ev_R": -0.111
+        }
+      },
+      "n_traded": 1240,
+      "train_date_cut": "2020-07-24",
+      "n_train": 745,
+      "n_test": 495,
+      "overall_net_win_rate": 55.08,
+      "overall_net_ev_R": 0.381,
+      "risk_mult": 2.0,
+      "full_sample_letter_net": {
+        "A+": {
+          "win_rate": 64.56,
+          "n": 158,
+          "wins": 102,
+          "ci_lo": 56.83,
+          "ci_hi": 71.59,
+          "net_ev_R": 0.38
+        },
+        "A": {
+          "win_rate": 58.74,
+          "n": 143,
+          "wins": 84,
+          "ci_lo": 50.55,
+          "ci_hi": 66.48,
+          "net_ev_R": 0.373
+        },
+        "B": {
+          "win_rate": 60.61,
+          "n": 490,
+          "wins": 297,
+          "ci_lo": 56.22,
+          "ci_hi": 64.84,
+          "net_ev_R": 0.557
+        },
+        "C": {
+          "win_rate": 47.76,
+          "n": 268,
+          "wins": 128,
+          "ci_lo": 41.85,
+          "ci_hi": 53.73,
+          "net_ev_R": 0.267
+        },
+        "D": {
+          "win_rate": 39.78,
+          "n": 181,
+          "wins": 72,
+          "ci_lo": 32.93,
+          "ci_hi": 47.05,
+          "net_ev_R": 0.079
+        }
+      },
+      "test_letter_net": {
+        "A+": {
+          "win_rate": 47.06,
+          "n": 34,
+          "wins": 16,
+          "ci_lo": 31.45,
+          "ci_hi": 63.26,
+          "net_ev_R": -0.102
+        },
+        "A": {
+          "win_rate": 41.67,
+          "n": 36,
+          "wins": 15,
+          "ci_lo": 27.14,
+          "ci_hi": 57.8,
+          "net_ev_R": -0.094
+        },
+        "B": {
+          "win_rate": 44.7,
+          "n": 132,
+          "wins": 59,
+          "ci_lo": 36.48,
+          "ci_hi": 53.21,
+          "net_ev_R": 0.075
+        },
+        "C": {
+          "win_rate": 40.88,
+          "n": 159,
+          "wins": 65,
+          "ci_lo": 33.54,
+          "ci_hi": 48.65,
+          "net_ev_R": 0.0
+        },
+        "D": {
+          "win_rate": 36.57,
+          "n": 134,
+          "wins": 49,
+          "ci_lo": 28.89,
+          "ci_hi": 44.99,
+          "net_ev_R": 0.02
+        }
+      },
+      "test_letter_gross": {
+        "A+": {
+          "win_rate": 47.06,
+          "n": 34,
+          "wins": 16,
+          "ci_lo": 31.45,
+          "ci_hi": 63.26,
+          "net_ev_R": -0.102
+        },
+        "A": {
+          "win_rate": 41.67,
+          "n": 36,
+          "wins": 15,
+          "ci_lo": 27.14,
+          "ci_hi": 57.8,
+          "net_ev_R": -0.094
+        },
+        "B": {
+          "win_rate": 44.7,
+          "n": 132,
+          "wins": 59,
+          "ci_lo": 36.48,
+          "ci_hi": 53.21,
+          "net_ev_R": 0.075
+        },
+        "C": {
+          "win_rate": 40.88,
+          "n": 159,
+          "wins": 65,
+          "ci_lo": 33.54,
+          "ci_hi": 48.65,
+          "net_ev_R": 0.0
+        },
+        "D": {
+          "win_rate": 36.57,
+          "n": 134,
+          "wins": 49,
+          "ci_lo": 28.89,
+          "ci_hi": 44.99,
+          "net_ev_R": 0.02
+        }
+      },
+      "test_calibrated_net": {
+        "A+": {
+          "win_rate": 46.0,
+          "n": 50,
+          "wins": 23,
+          "ci_lo": 32.97,
+          "ci_hi": 59.6,
+          "net_ev_R": -0.028
+        },
+        "A": {
+          "win_rate": 38.89,
+          "n": 36,
+          "wins": 14,
+          "ci_lo": 24.78,
+          "ci_hi": 55.14,
+          "net_ev_R": -0.261
+        },
+        "B": {
+          "win_rate": 49.21,
+          "n": 63,
+          "wins": 31,
+          "ci_lo": 37.27,
+          "ci_hi": 61.24,
+          "net_ev_R": 0.044
+        },
+        "C": {
+          "win_rate": 40.3,
+          "n": 67,
+          "wins": 27,
+          "ci_lo": 29.39,
+          "ci_hi": 52.26,
+          "net_ev_R": 0.042
+        },
+        "D": {
+          "win_rate": 39.07,
+          "n": 279,
+          "wins": 109,
+          "ci_lo": 33.53,
+          "ci_hi": 44.9,
+          "net_ev_R": 0.039
+        }
+      },
+      "score_cuts": [
+        [
+          "A+",
+          80.0
+        ],
+        [
+          "A",
+          60.0
+        ],
+        [
+          "B",
+          50.0
+        ],
+        [
+          "C",
+          30.0
+        ]
+      ],
+      "factor_stats_train": {
+        "信号K质量": {
+          "train_hit_wr": 63.76,
+          "train_miss_wr": 64.63,
+          "n_hit": 287,
+          "n_miss": 458
+        },
+        "回调速度": {
+          "train_hit_wr": 66.22,
+          "train_miss_wr": 46.58,
+          "n_hit": 672,
+          "n_miss": 73
+        },
+        "缺口宽度%": {
+          "train_hit_wr": 66.93,
+          "train_miss_wr": 61.62,
+          "n_hit": 375,
+          "n_miss": 370
+        },
+        "连阴数": {
+          "train_hit_wr": 66.1,
+          "train_miss_wr": 29.73,
+          "n_hit": 708,
+          "n_miss": 37
+        },
+        "时间衰减": {
+          "train_hit_wr": 64.3,
+          "train_miss_wr": null,
+          "n_hit": 745,
+          "n_miss": 0
+        },
+        "缺口全程存活": {
+          "train_hit_wr": 64.3,
+          "train_miss_wr": null,
+          "n_hit": 745,
+          "n_miss": 0
+        },
+        "两腿对称性": {
+          "train_hit_wr": 66.43,
+          "train_miss_wr": 58.12,
+          "n_hit": 554,
+          "n_miss": 191
+        }
+      },
+      "year_strat_net": {
+        "2011": {
+          "win_rate": 0.0,
+          "n": 3,
+          "ci_lo": 0.0,
+          "ci_hi": 56.15,
+          "net_ev_R": -1.01
+        },
+        "2012": {
+          "win_rate": 53.33,
+          "n": 15,
+          "ci_lo": 30.12,
+          "ci_hi": 75.19,
+          "net_ev_R": 0.247
+        },
+        "2013": {
+          "win_rate": 51.52,
+          "n": 66,
+          "ci_lo": 39.71,
+          "ci_hi": 63.15,
+          "net_ev_R": 0.156
+        },
+        "2014": {
+          "win_rate": 63.48,
+          "n": 230,
+          "ci_lo": 57.08,
+          "ci_hi": 69.43,
+          "net_ev_R": 0.655
+        },
+        "2015": {
+          "win_rate": 84.87,
+          "n": 238,
+          "ci_lo": 79.77,
+          "ci_hi": 88.87,
+          "net_ev_R": 1.115
+        },
+        "2016": {
+          "win_rate": 29.41,
+          "n": 17,
+          "ci_lo": 13.28,
+          "ci_hi": 53.13,
+          "net_ev_R": -0.296
+        },
+        "2017": {
+          "win_rate": 50.0,
+          "n": 72,
+          "ci_lo": 38.75,
+          "ci_hi": 61.25,
+          "net_ev_R": 0.278
+        },
+        "2018": {
+          "win_rate": 26.67,
+          "n": 15,
+          "ci_lo": 10.9,
+          "ci_hi": 51.95,
+          "net_ev_R": -0.558
+        },
+        "2019": {
+          "win_rate": 39.53,
+          "n": 43,
+          "ci_lo": 26.37,
+          "ci_hi": 54.42,
+          "net_ev_R": 0.208
+        },
+        "2020": {
+          "win_rate": 56.15,
+          "n": 130,
+          "ci_lo": 47.57,
+          "ci_hi": 64.39,
+          "net_ev_R": 0.362
+        },
+        "2021": {
+          "win_rate": 39.29,
+          "n": 84,
+          "ci_lo": 29.53,
+          "ci_hi": 49.98,
+          "net_ev_R": -0.206
+        },
+        "2022": {
+          "win_rate": 18.18,
+          "n": 22,
+          "ci_lo": 7.31,
+          "ci_hi": 38.52,
+          "net_ev_R": -0.599
+        },
+        "2023": {
+          "win_rate": 11.11,
+          "n": 45,
+          "ci_lo": 4.84,
+          "ci_hi": 23.5,
+          "net_ev_R": -0.763
+        },
+        "2024": {
+          "win_rate": 32.73,
+          "n": 55,
+          "ci_lo": 21.81,
+          "ci_hi": 45.9,
+          "net_ev_R": -0.097
+        },
+        "2025": {
+          "win_rate": 50.0,
+          "n": 152,
+          "ci_lo": 42.15,
+          "ci_hi": 57.85,
+          "net_ev_R": 0.375
+        },
+        "2026": {
+          "win_rate": 41.51,
+          "n": 53,
+          "ci_lo": 29.26,
+          "ci_hi": 54.91,
+          "net_ev_R": -0.088
+        }
+      }
+    }
+  },
+  "n_tests_approx": 297,
+  "elapsed_sec": 815.9694654999766
+}

@@ -1,0 +1,15 @@
+{
+  "issue": 145,
+  "date": "2026-11-11",
+  "reason": "Vance 点名清除已推翻的评级体系（Issue #145）；其余策略计算版本随批准变更推进",
+  "values": {
+    "calculation_versions": {
+      "STRATEGY_3K": "32d5a6aeb099a7d89702562449e6a43297dda3d8bdbe52ffc5401ce72d3c6eca",
+      "STRATEGY_GAP_H2": "861592a204709cc14d4c09f3dbde70518144e1d986f8b73cdc1c3aa17f5b640c"
+    },
+    "compatible_engines": {
+      "STRATEGY_3K": "768ca6bf5037b8971b30196e729474e2c4b1eeb10d6982326c26c9d4ebe8c028",
+      "STRATEGY_GAP_H2": "768ca6bf5037b8971b30196e729474e2c4b1eeb10d6982326c26c9d4ebe8c028"
+    }
+  }
+}

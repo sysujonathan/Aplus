@@ -395,7 +395,7 @@ def test_snapshot_candidates_exact_receipt_prices_without_rating(store, tmp_path
     rated = next(h for h in snapshot['hits'] if h['observation_id'] == 'obs-2')
     assert 'rating' not in rated.get('plan', {})
     assert 'score' not in rated.get('plan', {})
-    assert_no_retired_fields(json.loads((out / 'snapshot.json').read_text()))
+    assert_no_retired_fields(json.loads((out / 'snapshot.json').read_text(encoding="utf-8")))
     assert '服务端快照' in candidate_source_status(store)
     assert snapshot['generated_at'] in candidate_source_status(store)
 
@@ -600,7 +600,7 @@ def test_historical_snapshot_accepts_and_ignores_rating(store, tmp_path, monkeyp
     from workbench.snapshot import snapshot_digest
     out = _client_package(store, tmp_path, monkeypatch)
     path = out / 'snapshot.json'
-    original = json.loads(path.read_text())
+    original = json.loads(path.read_text(encoding="utf-8"))
     expected = load_snapshot(path)
     original['hits'][0].update(rating={'score': 99}, score=99)
     original['hits'][0].setdefault('plan', {})['setup_evaluation'] = {'rating': {'score': 88}, 'score': 88}
@@ -611,4 +611,4 @@ def test_historical_snapshot_accepts_and_ignores_rating(store, tmp_path, monkeyp
     assert loaded['hits'][0]['entry'] == expected['hits'][0]['entry']
     assert loaded['hits'][0]['plan']['setup_evaluation'] == {}
     # Disk stays unchanged: old integrity metadata describes original bytes/data.
-    assert json.loads(path.read_text()) == original
+    assert json.loads(path.read_text(encoding="utf-8")) == original

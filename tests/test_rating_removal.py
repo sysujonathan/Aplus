@@ -27,7 +27,7 @@ def test_fixed_signals_match_pre_removal_prices(h2_bars):
     samples = {'h2-fixture': h2_bars,
                'mtr-1-126': generated_bars(1).iloc[:127].copy(),
                'mtr-2-159': generated_bars(2).iloc[:160].copy()}
-    expected = json.loads((Path(__file__).parent / 'fixtures/rating_removal_signals.json').read_text())
+    expected = json.loads((Path(__file__).parent / 'fixtures/rating_removal_signals.json').read_text(encoding="utf-8"))
     actual = []
     for code, frame in samples.items():
         for key, item in sorted(StrategyRegistry._strategies.items()):
@@ -49,9 +49,9 @@ def test_snapshot_export_hit_drops_legacy_rating(tmp_path):
     hit = snapshot._hit(row, {})
     path = tmp_path / 'snapshot.json'
     path.write_text(json.dumps({'hits': [hit]}))
-    assert_no_retired_fields(json.loads(path.read_text()))
-    assert 'rating' not in path.read_text()
-    assert '"score"' not in path.read_text()
+    assert_no_retired_fields(json.loads(path.read_text(encoding="utf-8")))
+    assert 'rating' not in path.read_text(encoding="utf-8")
+    assert '"score"' not in path.read_text(encoding="utf-8")
     assert hit['entry'] == 10 and hit['plan']['mm_target'] == 13
 
 
@@ -75,7 +75,7 @@ def test_historical_snapshot_verifies_original_then_ignores_rating(tmp_path, mon
     assert_no_retired_fields(loaded)
     assert loaded['hits'][0]['entry'] == 10
     assert loaded['hits'][0]['plan']['setup_evaluation'] == {}
-    assert json.loads(path.read_text()) == data
+    assert json.loads(path.read_text(encoding="utf-8")) == data
     data['hits'][0]['score'] = 77  # Even ignored data must pass the ORIGINAL SHA.
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match='SHA'):
@@ -98,7 +98,7 @@ def test_write_snapshot_fixture_has_no_retired_fields(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshot, '_package_charts', lambda _store, data, _out:
                         ({}, {hit['observation_id']: 'fixture: no image' for hit in data['hits']}))
     out = snapshot.write_snapshot(store, ASOF, tmp_path / 'export')
-    text = (out / 'snapshot.json').read_text()
+    text = (out / 'snapshot.json').read_text(encoding="utf-8")
     assert 'rating' not in text and '"score"' not in text
     assert_no_retired_fields(json.loads(text))
     assert_no_retired_fields(snapshot.load_snapshot(out / 'snapshot.json'))
