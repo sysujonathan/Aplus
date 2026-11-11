@@ -14,7 +14,7 @@ from tests.test_closed_record_corrections import closed, business, CODE
     ('2026-10-30','2026-11-02',2),
     ('2026-09-30','2026-10-08',2),
     ('2026-09-20','2026-09-21',None),  # Sunday is not an exchange make-up day.
-    ('2025-01-03','2025-01-06',None),  # No verified calendar for this year.
+    ('2025-01-03','2025-01-06',2),  # Both endpoints are verified 2025 sessions.
     ('2026-10-28','2026-10-27',None),
     ('invalid','2026-10-27',None),
 ])
@@ -27,7 +27,8 @@ def test_verified_calendar_and_exact_fills_drive_counts_without_any_prices(tmp_p
     aid,pid,row,_=closed(store,bought='2025-01-03',sold='2025-01-06')
     store.save_closed_trade(aid,'sz.001234','合成汇总','2025-01-06',8,10,1)
     report=management_report(store,aid)
-    assert all(r['holding_trading_days'] is None for r in report['closed'])
+    assert next(r for r in report['closed'] if r['id']==row['id'])['holding_trading_days']==2
+    assert next(r for r in report['closed'] if not r['position_id'])['holding_trading_days'] is None
     (store.root/'trading_calendar.json').write_text(json.dumps(dict(
         start='2025-01-03',end='2025-01-06',trading_days=['2025-01-03','2025-01-06'])),encoding='utf-8')
     before=business(store)

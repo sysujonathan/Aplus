@@ -35,11 +35,11 @@ def test_today_is_selectable_without_current_price_files(tmp_path, monkeypatch, 
     choices=trading_dates(store, 'sz.002259', today=date(2026,10,9))
     assert choices[:2]==['2026-10-09', '2026-10-08']
     # The window is ten years, but this store has no verified calendar file and
-    # only 2026's published schedule exists, so older years stay unguessed. The
-    # list still reaches the first 2026 session instead of stopping at 180.
+    # only 2024-2026 published schedules exist, so older years stay unguessed.
+    # The list still reaches the first 2024 session instead of stopping at 180.
     assert choices==sorted(set(choices), reverse=True)
-    assert choices[-1]=='2026-01-05'
-    assert all(day.startswith('2026') for day in choices)
+    assert choices[-1]=='2024-01-02'
+    assert all(day[:4] in {'2024', '2025', '2026'} for day in choices)
     assert not any('2026-10-01'<=day<='2026-10-07' for day in choices)
     assert query('SELECT * FROM datasets')==before
 
