@@ -7,6 +7,7 @@
 
   snapshot.json  结构化快照（机器消费；含策略版本锚定与覆盖口径）
   index.html     同内容的可读清单（人直接打开看，不依赖任何外部资源）
+  charts/        既有候选渲染器生成的 PNG（失败项见 chart_errors）
 
 快照 v1 只支持单数据源的一键盘前结果；多源结果、缺盘前任务记录时
 明确报错，不静默拼一份不完整的快照。
@@ -16,6 +17,9 @@ from __future__ import annotations
 import contextlib
 import csv
 import html
+import hashlib
+import math
+from datetime import date, datetime, timedelta, timezone
 import json
 import sqlite3
 from collections import Counter
@@ -30,6 +34,7 @@ from .strategies import scan_engine_version, verify_frozen
 SNAPSHOT_SCHEMA_VERSION = 1
 SNAPSHOT_KIND = "aplus-premarket-snapshot"
 MAX_EXCLUDED_IN_HTML = 100
+_CST = timezone(timedelta(hours=8))  # A 股交易日时区
 
 
 class ReadOnlyStore:
@@ -52,9 +57,17 @@ class ReadOnlyStore:
             db.row_factory = sqlite3.Row
             return [dict(row) for row in db.execute(sql, args)]
 
+    def read_artifact(self, relative, job=None):
+        path = (self.root / relative).resolve()
+        if not path.is_relative_to(self.root):
+            raise ValueError("不允许越过运行目录读取文件")
+        return path.read_bytes()
+
 # observation payload 里除入场/止损/目标外，快照原样带出的计划字段。
 # 只白名单、不透传：payload 未来新增字段不会悄悄进入分发面。
 EXTRA_PLAN_KEYS = (
+    "rating",
+    "score",
     "plan_kind",
     "pending_state",
     "sl1_plan_price",
@@ -148,7 +161,7 @@ def _receipt_hits(store, scan_result, *, scan_job, source, spec):
         placeholders = ",".join("?" for _ in batch)
         for row in store.rows(
             "SELECT o.id, o.code, o.strategy, o.version, o.setup_date, o.payload,"
-            " o.timeframe, d.source AS dataset_source FROM observations o"
+            " o.timeframe, o.dataset_id, o.asof, d.source AS dataset_source FROM observations o"
             f" LEFT JOIN datasets d ON d.id = o.dataset_id WHERE o.id IN ({placeholders})",
             batch,
         ):
@@ -194,6 +207,10 @@ def _excluded(scan_result):
 def _hit(row, names):
     payload = _read_json(row["payload"], f"信号 {row['code']} {row['strategy']}")
     hit = {
+        "observation_id": row["id"],
+        "dataset_id": row.get("dataset_id"),
+        "asof": row.get("asof"),
+        "timeframe": row["timeframe"],
         "code": row["code"],
         "name": names.get(row["code"]),
         "strategy": row["strategy"],
@@ -291,6 +308,7 @@ def build_snapshot(store, asof):
                 error.get("category") or "unknown" for error in scan_errors
             )),
         },
+        "observation_ids": [hit["observation_id"] for hit in hits],
         "hits": hits,
         "excluded": excluded,
         "notes": notes,
@@ -398,10 +416,12 @@ def default_snapshot_dir(store, asof):
 
 
 def write_snapshot(store, asof, out_dir=None):
-    """Write snapshot.json + index.html; returns the output directory."""
+    """Write snapshot.json, index.html and candidate charts; return directory."""
     snapshot = build_snapshot(store, asof)
     out = Path(out_dir) if out_dir else default_snapshot_dir(store, asof)
     out.mkdir(parents=True, exist_ok=True)
+    snapshot["charts"], snapshot["chart_errors"] = _package_charts(store, snapshot, out)
+    snapshot["sha256"] = snapshot_digest(snapshot)
     (out / "snapshot.json").write_text(
         dumps(snapshot), encoding="utf-8"
     )
@@ -409,21 +429,108 @@ def write_snapshot(store, asof, out_dir=None):
     return out
 
 
-def load_snapshot(path):
-    """Read and validate a snapshot file; returns the snapshot dict."""
+def snapshot_digest(data):
+    """Canonical JSON SHA-256 excluding the digest field itself."""
+    return hashlib.sha256(json.dumps(
+        {k: v for k, v in data.items() if k != "sha256"}, ensure_ascii=False,
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+
+def _package_charts(store, snapshot, out):
+    charts, errors = {}, {}
+    for hit in snapshot["hits"]:
+        oid = hit["observation_id"]
+        try:
+            # Same candidate rendering path as ChartPanel, including H2 plans.
+            from gui.chart_renderer import render_chart
+            from workbench.market import load_dataset
+            from workbench.strategies import catalog, prepare, calculate
+            from workbench.h2_plan import display_plan, is_h2
+            observation = store.rows("SELECT * FROM observations WHERE id=?", (oid,))[0]
+            frame, _ = load_dataset(store, observation["dataset_id"])
+            payload = json.loads(observation["payload"])
+            for key in ("asof", "setup_date"):
+                payload.setdefault(key, observation[key])
+            spec = catalog(store)[observation["strategy"]]
+            bars = prepare(frame, observation["timeframe"], str(observation["asof"])[:10])
+            instance, calculated = calculate(spec, bars)
+            if spec.id == "STRATEGY_GAP_H2" and is_h2(instance.get_metadata()):
+                payload = display_plan(spec, bars, payload, observation["code"],
+                                       observation["setup_date"] or observation["asof"], "candidate")
+            image = render_chart(calculated, payload, "", instance.get_metadata(),
+                                 strategy=instance, strategy_type=observation["strategy"],
+                                 code=observation["code"],
+                                 instrument_type=bars.attrs.get("instrument_type"))
+            relative = "charts/" + hashlib.sha256(oid.encode()).hexdigest() + ".png"
+            (out / "charts").mkdir(exist_ok=True)
+            image.save(out / relative, format="PNG")
+            charts[oid] = relative
+        except Exception as exc:
+            errors[oid] = str(exc)
+    return charts, errors
+
+
+def load_snapshot(path, *, today=None):
+    """Validate SHA, local anchors, receipt set and freshness (seven calendar days)."""
     data = _read_json(Path(path).read_text(encoding="utf-8"), f"快照 {path}")
-    if data.get("kind") != SNAPSHOT_KIND:
-        raise ValueError(f"快照 {path} 类型不是 {SNAPSHOT_KIND}")
+    if not isinstance(data, dict) or data.get("kind") != SNAPSHOT_KIND:
+        raise ValueError(f"快照类型不是 {SNAPSHOT_KIND}")
     if data.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
-        raise ValueError(
-            f"快照 {path} 版本为 {data.get('schema_version')}，"
-            f"当前只支持 v{SNAPSHOT_SCHEMA_VERSION}"
-        )
-    for key in ("asof", "source", "hits", "coverage", "engine_version", "frozen_digest"):
-        if key not in data:
-            raise ValueError(f"快照 {path} 缺少必填字段 {key}")
-    if not isinstance(data["hits"], list):
-        raise ValueError(f"快照 {path} 的 hits 不是列表")
+        raise ValueError(f"快照版本为 {data.get('schema_version')}，当前只支持 v1")
+    for key, kind in {"asof": str, "generated_at": str, "source": str,
+                      "hits": list, "coverage": dict, "engine_version": str,
+                      "frozen_digest": str, "observation_ids": list,
+                      "timeframe": str, "boards": list, "strategies": list,
+                      "charts": dict, "chart_errors": dict}.items():
+        if not isinstance(data.get(key), kind):
+            raise ValueError(f"快照字段 {key} 缺少或类型错误")
+    if data.get("sha256") != snapshot_digest(data):
+        raise ValueError("快照 SHA 校验失败")
+    if data["engine_version"] != scan_engine_version() or data["frozen_digest"] != verify_frozen():
+        raise ValueError("快照版本锚不符")
+    ids = data["observation_ids"]
+    if not all(isinstance(oid, str) and oid for oid in ids) or len(set(ids)) != len(ids):
+        raise ValueError("快照收据 observation_ids 非法")
+    for key in ("boards", "strategies"):
+        if not all(isinstance(value, str) for value in data[key]):
+            raise ValueError(f"快照范围 {key} 结构错误")
+    hit_ids = []
+    for hit in data["hits"]:
+        if not isinstance(hit, dict):
+            raise ValueError("快照命中结构错误")
+        for key in ("observation_id", "code", "strategy", "version", "setup_date", "asof", "timeframe"):
+            if not isinstance(hit.get(key), str) or not hit[key]:
+                raise ValueError(f"快照命中字段 {key} 错误")
+        for key in ("entry", "stop", "target"):
+            if key not in hit or (hit[key] is not None and
+                                  (type(hit[key]) not in (int, float) or not math.isfinite(hit[key]))):
+                raise ValueError(f"快照计划价位 {key} 错误")
+        if not isinstance(hit.get("plan", {}), dict):
+            raise ValueError("快照计划结构错误")
+        if (hit["timeframe"] != data["timeframe"]
+                or (data["strategies"] and hit["strategy"] not in data["strategies"])
+                or (data["boards"] and board_of(hit["code"]) not in data["boards"])):
+            raise ValueError("快照命中范围越界")
+        hit_ids.append(hit["observation_id"])
+    if len(hit_ids) != len(set(hit_ids)) or set(hit_ids) != set(ids):
+        raise ValueError("快照命中集与收据 observation_ids 不一致")
+    day = date.fromisoformat(data["asof"])
+    current = (date.fromisoformat(today.isoformat() if isinstance(today, date) else today)
+               if today is not None else datetime.now(_CST).date())
+    generated = datetime.fromisoformat(data["generated_at"])
+    if generated.tzinfo is None:
+        raise ValueError("快照生成时间缺少时区")
+    if not 0 <= (current - day).days <= 7 or not 0 <= (current - generated.astimezone(_CST).date()).days <= 7:
+        raise ValueError("快照过期或日期在未来")
+    for oid, relative in data["charts"].items():
+        if oid not in ids or not isinstance(relative, str) or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise ValueError("快照图表清单错误")
+    if (set(data["charts"]) & set(data["chart_errors"])
+            or (set(data["charts"]) | set(data["chart_errors"])) != set(ids)):
+        raise ValueError("快照图表清单与命中集不一致")
+    if not all(isinstance(error, str) for error in data["chart_errors"].values()):
+        raise ValueError("快照图表失败记录结构错误")
     return data
 
 
@@ -451,4 +558,6 @@ def snapshot_summary(snapshot):
         "excluded": snapshot["coverage"]["excluded_count"],
         "engine_version": (snapshot.get("engine_version") or "")[:12],
         "generated_at": snapshot["generated_at"],
+        "charts": len(snapshot.get("charts") or {}),
+        "chart_errors": len(snapshot.get("chart_errors") or {}),
     }

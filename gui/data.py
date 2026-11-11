@@ -4,7 +4,15 @@
 """
 from __future__ import annotations
 
+from datetime import date
 import json
+import os
+import logging
+import tempfile
+from http.client import HTTPException
+from pathlib import Path
+from urllib.request import urlopen
+from urllib.parse import urlparse
 import re
 
 import pandas as pd
@@ -200,12 +208,86 @@ def _read_code_names(store):
     return result
 
 
+# Display-only status, keyed by runtime to avoid mixing independent windows.
+_candidate_sources = {}
+
+
+def snapshot_inputs():
+    """Snapshot file state and URL for the pipeline cache when merging #128."""
+    directory = os.environ.get("APLUS_SNAPSHOT_DIR")
+    state = ()
+    if directory:
+        path = Path(directory).expanduser() / "snapshot.json"
+        try:
+            stat = path.stat()
+            state = (str(path), stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            state = (str(path), None, None)
+    return (state, os.environ.get("APLUS_SNAPSHOT_URL", ""))
+
+
+def candidate_source_status(store):
+    return _candidate_sources.get(str(store.root), "本地扫描")
+
+
+def _snapshot_candidates(store, timeframe, source, asof_filter):
+    from workbench.snapshot import load_snapshot
+    directory = os.environ.get("APLUS_SNAPSHOT_DIR")
+    url = os.environ.get("APLUS_SNAPSHOT_URL")
+    if directory:
+        snapshot = load_snapshot(Path(directory).expanduser() / "snapshot.json")
+    else:
+        if urlparse(url).scheme not in ("http", "https"):
+            raise ValueError("快照地址须使用 HTTP/HTTPS")
+        address = url if url.endswith("/snapshot.json") else url.rstrip("/") + "/snapshot.json"
+        with urlopen(address, timeout=10) as response:
+            content = response.read(32 * 1024 * 1024 + 1)
+        if len(content) > 32 * 1024 * 1024:
+            raise ValueError("快照超过 32 MiB")
+        with tempfile.TemporaryDirectory(prefix="aplus-snapshot-") as temporary:
+            path = Path(temporary) / "snapshot.json"
+            path.write_bytes(content)
+            snapshot = load_snapshot(path)
+    if snapshot["timeframe"] != timeframe or (source and source != snapshot["source"]):
+        raise ValueError("快照来源或周期与当前候选页不符")
+    if asof_filter:
+        parts = date.fromisoformat(snapshot["asof"]).isoformat().split("-")
+        if any(str(value) != parts[i] for i, value in enumerate(asof_filter) if value):
+            raise ValueError("快照日期与当前候选页不符")
+    grouped = {}
+    for hit in snapshot["hits"]:
+        payload = dict(hit.get("plan") or {})
+        payload.update({key: hit[key] for key in ("entry", "stop", "target")})
+        grouped.setdefault(hit["strategy"], []).append({
+            "code": hit["code"], "name": hit.get("name") or "",
+            "date": hit["asof"], "observation_id": hit["observation_id"],
+            "dataset_id": hit.get("dataset_id"), "source": snapshot["source"],
+            "strategy": hit["strategy"], "timeframe": hit["timeframe"],
+            "payload": payload,
+        })
+    _candidate_sources[str(store.root)] = (
+        f"服务端快照 · {snapshot['asof']} · {snapshot['generated_at']}"
+    )
+    return grouped
+
+
 def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     """按一个明确行情来源读取扫描观察，返回 {strategy_key: [row, ...]}。
 
+    APLUS_SNAPSHOT_DIR 优先于 APLUS_SNAPSHOT_URL；均未配置时保持本地读取。
+    坏包回退原因由 candidate_source_status 供状态区显示；历史源始终本地。
     asof_filter: (year, month, day) 三元组，元素为 None 表示该位不约束。
     用 LIKE 前缀匹配 asof（形如 2026-09-20 或带时间），避免依赖具体存储格式。
     """
+    # Explicit legacy browsing stays local; snapshot failures never hide.
+    if source != LEGACY_MARKET_SOURCE and (os.environ.get("APLUS_SNAPSHOT_DIR") or os.environ.get("APLUS_SNAPSHOT_URL")):
+        try:
+            return _snapshot_candidates(store, timeframe, source, asof_filter)
+        except (ValueError, OSError, TypeError, KeyError, HTTPException) as exc:
+            _candidate_sources[str(store.root)] = f"本地扫描 · 快照拒绝：{exc}"
+            logging.getLogger(__name__).warning("快照拒绝，回退本地扫描：%s", exc)
+    else:
+        _candidate_sources[str(store.root)] = "本地扫描"
     source=source or market_source(store)
     sql = (
         "SELECT o.code, o.strategy, o.version, o.payload, o.timeframe, o.asof, o.id, o.dataset_id, "

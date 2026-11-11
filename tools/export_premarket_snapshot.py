@@ -3,7 +3,8 @@
 只读导出：经 ReadOnlyStore（SQLite mode=ro）读取，不构造 Store()，
 不运行初始化/迁移、不写数据库、不碰策略、不联网。产物写到
 <运行目录>/snapshots/<asof>/（可用 --out 改位置），含 snapshot.json 与
-index.html；客户端只需取这两个文件，不再跑同步与扫描。
+index.html 和 charts/；图表复用桌面候选渲染，单只失败写入 chart_errors。
+客户端阶段 2a 只读 snapshot.json；SHA、版本锚、收据与新鲜度校验失败即拒绝。
 
 用法：
     python tools/export_premarket_snapshot.py [--asof 2026-11-09] [--out DIR]

@@ -1,4 +1,5 @@
 """Premarket snapshot export: read-only build, files, and reload."""
+from datetime import date, datetime, timedelta, timezone
 import json
 import sqlite3
 
@@ -13,9 +14,10 @@ from workbench.snapshot import (
     render_html,
     write_snapshot,
 )
+from workbench.strategies import scan_engine_version
 from workbench.store import dumps
 
-ASOF = "2026-11-09"
+ASOF = (date.today() - timedelta(days=1)).isoformat()
 
 
 def _seed(store, *, sources=("tickflow",), hits=True):
@@ -34,7 +36,7 @@ def _seed(store, *, sources=("tickflow",), hits=True):
         "reused": 4,
         "calculated": 8,
         "observation_ids": ["obs-1", "obs-2"] if hits else [],
-        "engine_version": "engine-test-version",
+        "engine_version": scan_engine_version(),
         "strategy_versions": {"STRATEGY_GAP_H2": "v-gap-h2", "MTR_MASTER": "v-mtr"},
         "coverage": {"expected": 5, "ready": 3, "suspended": 0, "gaps": 2},
         "errors": [
@@ -81,7 +83,7 @@ def _seed(store, *, sources=("tickflow",), hits=True):
             "INSERT INTO observations(id,job_id,code,strategy,version,timeframe,asof,"
             "setup_date,dataset_id,payload,created) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             ("obs-1", "scan-1", "sh.601919", "STRATEGY_GAP_H2", "v-gap-h2", "daily",
-             ASOF, "2026-11-05", "ds-1",
+             ASOF, (date.fromisoformat(ASOF) - timedelta(days=4)).isoformat(), "ds-1",
              dumps({"entry": 17.63, "stop": 17.04, "target": 18.81,
                     "sl1_plan_price": 17.27, "mm_target": 19.39,
                     "prior_open_gap_count": 2, "pending_state": "PENDING",
@@ -107,7 +109,7 @@ def test_build_snapshot_happy_path(store):
     assert snapshot["source"] == "tickflow"
     assert snapshot["boards"] == ["沪深主板"]
     assert snapshot["complete"] is False
-    assert snapshot["engine_version"] == "engine-test-version"
+    assert snapshot["engine_version"] == scan_engine_version()
     assert snapshot["frozen_digest"]
     assert snapshot["jobs"] == {"premarket": "pm-1", "sync": "sync-1", "scan": "scan-1"}
     assert snapshot["timing_seconds"] == {"sync": 10.5, "scan": 60.25}
@@ -232,7 +234,7 @@ def test_hits_bound_to_selected_scan_receipt(store):
     assert gap["entry"] == 17.63  # the receipt revision, not the 99.99 revision
 
 
-def test_receipt_ids_out_of_scope_are_dropped_with_note(store):
+def test_receipt_ids_out_of_scope_are_dropped_with_note(store, tmp_path, monkeypatch):
     _seed(store)
     # The receipt itself lists an id whose row is out of the snapshot scope
     # (weekly instead of the spec's daily): it must be dropped, not shipped.
@@ -242,6 +244,16 @@ def test_receipt_ids_out_of_scope_are_dropped_with_note(store):
     snapshot = build_snapshot(store, ASOF)
     assert [hit["code"] for hit in snapshot["hits"]] == ["sh.600853", "sh.601919"]
     assert any("范围外" in note for note in snapshot["notes"])
+    out = write_snapshot(ReadOnlyStore(store.root), ASOF, tmp_path / "dropped")
+    loaded = load_snapshot(out / "snapshot.json")
+    assert set(loaded["observation_ids"]) == {"obs-1", "obs-2"}
+    assert set(loaded["charts"]) | set(loaded["chart_errors"]) == set(loaded["observation_ids"])
+    from gui.data import load_candidates, candidate_source_status
+    monkeypatch.setenv("APLUS_SNAPSHOT_DIR", str(out))
+    rows = load_candidates(store, source="tickflow")
+    assert {r["observation_id"] for group in rows.values() for r in group} == {"obs-1", "obs-2"}
+    assert "服务端快照" in candidate_source_status(store)
+
 
 
 def test_rescan_without_hits_empties_snapshot(store):
@@ -251,7 +263,7 @@ def test_rescan_without_hits_empties_snapshot(store):
     scan2 = {
         "asof": ASOF, "success": 12, "signals": 0, "no_signal": 12,
         "reused": 0, "calculated": 12, "observation_ids": [],
-        "engine_version": "engine-test-version",
+        "engine_version": scan_engine_version(),
         "strategy_versions": {"STRATEGY_GAP_H2": "v-gap-h2", "MTR_MASTER": "v-mtr"},
         "coverage": {"expected": 5, "ready": 5, "suspended": 0, "gaps": 0},
         "errors": [],
@@ -341,3 +353,225 @@ def test_export_cli_leaves_database_untouched(store, tmp_path, monkeypatch):
         version = db.execute(
             "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
     assert version == "8"
+
+
+def _client_package(store, tmp_path, monkeypatch):
+    from workbench.market import save_dataset
+    import pandas as pd
+    import numpy as np
+
+    _seed(store)
+    x = np.arange(180)
+    prices = 20 + np.sin(x / 4) + x / 100
+    frame = pd.DataFrame(dict(date=pd.bdate_range(end=ASOF, periods=180).strftime('%Y-%m-%d'),
+                              open=prices, high=prices + .5, low=prices - .5,
+                              close=prices + .1, volume=10000.))
+    for oid, code in [('obs-1', 'sh.601919'), ('obs-2', 'sh.600853')]:
+        dataset = save_dataset(store, code, frame, 'tickflow', 'qfq')
+        store.execute('UPDATE observations SET dataset_id=? WHERE id=?', (dataset, oid))
+    payload = json.loads(store.rows("SELECT payload FROM observations WHERE id='obs-2'")[0]['payload'])
+    payload.update(rating={'letter': 'A', 'score': 82}, score=71.5)
+    store.execute("UPDATE observations SET payload=? WHERE id='obs-2'", (dumps(payload),))
+    out = write_snapshot(ReadOnlyStore(store.root), ASOF, tmp_path / 'client-package')
+    monkeypatch.setenv('APLUS_SNAPSHOT_DIR', str(out))
+    monkeypatch.delenv('APLUS_SNAPSHOT_URL', raising=False)
+    return out
+
+
+def test_snapshot_candidates_exact_receipt_prices_and_rating(store, tmp_path, monkeypatch):
+    from gui.data import load_candidates, candidate_source_status
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    # Independent receipt from the DB, not reconstructed from snapshot hits.
+    receipt = json.loads(store.rows("SELECT result FROM jobs WHERE id='scan-1'")[0]['result'])
+    groups = load_candidates(store, source='tickflow', asof_filter=tuple(ASOF.split('-')))
+    rows = [row for group in groups.values() for row in group]
+    assert {r['observation_id'] for r in rows} == set(receipt['observation_ids'])
+    for row in rows:
+        original = json.loads(store.rows('SELECT payload FROM observations WHERE id=?',
+                                        (row['observation_id'],))[0]['payload'])
+        for key in ('entry', 'stop', 'target', 'sl1_plan_price', 'mm_target', 'rating', 'score'):
+            assert row['payload'].get(key) == original.get(key)
+    rated = next(h for h in snapshot['hits'] if h['observation_id'] == 'obs-2')
+    assert rated['plan']['rating'] == {'letter': 'A', 'score': 82}
+    assert rated['plan']['score'] == 71.5
+    assert '服务端快照' in candidate_source_status(store)
+    assert snapshot['generated_at'] in candidate_source_status(store)
+
+
+def test_snapshot_package_charts_match_manifest(store, tmp_path, monkeypatch):
+    # Packaging boundary test: rendering is independently exercised below.
+    from gui import chart_renderer
+    from PIL import Image
+    monkeypatch.setattr(chart_renderer, 'render_chart',
+                        lambda *a, **kw: Image.new('RGB', (64, 64)))
+    from PIL import Image
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    assert snapshot['chart_errors'] == {}
+    assert set(snapshot['charts']) == set(snapshot['observation_ids'])
+    for relative in snapshot['charts'].values():
+        with Image.open(out / relative) as image:
+            image.verify()
+
+
+def test_single_chart_failure_is_recorded(store, tmp_path, monkeypatch):
+    from gui import chart_renderer
+    from PIL import Image
+    real = lambda *a, **kw: Image.new('RGB', (64, 64))
+    def render(*args, **kwargs):
+        if kwargs['code'] == 'sh.601919':
+            raise RuntimeError('injected chart failure')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(chart_renderer, 'render_chart', render)
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    assert set(snapshot['charts']) == {'obs-2'}
+    assert snapshot['chart_errors'] == {'obs-1': 'injected chart failure'}
+
+
+@pytest.mark.parametrize('fault, message', [
+    ('sha', 'SHA'), ('ids', 'observation_ids'),
+    ('engine', '版本锚'), ('frozen', '版本锚'), ('expired', '过期'),
+    ('structure', '结构'),
+])
+def test_bad_snapshot_rejected_and_visible_local_fallback(store, tmp_path, monkeypatch, caplog, fault, message):
+    from gui.data import load_candidates, candidate_source_status
+    from workbench.snapshot import snapshot_digest
+    out = _client_package(store, tmp_path, monkeypatch)
+    path = out / 'snapshot.json'
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if fault == 'sha':
+        data['sha256'] = '0' * 64
+    else:
+        if fault == 'ids': data['hits'][0]['observation_id'] = 'outside-receipt'
+        elif fault == 'engine': data['engine_version'] = 'wrong-engine'
+        elif fault == 'frozen': data['frozen_digest'] = 'wrong-frozen'
+        elif fault == 'expired': data['asof'] = '2000-01-01'
+        elif fault == 'structure': data['hits'][0] = []
+        data['sha256'] = snapshot_digest(data)  # Reach the intended check, beyond SHA.
+    path.write_text(dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        load_snapshot(path)
+    monkeypatch.delenv('APLUS_SNAPSHOT_DIR')
+    local = load_candidates(store, source='tickflow')
+    monkeypatch.setenv('APLUS_SNAPSHOT_DIR', str(out))
+    assert load_candidates(store, source='tickflow') == local
+    assert message in candidate_source_status(store)
+    assert '回退本地扫描' in caplog.text
+
+
+def test_snapshot_http_and_directory_use_same_validation(store, tmp_path, monkeypatch):
+    from gui import data
+    from contextlib import contextmanager
+    out = _client_package(store, tmp_path, monkeypatch)
+    expected = data.load_candidates(store, source='tickflow')
+    @contextmanager
+    def response(address, timeout):
+        assert address == 'http://snapshot.test/serve/snapshot.json'
+        assert timeout == 10
+        with (out / 'snapshot.json').open('rb') as stream:
+            yield stream
+    monkeypatch.setattr(data, 'urlopen', response)
+    monkeypatch.delenv('APLUS_SNAPSHOT_DIR')
+    monkeypatch.setenv('APLUS_SNAPSHOT_URL', 'http://snapshot.test/serve')
+    assert data.load_candidates(store, source='tickflow') == expected
+
+
+def test_real_snapshot_chart_rendering(store, tmp_path, monkeypatch):
+    pytest.importorskip('mplfinance')
+    out = _client_package(store, tmp_path, monkeypatch)
+    snapshot = load_snapshot(out / 'snapshot.json')
+    assert snapshot['chart_errors'] == {}
+    assert len(snapshot['charts']) == 2
+
+
+def test_snapshot_candidates_need_no_local_observations(store, tmp_path, monkeypatch):
+    from gui.data import load_candidates
+    out = _client_package(store, tmp_path, monkeypatch)
+    class EmptyClient:
+        root = tmp_path / 'empty-client'
+        def rows(self, *args, **kwargs):
+            pytest.fail('valid snapshot candidates must not query local observations')
+    groups = load_candidates(EmptyClient(), source='tickflow')
+    ids = {r['observation_id'] for rows in groups.values() for r in rows}
+    assert ids == set(load_snapshot(out / 'snapshot.json')['observation_ids'])
+
+
+@pytest.mark.parametrize('hour', [0, 7])
+@pytest.mark.parametrize('generated_offset', [0, 8])
+def test_snapshot_accepts_beijing_early_morning(store, tmp_path, monkeypatch, hour, generated_offset):
+    import workbench.snapshot as module
+    from workbench.snapshot import snapshot_digest
+    monkeypatch.setattr(__import__(__name__, fromlist=['ASOF']), 'ASOF', '2026-11-11')
+    instant = datetime(2026, 11, 11, hour, 30, tzinfo=timezone(timedelta(hours=8)))
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz)
+    monkeypatch.setattr(module, 'datetime', Clock)
+    _seed(store)
+    out = write_snapshot(store, '2026-11-11', tmp_path / 'early')
+    path = out / 'snapshot.json'
+    data = json.loads(path.read_text(encoding='utf-8'))
+    data['generated_at'] = instant.astimezone(timezone(timedelta(hours=generated_offset))).isoformat()
+    data['sha256'] = snapshot_digest(data)
+    path.write_text(dumps(data), encoding='utf-8')
+    assert load_snapshot(path)['asof'] == '2026-11-11'
+    assert load_snapshot(path, today=date(2026, 11, 11))['asof'] == '2026-11-11'
+    assert load_snapshot(path, today='2026-11-11')['asof'] == '2026-11-11'
+
+
+def test_relative_asof_survives_november_17(store, tmp_path, monkeypatch):
+    import workbench.snapshot as module
+    # Re-evaluate the module's actual ASOF expression with a simulated calendar.
+    class Calendar(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 11, 17)
+    namespace = {'date': Calendar, 'timedelta': timedelta}
+    from pathlib import Path
+    assignment = next(line for line in Path(__file__).read_text(encoding='utf-8').splitlines()
+                      if line.startswith('ASOF = '))
+    exec(assignment, namespace)
+    monkeypatch.setattr(__import__(__name__, fromlist=['ASOF']), 'ASOF', namespace['ASOF'])
+    instant = datetime(2026, 11, 17, 4, tzinfo=timezone.utc)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz)
+    monkeypatch.setattr(module, 'datetime', Clock)
+    monkeypatch.setattr(module, 'now', lambda: instant.isoformat())
+    test_write_snapshot_round_trip_and_html_escaping(store, tmp_path)
+
+
+def test_snapshot_inputs_changes_with_file_and_url(tmp_path, monkeypatch):
+    from gui.data import snapshot_inputs
+    monkeypatch.setenv('APLUS_SNAPSHOT_DIR', str(tmp_path))
+    monkeypatch.delenv('APLUS_SNAPSHOT_URL', raising=False)
+    missing = snapshot_inputs()
+    path = tmp_path / 'snapshot.json'
+    path.write_text('{}', encoding='utf-8')
+    created = snapshot_inputs()
+    assert created != missing
+    path.write_text('{"updated": true}', encoding='utf-8')
+    assert snapshot_inputs() != created
+    local = snapshot_inputs()
+    monkeypatch.setenv('APLUS_SNAPSHOT_URL', 'https://snapshot.test')
+    assert snapshot_inputs() != local
+    path.unlink()
+    monkeypatch.delenv('APLUS_SNAPSHOT_URL')
+    assert snapshot_inputs() == missing
+
+
+def test_snapshot_basic_iso_asof_candidates(store, tmp_path, monkeypatch):
+    from gui.data import load_candidates, candidate_source_status
+    from workbench.snapshot import snapshot_digest
+    out = _client_package(store, tmp_path, monkeypatch)
+    path = out / 'snapshot.json'
+    data = json.loads(path.read_text(encoding='utf-8'))
+    data['asof'] = ASOF.replace('-', '')
+    data['sha256'] = snapshot_digest(data)
+    path.write_text(dumps(data), encoding='utf-8')
+    assert load_candidates(store, source='tickflow', asof_filter=tuple(ASOF.split('-')))
+    assert '服务端快照' in candidate_source_status(store)
