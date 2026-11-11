@@ -112,7 +112,63 @@ class StockNameLookup:
         return matches[0] if matches else (None, None)
 
 
+
+# Readers observe the same Store commit/artifact publication path used by sync,
+# registry and name edits. No new writer or parallel notification bus is needed.
+_data_cache = {}
+
+
+def invalidate(store=None):
+    """Explicitly discard display data (or one runtime's display data)."""
+    if store is None:
+        _data_cache.clear()
+    else:
+        for key in list(_data_cache):
+            if key[0] == str(store.root):
+                _data_cache.pop(key, None)
+
+
+def data_inputs(store):
+    from workbench.scan_cache import file_state, store_inputs
+    directories = store.root / 'directories'
+    return (store_inputs(store), file_state((directories, *directories.glob('*.csv'),
+            store.root / 'universe.csv',
+            *(store.root / 'sources' / source / 'universe.csv' for source in ('tickflow', 'tencent')))),
+            getattr(store, 'source', None))
+
+
+def _cached_read(store, name, inputs, read):
+    from copy import deepcopy
+    root = (str(store.root), name)
+    cached = _data_cache.get(root)
+    if cached is None or cached[0] != inputs:
+        _data_cache.pop(root, None)  # Existing Store publication changed inputs.
+        cached = (inputs, {})
+        if len(_data_cache) >= 16:
+            _data_cache.clear()
+        _data_cache[root] = cached
+    if name not in cached[1]:
+        value = read()
+        cached[1][name] = value.copy() if name == 'names' else deepcopy(value)
+        return value
+    return cached[1][name].copy() if name == 'names' else deepcopy(cached[1][name])
+
+
+def catalog(store):
+    from workbench.strategies import catalog as read
+    from workbench.scan_cache import engine_inputs, file_state
+    plugins = store.root / 'plugins'
+    inputs = (data_inputs(store), engine_inputs(),
+              file_state((plugins, *plugins.glob('*.py'))))
+    # Separate caches: names do not share the catalog's protected-file key.
+    return _cached_read(store, 'catalog', inputs, lambda: read(store))
+
+
 def code_names(store):
+    """Cached names expire on existing Store commits or directory publication."""
+    return _cached_read(store, 'names', data_inputs(store), lambda: _read_code_names(store))
+
+def _read_code_names(store):
     """Display names are independent of eligibility for market scans."""
     result = {}
     def add_file(path):

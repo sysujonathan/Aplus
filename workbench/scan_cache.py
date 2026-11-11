@@ -2,9 +2,73 @@
 import ast
 import inspect
 import json
+from functools import lru_cache
+from copy import deepcopy
 from pathlib import Path
 
 from .store import ROOT, digest, dumps
+
+
+def file_state(paths):
+    """Cheap input identity; missing inputs remain visible to the real reader."""
+    result = []
+    for path in sorted({Path(p).absolute() for p in paths}):
+        try:
+            stat = path.stat()
+            result.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except FileNotFoundError:
+            result.append((str(path), None, None))
+    return tuple(result)
+
+
+@lru_cache(maxsize=16)
+def _protected_paths(manifest_state):
+    path = Path(manifest_state[0][0])
+    manifest = json.loads(path.read_text(encoding='utf-8'))
+    return tuple(path.parent / row['path'] for row in manifest['files'])
+
+
+def engine_inputs(root=ROOT):
+    root = Path(root).resolve()
+    manifest = root / 'frozen_manifest.json'
+    return file_state((manifest, *_protected_paths(file_state((manifest,))),
+                       *(root / 'workbench' / name for name in
+                         ('strategies.py', 'market.py', 'h2_plan.py', 'prices.py'))))
+
+
+def store_inputs(store):
+    """Existing Store commits invalidate readers, including WAL-mode writers."""
+    path = Path(store.path)
+    return file_state((path, Path(str(path) + '-wal')))
+
+
+@lru_cache(maxsize=16)
+def _engine_version(inputs, include_frozen, function, semantics, verifier):
+    return function(include_frozen=include_frozen)
+
+
+def scan_engine_version(include_frozen=True):
+    from . import strategies as adapters
+    return _engine_version(engine_inputs(adapters.ROOT), include_frozen,
+                           adapters.scan_engine_version, adapters._scan_engine_semantics,
+                           adapters.verify_frozen)
+
+
+_latest_cache = {}
+
+
+def latest_datasets(store, source='baostock'):
+    from .market import latest_datasets as read
+    key = (store_inputs(store), source)
+    cached = _latest_cache.get(store.root)
+    if cached is None or cached[0] != key:
+        rows = read(store, source)
+        if key == (store_inputs(store), source):
+            if len(_latest_cache) >= 16:
+                _latest_cache.clear()
+            _latest_cache[store.root] = (key, deepcopy(rows))
+        return rows
+    return deepcopy(cached[1])
 
 
 # Exact audited PR45 addition. It is still executed for every calculation;
@@ -48,7 +112,7 @@ def compatible_engines(strategies):
     return result
 
 
-def calculation_versions(strategies, root=ROOT):
+def _calculation_versions(strategies, root=ROOT):
     """Bind each native detector to its own files and conservative shared deps.
 
     Frozen validation still protects the whole release. This only prevents an
@@ -111,6 +175,23 @@ def calculation_versions(strategies, root=ROOT):
     return result
 
 
+
+_versions_cache = {}
+
+
+def calculation_versions(strategies, root=ROOT):
+    strategies = list(strategies)
+    key = (engine_inputs(root), dumps([(s.id, s.file, s.params, s.version) for s in strategies]))
+    if key not in _versions_cache:
+        result = _calculation_versions(strategies, root)
+        if key[0] == engine_inputs(root):
+            if len(_versions_cache) >= 32:
+                _versions_cache.clear()
+            _versions_cache[key] = result
+        return result.copy()
+    return _versions_cache[key].copy()
+
+
 def cache_key(did, strategy, version, timeframe, asof, engine):
     return digest(dumps([did,strategy,version,timeframe,asof,engine]).encode())
 
@@ -166,8 +247,7 @@ def filter_candidate_revisions(store, rows, source, timeframe):
     from .sources import SOURCES
     if not rows or source not in SOURCES:
         return rows
-    from .strategies import catalog, scan_engine_version
-    from .market import latest_datasets
+    from gui.data import catalog
     entries = catalog(store)
     selected = [entries[k] for k in {r['strategy'] for r in rows} if k in entries]
     versions = calculation_versions(selected)

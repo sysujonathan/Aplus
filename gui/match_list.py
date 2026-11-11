@@ -86,14 +86,37 @@ class MatchList(CandidateTabs):
         self._choose(None)
 
     def load_from_store(self,store,timeframe='daily',asof_filter=None,source='baostock',notify=True):
-        from .data import load_candidates, code_names
+        from .data import load_candidates, code_names, data_inputs
+        from workbench.scan_cache import engine_inputs, file_state
         from workbench.sources import market_source
         self._timeframe, self._source = timeframe,source
+        # Store publication includes selected quant/shape receipts, no-signal
+        # checkpoints, template edits and name updates. This conservative token
+        # also handles old imports without receipts and repaired/deleted evidence.
+        receipts = store.rows("SELECT id,status,result FROM jobs WHERE kind='scan' "
+                              "ORDER BY created DESC,rowid DESC LIMIT 32")
+        shape_receipts = [r for r in store.shape_runs(market_source(store))
+                          if r['status'] in ('completed', 'partial') and
+                          (not asof_filter or all(not part or str(part) == r['asof'].split('-')[i]
+                                                for i, part in enumerate(asof_filter)))] if timeframe == 'daily' else []
+        artifacts = file_state(store.root / r['path'] for r in shape_receipts)
+        key = (str(store.root), tuple(asof_filter or ()), source, timeframe,
+               repr(receipts), repr(shape_receipts), artifacts, data_inputs(store), engine_inputs(), tuple(self._labels.items()))
+        cached = getattr(self, '_pipeline_cache', None)
+        if cached is not None and cached[0] == key:
+            from copy import deepcopy
+            self._rows, self._all_rows, self._template_labels, self._shape_error = deepcopy(cached[1])
+            self._refresh_filters()
+            self._choose(self._filter_key, notify=notify)
+            self._show_shape_error()
+            return
         groups = load_candidates(store,timeframe,source,asof_filter)
         quant = [dict(row,kind='quant',label=self._labels.get(key,key)) for key,rows in groups.items() for row in rows]
         self._shape_error = None
         try:
-            shapes = store.shape_candidates(asof_filter,market_source(store)) if timeframe=='daily' else []
+            from .background_status import display_store
+            from workbench.shape_store import candidates
+            shapes = candidates(display_store(store),asof_filter,market_source(store)) if timeframe=='daily' else []
         except (ValueError,OSError) as exc:
             shapes=[]
             self._shape_error = str(exc)
@@ -105,8 +128,15 @@ class MatchList(CandidateTabs):
         except ValueError as exc:
             self._template_labels = {}
             self._shape_error = str(exc)
+        if not self._shape_error:
+            from copy import deepcopy
+            self._pipeline_cache = (key, deepcopy((self._rows, self._all_rows,
+                                                  self._template_labels, self._shape_error)))
         self._refresh_filters()
         self._choose(self._filter_key,notify=notify)
+        self._show_shape_error()
+
+    def _show_shape_error(self):
         if self._shape_error:
             self.detail.set('形态历史暂不可用：'+self._shape_error)
             self.summary.set('形态历史校验未通过 · 量化策略仍可查看')
