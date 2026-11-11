@@ -92,5 +92,14 @@ def finish_update(root,runtime,folder,target):
             setup.unlink();result['download_removed']=True
         result['removed']=prune_versions(root,runtime)
     except Exception as exc:result['deferred']=str(exc)
+    try:
+        # A confirmed start with the pending record already cleared is the
+        # one moment backup rotation may run (Issue #131); it converges the
+        # bind backups and this attempt's migration copies. Best-effort:
+        # any failure defers to the next confirmed start.
+        from .installed_backup_rotation import rotate_backups
+        from .installed_data import state_home
+        result['backups']=rotate_backups(state_home(),install_root=root,runtime=runtime)
+    except Exception as exc:result['backups_deferred']=str(exc)
     try:atomic_json(Path(folder)/'cleanup.json',result)
     except OSError:pass

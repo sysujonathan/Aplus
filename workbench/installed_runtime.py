@@ -178,6 +178,19 @@ def launch():
         runtime=choose_data(install_root)
     if runtime is None: return
     os.environ['A_WORKBENCH_HOME']=str(runtime)
+    if os.environ.get('APLUS_INSTALL_SMOKE')!='1':
+        # One-time convergence for pre-rotation installs (Issue #131):
+        # background thread, never blocks startup, deletes only under the
+        # rotation module's conservative gates (no pending update, newest
+        # backup fully verified, binding pointer protected).
+        import threading
+        def converge_backups():
+            try:
+                from .installed_backup_rotation import rotate_backups
+                rotate_backups(install_root=install_root,runtime=runtime)
+            except Exception:
+                pass
+        threading.Thread(target=converge_backups,daemon=True,name='aplus-backup-rotation').start()
     import launch_dashboard
     # Installed users must never get a debug shell after backend failure.
     original=launch_dashboard.build_backend
