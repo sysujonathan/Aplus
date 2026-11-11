@@ -32,6 +32,7 @@ def server(tmp_path):
         json.dumps({"asof": "2026-11-10", "hits": []}), encoding="utf-8"
     )
     (package / "charts" / "obs-1.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    (package / "page.html").write_text("<html>not data</html>", encoding="utf-8")
     module.MobileHandler.data_dir = package.resolve()
     from http.server import ThreadingHTTPServer
 
@@ -80,3 +81,28 @@ def test_traversal_and_unknown_rejected(server):
 def test_writes_rejected(server):
     assert _get(server, "/data/snapshot.json", method="POST")[0] == 405
     assert _get(server, "/", method="PUT")[0] == 405
+
+
+def test_nul_path_rejected_without_crashing(server):
+    # 含 NUL 的路径曾让 resolve()/stat 抛 ValueError 断开连接，必须干净 404
+    assert _get(server, "/data/%00.png")[0] == 404
+    # 服务没被打死，后续正常请求仍可用
+    assert _get(server, "/data/snapshot.json")[0] == 200
+
+
+def test_head_and_nosniff(server):
+    status, _, body = _get(server, "/", method="HEAD")
+    assert status == 200 and body == b""
+    status, _, body = _get(server, "/data/snapshot.json", method="HEAD")
+    assert status == 200 and body == b""
+    conn = http.client.HTTPConnection("127.0.0.1", server, timeout=10)
+    conn.request("GET", "/data/snapshot.json")
+    resp = conn.getresponse()
+    resp.read()
+    conn.close()
+    assert resp.getheader("X-Content-Type-Options") == "nosniff"
+
+
+def test_data_html_not_served(server):
+    # /data/ 只给数据文件，.html 已从白名单收紧掉
+    assert _get(server, "/data/page.html")[0] == 404

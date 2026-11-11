@@ -8,8 +8,16 @@
 压成最宽 1280 的 JPEG。没有本地案例库属主或案例为 0 时，写一份空索引
 并正常退出——桌面端案例同步到服务端之前，移动端会显示空状态。
 
+数据链边界（重要）：本脚本只导**本机桌面端案例库**（pa_cases 本地属主的
+private_draft）。团队共享案例库在 Google Drive「PA知识库」文件夹，走
+workbench/pa_shared.py 的共享格式，**不在 pa_cases 表里**；共享案例的
+移动包由服务端同步链路另行生成后放入包目录（与本脚本产出同名
+cases.json）。因此：若目标目录已有一份非空 cases.json 而本次导出为
+0 篇，默认**拒绝覆盖**（返回 skipped_overwrite 并保持原文件），确需
+以空包覆盖时显式加 --force。
+
 用法：
-    python tools/export_case_library.py [--out DIR]
+    python tools/export_case_library.py [--out DIR] [--force]
     （--out 默认取运行目录 snapshots/ 下日期最新的快照包目录）
 """
 import argparse
@@ -48,7 +56,7 @@ def _json_list(value):
         return []
 
 
-def export_cases(store, out_dir):
+def export_cases(store, out_dir, force=False):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     owner_rows = store.rows("SELECT value FROM meta WHERE key='pa_local_owner'")
@@ -106,23 +114,43 @@ def export_cases(store, out_dir):
                     "updated": row["updated"],
                 }
             )
+    target = out_dir / "cases.json"
+    if not cases and not force and target.is_file():
+        # 防覆盖：目标目录已有非空案例包（多半是共享库同步链路生成的），
+        # 本地空导出不得把它冲掉。校验坏文件按 0 篇处理，照常写入。
+        try:
+            existing_count = int(
+                json.loads(target.read_text(encoding="utf-8")).get("count") or 0
+            )
+        except (ValueError, OSError):
+            existing_count = 0
+        if existing_count > 0:
+            return {
+                "out": str(out_dir),
+                "cases": 0,
+                "skipped_overwrite": existing_count,
+            }
     payload = {
         "kind": "aplus-case-library",
         "version": 1,
         "count": len(cases),
         "cases": cases,
     }
-    (out_dir / "cases.json").write_text(dumps(payload), encoding="utf-8")
+    target.write_text(dumps(payload), encoding="utf-8")
     return {"out": str(out_dir), "cases": len(cases)}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="导出案例库移动包（只读）")
     parser.add_argument("--out", default=None, help="目标包目录，默认最新快照包目录")
+    parser.add_argument(
+        "--force", action="store_true",
+        help="允许以空导出覆盖已有的非空 cases.json（默认拒绝）",
+    )
     args = parser.parse_args(argv)
     store = ReadOnlyStore()
     out = Path(args.out) if args.out else latest_snapshot_dir(resolve_runtime_root(None))
-    print(dumps(export_cases(store, out)))
+    print(dumps(export_cases(store, out, force=args.force)))
     return 0
 
 

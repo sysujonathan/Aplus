@@ -16,6 +16,20 @@ python tools/serve_mobile.py                              # 自动取最新快�
 # 打开 http://127.0.0.1:8765/
 ```
 
+局域网临时给手机看：`python tools/serve_mobile.py --host 0.0.0.0`。
+**注意**：该服务无鉴权，`--host 0.0.0.0` 后同一网段的任何设备都能读到
+快照包内容，只在可信网络、短时间开启，用完关掉。
+
+## 案例包从哪来（两条链，别混）
+
+- **本机桌面端案例库**：`python tools/export_case_library.py` 从本地库
+  （pa_cases 本地属主）导出 `cases.json` + 压缩图到快照包目录。本地
+  导出为 0 篇时默认**不覆盖**已有的非空 `cases.json`（`--force` 才行）。
+- **团队共享案例库**：在 Google Drive「PA知识库」文件夹（共享格式见
+  `workbench/pa_shared.py`），由服务端同步链路生成同名 `cases.json`
+  放入包目录。不要在放有共享案例包的目录里跑本地导出——虽然有防覆盖
+  闸门，但两条链的产出不要互相打架。
+
 ## 装到手机上（iPhone）
 
 1. 用 Safari 打开部署地址；

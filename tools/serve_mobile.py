@@ -35,7 +35,6 @@ DATA_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
-    ".html": "text/html; charset=utf-8",
 }
 
 
@@ -56,53 +55,70 @@ class MobileHandler(BaseHTTPRequestHandler):
     shell_dir = SHELL_DIR
     data_dir = Path(".")
 
-    def log_message(self, *args):  # 只保留错误日志，不刷屏
-        if args and "404" in str(args[1]):
-            super().log_message(*args)
+    def log_request(self, code="-", size="-"):  # 只保留 4xx/5xx 日志，不刷屏
+        if str(code).startswith(("4", "5")):
+            super().log_request(code, size)
 
-    def _reject(self, code, message):
+    def _reject(self, code, message, head_only=False):
         body = message.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
 
-    def _send_file(self, path, content_type, cache_control):
+    def _send_file(self, path, content_type, cache_control, head_only=False):
         body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", cache_control)
         if path.name == "sw.js":
             self.send_header("Service-Worker-Allowed", "/")
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
 
-    def do_GET(self):
+    def _serve(self, head_only):
         name = unquote(urlparse(self.path).path).lstrip("/")
+        # 含 NUL 的路径直接 404：resolve()/stat 遇到 NUL 会抛 ValueError，
+        # 未捕获会断开连接并刷 traceback（未鉴权可反复触发）。
+        if "\x00" in name:
+            self._reject(404, "快照包内没有这个文件", head_only)
+            return
         if name.startswith("data/"):
             rel = name[len("data/"):]
-            path = (self.data_dir / rel).resolve()
-            ctype = DATA_TYPES.get(path.suffix.lower())
-            if (
-                ctype is None
-                or not path.is_relative_to(self.data_dir.resolve())
-                or not path.is_file()
-            ):
-                self._reject(404, "快照包内没有这个文件")
+            try:
+                path = (self.data_dir / rel).resolve()
+                inside = path.is_relative_to(self.data_dir.resolve())
+                is_file = inside and path.is_file()
+            except (ValueError, RuntimeError, OSError):
+                self._reject(404, "快照包内没有这个文件", head_only)
                 return
-            self._send_file(path, ctype, "no-store")
+            ctype = DATA_TYPES.get(path.suffix.lower())
+            if ctype is None or not is_file:
+                self._reject(404, "快照包内没有这个文件", head_only)
+                return
+            self._send_file(path, ctype, "no-store", head_only)
             return
         if name not in SHELL_TYPES:
-            self._reject(404, "只有应用外壳与 data/ 快照包可读")
+            self._reject(404, "只有应用外壳与 data/ 快照包可读", head_only)
             return
         path = self.shell_dir / (name or "index.html")
         if not path.is_file():
-            self._reject(404, "应用外壳文件缺失")
+            self._reject(404, "应用外壳文件缺失", head_only)
             return
         cache = "no-cache" if name in ("", "index.html", "sw.js") else "max-age=86400"
-        self._send_file(path, SHELL_TYPES[name], cache)
+        self._send_file(path, SHELL_TYPES[name], cache, head_only)
+
+    def do_GET(self):
+        self._serve(head_only=False)
+
+    def do_HEAD(self):
+        self._serve(head_only=True)
 
     def do_POST(self):
         self._reject(405, "只读服务不接受写入")

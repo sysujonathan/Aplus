@@ -93,3 +93,24 @@ def test_export_empty_library(tmp_path):
     assert summary["cases"] == 0
     payload = json.loads((out / "cases.json").read_text(encoding="utf-8"))
     assert payload["count"] == 0 and payload["cases"] == []
+
+
+def test_empty_export_does_not_overwrite_existing_package(tmp_path):
+    # 目标目录已有非空案例包（如共享库同步链路生成）时，本地空导出不得冲掉
+    module = _load_module()
+    root = _make_runtime(tmp_path, with_case=False)
+    from workbench.snapshot import ReadOnlyStore
+
+    out = tmp_path / "package"
+    out.mkdir()
+    existing = {"kind": "aplus-case-library", "version": 1, "count": 9, "cases": []}
+    (out / "cases.json").write_text(json.dumps(existing), encoding="utf-8")
+
+    summary = module.export_cases(ReadOnlyStore(root), out)
+    assert summary["cases"] == 0
+    assert summary["skipped_overwrite"] == 9
+    assert json.loads((out / "cases.json").read_text(encoding="utf-8"))["count"] == 9
+
+    forced = module.export_cases(ReadOnlyStore(root), out, force=True)
+    assert forced["cases"] == 0 and "skipped_overwrite" not in forced
+    assert json.loads((out / "cases.json").read_text(encoding="utf-8"))["count"] == 0
