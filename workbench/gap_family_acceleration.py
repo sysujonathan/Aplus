@@ -16,8 +16,8 @@ from .store import ROOT, digest, dumps, now
 
 
 VALID_MODES = {'OFF', 'SHADOW', 'CANARY', 'ACCELERATED'}
-EXPECTED_RELEASE = '185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c'
-EXPECTED_ADAPTER_SHA = '844f211f2b09eb10e8217d0aa8421b52cf738d7b56623b05925e4d9ccc138a92'
+EXPECTED_RELEASE = 'a64e85c099cf977589b04de705e4cd5c91324a656ad3f71f878772b70ccefaff'
+EXPECTED_ADAPTER_SHA = 'c4e11c7c66e8bfc0503a9ae33e57da2fa1ea6f653df6c89379da22834c915204'
 STORE_CONTRACT_KEY = 'workbench/store.py:gap-family-persistence-contract'
 EXPECTED_SUPPORT_SHAS = {
     'workbench/scan_cache.py': 'b3420fd1f8260e58b99d18e426f97019d3f25a5fe398987ecd4d89414af42666',
@@ -55,14 +55,14 @@ CONFIGS = {
     'STRATEGY_GAP_PINBAR': StrategyConfig(
         'STRATEGY_GAP_PINBAR', 'Gap Pinbar', 'GAP_PINBAR',
         'core/strategies/gap_pinbar_strategy.py',
-        'facabaabc420b4a7aae8ef98be3e13eefef2a507601216a79d7c612384432083',
+        '7f6e58ccbefeafcdece9d63ee8655719aff869842806b8d3eef7e39efaa1e736',
         {'display_name': 'GAP PINBAR', 'signal_column': 'signal_gap_pinbar',
          'entry_column': 'entry_gap_pinbar', 'sl_column': 'sl_gap_pinbar',
          'tp_columns': ['tp_gap_pinbar'], 'supported_timeframes': ['daily', 'weekly']},
     ),
     'STRATEGY_AWIL': StrategyConfig(
         'STRATEGY_AWIL', 'AWIL', 'AWIL', 'core/strategies/awil_strategy.py',
-        'e3ac5bdba534bdc66d8a2cc2d6e2627be1d5dbefbc8c76e535c3fc74244e9d00',
+        '878006f4c29b4f4f5fdf8f4c1f2e559bb0dea5eae6ad291416b4672c59fa49fd',
         {'display_name': 'AIL', 'signal_column': 'signal_awil',
          'entry_column': 'entry_awil', 'sl_column': 'sl_awil',
          'tp_columns': ['tp_awil'], 'supported_timeframes': ['daily']},
@@ -70,7 +70,7 @@ CONFIGS = {
     'STRATEGY_STRUCTURAL_GAP': StrategyConfig(
         'STRATEGY_STRUCTURAL_GAP', 'Structural Gap', 'STRUCTURAL_GAP',
         'core/strategies/structural_gap_strategy.py',
-        'fb2370e15f667a6ee0b5e8c1b84ad9350acbc1ae5019292b6630e5be60eaca3f',
+        '541100ed8de9c0c316840b7053be7f1b62bdee2539b4de987c885f602c9f488b',
         {'display_name': 'GAP H1', 'signal_column': 'signal_struct_gap_confirm',
          'entry_column': 'entry_struct_gap', 'sl_column': 'sl_struct_gap',
          'tp_columns': ['tp_struct_gap'], 'supported_timeframes': ['daily', 'weekly']},

@@ -19,13 +19,17 @@ class Assumptions:
     commission_bps: float = 3
     sell_tax_bps: float = 5
     slippage_bps: float = 5
-    min_score: float = 0
     min_rr: float = 0
+
+    @classmethod
+    def from_saved(cls, values):
+        """Accept old study settings, ignoring the retired score filter."""
+        return cls(**{key: value for key, value in values.items() if key != 'min_score'})
 
     def validate(self):
         if not (1 <= self.wait_bars <= 100 and 1 <= self.holding_bars <= 500):
             raise ValueError('等待/持有根数超出允许范围')
-        for v in (self.commission_bps,self.sell_tax_bps,self.slippage_bps,self.min_score,self.min_rr):
+        for v in (self.commission_bps,self.sell_tax_bps,self.slippage_bps,self.min_rr):
             if not np.isfinite(v) or v < 0:
                 raise ValueError('研究条件必须为有限的非负数')
 
@@ -110,14 +114,14 @@ def run_study(spec, frame, start, end, assumptions, progress=lambda *a:None, can
         # Deliberately recalculate indicators AND strategy on the visible prefix.
         # Frozen strategies can repaint prior rows; reading a full-history signal
         # column would leak future knowledge. Only today's output can be used.
-        signal = signal_at_end(spec,frame.iloc[:i+1],with_rating=False,plan_prices=False)
+        signal = signal_at_end(spec,frame.iloc[:i+1],plan_prices=False)
         if signal:
             identity = signal['setup_date']
             if identity not in seen:
                 seen.add(identity)
                 rr = ((signal['target']-signal['entry'])/(signal['entry']-signal['stop'])
                       if not signal['warning'] else -1)
-                if (signal['score'] or 0) >= assumptions.min_score and rr >= assumptions.min_rr:
+                if rr >= assumptions.min_rr:
                     records.append(simulate(frame,i,signal,assumptions))
         progress(k+1,len(eligible))
     return records

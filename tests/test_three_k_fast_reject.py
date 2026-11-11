@@ -197,7 +197,7 @@ def test_shadow_preserves_payload_and_trips_fuse_on_difference(store, frame, mon
     fast = controller(store, monkeypatch, 'SHADOW')
     payload = {'asof': '2024-08-09', 'setup_date': '2024-08-09',
                'entry': 10.2, 'stop': 9.1, 'target': 12.4,
-               'score': None, 'rating': {'score': 88}, 'warning': ''}
+               'warning': ''}
     raw = reject_frame(frame)
     result = fast.run(lambda: payload, raw, prepare_indicators(raw), 'one')
     assert result.signal is payload and fast.fused and fast.mode == 'OFF'

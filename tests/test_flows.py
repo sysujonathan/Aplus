@@ -112,7 +112,7 @@ def test_ui_with_saved_signal_and_plan(tmp_path,monkeypatch,frame):
     did = save_dataset(store,'sh.600000',frame,'baostock','前复权')
     strategy = 'STRATEGY_3K'
     spec = catalog(store)[strategy]
-    payload = {'entry':22.,'stop':20.,'target':26.,'score':1.,'rating':None,'warning':'',
+    payload = {'entry':22.,'stop':20.,'target':26.,'warning':'',
                'close':21.,'asof':frame.date.iloc[-1],'setup_date':frame.date.iloc[-1]}
     store.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                   ('obs','scan','sh.600000',strategy,spec.version,'daily',payload['asof'],payload['setup_date'],did,dumps(payload),now()))

@@ -209,8 +209,6 @@ function render(snap) {
       const card = document.createElement(chartPath ? "button" : "div");
       card.className = "card";
       const rp = riskPct(h);
-      const score = (h.rating || h.score !== undefined)
-        ? '<span class="pill' + (h.rating === "A" ? " hot" : "") + '">' + esc(h.rating || "") + (h.score !== undefined && h.score !== null ? " " + esc(h.score) + "分" : "") + "</span>" : "";
       let prices = '<span class="pr">入场 <b>' + esc(num(h.entry)) + '</b></span>'
         + '<span class="pr">止损 <b class="dn">' + esc(num(h.stop)) + '</b></span>'
         + '<span class="pr">目标 <b class="up">' + esc(num(h.target)) + '</b></span>';
@@ -221,7 +219,7 @@ function render(snap) {
       if (h.prior_open_gap_count !== undefined && h.prior_open_gap_count !== null) sub.push("前序缺口 " + esc(h.prior_open_gap_count));
       if (h.setup_date) sub.push("信号日 " + esc(h.setup_date));
       card.innerHTML = '<div class="row1"><span class="nm">' + esc(h.name)
-        + '<span class="cd">' + esc(h.code) + "</span></span>" + score + "</div>"
+        + '<span class="cd">' + esc(h.code) + "</span></span>" + "</div>"
         + '<div class="prices">' + prices + "</div>"
         + (sub.length ? '<div class="sub">' + sub.join(" · ") + "</div>" : "")
         + (chartPath ? '<div class="chart-hint">点开看 K 线图 ›</div>' : "");

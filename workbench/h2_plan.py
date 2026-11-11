@@ -272,7 +272,7 @@ def plan_at_end(instance, calculated, code=None, setup_date=None):
     return project_plan(calculated, None, code, lookback=lookback)
 
 
-def evaluation_at_setup(spec, bars, setup_date, *, with_rating=True):
+def evaluation_at_setup(spec, bars, setup_date):
     """Archive original frozen evaluation, separate from SL1 plan risk metrics."""
     from .strategies import calculate
     source = bars[bars.date.astype(str).str[:10] <= str(setup_date)[:10]]
@@ -282,17 +282,9 @@ def evaluation_at_setup(spec, bars, setup_date, *, with_rating=True):
     row = calculated.iloc[-1]
     if not bool(row.get('signal_gap_h2', False)):
         return None
-    rating, warning = None, ''
-    if with_rating and hasattr(instance, 'compute_rating'):
-        try:
-            obj = instance.compute_rating(calculated)
-            rating = obj.to_dict() if obj is not None else None
-        except Exception as exc:
-            logger.warning('H2 setup evaluation failed: setup=%s', setup_date, exc_info=True)
-            warning = f'原形态评级失败：{exc}'
     return {'asof': str(setup_date)[:10], 'basis': 'frozen-original-setup',
             'signal_quality': _number(row.get('sig_bar_quality_h2')),
-            'rating': rating, 'warning': warning}
+            'warning': ''}
 
 
 def display_plan(spec, bars, payload, code, setup_date, mode='candidate'):
@@ -329,5 +321,4 @@ def display_plan(spec, bars, payload, code, setup_date, mode='candidate'):
     if structure:
         evaluation = evaluation_at_setup(spec, bars, setup_date)
         plan['setup_evaluation'] = evaluation
-        plan['rating'] = evaluation.get('rating') if evaluation else None
     return plan

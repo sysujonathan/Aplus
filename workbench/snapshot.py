@@ -66,8 +66,6 @@ class ReadOnlyStore:
 # observation payload 里除入场/止损/目标外，快照原样带出的计划字段。
 # 只白名单、不透传：payload 未来新增字段不会悄悄进入分发面。
 EXTRA_PLAN_KEYS = (
-    "rating",
-    "score",
     "plan_kind",
     "pending_state",
     "sl1_plan_price",
@@ -77,6 +75,16 @@ EXTRA_PLAN_KEYS = (
     "tp_r_multiple",
     "price_tick",
 )
+
+
+def _without_ratings(value):
+    """Accept historical rating/score fields, but never expose or export them."""
+    if isinstance(value, dict):
+        return {key: _without_ratings(child) for key, child in value.items()
+                if key not in {"rating", "score"}}
+    if isinstance(value, list):
+        return [_without_ratings(child) for child in value]
+    return value
 
 
 def _read_json(text, what):
@@ -223,7 +231,7 @@ def _hit(row, names):
     extras = {key: payload[key] for key in EXTRA_PLAN_KEYS if key in payload}
     if extras:
         hit["plan"] = extras
-    return hit
+    return _without_ratings(hit)
 
 
 def build_snapshot(store, asof):
@@ -531,7 +539,9 @@ def load_snapshot(path, *, today=None):
         raise ValueError("快照图表清单与命中集不一致")
     if not all(isinstance(error, str) for error in data["chart_errors"].values()):
         raise ValueError("快照图表失败记录结构错误")
-    return data
+    # Historical snapshots: accept and ignore retired rating/score fields.
+    # Validate the original SHA and anchors first; never alter the signed input.
+    return _without_ratings(data)
 
 
 def latest_asof(store):

@@ -92,7 +92,7 @@ def _execute_replay(service, job, spec, execution_model):
         raise ValueError('需要非空、不重复的行情快照范围')
     settings = H2Settings(**spec.get('h2_settings', {}))
     settings.validate()
-    costs = Assumptions(**spec.get('assumptions', {}))
+    costs = Assumptions.from_saved(spec.get('assumptions', {}))
     costs.validate()
     strategy = catalog(service.store)[spec['strategy']]
     engine = engine_version()

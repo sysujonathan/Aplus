@@ -19,9 +19,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, clamp, band, band_calibrated, is_calibration_available
-from core.rating_core import (quality_factor, pb_speed_factor, gap_width_factor,
-                              consec_bear_penalty, time_decay_factor, sum_weights)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +61,7 @@ class StructuralGapStrategy(BaseStrategy):
 
     @classmethod
     def get_signal_info(cls, df: pd.DataFrame) -> Dict[str, Any]:
-        """Structural Gap 信号信息提取 — 包含 EV 评级"""
+        """Structural Gap 信号信息提取 — 包含信号K质量与回调信息"""
         result = super().get_signal_info(df)
         
         if df is None or df.empty:
@@ -92,74 +89,11 @@ class StructuralGapStrategy(BaseStrategy):
         else:
             extra_info['pb_consec_bear'] = 0
         
-        # 动态 EV 评级
-        bears = extra_info['pb_consec_bear']
-        if q > 0.8 and bears < 2:
-            extra_info['ev_rating'] = '🌟 高预期'
-        elif q <= 0.5 and bears >= 2:
-            extra_info['ev_rating'] = '⚠️ 低预期'
-        else:
-            extra_info['ev_rating'] = '👍 常态'
-        
         if extra_info:
             result['extra_info'] = extra_info
         
         return result
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """[RATING_PLAN §4.1] 缺口家族四因子积分制 (数据驱动, 纯 PA).
-        日线/周线共用: 从 df 最后一信号行取量, 复用 rating_core 通用 PA 因子。
-        四因子: 回调速度(pb_bars)/缺口宽度%(gap_size_pct)/K线质量(q)/连阴数(bears) + 时间衰减。
-        ⛔ 全因子可溯源 SOP; 严禁 volume/EMA斜率 类因子。
-        """
-        if df is None or df.empty:
-            return None
-        meta = cls.get_metadata()
-        sig_col = meta.get('signal_column', '')
-        # 定位最后信号行 (兼容 scanner 末行信号 与 周线扫描中间信号)
-        sig_pos = len(df) - 1
-        sig_row = df.iloc[-1]
-        if sig_col and sig_col in df.columns and df[sig_col].fillna(False).any():
-            sig_positions = df.index[df[sig_col].fillna(False)]
-            sig_pos = df.index.get_loc(sig_positions[-1])
-            sig_row = df.iloc[sig_pos]
-
-        q = float(sig_row.get('sig_bar_quality', 0) or 0)
-        sl = sig_row.get('sl_struct_gap', np.nan)
-        gap_top = sig_row.get('struct_gap_top_exact', np.nan)
-        gap_size_pct = 0.0
-        if pd.notna(gap_top) and pd.notna(sl) and sl > 0:
-            gap_size_pct = round((float(gap_top) - float(sl)) / float(sl) * 100, 2)
-
-        pb_bars = int(sig_row.get('bars_since_breakout', 5) or 5)
-
-        # 连阴数 (复用 get_signal_info 算法, 纯 PA: Step 7/8)
-        bears = 0
-        if 'bars_since_breakout' in df.columns and pb_bars > 0 and 0 <= sig_pos - pb_bars < sig_pos:
-            pb_df = df.iloc[sig_pos - pb_bars: sig_pos]
-            is_bear = pb_df['close'] < pb_df['open']
-            if len(is_bear) > 1:
-                shifts = is_bear != is_bear.shift()
-                groups = shifts.cumsum()
-                bear_groups = is_bear.groupby(groups).sum()
-                bears = int(bear_groups.max()) if not bear_groups.empty else 0
-
-        bars_passed = max(0, len(df) - 1 - sig_pos)
-
-        # 四因子 (纯 PA, 数据驱动权重, Phase 0 calibrated=False 待 Phase 2 回归)
-        f_q = quality_factor(q)
-        f_pb = pb_speed_factor(pb_bars)
-        f_gap = gap_width_factor(gap_size_pct)
-        f_bear = consec_bear_penalty(bears)
-        f_decay = time_decay_factor(bars_passed)
-        factors = [f_q, f_pb, f_gap, f_bear, f_decay]
-        raw = sum_weights(factors)
-        score = clamp(50 + 10 * raw)  # 与原四因子映射完全兼容
-        toxic = raw <= -3
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        return RatingResult(raw_score=raw, score=score, letter=letter, factors=factors,
-                            toxic=toxic, calibrated=is_calibration_available())
 
     @classmethod
     def annotate_chart(cls, ax, plot_df: pd.DataFrame, strategy_type: str, **kwargs) -> int:
@@ -450,7 +384,7 @@ def _annotate_gap_strategy(ax, plot_df: pd.DataFrame, strategy_type: str, **kwar
         **kwargs:
             - sl_price: float — 止损价 (用于水平线)
             - tp1: float — 第一止盈价
-            - ev_rating: str — EV 评级标签
+            - pending_tracking: bool — 尚未成形的突破追踪标记
             - sig_quality: float — 信号K线质量分
             - bears: int — 连阴数
     """
@@ -458,7 +392,7 @@ def _annotate_gap_strategy(ax, plot_df: pd.DataFrame, strategy_type: str, **kwar
     
     sl_price = kwargs.get('sl_price', 0)
     tp1 = kwargs.get('tp1', 0)
-    ev_rating = kwargs.get('ev_rating', '')
+    pending_tracking = kwargs.get('pending_tracking', False)
     sig_quality = kwargs.get('sig_quality', 0)
     bears = kwargs.get('bears', 0)
     open_gap_count = 0  # 供 notifier 绘制『前序开放缺口』统计
@@ -547,7 +481,7 @@ def _annotate_gap_strategy(ax, plot_df: pd.DataFrame, strategy_type: str, **kwar
                 breakout_col = None
                 for col_name in ['is_breakout', 'is_breakout_gp', 'is_breakout_h2']:
                     if col_name in plot_df.columns and plot_df[col_name].any():
-                        if ev_rating and '追踪' in str(ev_rating):
+                        if pending_tracking:
                             signal_date = plot_df.index[-1]
                             breakout_col = col_name
                             is_pending_track = True
@@ -665,9 +599,7 @@ def _annotate_gap_strategy(ax, plot_df: pd.DataFrame, strategy_type: str, **kwar
             entry_price = plot_df.loc[signal_date]['high'] + 0.01
             rr_ratio = (tp1 - entry_price) / (entry_price - final_gap_low) if tp1 > entry_price and entry_price > final_gap_low else 0
         
-        # 左上角三层信息框 (Entry/SL/TP1 + Quality/PB bars/Rating + 因子理由)
-        # 已统一移至 notifier.generate_chart_bytes._draw_rating_panel 绘制,
-        # 避免与 notifier 面板重复。此处仅保留缺口矩形/画线/箭头标注。
+        # 此处仅保留缺口矩形/画线/箭头标注。
         
         # 标注 3a. MM low (Measured Move low: 丈量窗口最低低, TP=2×地板−该值)
         ax.annotate("MM low",
@@ -860,7 +792,6 @@ def _annotate_gap_strategy(ax, plot_df: pd.DataFrame, strategy_type: str, **kwar
         except Exception as e:
             logger.debug(f"前序开放缺口标注失败: {e}")
 
-        # 5b/5c 历史战绩与前序缺口汇总文本已移至 notifier._draw_rating_panel 统一绘制,
         # 此处仅保留 open_gap_count 计数 (供 notifier 使用)。
         return open_gap_count
 

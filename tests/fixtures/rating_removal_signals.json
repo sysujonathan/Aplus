@@ -1,0 +1,23 @@
+[
+  {
+    "code": "h2-fixture",
+    "strategy": "STRATEGY_GAP_H2",
+    "entry": 11.61,
+    "stop": 9.99,
+    "target": 14.85
+  },
+  {
+    "code": "mtr-1-126",
+    "strategy": "MTR_MASTER",
+    "entry": 18.604033092606375,
+    "stop": 18.035215335242597,
+    "target": 19.74166860733393
+  },
+  {
+    "code": "mtr-2-159",
+    "strategy": "MTR_MASTER",
+    "entry": 20.32638424449248,
+    "stop": 19.075580568700502,
+    "target": 22.827991596076437
+  }
+]

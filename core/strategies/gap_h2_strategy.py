@@ -27,9 +27,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, clamp, band, band_calibrated, is_calibration_available
-from core.rating_core import (quality_factor, pb_speed_factor, gap_width_factor,
-                              consec_bear_penalty, time_decay_factor, sum_weights, factor)
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +70,7 @@ class GapH2Strategy(BaseStrategy):
             'bars_since_breakout_column': 'bars_since_breakout_h2',
             'gap_top_exact_column': 'gap_h2_top_exact',
             # 生产活跃列 (日线 last-bar-only 持续提醒): 活跃单投影到最后一根K,
-            # 挂单价随回调动态下移; 信号K列(signal_gap_h2 等)保留给回测/评级/画图定位
+            # 挂单价随回调动态下移; 信号K列(signal_gap_h2 等)保留给回测/画图定位
             'active_signal_column': 'signal_active_gap_h2',
             'active_entry_column': 'entry_active_gap_h2',
             'active_sl_column': 'sl_active_gap_h2',
@@ -99,71 +96,6 @@ class GapH2Strategy(BaseStrategy):
         
         return result
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """[RATING_PLAN §4.3] Gap+H2 评级: 缺口家族四因子骨架 + 缺口全程存活 + 两腿对称性 (纯 PA)."""
-        if df is None or df.empty:
-            return None
-        meta = cls.get_metadata()
-        sig_col = meta.get('signal_column', '')
-        sig_pos = len(df) - 1
-        sig_row = df.iloc[-1]
-        if sig_col and sig_col in df.columns and df[sig_col].fillna(False).any():
-            sp = df.index[df[sig_col].fillna(False)]
-            sig_pos = df.index.get_loc(sp[-1])
-            sig_row = df.iloc[sig_pos]
-
-        q = float(sig_row.get('sig_bar_quality_h2', 0) or 0)
-        sl = sig_row.get('sl_gap_h2', np.nan)
-        gap_top = sig_row.get('gap_h2_top_exact', np.nan)
-        gap_size_pct = 0.0
-        if pd.notna(gap_top) and pd.notna(sl) and sl > 0:
-            gap_size_pct = round((float(gap_top) - float(sl)) / float(sl) * 100, 2)
-
-        pb_bars = int(sig_row.get('bars_since_breakout_h2', 5) or 5)
-        bears = 0
-        if 'bars_since_breakout_h2' in df.columns and pb_bars > 0 and 0 <= sig_pos - pb_bars < sig_pos:
-            pb_df = df.iloc[sig_pos - pb_bars: sig_pos]
-            is_bear = pb_df['close'] < pb_df['open']
-            if len(is_bear) > 1:
-                g = (is_bear != is_bear.shift()).cumsum()
-                bg = is_bear.groupby(g).sum()
-                bears = int(bg.max()) if not bg.empty else 0
-        bars_passed = max(0, len(df) - 1 - sig_pos)
-
-        f_q = quality_factor(q)
-        f_pb = pb_speed_factor(pb_bars)
-        f_gap = gap_width_factor(gap_size_pct)
-        f_bear = consec_bear_penalty(bears)
-        f_decay = time_decay_factor(bars_passed)
-
-        # H2 专属签名 (纯 PA)
-        gap_open = bool(sig_row.get('gap_h2_open', False)) if 'gap_h2_open' in df.columns else False
-        f_gapopen = factor('缺口全程存活', 1.0 if gap_open else 0.0, gap_open, 1.0 if gap_open else 0.0,
-                           sop_ref='SOP Step 6 Gap Integrity', note='回调全期缺口未破=强' if gap_open else '缺口曾破')
-        leg2_shallow = False
-        try:
-            if sig_pos >= 2 and 'high' in df.columns and 'low' in df.columns:
-                is_lhll = (df['high'] < df['high'].shift(1)) & (df['low'] < df['low'].shift(1))
-                pre = df.iloc[:sig_pos]
-                lhll_lows = pre['low'][is_lhll.iloc[:sig_pos]]
-                if len(lhll_lows) >= 2:
-                    leg2_shallow = float(lhll_lows.iloc[-1]) >= float(lhll_lows.iloc[-2])
-        except Exception:
-            leg2_shallow = False
-        # [Phase 2 校准] 回测显示 L2低点≥L1(经典H2) 反而输钱 (命中组34.7% vs 未中42.7%, w=-0.8, δ≈8点)
-        # 方向翻转: leg2_shallow 由 +1 改为 -1; hit 仍记 leg2_shallow 与回测 factor_hits 口径一致
-        leg2_weight = -1.0 if leg2_shallow else 0.0
-        f_leg2 = factor('两腿对称性', 1.0 if leg2_shallow else 0.0, leg2_shallow, leg2_weight,
-                        sop_ref='SOP Step 6 H2', note='回测倒挂: L2≥L1反而输钱→降权' if leg2_shallow else 'L2跌破L1(更优)')
-
-        factors = [f_q, f_pb, f_gap, f_bear, f_decay, f_gapopen, f_leg2]
-        raw = sum_weights(factors)
-        score = clamp(50 + 10 * raw)
-        toxic = raw <= -3
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        return RatingResult(raw_score=raw, score=score, letter=letter, factors=factors,
-                            toxic=toxic, calibrated=is_calibration_available())
 
     @classmethod
     def annotate_chart(cls, ax, plot_df: pd.DataFrame, strategy_type: str, **kwargs) -> int:

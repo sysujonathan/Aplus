@@ -146,7 +146,6 @@ def format_guardian_prompt(holding_data):
         _dn = StrategyRegistry.get_metadata(strategy).get('display_name', strategy)
     except Exception:
         _dn = strategy
-    ev_rating = thesis.get('ev_rating', 'N/A')
     gap_status = thesis.get('gap_status', '未知')
     signal_date = thesis.get('signal_date', '未知')
 
@@ -156,17 +155,17 @@ def format_guardian_prompt(holding_data):
     # 构建交易论据描述 (简洁)
     if 'STRUCTURAL_GAP' in strategy.upper():
         thesis_desc = (
-            f"策略: {_dn} | 信号日: {signal_date} | 评级: {ev_rating}\n"
+            f"策略: {_dn} | 信号日: {signal_date}\n"
             f"SL(Gap Floor): {sl_price:.2f} | TP(MM): {tp_price:.2f} | 缺口: {gap_status}"
         )
     elif 'GAP_PINBAR' in strategy.upper() or 'PINBAR' in strategy.upper():
         thesis_desc = (
-            f"策略: {_dn} | 信号日: {signal_date} | 评级: {ev_rating}\n"
+            f"策略: {_dn} | 信号日: {signal_date}\n"
             f"SL(Gap Floor): {sl_price:.2f} | TP(起涨区间上翻): {tp_price:.2f} | 缺口: {gap_status}"
         )
     elif 'GAP_H2' in strategy.upper() or 'H2' in strategy.upper():
         thesis_desc = (
-            f"策略: {_dn} | 信号日: {signal_date} | 评级: {ev_rating}\n"
+            f"策略: {_dn} | 信号日: {signal_date}\n"
             f"SL(Gap Floor): {sl_price:.2f} | TP(起涨区间上翻): {tp_price:.2f} | 缺口: {gap_status}"
         )
     elif '3K' in strategy.upper():

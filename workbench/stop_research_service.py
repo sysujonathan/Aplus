@@ -22,7 +22,7 @@ def execute_experiment(service, job, spec):
         raise ValueError('源回测原策略版本不同，请先重新运行盘后回测')
     if source['status'] in ('running', 'queued'):
         raise ValueError('请先等待盘后回测结束')
-    costs = Assumptions(**source_report['assumptions'])
+    costs = Assumptions.from_saved(source_report['assumptions'])
     costs.validate()
     rows, errors, frames = [], [], {}
     cancelled = False

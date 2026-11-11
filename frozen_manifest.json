@@ -13,6 +13,54 @@
       "strategy": "MTR_MASTER",
       "revision": "V36.4",
       "reason": "User-approved fix: setup without a qualifying signal bar cannot be published as an MTR candidate"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "MTR_MASTER",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_3K",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_STRUCTURAL_GAP",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_GAP_PINBAR",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_GAP_H2",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_GAP_H2_ENHANCED",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_AWIL",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
+    },
+    {
+      "date": "2026-11-11",
+      "strategy": "STRATEGY_MONTHLY_RANGE_BREAK",
+      "revision": "Issue #145",
+      "reason": "Vance 本人点名清除已推翻的评级体系（Issue #145）；信号等价已验证：712 次固定样本提取命中集合与入场/止损/目标逐只一致"
     }
   ],
   "files": [
@@ -26,7 +74,7 @@
     },
     {
       "path": "core/formatter.py",
-      "sha256": "ff4388c93a465ad75cd1365163c3c6cfa224e18dece8b8613814cccf04d9deea"
+      "sha256": "ef88d9e67234725a91f93968be26648cdbb3c4560e2f65da1ea04d91e9b2a626"
     },
     {
       "path": "core/log_config.py",
@@ -35,14 +83,6 @@
     {
       "path": "core/paths.py",
       "sha256": "cb0afc8cc076dc6743d31fa438f3bb438ba7077f56530c8b79148a3b3418e39d"
-    },
-    {
-      "path": "core/rating_core.py",
-      "sha256": "5fd4d32414a3d1a428f43d218c3281e261b8489017ca5ece6704ffe276de91a2"
-    },
-    {
-      "path": "core/rating.py",
-      "sha256": "81b34141c6d797cd467ee62f27064a07466cb5b438e52d4b0513005728ca8ca5"
     },
     {
       "path": "core/strategy_registry.py",
@@ -54,23 +94,23 @@
     },
     {
       "path": "core/strategies/awil_strategy.py",
-      "sha256": "d84c5a19de70934c4a060e1498b54124aeea898864613aea21c8d3d5664323a2"
+      "sha256": "559d93fdd0eead15c3a23d2428fa7482283e660e9b6f1ac1737e9aa518c6b86e"
     },
     {
       "path": "core/strategies/base.py",
-      "sha256": "c5b4dadf7a574aff6544fa10a3ca88f172f26cf4846082ceadb387e8d3e648d2"
+      "sha256": "560fa878bc4bb4457f1853f6210e8e44c3ee7564fd051f9610faa2397942ca57"
     },
     {
       "path": "core/strategies/gap_h2_enhanced_strategy.py",
-      "sha256": "61387386bb2558e33543c1e1bb818b6cce10288e654a871036c6fdc37635f386"
+      "sha256": "956cc458a052634c04c0e248c85f13e5755e63a6c77a5c4e0c6dd7ea9aae85bf"
     },
     {
       "path": "core/strategies/gap_h2_strategy.py",
-      "sha256": "57e61feb07991feabca85b556ca3a6e5e66eb5258d6f3c4a58a16d753237a248"
+      "sha256": "0fb25b7f6d2b053c29121a77a975737f7080981a773173444a355122cddbbe08"
     },
     {
       "path": "core/strategies/gap_pinbar_strategy.py",
-      "sha256": "53f79f022e95aa52ab1351bc7285b7942664f25f66860fcd8f1c101cd4a1b9bf"
+      "sha256": "e0973dfa39efcad3a04cc94633131a4020755b6538a70d3cc70ce99bc5312f5f"
     },
     {
       "path": "core/strategies/geometric_engine.py",
@@ -78,11 +118,11 @@
     },
     {
       "path": "core/strategies/monthly_range_break_strategy.py",
-      "sha256": "80bfcd8eae3ab527e8a625f33da811ae1e5726f23977c805643a7ff201144ac4"
+      "sha256": "89ec4490e5bd3d6a968d3e71805d9748b548ee98740ce0beec3012caf2284ce5"
     },
     {
       "path": "core/strategies/mtr_strategy.py",
-      "sha256": "69ca7d4f4924e1bfdec8ff97b2d68cb16dd11c9195d9a8fae838dffb10fec849"
+      "sha256": "0e2545ed1f14bd732f1160eae2ba3bd6b14d563a35dc58cc376e7839aac75fb3"
     },
     {
       "path": "core/strategies/mtr_structural_v35.py",
@@ -90,19 +130,15 @@
     },
     {
       "path": "core/strategies/structural_gap_strategy.py",
-      "sha256": "5d3627b27719bdcd8306692919e392951eadf3808a7a6820910934c55d0780c2"
+      "sha256": "b61655f97e187389b4ec6cb7b24f51d3d98d3a3bc9d50cf4c70dc619775f480c"
     },
     {
       "path": "core/strategies/three_k_strategy.py",
-      "sha256": "cb7a908ecc18396b6617988e633a28963a257b3ffa27c31bcec8eee14e8ba9ee"
+      "sha256": "f343eff864a2720fcab7fe48ffd62e9aa7dea4e59fb3bf2eeb1f8fadcf27d164"
     },
     {
       "path": "config/__init__.py",
       "sha256": "a90ee7673bc67bd4c441a2f9f97e88025e13e62585d354ac3b2b34566a7c9624"
-    },
-    {
-      "path": "config/rating_factors.json",
-      "sha256": "508d42deb24f90dfe9836da854c964c6b53e344cea156dbd81e192d1cff182c0"
     },
     {
       "path": "config/settings.py",

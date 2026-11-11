@@ -130,7 +130,7 @@ def test_shadow_preserves_payload_and_difference_fuses_only_that_strategy(
     fast = controller(store, monkeypatch, strategy_id, 'SHADOW')
     payload = {'asof': '2024-08-09', 'setup_date': '2024-08-09',
                'entry': 10.2, 'stop': 9.1, 'target': 12.4,
-               'score': 80, 'rating': {'score': 80}, 'warning': ''}
+               'warning': ''}
     raw = reject_frame(frame)
     result = fast.run(lambda: payload, raw, prepare_indicators(raw), strategy_id)
     assert result.signal is payload and fast.fused and fast.mode == 'OFF'

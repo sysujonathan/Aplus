@@ -31,8 +31,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, clamp, band_calibrated, is_calibration_available
-from core.rating_core import factor, sum_weights
 
 logger = logging.getLogger(__name__)
 
@@ -106,64 +104,6 @@ class MonthlyRangeBreakStrategy(BaseStrategy):
             result['extra_info'] = extra_info
         return result
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'monthly') -> Optional['RatingResult']:
-        """
-        [RATING_PLAN] 月线区间破位 Pinbar 评级：纯 PA 因子（无成交量/指标）。
-        因子：下影占振幅 / 下影实体比 / 破位深度(适度为佳) / 收盘收回幅度。
-        """
-        if df is None or df.empty:
-            return None
-        meta = cls.get_metadata()
-        sig_col = meta.get('signal_column', '')
-        if sig_col in df.columns and df[sig_col].fillna(False).any():
-            sp = df.index[df[sig_col].fillna(False)]
-            sig_pos = df.index.get_loc(sp[-1])
-        else:
-            sig_pos = len(df) - 1
-        row = df.iloc[sig_pos]
-
-        o = float(row.get('open', np.nan))
-        c = float(row.get('close', np.nan))
-        l = float(row.get('low', np.nan))
-        h = float(row.get('high', np.nan))
-        rng = (h - l) if (pd.notna(h) and pd.notna(l) and h > l) else 0.0
-        lower = (min(o, c) - l) if (rng > 0 and pd.notna(o) and pd.notna(c) and pd.notna(l)) else 0.0
-        body = (c - o) if (pd.notna(o) and pd.notna(c)) else 0.0
-        base_low = float(row.get('base_low_mrb', np.nan)) if pd.notna(row.get('base_low_mrb', np.nan)) else np.nan
-
-        # 因子1：下影占振幅（越高=拒绝越强）
-        tail_ratio = (lower / rng) if rng > 0 else 0.0
-        f_tail = factor('下影占振幅', round(tail_ratio, 3), tail_ratio >= 0.60,
-                        2.0 if tail_ratio >= 0.60 else 0.0,
-                        sop_ref='SOP Step4 长下影', note='下影占全根振幅≥60%=强拒绝')
-
-        # 因子2：下影/实体比（条件5 核心）
-        ratio = (lower / body) if body > 0 else 0.0
-        f_ratio = factor('下影实体比', round(ratio, 2), body > 0 and lower > 2 * body,
-                         1.5 if (body > 0 and lower > 2 * body) else 0.0,
-                         sop_ref='用户条件5', note='下影显著大于实体')
-
-        # 因子3：破位深度（适度刺破 1%~25% 为佳，过深或不过都减分）
-        bd = ((base_low - l) / base_low) if (pd.notna(base_low) and base_low > 0) else 0.0
-        bd_ok = 0.01 <= bd <= 0.25
-        f_depth = factor('破位深度', round(bd * 100, 2), bd_ok,
-                         1.0 if bd_ok else (-0.5 if bd > 0.25 else 0.0),
-                         sop_ref='弹簧刺破深度', note='适度刺破(1%~25%)制造陷阱，过深或不过都减分')
-
-        # 因子4：收盘收回幅度（收回到平台支撑上方越多越好）
-        rec = ((c - base_low) / base_low) if (pd.notna(base_low) and base_low > 0) else 0.0
-        f_rec = factor('收盘收回幅度', round(rec * 100, 2), rec > 0,
-                       1.0 if rec > 0 else 0.0,
-                       sop_ref='用户条件3', note='收盘站回平台支撑上方')
-
-        factors = [f_tail, f_ratio, f_depth, f_rec]
-        raw = sum_weights(factors)
-        score = clamp(50 + 10 * raw)
-        toxic = raw <= -3
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        return RatingResult(raw_score=raw, score=score, letter=letter,
-                            factors=factors, toxic=toxic, calibrated=is_calibration_available())
 
     @classmethod
     def annotate_chart(cls, ax, plot_df: pd.DataFrame, strategy_type: str, **kwargs) -> int:

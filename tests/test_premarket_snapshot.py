@@ -378,7 +378,7 @@ def _client_package(store, tmp_path, monkeypatch):
     return out
 
 
-def test_snapshot_candidates_exact_receipt_prices_and_rating(store, tmp_path, monkeypatch):
+def test_snapshot_candidates_exact_receipt_prices_without_rating(store, tmp_path, monkeypatch):
     from gui.data import load_candidates, candidate_source_status
     out = _client_package(store, tmp_path, monkeypatch)
     snapshot = load_snapshot(out / 'snapshot.json')
@@ -390,11 +390,12 @@ def test_snapshot_candidates_exact_receipt_prices_and_rating(store, tmp_path, mo
     for row in rows:
         original = json.loads(store.rows('SELECT payload FROM observations WHERE id=?',
                                         (row['observation_id'],))[0]['payload'])
-        for key in ('entry', 'stop', 'target', 'sl1_plan_price', 'mm_target', 'rating', 'score'):
+        for key in ('entry', 'stop', 'target', 'sl1_plan_price', 'mm_target'):
             assert row['payload'].get(key) == original.get(key)
     rated = next(h for h in snapshot['hits'] if h['observation_id'] == 'obs-2')
-    assert rated['plan']['rating'] == {'letter': 'A', 'score': 82}
-    assert rated['plan']['score'] == 71.5
+    assert 'rating' not in rated.get('plan', {})
+    assert 'score' not in rated.get('plan', {})
+    assert_no_retired_fields(json.loads((out / 'snapshot.json').read_text()))
     assert '服务端快照' in candidate_source_status(store)
     assert snapshot['generated_at'] in candidate_source_status(store)
 
@@ -575,3 +576,39 @@ def test_snapshot_basic_iso_asof_candidates(store, tmp_path, monkeypatch):
     path.write_text(dumps(data), encoding='utf-8')
     assert load_candidates(store, source='tickflow', asof_filter=tuple(ASOF.split('-')))
     assert '服务端快照' in candidate_source_status(store)
+
+
+def assert_no_retired_fields(value):
+    """Independent export acceptance check, including nested plan/evaluation data."""
+    if isinstance(value, dict):
+        assert not ({'rating', 'score'} & value.keys()), 'retired rating/score field'
+        for child in value.values():
+            assert_no_retired_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            assert_no_retired_fields(child)
+
+
+def test_export_acceptance_check_detects_injected_rating():
+    with pytest.raises(AssertionError, match='retired'):
+        assert_no_retired_fields({'hits': [{'plan': {'rating': {'score': 82}}}]})
+    with pytest.raises(AssertionError, match='retired'):
+        assert_no_retired_fields({'hits': [{'score': 82}]})
+
+
+def test_historical_snapshot_accepts_and_ignores_rating(store, tmp_path, monkeypatch):
+    from workbench.snapshot import snapshot_digest
+    out = _client_package(store, tmp_path, monkeypatch)
+    path = out / 'snapshot.json'
+    original = json.loads(path.read_text())
+    expected = load_snapshot(path)
+    original['hits'][0].update(rating={'score': 99}, score=99)
+    original['hits'][0].setdefault('plan', {})['setup_evaluation'] = {'rating': {'score': 88}, 'score': 88}
+    original['sha256'] = snapshot_digest(original)
+    path.write_text(json.dumps(original))
+    loaded = load_snapshot(path)
+    assert_no_retired_fields(loaded)
+    assert loaded['hits'][0]['entry'] == expected['hits'][0]['entry']
+    assert loaded['hits'][0]['plan']['setup_evaluation'] == {}
+    # Disk stays unchanged: old integrity metadata describes original bytes/data.
+    assert json.loads(path.read_text()) == original

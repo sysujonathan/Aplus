@@ -107,7 +107,7 @@ def test_shadow_preserves_complete_payload_and_records_match(store, frame, monke
     payload = {
         'asof': '2024-08-09', 'setup_date': '2024-08-08',
         'entry': 10.2, 'stop': 9.1, 'target': 12.4,
-        'score': 88, 'rating': {'score': 88}, 'warning': '',
+        'warning': '',
     }
     raw = reject_frame(frame)
     result = fast.run(lambda: payload, raw, prepare_indicators(raw), 'one')
@@ -447,8 +447,7 @@ def test_fuse_evidence_falls_back_to_stock_transaction_when_direct_write_fails(
                 asof=frame.date.iloc[-1], force=True)
     payload = {
         'asof': frame.date.iloc[-1], 'setup_date': frame.date.iloc[-1],
-        'entry': 20.0, 'stop': 19.0, 'target': 22.0, 'score': 80,
-        'rating': None, 'close': 20.0, 'warning': '',
+        'entry': 20.0, 'stop': 19.0, 'target': 22.0, 'close': 20.0, 'warning': '',
     }
     monkeypatch.setenv(MODE_ENV, 'SHADOW')
     monkeypatch.setattr('workbench.service.signal_at_end', lambda *_a, **_k: payload)

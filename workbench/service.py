@@ -1029,7 +1029,7 @@ class Service:
             raise ValueError('策略不支持所选周期')
         if not spec['datasets'] or spec['start'] > spec['end']:
             raise ValueError('需要有效的股票范围和起止日期')
-        a = Assumptions(**spec['assumptions'])
+        a = Assumptions.from_saved(spec['assumptions'])
         a.validate()
         records,errors,snapshots = [],[],[]
         for n,did in enumerate(spec['datasets']):

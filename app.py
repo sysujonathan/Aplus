@@ -208,7 +208,6 @@ def research_page():
         wait = c1.number_input('最多等待入场（根）',1,100,5)
         hold = c2.number_input('最多持有（根）',1,500,20)
         rr = c3.number_input('最低计划盈亏比',0.,20.,0.,step=0.5)
-        score = st.number_input('最低原始策略分数（各策略量纲不同，0 表示不额外筛分）',0.,10000.,0.)
         c1,c2,c3 = st.columns(3)
         fee = c1.number_input('单边费率（万分之）',0.,100.,3.)
         tax = c2.number_input('卖出额外费用（万分之）',0.,100.,5.)
@@ -216,7 +215,7 @@ def research_page():
         st.caption('这些是可修改的研究假设，不是当前券商收费标准。下一根才允许退出；同根触及止盈止损按止损处理；单一价格 K 线不成交。')
     if st.button('开始回测研究',type='primary'):
         submit('backtest',{'datasets':ids,'strategy':key,'timeframe':tf,'start':str(start),'end':str(end),
-                          'assumptions':dict(wait_bars=wait,holding_bars=hold,min_rr=rr,min_score=score,
+                          'assumptions':dict(wait_bars=wait,holding_bars=hold,min_rr=rr,
                                              commission_bps=fee,sell_tax_bps=tax,slippage_bps=slip)})
     current_job()
     st.subheader('研究报告与对比')

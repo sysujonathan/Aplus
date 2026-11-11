@@ -23,9 +23,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, clamp, band, band_calibrated, is_calibration_available
-from core.rating_core import (quality_factor, pb_speed_factor, gap_width_factor,
-                              consec_bear_penalty, time_decay_factor, sum_weights, factor)
 
 logger = logging.getLogger(__name__)
 
@@ -94,66 +91,6 @@ class GapPinbarStrategy(BaseStrategy):
         
         return result
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """[RATING_PLAN §4.2] Gap+Pinbar 评级: 缺口家族四因子骨架 + Pinbar 下影比 + EMA20刺破回收 (纯 PA)."""
-        if df is None or df.empty:
-            return None
-        meta = cls.get_metadata()
-        sig_col = meta.get('signal_column', '')
-        sig_pos = len(df) - 1
-        sig_row = df.iloc[-1]
-        if sig_col and sig_col in df.columns and df[sig_col].fillna(False).any():
-            sp = df.index[df[sig_col].fillna(False)]
-            sig_pos = df.index.get_loc(sp[-1])
-            sig_row = df.iloc[sig_pos]
-
-        q = float(sig_row.get('sig_bar_quality_gp', 0) or 0)
-        sl = sig_row.get('sl_gap_pinbar', np.nan)
-        gap_top = sig_row.get('gap_pinbar_top_exact', np.nan)
-        gap_size_pct = 0.0
-        if pd.notna(gap_top) and pd.notna(sl) and sl > 0:
-            gap_size_pct = round((float(gap_top) - float(sl)) / float(sl) * 100, 2)
-
-        pb_bars = int(sig_row.get('bars_since_breakout_gp', 5) or 5)
-        bears = 0
-        if 'bars_since_breakout_gp' in df.columns and pb_bars > 0 and 0 <= sig_pos - pb_bars < sig_pos:
-            pb_df = df.iloc[sig_pos - pb_bars: sig_pos]
-            is_bear = pb_df['close'] < pb_df['open']
-            if len(is_bear) > 1:
-                g = (is_bear != is_bear.shift()).cumsum()
-                bg = is_bear.groupby(g).sum()
-                bears = int(bg.max()) if not bg.empty else 0
-        bars_passed = max(0, len(df) - 1 - sig_pos)
-
-        f_q = quality_factor(q)
-        f_pb = pb_speed_factor(pb_bars)
-        f_gap = gap_width_factor(gap_size_pct)
-        f_bear = consec_bear_penalty(bears)
-        f_decay = time_decay_factor(bars_passed)
-
-        # Pinbar 专属签名 (纯 PA)
-        o = sig_row.get('open', np.nan)
-        c = sig_row.get('close', np.nan)
-        l = sig_row.get('low', np.nan)
-        h = sig_row.get('high', np.nan)
-        rng = (h - l) if (pd.notna(h) and pd.notna(l)) else 0.0
-        tail = ((min(o, c) - l) / rng) if (rng > 0 and pd.notna(o) and pd.notna(c) and pd.notna(l)) else 0.0
-        f_tail = factor('Pinbar下影比', round(float(tail), 3), tail >= 0.40, 1.5 if tail >= 0.40 else 0.0,
-                        sop_ref='SOP Step 4 Tail', note='长下影=拒绝/空头陷阱' if tail >= 0.40 else '下影不足')
-        ema = sig_row.get('ema20', np.nan)
-        pierce = (pd.notna(ema) and pd.notna(l) and l <= ema and pd.notna(c) and c > ema)
-        f_pierce = factor('EMA20刺破回收', 1.0 if pierce else 0.0, pierce, 1.0 if pierce else 0.0,
-                          sop_ref='SOP Step 8 Trap2+Step2磁力',
-                          note='刺破EMA20后收盘回收=空头陷阱' if pierce else 'EMA20未刺破回收')
-
-        factors = [f_q, f_pb, f_gap, f_bear, f_decay, f_tail, f_pierce]
-        raw = sum_weights(factors)
-        score = clamp(50 + 10 * raw)
-        toxic = raw <= -3
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        return RatingResult(raw_score=raw, score=score, letter=letter, factors=factors,
-                            toxic=toxic, calibrated=is_calibration_available())
 
     @classmethod
     def annotate_chart(cls, ax, plot_df: pd.DataFrame, strategy_type: str, **kwargs) -> int:

@@ -116,7 +116,7 @@ def test_render_chart_calls_strategy_annotation_with_integer_axis_and_anchor():
     assert captured["kwargs"]["tp1"] == payload["target"]
 
 
-def test_info_panel_restores_plan_quality_rating_and_hit_factors():
+def test_info_panel_keeps_prices_quality_and_ignores_legacy_rating():
     frame = _bars()
     frame["bars_since_breakout"] = 4
     payload = {
@@ -145,9 +145,9 @@ def test_info_panel_restores_plan_quality_rating_and_hit_factors():
     assert "信号K收盘位置 100%（门槛≥100%）" in lines[1]
     assert "Quality 0.75" in lines[1]
     assert "PB bars 4" in lines[1]
-    assert "Rating 76" in lines[1]
+    assert "Rating" not in "\n".join(lines)
     assert "前序开放缺口 3个" in lines[1]
-    assert lines[2] == "命中：信号K质量 / 趋势过滤"
+    assert len(lines) == 2
 
 
 def test_gap_h2_h1_marker_uses_neutral_colors_in_gui_adapter():

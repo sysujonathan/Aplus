@@ -208,7 +208,7 @@ def _setup_date(instance, df, meta):
     return str(last.date)
 
 
-def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=None):
+def signal_at_end(spec, frame, *, plan_prices=True, prepared=None):
     instance, df = (calculate_prepared(spec, prepared) if prepared is not None
                     else calculate(spec, frame))
     meta = instance.get_metadata()
@@ -222,12 +222,10 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
             return None
         entry, stop, target = plan['entry'], plan['stop'], plan['target']
         warning = '' if 0 < stop < entry < target else '当前计划无有效做多风险收益组合，请人工核对'
-        evaluation = evaluation_at_setup(spec, frame, plan['h2_setup_date'], with_rating=with_rating)
+        evaluation = evaluation_at_setup(spec, frame, plan['h2_setup_date'])
         if evaluation and evaluation.get('warning'):
             warning += ' ' + evaluation['warning']
         return dict(plan, asof=str(row.date), setup_date=plan['h2_setup_date'],
-                    score=_number(row.get(meta.get('score_column', ''))),
-                    rating=evaluation.get('rating') if evaluation else None,
                     setup_evaluation=evaluation,
                     close=float(row.close), warning=warning)
     flag = row[meta.get('active_signal_column') or meta['signal_column']]
@@ -241,16 +239,8 @@ def signal_at_end(spec, frame, with_rating=True, *, plan_prices=True, prepared=N
     warning = ''
     if entry is None or stop is None or target is None or not 0 < stop < entry < target:
         warning = '策略未给出有效的做多入场/止损/目标组合；保留信号供人工分析，不自动补造交易价格'
-    score = _number(row.get(meta.get('score_column', '')))
-    rating = None
-    if with_rating and hasattr(instance, 'compute_rating'):
-        try:
-            obj = instance.compute_rating(df)
-            rating = obj.to_dict() if obj is not None else None
-        except Exception as exc:
-            warning += f' 评级失败：{exc}'
     payload = {'asof':str(row.date), 'setup_date':_setup_date(instance,df,meta),
-               'entry':entry,'stop':stop,'target':target,'score':score,'rating':rating,
+               'entry':entry,'stop':stop,'target':target,
                'close':float(row.close), 'warning':warning}
     close_position_column = meta.get('signal_close_position_column')
     close_position_minimum = _number(meta.get('signal_close_position_min'))

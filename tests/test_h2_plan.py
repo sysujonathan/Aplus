@@ -115,9 +115,9 @@ def test_daily_entry_floor_sl_two_r_and_reference_levels(h2_spec, h2_bars):
     assert second['target'] == 14.25
     assert second['initial_risk_pct'] == pytest.approx((11.41 - 9.99) / 11.41 * 100)
     assert second['mm_r_multiple'] == pytest.approx((14 - 11.41) / (11.41 - 9.99))
-    assert second['rating'] == first['rating']
+    assert 'rating' not in second and 'score' not in second
     assert second['setup_evaluation'] == first['setup_evaluation']
-    assert second['rating']['factors']
+    assert 'rating' not in second['setup_evaluation']
 
 
 @pytest.mark.parametrize('high,low,state,reason', [
@@ -292,17 +292,17 @@ def test_legacy_v1_plan_keeps_pre_upgrade_exact_offset_prices():
     assert plan['target'] == 15.51
 
 
-def test_setup_evaluation_is_causal_and_rating_can_be_disabled(h2_spec, h2_bars):
+def test_setup_evaluation_is_causal_without_rating(h2_spec, h2_bars):
     first = signal_at_end(h2_spec, h2_bars)
     latest = append_bar(h2_bars, 11.4, 10.3)
     last = signal_at_end(h2_spec, latest)
     assert last['setup_evaluation'] == first['setup_evaluation']
     assert last['setup_evaluation']['asof'] == first['setup_date']
     assert last['setup_evaluation']['basis'] == 'frozen-original-setup'
-    assert last['rating'] == first['rating']
-    assert last['rating']['factors']
-    no_rating = signal_at_end(h2_spec, latest, with_rating=False)
-    assert no_rating['rating'] is None
+    assert 'rating' not in last and 'score' not in last
+    assert 'rating' not in last['setup_evaluation']
+    no_rating = signal_at_end(h2_spec, latest)
+    assert 'rating' not in no_rating
     assert no_rating['setup_evaluation']['signal_quality'] == first['setup_evaluation']['signal_quality']
 
 
@@ -344,7 +344,7 @@ def test_missing_anchor_hides_old_prices(h2_spec, h2_bars):
 
 
 def test_frozen_and_fixed_price_research_stay_unchanged(h2_spec, h2_bars):
-    legacy = signal_at_end(h2_spec, h2_bars, with_rating=False, plan_prices=False)
+    legacy = signal_at_end(h2_spec, h2_bars, plan_prices=False)
     assert legacy['entry'] == 11.6
     assert legacy['stop'] == 10
     assert legacy['target'] == pytest.approx(14.8)  # Frozen active first target = 2R.
@@ -540,7 +540,7 @@ def test_integrated_h2_uses_plan_card_without_old_prices_or_rating_labels(h2_spe
     assert any('SL1参考 10.29' in text and 'MM参考 14.00' in text for text in labels)
     assert not any('Rating' in text or 'Quality' in text or 'PB bars' in text for text in labels)
     assert to_hex(colors['H1']).upper() == '#CBD5E1'
-    assert plan['rating']['factors']  # Still archived for tracing, outside the decision card.
+    assert 'rating' not in plan and 'score' not in plan
 
 
 def test_historical_h2_without_pricing_basis_keeps_sl1_mm_labels(h2_spec, h2_bars):
@@ -601,7 +601,7 @@ def test_scan_archives_new_plan_without_replacing_legacy_or_duplicating_manual_p
     store = Store(tmp_path / 'scan-plan')
     did = save_dataset(store, 'sh.600000', h2_bars, 'csv', '前复权')
     day = h2_bars.date.iloc[-1]
-    legacy = signal_at_end(h2_spec, h2_bars, with_rating=False, plan_prices=False)
+    legacy = signal_at_end(h2_spec, h2_bars, plan_prices=False)
     oid = digest(f'{did}|{h2_spec.id}|{h2_spec.version}|daily|{day}'.encode())
     store.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                   (oid, 'previous-scan', 'sh.600000', h2_spec.id, h2_spec.version,

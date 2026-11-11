@@ -6,7 +6,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, RatingFactor, clamp, band, band_calibrated, is_calibration_available
 from .geometric_engine import GeometricTrendlineEngine 
 from core.strategies.mtr_structural_v35 import MTRStructuralEngineV35
 
@@ -68,31 +67,6 @@ class MTRStrategy(BaseStrategy):
         """MTR 信号信息提取 (使用基类默认实现即可, 无额外信息)"""
         return super().get_signal_info(df)
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """[RATING_PLAN §4.4] MTR 评级: 包七维综合分 mtr_score(0-100).
-        ⚠️ Phase 0 直接包手调七维权重; 维度2(EMA20突破)权重待 Phase 2 下调至低档
-           (Step 7 MA_Gap 翻转证据, 非动量因子); calibrated=False。
-        """
-        if df is None or df.empty:
-            return None
-        meta = cls.get_metadata()
-        score_col = meta.get('score_column', 'mtr_score')
-        raw = 0.0
-        if score_col in df.columns:
-            val = df.iloc[-1].get(score_col, np.nan)
-            if pd.notna(val):
-                raw = float(val)
-        score = clamp(round(raw))
-        toxic = score < 30
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        factors = [RatingFactor(
-            name='七维综合评分', value=raw, hit=raw >= 50, weight=0.0,
-            sop_ref='SOP Step 1/2/4/5/7/11',
-            note='七维手调加权(结构15+趋势10+反弹20+回调35+极值5+信号K10+深度5); '
-                 '维度2 EMA权重待Phase2下调至低档(MA_Gap翻转证据, 非动量因子)')]
-        return RatingResult(raw_score=raw, score=score, letter=letter, factors=factors,
-                            toxic=toxic, calibrated=is_calibration_available())
 
     @classmethod
     def annotate_chart(cls, ax, plot_df: pd.DataFrame, strategy_type: str, **kwargs) -> None:
@@ -383,7 +357,6 @@ class MTRStrategy(BaseStrategy):
 # 🔧 系统说明
 Python 引擎已完成以下验证（无需你重复质疑）：
 - ✅ H0→L1→H1→TL 五点结构已识别并通过斐波那契回撤校验
-- ✅ 七维度综合评分: **{df.iloc[-1].get('mtr_score', 0):.1f} / 100**（≥50分才会提交给你审核）
 - ✅ Buy Stop 入场价已定位在信号K线的 High
 
 **你的职责**是评估以下两个维度，给出客观判断：

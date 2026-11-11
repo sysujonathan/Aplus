@@ -160,7 +160,6 @@ def annotation_kwargs(payload, info):
         "sl_price": payload.get("stop") if payload.get("stop") is not None else info.get("sl"),
         "tp1": payload.get("target") if payload.get("target") is not None else info.get("tp1"),
         "anchor_signal_date": payload.get("setup_date") or payload.get("asof"),
-        "ev_rating": extra.get("ev_rating", ""),
         "sig_quality": extra.get("sig_quality", 0),
         "bears": extra.get("pb_consec_bear", 0),
     }
@@ -214,8 +213,6 @@ def info_panel_lines(payload, info, frame, open_gap_count=0):
             if key in row and pd.notna(row.get(key)):
                 pb_bars = int(row.get(key))
                 break
-    rating = payload.get("rating") or info.get("rating") or {}
-    rating_score = _number(rating.get("score")) if isinstance(rating, dict) else None
     quality_parts = []
     gate = payload.get("signal_quality_rule") if isinstance(payload.get("signal_quality_rule"), dict) else {}
     gate_position = _number(gate.get("close_position"))
@@ -226,26 +223,14 @@ def info_panel_lines(payload, info, frame, open_gap_count=0):
         quality_parts.append(f"Quality {quality:.2f}")
     if pb_bars is not None:
         quality_parts.append(f"PB bars {pb_bars}")
-    if rating_score is not None:
-        quality_parts.append(f"Rating {rating_score:.0f}")
     if open_gap_count:
         quality_parts.append(f"前序开放缺口 {open_gap_count}个")
-
-    factor_parts = []
-    if isinstance(rating, dict):
-        factor_parts = [
-            str(factor.get("name"))
-            for factor in rating.get("factors", [])
-            if isinstance(factor, dict) and factor.get("hit") and factor.get("name")
-        ][:3]
 
     lines = []
     if prices:
         lines.append(" · ".join(prices))
     if quality_parts:
         lines.append(" · ".join(quality_parts))
-    if factor_parts:
-        lines.append("命中：" + " / ".join(factor_parts))
     return lines
 
 

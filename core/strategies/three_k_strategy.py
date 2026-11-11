@@ -14,8 +14,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, clamp, band, band_calibrated, is_calibration_available
-from core.rating_core import factor, rr_factor, sum_weights
 
 # Al Brooks PA 概念标注:
 # - Breakout Gap (突破缺口): 3K中相邻K线之间的跳空, Low(i) >= High(i-1)
@@ -99,71 +97,11 @@ class ThreeKStrategy(BaseStrategy):
                     reward = gt_tp_f - gt_entry_f if gt_tp_f else 0
                     extra_info['gap_test_rr'] = round(reward / risk, 1) if risk > 0 else 0
         
-        # 3K 评分 (简化版: 使用 location_pct)
-        loc = row.get('location_pct', 0.5)
-        extra_info['score'] = round((1 - loc) * 100, 1)  # 低位加分
-        
         if extra_info:
             result['extra_info'] = extra_info
         
         return result
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """[RATING_PLAN §4.5] 3K 评级: 最小手调集 (纯 PA, 已删违规 trend_align/EMA动量).
-        因子: 信号K质量/缺口保持开放/陷阱过滤/非买入高潮/三连阳/RR≥2。
-        """
-        if df is None or df.empty:
-            return None
-        sig_col = 'signal_3k_gap_test'
-        sig_pos = len(df) - 1
-        sig_row = df.iloc[-1]
-        if sig_col in df.columns and df[sig_col].fillna(False).any():
-            sp = df.index[df[sig_col].fillna(False)]
-            sig_pos = df.index.get_loc(sp[-1])
-            sig_row = df.iloc[sig_pos]
-
-        # 信号K质量 (Step 4)
-        body_pct = float(sig_row.get('body_pct', 0) or 0)
-        morph_ok = bool(sig_row.get('morph_ok', False))
-        f_q = factor('信号K质量', round(body_pct, 3), morph_ok, 1.0 if morph_ok else 0.0,
-                     sop_ref='SOP Step 4', note='实体饱满=强阳' if morph_ok else '形态不达标')
-
-        # 缺口保持开放 (Step 6 Body Gap — Measured Gap 完整)
-        gap_open = bool(sig_row.get('breakout_gap_open', False))
-        f_gap = factor('缺口保持开放', 1.0 if gap_open else 0.0, gap_open, 2.0 if gap_open else 0.0,
-                       sop_ref='SOP Step 6 Body Gap', note='Measured Gap完整=趋势延续' if gap_open else '缺口被补')
-
-        # 陷阱过滤 (Step 8 FBO/Climax)
-        trap_ok = bool(sig_row.get('trap_check_ok', True))
-        f_trap = factor('陷阱过滤通过', 1.0 if trap_ok else 0.0, trap_ok, 2.0 if trap_ok else 0.0,
-                        sop_ref='SOP Step 8 (FBO/Climax)', note='非多头陷阱' if trap_ok else 'Bull Trap风险')
-
-        climax_ok = bool(sig_row.get('climax_ok', True))
-        f_climax = factor('非买入高潮', 1.0 if climax_ok else 0.0, climax_ok, 1.0 if climax_ok else 0.0,
-                          sop_ref='SOP Step 8 Climax', note='非 exhaustion move' if climax_ok else '买入高潮')
-
-        # 三连阳动能 (Step 6/7)
-        three_bulls = bool(sig_row.get('three_bulls', False))
-        f_3b = factor('三连阳动能', 1.0 if three_bulls else 0.0, three_bulls, 1.0 if three_bulls else 0.0,
-                      sop_ref='SOP Step 6/7', note='强动能微通道' if three_bulls else '动能不足')
-
-        # RR (Step 9)
-        entry = sig_row.get('entry_3k_gap_test', np.nan)
-        sl = sig_row.get('sl_3k_gap_test', np.nan)
-        tp = sig_row.get('tp_3k_gap_test', np.nan)
-        rr = 0.0
-        if pd.notna(entry) and pd.notna(sl) and pd.notna(tp) and entry > sl:
-            rr = round((tp - entry) / (entry - sl), 1)
-        f_rr = rr_factor(rr)
-
-        factors = [f_q, f_gap, f_trap, f_climax, f_3b, f_rr]
-        raw = sum_weights(factors)
-        score = clamp(40 + 12 * raw)  # 占位归一, Phase 2 改逐策略切点
-        toxic = raw <= -3
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        return RatingResult(raw_score=raw, score=score, letter=letter, factors=factors,
-                            toxic=toxic, calibrated=is_calibration_available())
 
     def __init__(self):
         # Load parameters from settings

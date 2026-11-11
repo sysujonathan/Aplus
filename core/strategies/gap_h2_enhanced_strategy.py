@@ -165,7 +165,7 @@ class GapH2EnhancedStrategy(GapH2Strategy):
             df['sl_gap_h2'] = np.where(df['signal_gap_h2'], floor, np.nan)
         df['tp_gap_h2'] = np.where(df['signal_gap_h2'], target, np.nan)
 
-        # 兼容性列 (供 compute_rating / 图表标注复用, 不影响回测)
+        # 兼容性列 (供 图表标注复用, 不影响回测)
         df['gap_h2_floor_exact'] = np.where(df['signal_gap_h2'], floor, np.nan)
         df['gap_h2_prior_low'] = np.where(df['signal_gap_h2'], swing, np.nan)
         df['gap_h2_top_exact'] = np.where(df['signal_gap_h2'], group_min_low.shift(1), np.nan)

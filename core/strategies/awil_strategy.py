@@ -34,8 +34,6 @@ from typing import Dict, Any, Optional
 from .base import BaseStrategy
 from core.formatter import get_common_context
 from config import settings
-from core.rating import RatingResult, clamp, band, band_calibrated, is_calibration_available
-from core.rating_core import factor, sum_weights
 
 logger = logging.getLogger(__name__)
 
@@ -94,119 +92,6 @@ class AWILStrategy(BaseStrategy):
 
         return result
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """[RATING_PLAN §4.6] AWIL 评级 (Phase 2 重设计): 全部使用随信号变化的纯 PA 因子,
-        消除原恒为 A+ 退化。
-        因子: 实体占比 / 回调速度(awil_pb_bars) / EMA20磁力距离 / 回撤深度比 / 两腿对称 / 下影陷阱。
-        ⛔ 已移除原恒定因子 (收盘位置/全程站上EMA20/空头失败次数/RR), 因其由策略前置条件恒定,
-           导致 520 信号全 A+ 无区分度 (违反评级契约)。
-        """
-        if df is None or df.empty:
-            return None
-        sig_col = 'signal_awil'
-        sig_pos = len(df) - 1
-        sig_row = df.iloc[-1]
-        if sig_col in df.columns and df[sig_col].fillna(False).any():
-            sp = df.index[df[sig_col].fillna(False)]
-            sig_pos = df.index.get_loc(sp[-1])
-            sig_row = df.iloc[sig_pos]
-
-        o = float(sig_row.get('open', np.nan))
-        h = float(sig_row.get('high', np.nan))
-        l = float(sig_row.get('low', np.nan))
-        c = float(sig_row.get('close', np.nan))
-        rng = h - l
-        body_pct = (c - o) / rng if (pd.notna(o) and pd.notna(c) and pd.notna(h) and pd.notna(l) and rng > 0) else 0.0
-
-        # 1) 信号K线实体占比 (Step 4 Signal Bar Quality, 连续变化, 替代原恒定收盘位置)
-        if body_pct >= 0.7:
-            f_body = factor('实体占比', round(body_pct, 3), True, 1.5,
-                            sop_ref='SOP Step 4', note='强实体阳线=买方完全控制')
-        elif body_pct >= 0.5:
-            f_body = factor('实体占比', round(body_pct, 3), True, 0.5,
-                            sop_ref='SOP Step 4', note='中等实体')
-        else:
-            f_body = factor('实体占比', round(body_pct, 3), False, 0.0,
-                            sop_ref='SOP Step 4', note='实体弱/长影线')
-
-        # 2) 回调速度 (缺口家族共用口径, 变化; 快速=空头被套)
-        pb_bars = int(sig_row.get('awil_pb_bars', 0) or 0)
-        if pb_bars > 0:
-            f_pb = factor('回调速度', pb_bars, pb_bars <= 8,
-                          (1.0 if pb_bars <= 8 else (-1.0 if pb_bars > 15 else 0.0)),
-                          sop_ref='SOP Step 8/Step 3',
-                          note='快速回调=空头被套' if pb_bars <= 8 else ('拖延回调=动能衰减' if pb_bars > 15 else '回调速度中性'))
-        else:
-            f_pb = factor('回调速度', 0, False, 0.0, sop_ref='SOP Step 8/Step 3', note='无回调速度数据')
-
-        # 3) EMA20 磁力距离 (Step 7 Method 3, 变化; 适中最佳, 过远=追高)
-        ema = float(sig_row.get('ema20', np.nan))
-        atr = float(sig_row.get('atr', np.nan))
-        ema_dist = (c - ema) / atr if (pd.notna(ema) and pd.notna(atr) and atr > 0) else np.nan
-        if pd.notna(ema_dist):
-            if 0.5 <= ema_dist <= 5.0:
-                f_ema = factor('EMA磁力距离', round(ema_dist, 2), True, 0.5,
-                               sop_ref='SOP Step 7 Method 3 (EMA磁力, 非动量)', note='距EMA适中=健康低吸')
-            elif ema_dist > 6.0:
-                f_ema = factor('EMA磁力距离', round(ema_dist, 2), False, -0.5,
-                               sop_ref='SOP Step 7 Method 3 (EMA磁力, 非动量)', note='过度远离EMA=追高')
-            else:
-                f_ema = factor('EMA磁力距离', round(ema_dist, 2), False, 0.0,
-                               sop_ref='SOP Step 7 Method 3 (EMA磁力, 非动量)', note='贴脸EMA')
-        else:
-            f_ema = factor('EMA磁力距离', 0.0, False, 0.0, sop_ref='SOP Step 7 Method 3', note='无EMA数据')
-
-        # 4) 回撤深度比 (swing_high -> 信号low, 变化; 浅回撤=强趋势)
-        swing_high = float(sig_row.get('awil_swing_high', np.nan))
-        if pd.notna(swing_high) and swing_high > 0 and pd.notna(l):
-            depth = (swing_high - l) / swing_high
-            if depth < 0.12:
-                f_depth = factor('回撤深度', round(depth, 3), True, 0.5,
-                                 sop_ref='SOP Step 6 (浅回调=强趋势)', note='浅回撤=强势')
-            elif depth > 0.25:
-                f_depth = factor('回撤深度', round(depth, 3), False, -0.5,
-                                 sop_ref='SOP Step 6 (深回调=弱)', note='深回撤=趋势减弱')
-            else:
-                f_depth = factor('回撤深度', round(depth, 3), True, 0.0,
-                                 sop_ref='SOP Step 6', note='回撤适中')
-        else:
-            f_depth = factor('回撤深度', 0.0, False, 0.0, sop_ref='SOP Step 6', note='无回撤数据')
-
-        # 5) 两腿对称性 (Step 6 H2, 变化; 回测 awil 中 L2≥L1 更优 w=+0.5)
-        leg2_shallow = False
-        try:
-            if sig_pos >= 2 and 'high' in df.columns and 'low' in df.columns:
-                is_lhll = (df['high'] < df['high'].shift(1)) & (df['low'] < df['low'].shift(1))
-                pre = df.iloc[:sig_pos]
-                lhll_lows = pre['low'][is_lhll.iloc[:sig_pos]]
-                if len(lhll_lows) >= 2:
-                    leg2_shallow = float(lhll_lows.iloc[-1]) >= float(lhll_lows.iloc[-2])
-        except Exception:
-            leg2_shallow = False
-        f_leg2 = factor('两腿对称性', 1.0 if leg2_shallow else 0.0, leg2_shallow, 1.0 if leg2_shallow else 0.0,
-                        sop_ref='SOP Step 6 H2', note='L2低点≥L1=经典H2' if leg2_shallow else 'L2跌破L1')
-
-        # 6) 下影支撑回收 (空头陷阱, Step 8 Trap2 + Step 4 Tail, 变化稀有)
-        tail_trap = False
-        try:
-            if sig_pos >= 1:
-                prev_low = df.iloc[sig_pos - 1]['low']
-                if pd.notna(prev_low) and pd.notna(l) and pd.notna(c) and pd.notna(o):
-                    tail_trap = (l <= prev_low) and (c > o)
-        except Exception:
-            tail_trap = False
-        f_tail = factor('下影支撑回收', 1.0 if tail_trap else 0.0, tail_trap, 1.0 if tail_trap else 0.0,
-                        sop_ref='SOP Step 8 Trap2 + Step 4 Tail',
-                        note='下影刺穿前低收阳=空头陷阱' if tail_trap else '无下影陷阱')
-
-        factors = [f_body, f_pb, f_ema, f_depth, f_leg2, f_tail]
-        raw = sum_weights(factors)
-        score = clamp(40 + 12 * raw)  # Phase 2 重设计: 全变化因子后 raw 有分布, 不再恒 A+
-        toxic = raw <= -3
-        letter = band_calibrated(cls, score, toxic=toxic, timeframe=timeframe)
-        return RatingResult(raw_score=raw, score=score, letter=letter, factors=factors,
-                            toxic=toxic, calibrated=is_calibration_available())
 
     @classmethod
     def annotate_chart(cls, ax, plot_df: pd.DataFrame,

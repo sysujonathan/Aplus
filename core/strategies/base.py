@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import logging
 
-from core.rating import RatingResult, RatingFactor, band, band_calibrated, map_native, clamp
 
 logger = logging.getLogger(__name__)
 
@@ -89,35 +88,6 @@ class BaseStrategy(ABC):
             'gap_top_exact_column': '',
         }
 
-    @classmethod
-    def compute_rating(cls, df: pd.DataFrame, timeframe: str = 'daily') -> Optional['RatingResult']:
-        """
-        [RATING_PLAN Phase 0] 计算信号评级 (统一输出契约).
-
-        默认实现: 退化评级 (从 score_column 取质量分 0-1 -> 0-100 映射)。
-        各策略 MUST 覆写此方法, 以产出基于自身 PA 签名的数据驱动 RatingResult。
-        返回值经 to_dict() 由 scanner/hunter 统一消费 (res['info']['rating'])。
-
-        ⛔ PA 约束: 任何覆写不得引入 volume/ADX/EMA斜率 类非 PA 因子。
-        """
-        meta = cls.get_metadata()
-        score_col = meta.get('score_column', '')
-        q = 0.0
-        try:
-            if score_col and score_col in df.columns and df is not None and not df.empty:
-                val = df.iloc[-1].get(score_col, np.nan)
-                if pd.notna(val):
-                    q = float(val)
-        except Exception:
-            q = 0.0
-        score = clamp(round(q * 100))
-        letter = band_calibrated(cls, score, timeframe=timeframe)
-        factors = [RatingFactor(
-            name='信号K质量(退化)', value=q, hit=q > 0.5, weight=0.0,
-            sop_ref='SOP Step 4',
-            note='默认退化评级 — 该策略未覆写 compute_rating, 请用真实 PA 因子替换')]
-        return RatingResult(raw_score=q, score=score, letter=letter,
-                            factors=factors, calibrated=False)
 
     @classmethod
     def get_signal_info(cls, df: pd.DataFrame) -> Dict[str, Any]:
@@ -136,7 +106,6 @@ class BaseStrategy(ABC):
                 - entry: float            — Entry price from last row
                 - tp1: float              — First take-profit price
                 - tp2: float              — Second take-profit price (if exists)
-                - score: float            — Signal quality score
                 - extra_info: dict        — Strategy-specific附加信息
         """
         meta = cls.get_metadata()
@@ -169,21 +138,6 @@ class BaseStrategy(ABC):
                 if pd.notna(val):
                     result[f'tp{i+1}'] = float(val)
         
-        # Score
-        score_col = meta.get('score_column', '')
-        if score_col and score_col in df.columns:
-            val = row.get(score_col, np.nan)
-            if pd.notna(val):
-                result['score'] = float(val)
-        
-        # 评级 (RATING_PLAN Phase 0): 统一经 compute_rating 产出, 注入 extra_info
-        try:
-            rating_result = cls.compute_rating(df)
-            if rating_result is not None:
-                result['rating'] = rating_result.to_dict()
-        except Exception as e:
-            logger.warning(f"compute_rating failed in get_signal_info for {cls.__name__}: {e}")
-
         return result
 
     @classmethod
@@ -202,7 +156,6 @@ class BaseStrategy(ABC):
                 - sl_price: float         — Stop-loss price for horizontal lines
                 - tp1: float              — First take-profit price
                 - tp2: float              — Second take-profit price
-                - ev_rating: str          — EV rating label
                 - sig_quality: float       — Signal bar quality score
                 - bears: int              — Consecutive bear bars in pullback
         """
