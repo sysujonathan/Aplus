@@ -162,13 +162,21 @@ class InstalledVersionController:
         if self.waiting:
             folder,deadline=self.waiting
             if (folder/'ready.json').exists():
-                try:self.window._close_for_version_update();return
+                try:
+                    self.window._close_for_version_update(
+                        on_failure=lambda: self._cancel_chart_close(folder))
+                    return
                 except Exception as exc:
                     atomic_json(folder/'cancelled.json',{'cancelled':True});self.fail(str(exc))
             elif time.monotonic()>deadline:
                 atomic_json(folder/'cancelled.json',{'cancelled':True});self.fail('更新助手未能就绪，请稍后重试。')
         if self.queued and not self.busy and self.idle():self.begin()
         if not self.busy and not self.queued and time.monotonic()-self.last_check>6*3600:self.check(False)
+        self.poll_id=self.window.after(200,self.poll)
+
+    def _cancel_chart_close(self,folder):
+        atomic_json(folder/'cancelled.json',{'cancelled':True})
+        self.fail('图表尚未确认保存，当前版本继续使用。')
         self.poll_id=self.window.after(200,self.poll)
 
     def destroyed(self,event):
