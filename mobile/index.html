@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Aplus 盘前</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0d1117; color:#e6edf3; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; max-width:560px; margin:0 auto; padding:14px 14px 40px; }
+  header { padding:6px 0 10px; }
+  .brand { color:#8b949e; font-size:12px; letter-spacing:2px; }
+  h1 { font-size:22px; margin:3px 0 4px; }
+  .meta { color:#9da7b1; font-size:12.5px; line-height:1.6; }
+  .group { margin-top:18px; }
+  .group h2 { font-size:14px; color:#8b949e; letter-spacing:1px; margin-bottom:8px; display:flex; justify-content:space-between; }
+  .group h2 .cnt { color:#6e7681; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:11px 12px; margin-bottom:8px; width:100%; text-align:left; color:inherit; font:inherit; display:block; }
+  button.card { cursor:pointer; }
+  button.card:active { background:#1c2330; }
+  .row1 { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  .nm { font-size:16px; font-weight:600; }
+  .cd { color:#8b949e; font-size:12.5px; margin-left:6px; font-weight:400; }
+  .pill { font-size:11px; padding:2px 8px; border-radius:99px; white-space:nowrap; background:#0d2137; color:#79b8ff; }
+  .pill.hot { background:#3d1114; color:#ff7b72; }
+  .prices { display:flex; gap:12px; margin-top:7px; flex-wrap:wrap; }
+  .pr { font-size:13px; color:#9da7b1; }
+  .pr b { color:#f0f6fc; font-size:14.5px; }
+  .pr .up { color:#ff7b72; } .pr .dn { color:#56d364; }
+  .sub { color:#6e7681; font-size:12px; margin-top:5px; line-height:1.55; }
+  .chart-hint { color:#58a6ff; font-size:12px; margin-top:5px; }
+  .stale { display:none; border-radius:10px; padding:10px 12px; font-size:13.5px; line-height:1.55; margin-top:10px; }
+  .stale.info { display:block; background:#2b2110; border:1px solid #6e5518; color:#e3b341; }
+  .stale.warn { display:block; background:#5a2320; border:1px solid #8b3a34; color:#ffb4ab; }
+  .empty, .err { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px 12px; color:#9da7b1; font-size:14px; line-height:1.6; margin-top:16px; }
+  .err { border-color:#5a2320; color:#ff7b72; }
+  #viewer { position:fixed; inset:0; background:#05070a; display:none; z-index:10; flex-direction:column; }
+  #viewer.on { display:flex; }
+  #viewer .bar { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; }
+  #viewer .bar .t { font-size:15px; font-weight:600; }
+  #viewer button { background:#21262d; color:#e6edf3; border:1px solid #30363d; border-radius:8px; padding:6px 14px; font-size:14px; }
+  #viewer .imgwrap { flex:1; overflow:auto; display:flex; align-items:flex-start; justify-content:center; }
+  #viewer img { max-width:100%; height:auto; }
+  .ref-link { color:#d29922; font-size:12.5px; margin-top:5px; }
+  #cases { margin-top:26px; }
+  #cases h2 { font-size:17px; margin-bottom:4px; }
+  #cases .hint { color:#6e7681; font-size:12px; line-height:1.55; margin-bottom:10px; }
+  .search { width:100%; background:#161b22; border:1px solid #30363d; border-radius:8px; color:#e6edf3; padding:9px 11px; font-size:14px; margin-bottom:8px; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .chip { font-size:12px; padding:4px 10px; border-radius:99px; background:#161b22; border:1px solid #30363d; color:#9da7b1; cursor:pointer; }
+  .chip.on { background:#0d2137; color:#79b8ff; border-color:#1f6feb; }
+  .thumb { width:100%; border-radius:6px; margin-top:8px; display:block; }
+  #case-viewer { position:fixed; inset:0; background:#05070a; display:none; z-index:11; flex-direction:column; }
+  #case-viewer.on { display:flex; }
+  #case-viewer .bar { display:flex; justify-content:space-between; align-items:center; padding:12px 14px; }
+  #case-viewer .bar .t { font-size:15px; font-weight:600; }
+  #case-viewer button { background:#21262d; color:#e6edf3; border:1px solid #30363d; border-radius:8px; padding:6px 14px; font-size:14px; }
+  #case-viewer .body { flex:1; overflow:auto; padding:0 14px 30px; max-width:560px; margin:0 auto; width:100%; }
+  #case-viewer img { width:100%; border-radius:8px; margin:8px 0; }
+  #case-viewer .memory { white-space:pre-wrap; font-size:14px; line-height:1.75; color:#c9d1d9; margin-top:10px; }
+  #case-viewer .cmeta { color:#9da7b1; font-size:12.5px; line-height:1.7; }
+  footer { margin-top:22px; color:#6e7681; font-size:12px; line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">APLUS · 服务端盘前快照</div>
+  <h1 id="title">昨晚匹配</h1>
+  <div class="meta" id="meta">正在读取快照…</div>
+</header>
+<div class="stale" id="stale"></div>
+<main id="main"></main>
+<section id="cases"></section>
+<footer>数据来自服务端每晚一键同步+策略匹配导出的只读快照包；本页不做本地扫描、不连行情。价格为计划价位，交易决策请回桌面端核对背景。</footer>
+
+<div id="viewer">
+  <div class="bar"><span class="t" id="viewer-title"></span><button id="viewer-close">关闭</button></div>
+  <div class="imgwrap"><img id="viewer-img" alt="候选 K 线图"></div>
+</div>
+
+<div id="case-viewer">
+  <div class="bar"><span class="t" id="case-title"></span><button id="case-close">关闭</button></div>
+  <div class="body" id="case-body"></div>
+</div>
+
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const DATA_URL = params.get("src") || "data/snapshot.json";
+const main = document.getElementById("main");
+const meta = document.getElementById("meta");
+
+function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : v; }
+function num(v) { return (typeof v === "number") ? (Math.round(v * 1000) / 1000) : fmt(v); }
+/* 快照与案例都来自外部数据文件（案例更是多用户共享内容）：任何动态文本
+   拼进 innerHTML 之前必须先过 esc()，属性位也一样，禁止裸拼。 */
+function esc(v) {
+  return String(fmt(v)).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function riskPct(h) {
+  if (typeof h.initial_risk_pct === "number") return h.initial_risk_pct;
+  if (typeof h.entry === "number" && typeof h.stop === "number" && h.entry > 0) {
+    return Math.round((h.entry - h.stop) / h.entry * 10000) / 100;
+  }
+  return null;
+}
+
+function openChart(title, path) {
+  const v = document.getElementById("viewer");
+  document.getElementById("viewer-title").textContent = title;
+  document.getElementById("viewer-img").src = "data/" + path;
+  v.classList.add("on");
+}
+document.getElementById("viewer-close").addEventListener("click", () => {
+  document.getElementById("viewer").classList.remove("on");
+  document.getElementById("viewer-img").src = "";
+});
+
+const TOPIC_LABELS = {
+  "cont-h2": "高二延续", "cont-h1": "高一延续", "cont-gap": "缺口延续",
+  "cont-breakout": "突破延续", "cont-pullback": "回调延续", "cont-mm": "测量移动",
+  "rev-mtr": "MTR 反转", "rev-climax": "高潮反转", "rev-wedge": "楔形反转",
+  "rev-double": "双顶/双底", "range-boundary": "区间边界", "range-fail": "区间假突破",
+  "range-middle": "区间中部", "struct-signal": "信号 K", "struct-tail": "影线结构",
+  "struct-inside": "内包 K", "struct-outside": "外包 K", "struct-slope": "斜率结构",
+  "context-trend": "趋势背景", "context-range": "区间背景",
+  "context-transition": "背景转换", "context-mtf": "多周期",
+  "risk-entry": "入场风险", "risk-sl": "止损", "risk-exposure": "敞口", "risk-exit": "离场"
+};
+const STRATEGY_TOPICS = {
+  "STRATEGY_GAP_H2": ["cont-gap", "cont-h2"],
+  "STRATEGY_GAP_PINBAR": ["cont-gap", "struct-tail"],
+  "STRATEGY_STRUCTURAL_GAP": ["cont-gap"],
+  "MTR_MASTER": ["rev-mtr"],
+  "STRATEGY_3K": ["struct-signal", "struct-outside", "struct-inside"],
+  "STRATEGY_AWIL": ["context-trend", "cont-h2", "cont-breakout"]
+};
+let CASES = null;
+let caseTopic = "";
+let cardHits = [];
+
+function caseMatchesFor(h) {
+  if (!CASES) return [];
+  const topics = STRATEGY_TOPICS[h.strategy] || [];
+  return CASES.filter(c =>
+    (topics.length && (c.topic_ids || []).some(t => topics.includes(t)))
+    || (h.code && c.symbol === h.code));
+}
+
+function render(snap) {
+  const asof = snap.asof || "未知日期";
+  document.getElementById("title").textContent = asof + " 盘前匹配";
+  const gen = snap.generated_at ? new Date(snap.generated_at) : null;
+  const hits = Array.isArray(snap.hits) ? snap.hits : [];
+  const cov = snap.coverage || {};
+  meta.textContent = "快照生成 " + (gen ? gen.toLocaleString("zh-CN", { hour12: false }) : "—")
+    + " · 命中 " + hits.length + " 条"
+    + (cov.scanned ? " · 扫描 " + cov.scanned + "/" + (cov.scope || "") : "")
+    + " · 来源 " + (snap.source || "服务端");
+  /* 新鲜度闸门：主要使用场景是早上看昨晚的结果，asof=昨日是常态，
+     故 3 天内只作琥珀色日期提示；超过 3 天视为过期包，红色警告——
+     过期数据必须一眼看得出和「昨晚匹配」的区别。 */
+  const stale = document.getElementById("stale");
+  stale.className = "stale";
+  stale.textContent = "";
+  const dayMs = 24 * 3600 * 1000;
+  const asofDate = /^(\d{4})-(\d{2})-(\d{2})$/.test(asof)
+    ? new Date(+RegExp.$1, +RegExp.$2 - 1, +RegExp.$3) : null;
+  if (asofDate) {
+    const nowD = new Date();
+    const today = new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate());
+    const age = Math.round((today - asofDate) / dayMs);
+    if (age > 3) {
+      stale.classList.add("warn");
+      stale.textContent = "⚠ 这份快照是 " + asof + " 的，已经 " + age + " 天了，可能不是最新结果。先确认服务端最近一晚的盘前任务是否跑完。";
+    } else if (age >= 1) {
+      stale.classList.add("info");
+      stale.textContent = "这是 " + asof + "（昨晚）的匹配结果，今天的要等今晚盘后任务跑完。";
+    } else if (age < 0) {
+      stale.classList.add("warn");
+      stale.textContent = "⚠ 这份快照的日期 " + asof + " 在今天之后，日期异常，先别按它做计划。";
+    }
+  }
+  if (!hits.length) {
+    main.innerHTML = '<div class="empty">这一天没有命中任何策略。覆盖情况见快照元数据，明早再看。</div>';
+    return;
+  }
+  const charts = snap.charts || (snap.metadata && snap.metadata.charts) || {};
+  const groups = new Map();
+  for (const h of hits) {
+    const key = h.strategy || "其他";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(h);
+  }
+  main.innerHTML = "";
+  cardHits = hits;
+  for (const [name, rows] of groups) {
+    const sec = document.createElement("section");
+    sec.className = "group";
+    sec.innerHTML = "<h2>" + esc(name) + '<span class="cnt">' + rows.length + " 条</span></h2>";
+    for (const h of rows) {
+      const chartPath = h.observation_id ? charts[h.observation_id] : null;
+      const card = document.createElement(chartPath ? "button" : "div");
+      card.className = "card";
+      const rp = riskPct(h);
+      const score = (h.rating || h.score !== undefined)
+        ? '<span class="pill' + (h.rating === "A" ? " hot" : "") + '">' + esc(h.rating || "") + (h.score !== undefined && h.score !== null ? " " + esc(h.score) + "分" : "") + "</span>" : "";
+      let prices = '<span class="pr">入场 <b>' + esc(num(h.entry)) + '</b></span>'
+        + '<span class="pr">止损 <b class="dn">' + esc(num(h.stop)) + '</b></span>'
+        + '<span class="pr">目标 <b class="up">' + esc(num(h.target)) + '</b></span>';
+      let sub = [];
+      if (h.sl1_plan_price !== undefined && h.sl1_plan_price !== null) sub.push("SL1 " + esc(num(h.sl1_plan_price)));
+      if (h.mm_target !== undefined && h.mm_target !== null) sub.push("MM " + esc(num(h.mm_target)));
+      if (rp !== null) sub.push("风险 " + esc(rp) + "%");
+      if (h.prior_open_gap_count !== undefined && h.prior_open_gap_count !== null) sub.push("前序缺口 " + esc(h.prior_open_gap_count));
+      if (h.setup_date) sub.push("信号日 " + esc(h.setup_date));
+      card.innerHTML = '<div class="row1"><span class="nm">' + esc(h.name)
+        + '<span class="cd">' + esc(h.code) + "</span></span>" + score + "</div>"
+        + '<div class="prices">' + prices + "</div>"
+        + (sub.length ? '<div class="sub">' + sub.join(" · ") + "</div>" : "")
+        + (chartPath ? '<div class="chart-hint">点开看 K 线图 ›</div>' : "");
+      if (chartPath) {
+        card.addEventListener("click", () => openChart((h.name || "") + " " + (h.code || ""), chartPath));
+      }
+      card.dataset.hit = hits.indexOf(h);
+      sec.appendChild(card);
+    }
+    main.appendChild(sec);
+  }
+  /* 竞态修复：快照后到时也要补挂参考案例链接（案例先到时由 fetch 回调挂）。 */
+  if (CASES) annotateCards();
+}
+
+fetch(DATA_URL, { cache: "no-store" })
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(render)
+  .catch(e => {
+    meta.textContent = "读取快照失败";
+    main.innerHTML = '<div class="err">没读到快照包（' + esc(e.message) + '）。请确认服务端已导出最新快照，并且本页与快照包同源部署（data/snapshot.json）。</div>';
+  });
+
+function annotateCards() {
+  document.querySelectorAll(".card[data-hit]").forEach(card => {
+    if (card.querySelector(".ref-link")) return; /* 两个包都到齐时会调两次，防重复挂载 */
+    const h = cardHits[Number(card.dataset.hit)];
+    if (!h) return;
+    const matches = caseMatchesFor(h);
+    if (!matches.length) return;
+    const link = document.createElement("div");
+    link.className = "ref-link";
+    link.textContent = "参考案例 " + matches.length + " 篇 ›";
+    link.addEventListener("click", ev => {
+      ev.stopPropagation();
+      caseTopic = (STRATEGY_TOPICS[h.strategy] || [])[0] || "";
+      renderCases();
+      document.getElementById("cases").scrollIntoView({ behavior: "smooth" });
+    });
+    card.appendChild(link);
+  });
+}
+
+function openCase(c) {
+  document.getElementById("case-title").textContent = c.title || "案例";
+  const topics = (c.topic_ids || []).map(t => esc(TOPIC_LABELS[t] || t)).join(" · ");
+  const tags = (c.tags || []).concat(c.keywords || []).map(x => esc(x)).join(" · ");
+  let html = '<div class="cmeta">' + [c.symbol, c.timeframe, c.market].filter(Boolean).map(x => esc(x)).join(" · ")
+    + (topics ? "<br>主题 " + topics : "") + (tags ? "<br>标签 " + tags : "") + "</div>";
+  for (const img of c.images || []) html += '<img src="data/' + esc(img) + '" alt="案例图">';
+  if (c.memory) html += '<div class="memory">' + esc(c.memory) + "</div>";
+  document.getElementById("case-body").innerHTML = html;
+  document.getElementById("case-viewer").classList.add("on");
+}
+document.getElementById("case-close").addEventListener("click", () => {
+  document.getElementById("case-viewer").classList.remove("on");
+});
+
+/* 案例区外壳（搜索框+主题片）只建一次：输入事件只重绘列表容器，
+   绝不重建搜索框节点——否则每打一个字输入框就被替换、焦点丢失，
+   手机与中文输入法下搜索等于不可用。 */
+let casesShellBuilt = false;
+
+function buildCasesShell() {
+  const sec = document.getElementById("cases");
+  const usedTopics = [...new Set(CASES.flatMap(c => c.topic_ids || []))]
+    .filter(t => TOPIC_LABELS[t]);
+  sec.innerHTML = "<h2>案例库</h2>"
+    + '<div class="hint">看到新匹配的标的，先翻同主题的历史案例再做计划。下方的匹配是按策略主题/品种对齐，不是相似度判定。</div>'
+    + '<input class="search" id="case-q" type="search" placeholder="搜标题 / 品种 / 标签 / 复盘文字">'
+    + '<div class="chips"><span class="chip" data-topic="">全部</span>'
+    + usedTopics.map(t => '<span class="chip" data-topic="' + esc(t) + '">' + esc(TOPIC_LABELS[t]) + "</span>").join("")
+    + "</div>"
+    + '<div id="case-list"></div>';
+  document.getElementById("case-q").addEventListener("input", renderCaseList);
+  sec.querySelectorAll(".chip").forEach(ch => ch.addEventListener("click", () => {
+    caseTopic = ch.dataset.topic;
+    syncCaseChips();
+    renderCaseList();
+    document.getElementById("cases").scrollIntoView();
+  }));
+  casesShellBuilt = true;
+}
+
+function syncCaseChips() {
+  document.querySelectorAll("#cases .chip").forEach(ch =>
+    ch.classList.toggle("on", (ch.dataset.topic || "") === caseTopic));
+}
+
+function renderCaseList() {
+  const list = document.getElementById("case-list");
+  if (!list) return;
+  const q = (document.getElementById("case-q") || {}).value || "";
+  const rows = CASES.filter(c => {
+    if (caseTopic && !(c.topic_ids || []).includes(caseTopic)) return false;
+    if (q) {
+      const hay = [c.title, c.memory, c.symbol, (c.tags || []).join(" "), (c.keywords || []).join(" ")].join(" ");
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  list.innerHTML = "";
+  if (!rows.length) {
+    list.innerHTML = '<div class="empty">没有符合这个筛选的案例。</div>';
+    return;
+  }
+  for (const c of rows.slice(0, 100)) {
+    const card = document.createElement("button");
+    card.className = "card";
+    const topicLine = (c.topic_ids || []).map(t => esc(TOPIC_LABELS[t] || t)).join(" · ");
+    card.innerHTML = '<div class="row1"><span class="nm">' + esc(c.title) + "</span></div>"
+      + '<div class="sub">' + [c.symbol, c.timeframe].filter(Boolean).map(x => esc(x)).join(" · ")
+      + (topicLine ? '<div class="sub">' + topicLine + "</div>" : "")
+      + ((c.tags || []).length ? '<div class="sub">' + c.tags.map(x => esc(x)).join(" · ") + "</div>" : "")
+      + (c.images && c.images.length ? '<img class="thumb" loading="lazy" src="data/' + esc(c.images[0]) + '" alt="">' : "");
+    card.addEventListener("click", () => openCase(c));
+    list.appendChild(card);
+  }
+}
+
+function renderCases() {
+  const sec = document.getElementById("cases");
+  if (!CASES) {
+    sec.innerHTML = "<h2>案例库</h2>"
+      + '<div class="empty">这份包没有随附案例库（服务端案例库为空，或案例包尚未导出）。桌面端案例同步到服务端后，这里会自动出现。</div>';
+    casesShellBuilt = false;
+    return;
+  }
+  if (!casesShellBuilt) buildCasesShell();
+  syncCaseChips();
+  renderCaseList();
+}
+
+fetch("data/cases.json", { cache: "no-store" })
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(p => { CASES = Array.isArray(p.cases) ? p.cases : []; renderCases(); annotateCards(); })
+  .catch(() => { CASES = null; renderCases(); });
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
