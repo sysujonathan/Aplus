@@ -1,0 +1,11 @@
+.............................................................s.......... [ 75%]
+...s....................                                                 [100%]
+=============================== warnings summary ===============================
+tests/test_tickflow_scan_readiness.py::test_weekly_scan_without_daily_is_accepted_and_minimum_uses_weeks
+tests/test_tickflow_scan_readiness.py::test_partial_daily_does_not_prevent_a_valid_weekly_scan
+tests/test_scan_preflight.py::test_multiple_periods_audit_once_each_and_persist_checks
+  /home/hatch/workspace/Aplus/.venv/lib/python3.12/site-packages/pandas/core/resample.py:2359: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`). Please use a specific unit instead.
+    + Timedelta(days=1, unit=edges_dti.unit).as_unit(edges_dti.unit)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+94 passed, 2 skipped, 3 warnings in 26.19s

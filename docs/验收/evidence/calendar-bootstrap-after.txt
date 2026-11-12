@@ -1,0 +1,7 @@
+phase=after; end=2026-11-12; provider=sentinel (no network)
+2024-11-11: calendar PASS; trading_days=487; provider reached
+2019-01-01: BLOCKED before provider: 2019 年缺少已核验历史交易日历；请将同步起始日期改为已收录年份（2024–2026）；如需该年历史，请在 BaoStock 可用时同步取得日历，或迁入覆盖该年的已核验 trading_calendar.json；不能把缺数据当休市
+2016-01-01: BLOCKED before provider: 2016 年缺少已核验历史交易日历；请将同步起始日期改为已收录年份（2024–2026）；如需该年历史，请在 BaoStock 可用时同步取得日历，或迁入覆盖该年的已核验 trading_calendar.json；不能把缺数据当休市
+reference_sha256=6fd5f0f057ff5a8406f0e2cfc847993a2b99a4c8020c8a84338235ee814a6d7e; coverage=1990-12-19..2026-10-28
+2024: product=242; BaoStock=242; extra=[]; missing=[]
+2025: product=243; BaoStock=243; extra=[]; missing=[]

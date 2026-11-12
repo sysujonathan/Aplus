@@ -3,9 +3,18 @@ from datetime import date
 from functools import lru_cache
 
 # Published exchange schedule, not the government's make-up working days.
-# Bound to this year; an unpublished year's weekdays must remain unknown.
-# https://www.sse.com.cn/disclosure/dealinstruc/closed/c/c_20251222_10802510.shtml
+# Only listed published years are verified; other years' weekdays remain unknown.
 SCHEDULES = {
+    # 上证公告〔2023〕47号：2024 年部分节假日休市安排
+    # https://www.sse.com.cn/disclosure/announcement/general/c/c_20231226_5733939.shtml
+    2024: (("01-01", "01-01"), ("02-09", "02-17"), ("04-04", "04-06"),
+           ("05-01", "05-05"), ("06-10", "06-10"), ("09-15", "09-17"),
+           ("10-01", "10-07")),
+    # 上证公告〔2024〕38号：2025 年部分节假日休市安排
+    # https://www.sse.com.cn/disclosure/announcement/general/c/c_20241223_10767108.shtml
+    2025: (("01-01", "01-01"), ("01-28", "02-04"), ("04-04", "04-06"),
+           ("05-01", "05-05"), ("05-31", "06-02"), ("10-01", "10-08")),
+    # https://www.sse.com.cn/disclosure/dealinstruc/closed/c/c_20251222_10802510.shtml
     2026: (("01-01", "01-03"), ("02-15", "02-23"), ("04-04", "04-06"),
            ("05-01", "05-05"), ("06-19", "06-21"), ("09-25", "09-27"),
            ("10-01", "10-07")),
