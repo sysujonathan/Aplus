@@ -2065,14 +2065,57 @@ class _PositionDialog(_IdentityDialog):
             if not silent:
                 messagebox.showinfo("未识别代码", "请先输入有效股票代码或准确名称。", parent=self.top)
             return
-        rows = self.store.rows(
-            "SELECT o.id AS observation_id,o.payload,o.strategy,p.id AS plan_id,p.entry,p.stop,p.target "
-            "FROM observations o LEFT JOIN plans p ON p.observation_id=o.id "
-            "WHERE o.code=? ORDER BY o.created DESC,p.updated DESC LIMIT 1", (code,)
-        )
+        from .background_status import LatestRefresh
+        if getattr(self, '_plan_reader', None) is None:
+            store = self.store
+            def load(request, check):
+                code, _ = request
+                check()
+                rows = store.rows(
+                    "SELECT o.id AS observation_id,o.payload,o.strategy,p.id AS plan_id,p.entry,p.stop,p.target "
+                    "FROM observations o LEFT JOIN plans p ON p.observation_id=o.id "
+                    "WHERE o.code=? ORDER BY o.created DESC,p.updated DESC LIMIT 1", (code,))
+                return rows
+            self._plan_reader = LatestRefresh(load)
+            self._plan_poll = None
+            self.top.bind('<Destroy>', self._close_plan_reader, add='+')
+        fields = tuple(variable.get() for variable in (self.entry_price, self.stop, self.tp1))
+        self._plan_reader.submit((code, fields))
+        if not silent:
+            self.hint.set('正在识别计划，可继续填写；不会覆盖随后手工修改的价位。')
+        if self._plan_poll is None:
+            self._plan_poll = self.top.after(50, self._poll_plan)
+
+    def _close_plan_reader(self, event):
+        if event.widget is self.top:
+            self._plan_reader.close()
+            if self._plan_poll is not None:
+                self.top.after_cancel(self._plan_poll)
+                self._plan_poll = None
+
+    def _poll_plan(self):
+        self._plan_poll = None
+        result = self._plan_reader.poll()
+        if result is not None:
+            _, (code, fields), rows, error = result
+            try:
+                current = code_of(self.code.get().strip())
+            except ValueError:
+                current = None
+            if current == code:
+                now = tuple(variable.get() for variable in (self.entry_price, self.stop, self.tp1))
+                if error:
+                    self.hint.set('暂未能读取策略计划，可继续手工填写。')
+                elif now != fields:
+                    self.hint.set('已保留手工填写的价位；需要时可再次识别策略计划。')
+                else:
+                    self._apply_plan(rows)
+        if self._plan_reader.running:
+            self._plan_poll = self.top.after(50, self._poll_plan)
+
+    def _apply_plan(self, rows):
         if not rows:
-            if not silent:
-                self.hint.set("最新策略结果和关注列表中未找到该标的，交易计划请手工填写。")
+            self.hint.set("最新策略结果和关注列表中未找到该标的，交易计划请手工填写。")
             return
         row = rows[0]
         try:

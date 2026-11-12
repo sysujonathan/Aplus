@@ -362,6 +362,8 @@ class ChartPanel(native_ttk.Frame):
     def auto_quotes_changed(self):
         if self._intraday_poller is not None:
             self._intraday_poller.invalidate()
+        if getattr(self, '_minute_display', None) is not None:
+            self._minute_display.invalidate()
         self._intraday_due = 0.0
 
     def _accept_intraday(self, on):
@@ -375,6 +377,8 @@ class ChartPanel(native_ttk.Frame):
         if _shape_selected(self):
             on = False
         if not on:
+            if getattr(self, '_minute_display', None) is not None:
+                self._minute_display.invalidate()
             self._intraday_on = False
             if self._intraday_poller is not None:
                 self._intraday_poller.invalidate()
@@ -457,32 +461,31 @@ class ChartPanel(native_ttk.Frame):
         # here. A dated shape session must never receive any minute transport.
         if _shape_selected(self):
             return
-        from workbench.live_minutes import (chart_minute_series, expected_minute_close,
-                                            live_metadata, minute_rows)
-        from workbench.holding_quotes import china_now
         embedded = self._embedded
         if embedded is None or embedded.closed():
             return
-        try:
-            rows = minute_rows(frame)
-        except ValueError:
-            return
-        tail = rows[-1]
-        self._intraday_frame = frame
-        metadata = live_metadata(frame)
-        key = (tail['date'], len(rows), tail['open'], tail['high'], tail['low'], tail['close'], tail['volume'],
-               str(metadata.get('quote')), frame.attrs.get('m1'))
-        if key == self._intraday_sent:
-            return
+        from .live_chart_refresh import LiveChartRefresh
+        if getattr(self, '_minute_display', None) is None:
+            self._minute_display = LiveChartRefresh(self, self._deliver_intraday)
         if self._hourly is not None:
             self._hourly.request(self._code)
         history = self._hourly.history(self._code) if self._hourly is not None else None
-        series = chart_minute_series(frame, history)
-        payload = {"series": series,"live": metadata}
-        if embedded.push_live(payload):
+        identity = (self._code, embedded, embedded.token, self._workspace_context)
+        self._minute_display.submit(identity, frame, history)
+
+    def _deliver_intraday(self, identity, result, error):
+        code, embedded, token, context = identity
+        if (error or _shape_selected(self) or code != self._code or embedded is not self._embedded
+                or embedded.closed() or token != embedded.token or context is not self._workspace_context):
+            return
+        from workbench.live_minutes import expected_minute_close
+        from workbench.holding_quotes import china_now
+        frame, tail, payload, key = result
+        self._intraday_frame = frame
+        if key != self._intraday_sent and embedded.push_live(payload):
             self._intraday_sent = key
             expected = expected_minute_close(china_now())
-            self._intraday_loaded = not expected or tail['date'] >= expected
+            self._intraday_loaded = not expected or tail >= expected
 
     def set_drop_target(self, active):
         if active:
@@ -625,6 +628,8 @@ class ChartPanel(native_ttk.Frame):
 
     def _destroy_manual(self, event):
         if event.widget is self:
+            if getattr(self, '_minute_display', None) is not None:
+                self._minute_display.close()
             self._cancel_manual()
             if self._observation_reader is not None:
                 self._observation_reader.close()

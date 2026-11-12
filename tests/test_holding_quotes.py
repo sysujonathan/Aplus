@@ -49,6 +49,17 @@ def quote_window():
     gc.collect()
 
 
+def wait_minute_display(chart):
+    import time
+    deadline = time.monotonic() + 3
+    while getattr(chart, '_minute_display', None) is not None:
+        chart.top.update()
+        if chart._minute_display.timer is None:
+            return
+        assert time.monotonic() < deadline, 'minute display did not finish'
+        time.sleep(.01)
+
+
 def quote(price=11, previous=10.5, moment=NOW):
     return {"price": price, "previous_close": previous, "date": moment.date().isoformat(),
             "quote_time": moment.isoformat(), "source": "sina"}
@@ -954,12 +965,13 @@ def test_holding_chart_publishes_verified_intraday_rows_once(tmp_path, quote_win
     chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
                                     interactive=False, minute_fetch=fake_fetch, prime_minutes=False)
     try:
-        chart._embedded = SimpleNamespace(closed=lambda: lifecycle["closed"],
+        chart._embedded = SimpleNamespace(token=1,closed=lambda: lifecycle["closed"],
             push_live=lambda payload: pushes.append(payload) or True)
         assert started.wait(2)
         chart.top.after_cancel(chart._live_after)
         chart._live_after = None
         chart._live_tick()
+        wait_minute_display(chart)
         assert pushes and pushes[-1]["series"]["m5"][-1]["date"] == "2026-09-30 15:00"
         assert pushes[-1]["live"]["source"] == "腾讯分钟行情"
         assert "5 分钟" in chart.live_var.get()
@@ -969,18 +981,22 @@ def test_holding_chart_publishes_verified_intraday_rows_once(tmp_path, quote_win
         # row count, but the trader must see the new high/close/volume.
         minute.loc[2, ["high", "close", "volume"]] = [11.2, 11.15, 1.8e5]
         chart._publish_live(minute)
+        wait_minute_display(chart)
         assert len(pushes) == 2
         assert pushes[-1]["series"]["m5"][-1]["date"] == "2026-09-30 15:00"
         assert pushes[-1]["series"]["m5"][-1]["close"] == 11.15
         assert pushes[-1]["series"]["m5"][-1]["volume"] == 1.8e5
         chart._publish_live(minute)             # identical frame is still deduplicated
+        wait_minute_display(chart)
         assert len(pushes) == 2
         fine = minute.tail(2).assign(date=['2026-09-30 14:59', '2026-09-30 15:00']).to_dict('records')
         minute.attrs['m1'] = fine
         chart._publish_live(minute)
+        wait_minute_display(chart)
         assert len(pushes) == 3
         minute.attrs['m1'] = [{**fine[0], 'close': 10.88}, fine[1]]
         chart._publish_live(minute)
+        wait_minute_display(chart)
         assert len(pushes) == 4
         assert pushes[-1]['series']['m5'] == pushes[-2]['series']['m5']
         assert pushes[-1]['series']['m1'][0]['close'] == 10.88
@@ -1111,7 +1127,7 @@ def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote
     chart = HoldingTradeChartDialog(quote_window, store, report(store, aid)["positions"][0],
                                     interactive=False, minute_fetch=flaky, prime_minutes=False)
     try:
-        chart._embedded = SimpleNamespace(closed=lambda: lifecycle["closed"],
+        chart._embedded = SimpleNamespace(token=1,closed=lambda: lifecycle["closed"],
             push_live=lambda payload: pushes.append(payload) or True)
         for _ in range(300):
             if chart._live_poller.busy or not chart._live_poller.results.empty():
@@ -1120,6 +1136,7 @@ def test_holding_chart_keeps_last_frame_when_intraday_read_fails(tmp_path, quote
         chart.top.after_cancel(chart._live_after)
         chart._live_after = None
         chart._live_tick()
+        wait_minute_display(chart)
         assert len(pushes) == 1
         chart._live_poller.start(CODE)
         for _ in range(300):
