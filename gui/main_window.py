@@ -465,8 +465,8 @@ class AplusMainWindow(ttk.Window):
             image = Image.open(icon_path).convert("RGBA")
             menu = pystray.Menu(
                 pystray.MenuItem(
-                    "打开主界面",
-                    lambda _icon, _item: self._tray_actions.put("show"),
+                    "显示／隐藏主界面",
+                    lambda _icon, _item: self._tray_actions.put("toggle"),
                     default=True,
                 ),
                 pystray.MenuItem(
@@ -503,7 +503,12 @@ class AplusMainWindow(ttk.Window):
         try:
             while True:
                 action = self._tray_actions.get_nowait()
-                if action == "show":
+                if action == "toggle":
+                    if self.state() in ('withdrawn', 'iconic'):
+                        self._show_from_tray()
+                    elif not getattr(self, '_update_pending', False):
+                        self._hide_to_tray()
+                elif action == "show":
                     self._show_from_tray()
                 elif action == "quit":
                     self._exit_from_tray()

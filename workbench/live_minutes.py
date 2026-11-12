@@ -176,7 +176,10 @@ def minute_rows(frame):
     if missing:
         raise ValueError('分钟行情缺少字段：' + '、'.join(missing))
     rows = []
-    for row in frame.loc[:, required].itertuples(index=False):
+    # DataFrame.attrs may contain the complete m1 transport. Pandas propagates
+    # and deep-copies it on every selection/group; numeric display work needs
+    # only the bars. The caller retains the original quote and m1 metadata.
+    for row in pd.DataFrame(frame, copy=False).loc[:, required].itertuples(index=False):
         values = [float(row.open), float(row.high), float(row.low), float(row.close)]
         if not all(math.isfinite(value) and value > 0 for value in values):
             raise ValueError('分钟行情含无效价格')
@@ -204,7 +207,7 @@ def aggregate_minute_bars(frame, minutes, *, source_minutes=1):
     minutes = int(minutes)
     if minutes not in PERIODS.values() or minutes == 1:
         raise ValueError('分钟聚合仅支持 5、15、30、60 分钟')
-    value = frame.copy()
+    value = pd.DataFrame(frame, copy=True)
     stamp = pd.to_datetime(value['date'])
     value['_slot'] = [bar_close_of(int(t.hour) * 60 + int(t.minute), minutes) for t in stamp]
     value['_day'] = stamp.dt.strftime('%Y-%m-%d')
@@ -333,6 +336,9 @@ def chart_minute_series(frame, hourly=None):
     series = {'m5': minute_rows(frame)}
     if frame.attrs.get('m1'):
         series['m1'] = frame.attrs['m1']
+    frame = pd.DataFrame(frame, copy=False)
+    if hourly is not None:
+        hourly = pd.DataFrame(hourly, copy=False)
     for minutes in (15, 30, 60):
         try:
             bars = (coarse_series(hourly, frame, minutes) if minutes == 60

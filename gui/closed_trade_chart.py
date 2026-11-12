@@ -458,24 +458,31 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         self._live_after = self.top.after(400, self._live_tick)
 
     def _publish_live(self, frame):
-        from workbench.live_minutes import chart_minute_series, live_metadata, minute_rows
-        try:
-            rows = minute_rows(frame)
-        except ValueError as exc:
-            self._live_error = str(exc)
+        embedded = self._embedded
+        if embedded is None or embedded.closed():
+            return
+        from .live_chart_refresh import LiveChartRefresh
+        if getattr(self, '_minute_display', None) is None:
+            self._minute_display = LiveChartRefresh(self.top, self._deliver_live)
+        self._minute_display.submit((embedded, embedded.token), frame,
+                                    self._hourly.history(self.data['code']))
+
+    def _deliver_live(self, identity, result, error):
+        embedded, token = identity
+        if (self._live_cancel.is_set() or embedded is not self._embedded
+                or embedded.closed() or token != embedded.token):
+            return
+        if error:
+            self._live_error = str(error)
             self._show_live_status()
             return
-        self._live_error = ""
+        frame, tail, payload, key = result
+        self._live_error = ''
         self._live_frame = frame
-        key = (_rows_key(rows), str(frame.attrs.get('quote')), frame.attrs.get('m1'))
-        embedded = self._embedded
-        if key != self._live_sent and embedded is not None and not embedded.closed():
-            series = chart_minute_series(frame, self._hourly.history(self.data['code']))
-            payload = {"series": series,"live": live_metadata(frame)}
-            if embedded.push_live(payload):
-                self._live_sent = key
-                self._last_live_at = rows[-1]["date"]
-        self._show_live_status(rows[-1]["date"])
+        if key != self._live_sent and embedded.push_live(payload):
+            self._live_sent = key
+            self._last_live_at = tail
+        self._show_live_status(tail)
 
     def _show_live_status(self, stamp=None):
         if self._live_error:
@@ -552,6 +559,8 @@ class HoldingTradeChartDialog(ClosedTradeChartDialog):
         if event.widget is self.top:
             self._reference_cancel.set()
             self._live_cancel.set()
+            if getattr(self, '_minute_display', None) is not None:
+                self._minute_display.close()
             self._live_poller.invalidate()
             for attribute in ("_reference_after", "_live_after", "_hour_after"):
                 handle = getattr(self, attribute, None)
