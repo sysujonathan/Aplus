@@ -26,6 +26,55 @@ def test_acceptance_tool_and_gui_use_the_same_legacy_baseline():
     assert acceptance_stop_research.BASE_MODEL == BASE_MODEL
 
 
+
+@pytest.mark.parametrize('schema', ['9', '999'])
+def test_acceptance_tool_schema_and_v2_baseline_lineage(tmp_path, monkeypatch, capsys, h2_bars, schema):
+    # Synthetic inputs exercise the CLI contract, never real-market acceptance.
+    source = Store(tmp_path / 'source')
+    for code in ('sz.002870', 'sz.300870', 'sz.300837', 'sz.301387'):
+        save_dataset(source, code, h2_bars, 'baostock', 'synthetic test only')
+    source.execute("UPDATE meta SET value=? WHERE key='schema_version'", (schema,))
+    before = source.path.read_bytes()
+    destination = tmp_path / 'evidence'
+    monkeypatch.setattr('sys.argv', ['acceptance_stop_research', '--source-home', str(source.root),
+                                    '--home', str(destination)])
+    calls = []
+    class FakeService:
+        def __init__(self, store):
+            from unittest.mock import Mock
+            self.pool = Mock()
+        def submit(self, kind, spec):
+            calls.append((kind, spec))
+            return f'job-{len(calls)}'
+    monkeypatch.setattr(acceptance_stop_research, 'Service', FakeService)
+    monkeypatch.setattr(acceptance_stop_research, 'wait', lambda *_: {'status': 'completed'})
+    monkeypatch.setattr(acceptance_stop_research, 'load_receipt',
+                        lambda *_: (None, {'real_data': True}, []))
+    monkeypatch.setattr(acceptance_stop_research, 'load_experiment', lambda *_: (None, {
+        'errors': [], 'real_data': True, 'opportunities': 0, 'comparable': 0, 'groups': {}}, []))
+    if schema == '999':
+        with pytest.raises(ValueError, match='不是兼容'):
+            acceptance_stop_research.main()
+        assert not calls and not destination.exists()
+    else:
+        acceptance_stop_research.main()
+        evidence = json.loads((destination / 'stop-acceptance.json').read_text())
+        assert len(calls) == 4
+        assert calls[0][0] == 'backtest'
+        current = calls[0][1]
+        assert current['execution_model'] == CURRENT_MODEL
+        assert current['strategy'] == 'STRATEGY_GAP_H2' and current['timeframe'] == 'daily'
+        assert current['start'] == '2026-01-01' and current['end'] == '2026-09-30'
+        assert len(current['datasets']) == 4
+        assert calls[1] == ('backtest', dict(execution_model=BASE_MODEL,
+            purpose=acceptance_stop_research.ITERATION_BASELINE_PURPOSE, baseline_source_job='job-1'))
+        assert calls[2] == ('backtest', dict(execution_model=MODEL, source_job='job-2'))
+        assert calls[3] == ('backtest', dict(execution_model=MODEL, source_job='job-2',
+                                           anchor_settings=dict(max_bars=8, pause_ticks=1)))
+        assert evidence['source'] == 'job-2' and evidence['baseline_source_job'] == 'job-1'
+    assert source.path.read_bytes() == before
+
+
 def test_stop_research_rejects_v2_source_instead_of_mixing_r_basis(tmp_path):
     store = Store(tmp_path/'isolated')
     source = 'v2-source'
