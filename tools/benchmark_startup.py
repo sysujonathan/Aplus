@@ -145,7 +145,8 @@ def prepare_watches(runtime,count):
     if not original.exists():
         original.write_text(json.dumps([r['code'] for r in store.rows(
             'SELECT code FROM watchlist WHERE active=1 ORDER BY code')]),encoding='utf-8')
-    known=set(json.loads(original.read_text(encoding='utf-8')))
+    original_codes=set(json.loads(original.read_text(encoding='utf-8')))
+    known=set(original_codes)
     with store.connect() as db:
         db.execute('UPDATE watchlist SET active=0')
         db.executemany('UPDATE watchlist SET active=1 WHERE code=?',[(code,) for code in known])
@@ -156,8 +157,15 @@ def prepare_watches(runtime,count):
     for row in store.rows("SELECT DISTINCT code FROM datasets WHERE source='tickflow' AND timeframe='daily' ORDER BY code"):
         if row['code'] in known or row['code'] in archived:continue
         store.add_manual_watch(row['code'],notes=tag);known.add(row['code'])
-        if len(known)>=count:return
-    raise ValueError('Not enough real symbols in the isolated fixture')
+        if len(known)>=count:break
+    if len(known)<count:raise ValueError('Not enough real symbols in the isolated fixture')
+    # Store timestamps have second precision. Re-adding hundreds across a
+    # second boundary otherwise changes tie groups despite identical symbols.
+    # Only fixture-owned rows get deterministic ordering; user rows stay exact.
+    with store.connect() as db:
+        db.executemany('UPDATE watchlist SET updated=? WHERE code=? AND notes=?',[
+            (f'2000-01-01T00:{i//60:02d}:{i%60:02d}+00:00',code,tag)
+            for i,code in enumerate(sorted(known-original_codes))])
 
 
 def prepare_backup(runtime):

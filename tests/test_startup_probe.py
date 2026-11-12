@@ -26,7 +26,7 @@ def test_copy_rejects_unfinished_backup_without_creating_destination(tmp_path):
     assert source.read_bytes()==b'source sentinel' and not target.exists()
 
 
-def test_large_watch_fixture_is_identical_across_reuse_and_excludes_archived_watches(tmp_path):
+def test_large_watch_fixture_is_identical_across_reuse_and_excludes_archived_watches(tmp_path,monkeypatch):
     import pandas as pd
     from tools.benchmark_startup import prepare_watches
     from workbench.store import Store
@@ -35,12 +35,16 @@ def test_large_watch_fixture_is_identical_across_reuse_and_excludes_archived_wat
     original=store.add_manual_watch('600001',notes='original')
     archived=store.add_manual_watch('600002',notes='keep archived anchor')
     store.execute('UPDATE watchlist SET active=0 WHERE code=?',(archived,))
+    monkeypatch.setattr('workbench.store.now',lambda:'2030-01-01T00:00:00+00:00')
     frame=pd.DataFrame(dict(date=['2026-11-10','2026-11-11'],open=10.,high=11.,low=9.,close=10.5,volume=100.))
     for i in range(1,7):save_dataset(store,f'60000{i}',frame,'tickflow','qfq')
     def members():return [r['code'] for r in store.rows('SELECT code FROM watchlist WHERE active=1 ORDER BY updated DESC')]
     prepare_watches(store.root,3);first=members()
     assert len(first)==3 and archived not in first and original in first
     prepare_watches(store.root,1);assert members()==[original]
+    from itertools import count
+    clock=count()
+    monkeypatch.setattr('workbench.store.now',lambda:f'2030-01-02T00:00:{next(clock):02d}+00:00')
     prepare_watches(store.root,3);assert members()==first
     assert store.rows('SELECT active,notes FROM watchlist WHERE code=?',(archived,))==[
         dict(active=0,notes='keep archived anchor')]
