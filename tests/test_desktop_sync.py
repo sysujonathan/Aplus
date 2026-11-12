@@ -16,7 +16,7 @@ ASOF = '2026-11-11'
 
 
 def test_find_sync_source_direct(tmp_path):
-    (tmp_path / 'manifest.json').write_text('not parsed')
+    (tmp_path / 'manifest.json').write_text('not parsed', encoding='utf-8')
     assert find_sync_source(tmp_path) == tmp_path
 
 
@@ -25,7 +25,7 @@ def test_find_sync_source_latest_valid_child(tmp_path):
         child = tmp_path / name
         child.mkdir()
         if name != '2026-11-12':
-            (child / 'manifest.json').write_text('not parsed')
+            (child / 'manifest.json').write_text('not parsed', encoding='utf-8')
     assert find_sync_source(str(tmp_path)) == tmp_path / '2026-11-11'
 
 
@@ -40,7 +40,7 @@ def test_find_sync_source_root_precedes_child(tmp_path):
     child = tmp_path / '2026-11-12'
     child.mkdir()
     for directory in [tmp_path, child]:
-        (directory / 'manifest.json').write_text('not parsed')
+        (directory / 'manifest.json').write_text('not parsed', encoding='utf-8')
     assert find_sync_source(tmp_path) == tmp_path
 
 
@@ -58,10 +58,10 @@ def sample(tmp_path, monkeypatch):
                         dumps(dict(entry=11, stop=9, target=15, plan=dict(entry=11, stop=9, target=15))), ASOF))
     path = source.root / 'snapshots' / ASOF
     path.mkdir(parents=True)
-    (path / 'snapshot.json').write_text(dumps(dict(asof=ASOF, hits=[dict(observation_id=f'obs-{i}') for i in range(2)], coverage={'ready': 2})))
+    (path / 'snapshot.json').write_text(dumps(dict(asof=ASOF, hits=[dict(observation_id=f'obs-{i}') for i in range(2)], coverage={'ready': 2})), encoding='utf-8')
     directory = source.root / 'sources/tickflow'
     directory.mkdir(parents=True)
-    (directory / 'universe.csv').write_text('code,code_name\nsh.600000,样本\n')
+    (directory / 'universe.csv').write_text('code,code_name\nsh.600000,样本\n', encoding='utf-8')
     out = write_sync_source(ReadOnlyStore(source.root))
     return source, desktop, out
 
@@ -72,16 +72,16 @@ def state(store):
 
 def edit(out, change, resign=True):
     path = out / 'manifest.json'
-    manifest = json.loads(path.read_text())
+    manifest = json.loads(path.read_text(encoding='utf-8'))
     change(manifest)
     if resign:
         manifest['sha256'] = snapshot_digest(manifest)
-    path.write_text(dumps(manifest))
+    path.write_text(dumps(manifest), encoding='utf-8')
 
 
 def test_export_and_end_to_end(sample):
     source, desktop, out = sample
-    manifest = json.loads((out / 'manifest.json').read_text())
+    manifest = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
     assert manifest['sha256'] == snapshot_digest(manifest)
     assert {'kind', 'schema', 'asof', 'source', 'timeframe', 'generated_at', 'engine', 'frozen_sha256', 'coverage', 'directories'} <= manifest.keys()
     assert manifest['datasets'] == source.rows('SELECT * FROM datasets')
@@ -143,7 +143,7 @@ def test_up_to_date_sync_preserves_market_source(sample):
 @pytest.mark.parametrize('kind', ['market', 'payload', 'schema', 'stale', 'engine', 'directory', 'bad-json', 'dataset-ref', 'existing-file'])
 def test_reject_without_database_changes(sample, kind):
     _, desktop, out = sample
-    manifest = json.loads((out / 'manifest.json').read_text())
+    manifest = json.loads((out / 'manifest.json').read_text(encoding='utf-8'))
     if kind == 'market':
         path = out / manifest['datasets'][0]['path']
         path.write_bytes(path.read_bytes() + b'x')
@@ -157,7 +157,7 @@ def test_reject_without_database_changes(sample, kind):
     elif kind == 'engine':
         edit(out, lambda m: m.update(engine='fake'))
     elif kind == 'directory':
-        (out / 'sources/tickflow/universe.csv').write_text('bad')
+        (out / 'sources/tickflow/universe.csv').write_text('bad', encoding='utf-8')
     elif kind == 'bad-json':
         edit(out, lambda m: m['observations'][0].update(payload='{'))
     elif kind == 'dataset-ref':
