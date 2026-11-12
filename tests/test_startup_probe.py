@@ -21,9 +21,20 @@ def test_copy_rejects_unfinished_backup_without_creating_destination(tmp_path):
     source=tmp_path/'backup.sqlite3';source.write_bytes(b'source sentinel')
     source.with_name(source.name+'-wal').write_bytes(b'unfinished')
     target=tmp_path/'new-copy'
+    assets=tmp_path/'source-assets';assets.mkdir()
     with pytest.raises(ValueError,match='static'):
-        prepare_copy(source,tmp_path,target)
+        prepare_copy(source,assets,target)
     assert source.read_bytes()==b'source sentinel' and not target.exists()
+
+
+def test_copy_never_creates_destination_inside_source_assets(tmp_path):
+    from tools.benchmark_startup import prepare_copy
+    assets=tmp_path/'source-assets';assets.mkdir()
+    source=tmp_path/'backup.sqlite3';source.write_bytes(b'sentinel')
+    target=assets/'reports/nested-copy'
+    with pytest.raises(ValueError,match='independent'):
+        prepare_copy(source,assets,target)
+    assert not target.exists() and source.read_bytes()==b'sentinel'
 
 
 def test_large_watch_fixture_is_identical_across_reuse_and_excludes_archived_watches(tmp_path,monkeypatch):

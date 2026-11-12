@@ -80,7 +80,7 @@ class LoadingPanel(tk.Toplevel):
                                     max(y(opened),y(closed)),fill='#36414b',outline='')
             self.bars.append((wick,body,'#edf3fa' if closed>opened else '#168cfa'))
         self._start=time.monotonic();self._timer=None;self.cycles=0
-        self.status('正在读取本地交易数据…')
+        self.status('正在准备交易工作台…')
         self.bind('<Destroy>',self._destroyed,add='+')
         self.deiconify();self.lift();self._animate()
 
@@ -137,7 +137,7 @@ def initialize(factory, *, handoff=True):
         else:root.destroy()
     def start():
         for button in actions:button.destroy()
-        actions.clear();working[0]=True;panel.status(PHASES['backend.store'])
+        actions.clear();working[0]=True;panel.status('正在准备交易工作台…')
         def work():
             try:messages.put(('ready',factory()))
             except Exception as exc:

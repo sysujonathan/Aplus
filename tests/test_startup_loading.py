@@ -21,13 +21,13 @@ def test_bootstrap_paints_while_factory_is_slow_and_trace_disabled(monkeypatch):
     monkeypatch.setattr(loading.LoadingPanel,'status',status)
     def work():
         threads.append(threading.get_ident())
-        with metrics.span('window.import'):time.sleep(.3)
+        with metrics.span('backend.service'):time.sleep(.3)
         return 'ready'
     try:
         assert loading.initialize(work)=='ready'
         assert threads==[threads[0]] and threads[0]!=threading.get_ident()
         assert len(beats)>=5
-        assert '正在准备交易工作台…' in observed
+        assert '正在验证策略与运行配置…' in observed
     finally:
         if metrics.early_watchdog:metrics.early_watchdog.stop();metrics.early_watchdog=None
 

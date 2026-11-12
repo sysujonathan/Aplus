@@ -29,7 +29,8 @@ def prepare_copy(backup, assets, runtime):
     import shutil
     import sqlite3
     backup, assets, runtime = backup.resolve(), assets.resolve(), runtime.resolve()
-    if runtime.exists() or runtime == assets or assets.is_relative_to(runtime):
+    if (runtime.exists() or runtime == assets or assets.is_relative_to(runtime)
+            or runtime.is_relative_to(assets)):
         raise ValueError('Use a new independent destination directory')
     if any(p.exists() and p.stat().st_size for p in
            (backup.with_name(backup.name+'-wal'), backup.with_name(backup.name+'-journal'))):
