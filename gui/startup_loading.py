@@ -1,7 +1,9 @@
 """Small native startup hint. Workers publish events; only Tk paints widgets."""
+import gc
 import logging
 import math
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -122,6 +124,7 @@ def initialize(factory, *, handoff=True):
         ctypes.windll.user32.SetProcessDPIAware()
     root=tk.Tk();root.withdraw()
     panel=LoadingPanel(root)
+    theme_names={str(root),str(panel),str(panel.canvas)}
     messages=queue.Queue(maxsize=32)
     def publish(event):
         try:messages.put_nowait(('phase',event))
@@ -166,6 +169,7 @@ def initialize(factory, *, handoff=True):
                     button=tk.Button(panel,text=text,command=action,bg='#14202b',fg='#cbd5df',
                         relief='flat',borderwidth=0,font=('Microsoft YaHei UI',8))
                     button.place(x=x*panel.scale,y=15*panel.scale,width=38*panel.scale,height=22*panel.scale)
+                    theme_names.add(str(button))
                     actions.append(button)
         root.after(30,poll)
     root.protocol('WM_DELETE_WINDOW',close)
@@ -173,7 +177,38 @@ def initialize(factory, *, handoff=True):
     root.after(0,start);root.after(30,poll)
     try:root.mainloop()
     finally:
-        unsubscribe()
-        if (not result or not handoff) and metrics.early_watchdog:
-            metrics.early_watchdog.stop();metrics.early_watchdog=None
+        # destroy() closes the native window, but its callbacks, fonts and
+        # PhotoImage still form Python cycles holding the Tcl interpreter.
+        # A later automatic GC on a data worker would then delete that Tcl
+        # interpreter on the wrong thread (Tcl_AsyncDelete / 0x80000003).
+        # Suspend automatic GC only for this short teardown, drop our closure
+        # references and collect on the owning thread before allowing workers
+        # to trigger automatic collection again. Preserve the caller's GC mode.
+        collect_automatically = gc.isenabled()
+        gc.disable()
+        try:
+            unsubscribe()
+            if (not result or not handoff) and metrics.early_watchdog:
+                metrics.early_watchdog.stop();metrics.early_watchdog=None
+            try:
+                if root.winfo_exists():root.destroy()
+            except tk.TclError:
+                pass  # The normal ready/close path already destroyed the root.
+            # ttkbootstrap may already have patched classic Tk constructors
+            # (second installed loader, or a retry). Its singleton must not
+            # keep this destroyed interpreter alive for the next workbench.
+            bootstrap = sys.modules.get('ttkbootstrap')
+            if bootstrap is not None:
+                from ttkbootstrap.publisher import Publisher
+                for name in theme_names:
+                    Publisher.unsubscribe(name)
+                style = bootstrap.Style.instance
+                if style is not None and style.master is root:
+                    bootstrap.Style.instance = None
+                style = None
+            actions.clear()
+            panel = root = None
+            gc.collect()
+        finally:
+            if collect_automatically:gc.enable()
     return result[0] if result else None
