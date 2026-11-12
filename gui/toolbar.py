@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date
 import json
 import logging
+import os
+import threading
 import time
 import tkinter as tk
 import ttkbootstrap as ttk
@@ -292,6 +294,10 @@ class ToolBar(ttk.Frame):
         ttk.Separator(actions, orient=tk.VERTICAL).pack(
             side=tk.LEFT, fill=tk.Y, padx=(0, 8), pady=3
         )
+        self._desktop_sync_running = False
+        self.btn_desktop_sync = ttk.Button(actions, text="同步", bootstyle="primary",
+                                           cursor="hand2", command=self._on_desktop_sync)
+        self.btn_desktop_sync.pack(side=tk.LEFT, padx=(0, 6))
         ttk.Label(
             actions, text="① 行情", font=("Microsoft YaHei", 9, "bold"), foreground=_LABEL_FG
         ).pack(side=tk.LEFT, padx=(0, 4))
@@ -1167,6 +1173,43 @@ class ToolBar(ttk.Frame):
             self.store.save_premarket_sources(sources)
         self._auto_sources_saved = sources
         self.set_status('一键盘前来源：' + '、'.join(SOURCES[s] for s in sources))
+
+    def _on_desktop_sync(self):
+        if self._job_id or self._desktop_sync_running:
+            self._header_data_var.set('正在忙，稍后再试')
+            return
+        root = os.environ.get('APLUS_SYNC_DIR')
+        from workbench.sync_client import find_sync_source
+        source = find_sync_source(root)
+        if source is None:
+            self._header_data_var.set('未配置同步来源')
+            logging.getLogger(__name__).warning('No desktop synchronization source: %s', root)
+            return
+        self._desktop_sync_running = True
+        self.btn_desktop_sync.state(['disabled'])
+
+        def finished(result):
+            from .data import invalidate
+            self._desktop_sync_running = False
+            self.btn_desktop_sync.state(['!disabled'])
+            invalidate(self.store)
+            if self._on_job_finished:
+                self._on_job_finished('同步', 'completed' if result['status'] != 'rejected' else 'failed', None)
+            self._header_data_var.set(result['message'])
+
+        def run():
+            from workbench.sync_client import apply_sync_source, rejection_message
+            try:
+                result = apply_sync_source(self.store, source)
+            except Exception:
+                logging.getLogger(__name__).exception('Desktop synchronization failed')
+                result = {'status': 'rejected', 'message': rejection_message(self.store)}
+            try:
+                self.after(0, finished, result)
+            except (RuntimeError, tk.TclError):
+                logging.getLogger(__name__).info('Toolbar closed before synchronization finished')
+
+        threading.Thread(target=run, name='desktop-sync', daemon=True).start()
 
     def _on_sync(self, chained=False):
         if self.store and market_source(self.store) not in UPDATE_SOURCES:
