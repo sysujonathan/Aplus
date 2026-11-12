@@ -29,12 +29,18 @@ def case_template(store,source='baostock',adjustment='qfq'):
 
 def test_same_symbol_live_then_historical_shape_never_sends_cached_or_late_minutes(monkeypatch):
     monkeypatch.setattr(EmbeddedChartHost,'available',staticmethod(lambda:True))
-    host=SimpleNamespace(closed=lambda:False,show=Mock(),push_live=Mock(return_value=True))
+    host=SimpleNamespace(token=1,closed=lambda:False,show=Mock(),push_live=Mock(return_value=True))
     panel=SimpleNamespace(_interactive=True,store=True,_embedded=host,
         _workspace_context=dict(context_kind='watch',code='sh.600000'),
         header=Mock(),readout_frame=Mock(),readout=Mock(),_intraday_sent=None,
         _intraday_code='sh.600000',_code='sh.600000',_intraday_frame=minutes(),_hourly=None,
         _embedded_error=Mock())
+    from gui.live_chart_refresh import prepare_minutes
+    panel._deliver_intraday=MethodType(ChartPanel._deliver_intraday,panel)
+    # This test exercises the historical-context guard; async delivery and
+    # invalidation with real workers/Tk are covered in test_interaction_latency.
+    panel._minute_display=SimpleNamespace(submit=lambda identity,frame,hourly:
+        panel._deliver_intraday(identity,prepare_minutes((identity,frame,hourly),lambda:None),None))
     panel._publish_intraday=MethodType(ChartPanel._publish_intraday,panel)
     ChartPanel._show_interactive(panel)
     assert host.push_live.call_count==1
