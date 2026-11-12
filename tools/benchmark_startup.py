@@ -309,7 +309,8 @@ def run_probe(args,runtime):
                 original_load=mod.AplusMainWindow._load_strategies
                 def load_for_date(app,*a,_fn=original_load,**kw):
                     if not getattr(app.toolbar,'_dates_pending',False):
-                        app.toolbar._select_date(args.candidate_date)
+                        if not app.toolbar._select_date(args.candidate_date):
+                            raise ValueError('Requested historical date is unavailable in this source: '+args.candidate_date)
                     return _fn(app,*a,**kw)
                 mod.AplusMainWindow._load_strategies=load_for_date
         for module,cls in [('workbench.holding_quotes','QuotePoller'),('workbench.live_minutes','MinutePoller')]:
