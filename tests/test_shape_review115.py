@@ -58,6 +58,37 @@ def test_historical_shape_activation_invalidates_live_poller_without_restarting(
     poller.invalidate.assert_called_once()
 
 
+def test_pending_shape_rejects_activation_ticks_and_late_minute_replies():
+    poller = SimpleNamespace(invalidate=Mock(), take=Mock(), request=Mock())
+    host = SimpleNamespace(push_live=Mock())
+    panel = SimpleNamespace(_workspace_context={'context_kind':'watch'},
+        _workspace_request={'shape':{'end':'2026-08-03'}},
+        _intraday_on=True, _intraday_poller=poller, _embedded=host)
+    ChartPanel._accept_intraday(panel, True)
+    assert panel._intraday_on is False
+    poller.invalidate.assert_called_once()
+    # A scheduled tick and a late response can arrive before the worker delivers.
+    ChartPanel._intraday_tick(panel)
+    ChartPanel._publish_intraday(panel, minutes())
+    poller.take.assert_not_called()
+    poller.request.assert_not_called()
+    host.push_live.assert_not_called()
+
+
+def test_shape_delivery_reassesses_inherited_intraday_state():
+    poller = SimpleNamespace(invalidate=Mock())
+    panel = SimpleNamespace(_workspace_context={'context_kind':'watch'},
+        _intraday_on=True, _intraday_poller=poller,
+        _title_var=Mock(), _tv_btn=Mock(), _analysis_btn=Mock(),
+        _fit_image=Mock(), _show_interactive=Mock())
+    panel._accept_intraday = MethodType(ChartPanel._accept_intraday, panel)
+    ChartPanel._apply_observation(panel, dict(context=dict(code='sh.600000',
+        timeframe='daily', context_kind='shape'), image=None, title='historical', boot=None))
+    assert panel._intraday_on is False
+    poller.invalidate.assert_called_once()
+    panel._show_interactive.assert_called_once()
+
+
 @pytest.mark.native_process
 def test_real_tile_switch_to_shape_keeps_prefix_and_blocks_retained_minutes(tmp_path,monkeypatch):
     import ttkbootstrap as ttk
@@ -78,6 +109,12 @@ def test_real_tile_switch_to_shape_keeps_prefix_and_blocks_retained_minutes(tmp_
         panel._history_btn.pack()
         monkeypatch.setattr(EmbeddedChartHost,'available',staticmethod(lambda:True))
         panel.show_shape(store,item);panel.set_active(True);root.update()
+        # show(None) clears the previous page first. Inspect the delivered
+        # context only after the asynchronous shape preparation completes.
+        deadline = time.monotonic()+10
+        while (not host.show.call_args or host.show.call_args.args[0] is None) and time.monotonic()<deadline:
+            root.update();time.sleep(.005)
+        assert host.show.call_args and host.show.call_args.args[0] is not None
         boot=workspace_boot(store,host.show.call_args.args[0])
         assert max(row['date'] for row in boot['bars'])=='2026-08-03'
         assert not any(key.startswith('m') and key!='monthly' for key in boot['series'])

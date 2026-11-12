@@ -74,6 +74,14 @@ class LatestRefresh:
             if self.active:
                 self.active.set()
 
+    def invalidate(self):
+        """Cancel a display selection without starting another worker."""
+        with self.lock:
+            self.token += 1
+            self.pending = None
+            if self.active:
+                self.active.set()
+
 
 class ReadView:
     """Existing data only: no Store initialization, migration or writable DB."""
@@ -95,6 +103,14 @@ class ReadView:
     def gap_review_decisions(self, source):
         rows = self.rows('SELECT value FROM meta WHERE key=?', ('gap_review:'+source,))
         return json.loads(rows[0]['value']) if rows else {}
+
+    def chart_document(self, identity):
+        from workbench.store import Store
+        return Store.chart_document(self, identity)
+
+    def load_ui_preferences(self, namespace):
+        from workbench.store import Store
+        return Store.load_ui_preferences(self, namespace)
 
     def read_artifact(self, relative, job=None):
         path = (self.root/relative).resolve()
