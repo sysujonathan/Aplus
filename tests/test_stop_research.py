@@ -58,7 +58,7 @@ def test_acceptance_tool_schema_and_v2_baseline_lineage(tmp_path, monkeypatch, c
         assert not calls and not destination.exists()
     else:
         acceptance_stop_research.main()
-        evidence = json.loads((destination / 'stop-acceptance.json').read_text())
+        evidence = json.loads((destination / 'stop-acceptance.json').read_text(encoding='utf-8'))
         assert len(calls) == 4
         assert calls[0][0] == 'backtest'
         current = calls[0][1]
