@@ -121,7 +121,10 @@ class WatchPanel(ttk.Frame):
         for color, value in FLAGS.items():
             self.tree.tag_configure('flag:' + color, foreground=value)
         self.hint = tk.StringVar(value='自选表设置无法读取，原设置已保留；暂用全部关注' if self.views.error else '拖动排序 · 拖出列表放入图格')
-        ttk.Label(self, textvariable=self.hint, foreground='#9BA7B4', wraplength=360).pack(fill=tk.X, pady=3)
+        self.hint_label=ttk.Label(self,textvariable=self.hint,foreground='#9BA7B4',wraplength=360)
+        self.hint_label.pack(fill=tk.X,pady=3)
+        self._read_error=False
+        self.hint_label.bind('<Button-1>',lambda _:self.reload() if self._read_error else None)
         self.tree.bind('<Motion>', self._hover_row, add='+')
         self._hover_code = None
         self._remove_hover = ttk.Button(self.tree, text='×', width=2, bootstyle='secondary',
@@ -160,6 +163,7 @@ class WatchPanel(ttk.Frame):
             if self._reload_reader is None:
                 self._reload_reader = LatestRefresh(lambda root,check:watch_rows(root,check))
             self._loading = True
+            self._read_error=False;self.hint_label.configure(cursor='')
             self.hint.set('正在加载关注列表…')
             self._reload_reader.submit(self.store.root)
             if self._reload_poll is None:
@@ -226,7 +230,8 @@ class WatchPanel(ttk.Frame):
         _,_,rows,error = reply
         from workbench.startup_metrics import record
         if error is not None:
-            self.hint.set(f'关注列表读取失败，原列表保留；请重试：{error}')
+            self._read_error=True;self.hint_label.configure(cursor='hand2')
+            self.hint.set(f'关注列表读取失败，原列表保留；点击此处重试：{error}')
             record('watch.failed',error_type=type(error).__name__)
             return
         self._all_rows = rows

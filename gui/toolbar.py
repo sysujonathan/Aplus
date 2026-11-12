@@ -172,6 +172,8 @@ class ToolBar(ttk.Frame):
         self._dates_reader = self._dates_poll = None
         self._dates_pending = self._dates_select_latest = False
         self._dates_latest = self._dates_error = None
+        self._dates_target = None
+        self._dates_retry_bind = None
         self._tf_var = tf_var or tk.StringVar(value="daily")
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
@@ -635,6 +637,13 @@ class ToolBar(ttk.Frame):
         if parsed is None:
             return False
         y, m, d = parsed
+        if getattr(self,'_background_reads',False) is True and self._dates_pending:
+            # A just-completed scan may publish a date absent from the old
+            # Combobox inventory. Preserve that exact intent until new rows
+            # arrive; never substitute another scan day.
+            self._dates_target=day
+            self.year_var.set(y);self.month_var.set(m);self.day_var.set(d)
+            return True
         if y not in self._all_years or m not in self._months_by_year.get(y, []):
             return False
         if d not in self._days_by_ym.get((y, m), []):
@@ -685,6 +694,7 @@ class ToolBar(ttk.Frame):
             if self._dates_reader is None:
                 self._dates_reader=LatestRefresh(lambda value,check:date_options(value[0],value[1],check))
             self._dates_pending=True;self._dates_error=None
+            self._dates_target=None;self._dates_select_latest=False
             self._dates_selection=self.selected_date()
             self._dates_reader.submit((self.store.root,self._tf_var.get()))
             if self._dates_poll is None:self._dates_poll=self.after(30,self._poll_dates)
@@ -747,21 +757,49 @@ class ToolBar(ttk.Frame):
         self._dates_pending=False
         from workbench.startup_metrics import record
         if error is not None:
-            self._dates_error=str(error)
-            self.set_status(f'日期读取失败，保留原选择：{error}')
-            record('toolbar.dates.failed',error_type=type(error).__name__)
+            self._show_dates_error(error)
             return
+        if self._dates_retry_bind is not None:
+            self.status_label.unbind('<Button-1>',self._dates_retry_bind)
+            self._dates_retry_bind=None;self.status_label.configure(cursor='')
+            self.set_status('匹配日期已重新读取')
         unchanged=self.selected_date()==self._dates_selection
+        activate=bool(self._dates_target or self._dates_select_latest)
+        target=self._dates_target
         self._load_date_options(rows=[{'asof':day} for day in value['dates']])
         self._dates_latest=value['latest']
-        if self._dates_select_latest and unchanged:
+        if target:
+            if not self._select_date(target):
+                for variable,part in zip((self.year_var,self.month_var,self.day_var),self._dates_selection):
+                    variable.set(part or _ALL)
+                self._show_dates_error(ValueError('扫描日期未出现在已保存结果中：'+str(target)))
+                return
+        elif self._dates_select_latest and unchanged:
             if value['latest']:self._select_date(value['latest'])
             else:
                 for variable in (self.year_var,self.month_var,self.day_var):variable.set(_ALL)
         self._dates_select_latest=False
+        self._dates_target=None
         record('toolbar.dates.ready',dates=len(value['dates']))
         callback=getattr(self,'on_dates_ready',None)
-        if callback:callback()
+        if callback and activate:callback()
+
+    def _show_dates_error(self,error):
+        self._dates_error=str(error)
+        self.set_status(f'日期读取失败，保留原选择；点击此处重试：{error}')
+        self.status_label.configure(cursor='hand2')
+        if self._dates_retry_bind is None:
+            self._dates_retry_bind=self.status_label.bind('<Button-1>',self._retry_dates,add='+')
+        from workbench.startup_metrics import record
+        record('toolbar.dates.failed',error_type=type(error).__name__)
+        callback=getattr(self,'on_dates_failed',None)
+        if callback:callback(error)
+
+    def _retry_dates(self,_event=None):
+        if self._dates_error and not self._dates_pending:
+            target,latest=self._dates_target,self._dates_select_latest
+            self._load_date_options()
+            self._dates_target,self._dates_select_latest=target,latest
 
     @staticmethod
     def _parse_asof(asof):

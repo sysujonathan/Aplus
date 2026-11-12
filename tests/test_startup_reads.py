@@ -47,3 +47,24 @@ def test_worker_cancellation_is_not_successful_empty_list(tmp_path):
     store=Store(tmp_path/'runtime')
     def cancelled():raise InterruptedError('obsolete')
     with pytest.raises(InterruptedError):watch_rows(store.root,cancelled)
+
+
+def test_worker_invalid_snapshot_falls_back_with_same_payload_and_new_identity(tmp_path,monkeypatch):
+    from tests.test_premarket_snapshot import _client_package,ASOF
+    from gui.startup_reads import match_rows
+    from gui.data import load_candidates,candidate_source_status
+    store=Store(tmp_path/'runtime');_client_package(store,tmp_path,monkeypatch)
+    snapshot=tmp_path/'snapshot';snapshot.mkdir()
+    path=snapshot/'snapshot.json';path.write_text('{invalid',encoding='utf-8')
+    monkeypatch.setenv('APLUS_SNAPSHOT_DIR',str(snapshot))
+    monkeypatch.delenv('APLUS_SNAPSHOT_URL',raising=False)
+    day=tuple(ASOF.split('-'))
+    expected=load_candidates(store,'daily','tickflow',day)
+    value=match_rows(store.root,('daily',day,'tickflow',(),None))
+    assert value['rows']==expected
+    assert sum(map(len,expected.values()))>0
+    assert '快照拒绝' in candidate_source_status(store)
+    path.write_text('{invalid changed}',encoding='utf-8')
+    refreshed=match_rows(store.root,('daily',day,'tickflow',(),value['cache']))
+    assert refreshed['cache'][0]!=value['cache'][0]
+    assert refreshed['rows']==expected

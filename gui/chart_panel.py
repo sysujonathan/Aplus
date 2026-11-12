@@ -295,6 +295,8 @@ class ChartPanel(native_ttk.Frame):
             self._embedded_error(str(exc))
 
     def _interactive_ready(self):
+        from workbench.startup_metrics import record
+        record('chart.ready',slot=id(self))
         self.readout_frame.grid_remove()
         self._update_tile_header()
 
@@ -598,6 +600,8 @@ class ChartPanel(native_ttk.Frame):
             self._show_interactive()
 
     def _observation_error(self, error):
+        from workbench.startup_metrics import record
+        record('chart.failed',error_type=type(error).__name__)
         self._code = None
         self._image = self._photo = None
         self._title_var.set('加载失败')

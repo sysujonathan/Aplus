@@ -46,8 +46,10 @@ class MatchList(CandidateTabs):
         self.tree.bind('<Configure>',self._fit_columns)
         self.detail = tk.StringVar(value='相似度为图形相似程度，不是交易胜率')
         self.summary = tk.StringVar(value='相似度不是交易胜率')
-        ttk.Label(self,textvariable=self.summary,foreground=MUTED,font=('Microsoft YaHei UI',8)).grid(
-            row=3,column=0,sticky=tk.EW,pady=(4,0))
+        self.summary_label=ttk.Label(self,textvariable=self.summary,foreground=MUTED,font=('Microsoft YaHei UI',8))
+        self.summary_label.grid(row=3,column=0,sticky=tk.EW,pady=(4,0))
+        self.summary_label.bind('<Button-1>',self._retry_list)
+        self._read_error=False;self._retry_request=None
         from ttkbootstrap.widgets import ToolTip
         self._detail_tip = ToolTip(self.tree,text=self.detail.get(),delay=600)
         self.tree.configure(height=3)
@@ -97,6 +99,8 @@ class MatchList(CandidateTabs):
                 self._list_reader = LatestRefresh(lambda value,check:match_rows(value[0],value[1],check))
             self._timeframe = timeframe
             self._loading = True
+            self._read_error=False;self.summary_label.configure(cursor='')
+            self._retry_request=(store,timeframe,asof_filter,source,notify)
             self.summary.set('正在加载策略匹配…')
             context=(timeframe,tuple(asof_filter or ()),source,tuple(self._labels.items()),
                      getattr(self,'_pipeline_cache',None))
@@ -163,13 +167,18 @@ class MatchList(CandidateTabs):
         self._loading=False
         from workbench.startup_metrics import record
         if error is not None:
-            self.summary.set(f'策略匹配读取失败，原列表保留：{error}')
+            self._read_error=True;self.summary_label.configure(cursor='hand2')
+            self.summary.set(f'策略匹配读取失败，原列表保留；点击此处重试：{error}')
             record('candidates.failed',error_type=type(error).__name__);return
         self._rows,self._all_rows=value['rows'],value['all_rows']
         self._template_labels,self._shape_error=value['templates'],value['error']
         self._pipeline_cache,self._source=value['cache'],value['source']
         self._refresh_filters();self._choose(self._filter_key,notify=request[2]);self._show_shape_error()
         record('candidates.ready',rows=len(self._all_rows))
+
+    def _retry_list(self,_event=None):
+        if self._read_error and self._retry_request and not self._loading:
+            self.load_from_store(*self._retry_request)
 
     def _stop_reader(self,event):
         if event.widget is not self:return
@@ -240,7 +249,12 @@ class MatchList(CandidateTabs):
             self.tree._obs[iid], self.tree._codes[iid] = row['observation_id'],row['code']
             self.tree._base_tags[iid], self._row_by_iid[iid] = tags,row
         if self.on_rows_changed and notify:
-            self.on_rows_changed(list(self._display_rows))
+            if self.on_rows_changed(list(self._display_rows)) is False:
+                # A restored workspace or an explicit user selection takes
+                # precedence over the first automatic sidebar selection.
+                notify=False
+                self._muted=True
+                self._rows_changed_silently=True
         children = self.tree.get_children()
         if children:
             target = next((i for i in children if self.tree._obs.get(i)==previous),children[0]) if not notify else children[0]

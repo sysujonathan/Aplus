@@ -113,11 +113,21 @@ class AplusMainWindow(ttk.Window):
         self._candidate_source = REALTIME_MARKET_SOURCE
         self._case_comparisons = []
         self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
-        self._build_ui()
+        from workbench.startup_metrics import span,record
+        with span('window.widgets'):
+            self._build_ui()
+        self._first_map=False
+        def mapped(event):
+            if event.widget is self and not self._first_map:
+                self._first_map=True;record('window.visible')
+        self.bind('<Map>',mapped,add='+')
         self.candidates._background_reads = True
         self.toolbar.on_dates_ready = self._startup_candidates
+        self.toolbar.on_dates_failed = lambda error:self.candidates.summary.set(
+            '匹配日期读取失败；请点击工具栏错误提示重试') if self._initial_candidates else None
         self._startup_layout = bool(self.chart.controls and self.chart.controls.current['panes'])
         self._initial_candidates = True
+        self._startup_requested = False
         self._shape_last_run = None
         if self.service is not None:
             self.after(1000,self._poll_shape_results)
@@ -144,9 +154,32 @@ class AplusMainWindow(ttk.Window):
         self._exit_hosts = None
         if os.environ.get('APLUS_RESPONSIVENESS_WATCHDOG', '1') != '0':
             from .responsiveness import ResponsivenessWatchdog
-            self._watchdog = ResponsivenessWatchdog()
+            from workbench import startup_metrics
+            self._watchdog = startup_metrics.early_watchdog or ResponsivenessWatchdog()
             self._watchdog.start()
             self._watchdog_tick()
+
+    def schedule_startup_maintenance(self, callback):
+        """Do not compete for disk while initial lists/active chart still load."""
+        import time
+        previous=[time.monotonic()]
+        def idle():
+            if self._closing:return
+            now=time.monotonic();gap=now-previous[0];previous[0]=now
+            lists_busy=(self.watch._loading or self.candidates._loading or self.toolbar._dates_pending)
+            chart=self.chart
+            slot=chart._slots[chart._active_slot] if chart._slots else None
+            host=getattr(slot,'_embedded',None)
+            chart_busy=bool(getattr(slot,'_observation_poll',None) or
+                            (host and not host.ready() and not host.error))
+            if lists_busy or chart_busy or gap>1.8:
+                self.after(1000,idle);return
+            import threading
+            from workbench.startup_metrics import span
+            def work():
+                with span('maintenance.backup_rotation'):callback()
+            threading.Thread(target=work,daemon=True,name='aplus-backup-rotation').start()
+        self.after(1500,idle)
 
     def _watchdog_tick(self):
         if self._watchdog is None:
@@ -161,12 +194,20 @@ class AplusMainWindow(ttk.Window):
         if self._closing:
             return
         self.chart.restore_saved_layout()
+        from workbench.startup_metrics import record
+        record('workspace.restored',panes=self.chart.layout_count)
         self.watch.reload()
-        if not getattr(self.toolbar,'_dates_pending',False):self._startup_candidates()
+        if (not getattr(self.toolbar,'_dates_pending',False) and
+                not getattr(self.toolbar,'_dates_error',None) and
+                not getattr(self,'_startup_requested',False)):
+            self._startup_candidates()
 
     def _startup_candidates(self):
         if self._closing:
             return
+        if getattr(self.toolbar,'_dates_error',None):
+            return
+        self._startup_requested=True
         self._load_strategies()
 
     def _build_ui(self):
@@ -803,7 +844,6 @@ class AplusMainWindow(ttk.Window):
             self.toolbar.date_label.configure(text='截至周' if tf == 'weekly' else '交易日')
             return
         self._cur_date = self.toolbar.selected_date()
-        self._candidate_source = self._source_for_current_date(tf)
         self.chart.set_timeframe(tf)
         self.chart.clear()
         if self.store is not None:
@@ -811,7 +851,7 @@ class AplusMainWindow(ttk.Window):
                 self.store,
                 timeframe=tf,
                 asof_filter=getattr(self, "_cur_date", None),
-                source=self._candidate_source,
+                source=None,
             )
         self.toolbar.date_label.configure(text="截至周" if tf == "weekly" else "交易日")
         self._status_text.set(f"周期：{tf}")
@@ -819,13 +859,12 @@ class AplusMainWindow(ttk.Window):
     # ---- 信号日筛选：重读候选 ----
     def _on_date_change(self, year, month, day):
         self._cur_date = (year, month, day)
-        self._candidate_source = self._source_for_current_date(self._tf_var.get())
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store,
                 timeframe=self._tf_var.get(),
                 asof_filter=self._cur_date,
-                source=self._candidate_source,
+                source=None,
             )
         label = f"{year or '*'}-{month or '*'}-{day or '*'}"
         self._status_text.set(f"信号日筛选：{label}")
@@ -853,7 +892,8 @@ class AplusMainWindow(ttk.Window):
                 ("STRATEGY_GAP_H2", "GAP H2"),
                 ("STRATEGY_AWIL", "AIL"),
             ]
-        self.candidates.build_tabs(strategies,notify=False)
+        if dict(strategies)!=self.candidates._labels:
+            self.candidates.build_tabs(strategies,notify=False)
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store,
@@ -867,7 +907,7 @@ class AplusMainWindow(ttk.Window):
         self._candidate_source=self.candidates._source
         if getattr(self,'_initial_candidates',False):
             self._initial_candidates=False
-            if self._startup_layout or self._chart_mode != 'candidates':return
+            if self._startup_layout or self._chart_mode != 'candidates':return False
         self._chart_mode = "candidates"
         self.toolbar.set_chart_source("匹配")
         self.chart.set_items(chart_items(rows, "candidate"))

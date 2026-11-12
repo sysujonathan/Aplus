@@ -160,11 +160,23 @@ def recover_data():
 
 
 def launch():
-    from .strategies import verify_frozen
-    verify_frozen()
+    from .startup_metrics import span
+    from gui.startup_loading import initialize
+    def preflight():
+        with span('installed.integrity'):
+            from .strategies import verify_frozen
+            verify_frozen()
+        try:
+            with span('installed.binding'):
+                return bound_runtime(),None
+        except Exception as exc:
+            return None,exc
+    checked=initialize(preflight,handoff=False)
+    if checked is None:return
+    runtime,error=checked
     install_root=Path(os.environ.get('APLUS_INSTALL_ROOT') or Path(__import__('sys').executable).parent.parent.parent)
     try:
-        runtime=bound_runtime()
+        if error is not None:raise error
     except RecoveryRequired:
         runtime=recover_data()
         if runtime is None:return
@@ -179,18 +191,17 @@ def launch():
     if runtime is None: return
     os.environ['A_WORKBENCH_HOME']=str(runtime)
     if os.environ.get('APLUS_INSTALL_SMOKE')!='1':
-        # One-time convergence for pre-rotation installs (Issue #131):
-        # background thread, never blocks startup, deletes only under the
-        # rotation module's conservative gates (no pending update, newest
-        # backup fully verified, binding pointer protected).
-        import threading
+        # Same conservative gates; start only after initial UI/active chart
+        # work is idle, rather than competing with startup I/O (Issue #152).
         def converge_backups():
             try:
                 from .installed_backup_rotation import rotate_backups
                 rotate_backups(install_root=install_root,runtime=runtime)
             except Exception:
-                pass
-        threading.Thread(target=converge_backups,daemon=True,name='aplus-backup-rotation').start()
+                import logging
+                logging.getLogger(__name__).exception('后台备份维护未完成，备份保留')
+        import launch_dashboard
+        launch_dashboard.idle_maintenance=converge_backups
     import launch_dashboard
     # Installed users must never get a debug shell after backend failure.
     original=launch_dashboard.build_backend
