@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import json
 import os
 import logging
@@ -341,6 +341,20 @@ def load_legacy_candidates(store, timeframe="daily", asof_filter=None):
     )
 
 
+def scan_result_date(asof, timeframe="daily"):
+    """Display the completed bar date, distinct from a job's input cutoff.
+
+    Production weekly_bars labels W-FRI bars and excludes labels after cutoff.
+    This only projects that existing rule into the result-date selector.
+    """
+    if not asof:
+        return None
+    day = date.fromisoformat(str(asof)[:10])
+    if timeframe == 'weekly':
+        day -= timedelta(days=(day.weekday() - 4) % 7)
+    return day.isoformat()
+
+
 def candidate_dates(store, timeframe="daily", source=None):
     """返回日期栏时间线：已同步行情日 + 已保存策略扫描日。
 
@@ -369,6 +383,13 @@ def candidate_dates(store, timeframe="daily", source=None):
         )
     days = {row['day'] for row in rows if row.get('day')}
     if source is None:
+        if timeframe == 'weekly':
+            # Weekly scans consume daily snapshots; they do not save another
+            # weekly dataset. A valid zero-hit scan still needs a selectable
+            # completed weekly bar, without inventing observations/signals.
+            daily = store.rows("SELECT DISTINCT end AS day FROM datasets "
+                               "WHERE source=? AND timeframe='daily'", (market_source(store),))
+            days.update(scan_result_date(row['day'], 'weekly') for row in daily if row.get('day'))
         if timeframe == 'daily':
             days.update(r['asof'] for r in store.shape_runs(market_source(store)) if r['status'] in ('completed','partial'))
     return sorted(days,reverse=True)
