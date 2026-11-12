@@ -170,7 +170,10 @@ class AplusMainWindow(ttk.Window):
             chart=self.chart
             slot=chart._slots[chart._active_slot] if chart._slots else None
             host=getattr(slot,'_embedded',None)
-            chart_busy=bool(getattr(slot,'_observation_poll',None) or
+            manual=getattr(slot,'_manual_controller',None)
+            # The first reply may be queued after the reader stops running.
+            manual_busy=bool(manual and not manual.shown and manual.poll_id is not None)
+            chart_busy=bool(getattr(slot,'_observation_poll',None) or manual_busy or
                             (host and not host.ready() and not host.error))
             if lists_busy or chart_busy or gap>1.8:
                 self.after(1000,idle);return

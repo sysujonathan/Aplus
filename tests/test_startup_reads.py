@@ -68,3 +68,36 @@ def test_worker_invalid_snapshot_falls_back_with_same_payload_and_new_identity(t
     refreshed=match_rows(store.root,('daily',day,'tickflow',(),value['cache']))
     assert refreshed['cache'][0]!=value['cache'][0]
     assert refreshed['rows']==expected
+
+
+@pytest.mark.parametrize('asof', [None, (), (None,None,None), ('','','')])
+def test_worker_all_dates_keeps_current_source_and_dated_history_resolves(tmp_path, asof):
+    import pandas as pd
+    from gui.startup_reads import match_rows
+    from gui.data import candidate_source_for_date, load_candidates
+    from workbench.market import save_dataset
+    from workbench.store import now
+    from workbench.sources import market_source
+    store=Store(tmp_path/'runtime')
+    for source,code,day in [('baostock','sh.600000','2026-11-10'),
+                            ('legacy-engine-a','sz.000001','2026-11-11')]:
+        frame=pd.DataFrame([dict(date=day,open=10.,high=11.,low=9.,close=10.,volume=1000.)])
+        dataset=save_dataset(store,code,frame,source,'前复权')
+        with store.connect() as db:
+            db.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                (source,'synthetic-job',code,'MTR_MASTER','test','daily',day,day,dataset,'{}',now()))
+    assert market_source(store)=='baostock'
+    assert candidate_source_for_date(store,'daily',asof)=='legacy-engine-a'
+    value=match_rows(store.root,('daily',asof,None,(),None))
+    assert value['source']=='baostock'
+    assert [r['code'] for r in value['all_rows']]==['sh.600000']
+    for day,expected,code in [('10','baostock','sh.600000'),
+                              ('11','legacy-engine-a','sz.000001')]:
+        date=('2026','11',day)
+        dated=match_rows(store.root,('daily',date,None,(),None))
+        assert dated['source']==candidate_source_for_date(store,'daily',date)==expected
+        assert dated['rows']==load_candidates(store,'daily',expected,date)
+        assert [r['code'] for r in dated['all_rows']]==[code]
+    explicit=match_rows(store.root,('daily',asof,'legacy-engine-a',(),None))
+    assert explicit['source']=='legacy-engine-a'
+    assert [r['code'] for r in explicit['all_rows']]==['sz.000001']

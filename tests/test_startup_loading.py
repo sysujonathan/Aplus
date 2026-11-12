@@ -108,3 +108,34 @@ def test_backup_maintenance_waits_for_lists_and_active_chart(monkeypatch):
     queued.pop(0)();assert calls==[]
     host.ready=lambda:True
     queued.pop(0)();assert calls==['maintenance']
+
+
+@pytest.mark.parametrize('released', ['shown', 'finished', 'failed'])
+def test_backup_maintenance_waits_for_manual_first_chart_only(monkeypatch, released):
+    from types import SimpleNamespace as NS
+    from gui.main_window import AplusMainWindow
+    import threading
+    queued=[];calls=[]
+    manual=NS(reader=NS(running=True),shown=False,poll_id='first-poll')
+    app=NS(_closing=False,watch=NS(_loading=False),candidates=NS(_loading=False),
+           toolbar=NS(_dates_pending=False),chart=NS(_active_slot=0,
+               _slots=[NS(_embedded=None,_observation_poll=None,_manual_controller=manual)]),
+           after=lambda delay,fn:queued.append(fn))
+    class Thread:
+        def __init__(self,target,**kwargs):self.target=target
+        def start(self):self.target()
+    monkeypatch.setattr(threading,'Thread',Thread)
+    AplusMainWindow.schedule_startup_maintenance(app,lambda:calls.append('maintenance'))
+    queued.pop(0)();assert calls==[]
+    # A queued first reply still awaits Tk delivery after the worker stops.
+    manual.reader.running=False
+    queued.pop(0)();assert calls==[]
+    if released=='shown':
+        manual.shown=True
+        manual.reader.running=True  # Subsequent refresh must not hold maintenance.
+        manual.poll_id='refresh-poll'
+    else:
+        manual.poll_id=None  # First reply consumed, including a terminal failure.
+        manual.shown=released=='finished'
+    queued.pop(0)();assert calls==['maintenance']
+    assert queued==[]

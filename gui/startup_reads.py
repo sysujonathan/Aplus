@@ -100,7 +100,9 @@ def match_rows(root, context, check=lambda: None):
     from workbench.sources import market_source
     timeframe, asof, source, labels, cached = context
     with span('candidates.prepare'), ReadSession(root,check) as view:
-        source = source or candidate_source_for_date(view,timeframe,asof)
+        if not source:
+            source = (market_source(view) if not asof or not any(asof)
+                      else candidate_source_for_date(view,timeframe,asof))
         receipts = view.rows("SELECT id,status,result FROM jobs WHERE kind='scan' "
                              "ORDER BY created DESC,rowid DESC LIMIT 32")
         shape_receipts = [r for r in view.shape_runs(market_source(view))
