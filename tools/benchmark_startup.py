@@ -141,11 +141,20 @@ def prepare_watches(runtime,count):
     from workbench.store import Store
     store=Store(runtime)
     tag='startup-probe-extra-watch'
-    with store.connect() as db:db.execute('UPDATE watchlist SET active=0 WHERE notes=?',(tag,))
-    known={r['code'] for r in store.rows('SELECT code FROM watchlist WHERE active=1')}
+    original=runtime/'startup-probe-original-watches.json'
+    if not original.exists():
+        original.write_text(json.dumps([r['code'] for r in store.rows(
+            'SELECT code FROM watchlist WHERE active=1 ORDER BY code')]),encoding='utf-8')
+    known=set(json.loads(original.read_text(encoding='utf-8')))
+    with store.connect() as db:
+        db.execute('UPDATE watchlist SET active=0')
+        db.executemany('UPDATE watchlist SET active=1 WHERE code=?',[(code,) for code in known])
+    # Re-adding an archived user watch preserves its old anchor/notes. Those
+    # rows must not accidentally become different fixtures on the next run.
+    archived={r['code'] for r in store.rows('SELECT code FROM watchlist WHERE notes<>?',(tag,))}
     if len(known)>=count:return
     for row in store.rows("SELECT DISTINCT code FROM datasets WHERE source='tickflow' AND timeframe='daily' ORDER BY code"):
-        if row['code'] in known:continue
+        if row['code'] in known or row['code'] in archived:continue
         store.add_manual_watch(row['code'],notes=tag);known.add(row['code'])
         if len(known)>=count:return
     raise ValueError('Not enough real symbols in the isolated fixture')
