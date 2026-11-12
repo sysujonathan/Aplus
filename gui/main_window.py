@@ -1103,6 +1103,9 @@ class AplusMainWindow(ttk.Window):
                 item = (result or {}).get('sources', {}).get(market_source(self.store), {})
                 if item.get('scan_status') in ('completed','partial'):
                     scanned_day = item.get('scan_result', {}).get('asof')
+            if scanned_day:
+                from .data import scan_result_date
+                scanned_day = scan_result_date(scanned_day, self._tf_var.get())
             if scanned_day and self.toolbar._select_date(scanned_day):
                 selected_date = self.toolbar.selected_date()
             self._cur_date = selected_date

@@ -96,9 +96,15 @@ def test_watch_read_failure_keeps_existing_rows_and_reports_failure(tmp_path, mo
 @pytest.mark.native_process
 def test_sqlite_exclusive_lock_is_visible_then_retry_recovers(tmp_path):
     import sqlite3
-    from gui.main_window import AplusMainWindow
+    import ttkbootstrap as ttk
+    from gui.watch_panel import WatchPanel
     store=Store(tmp_path/'runtime');store.add_manual_watch('600000','隔离测试')
-    window=AplusMainWindow(store=store,enable_tray=False)
+    # Exercise the real background list/SQLite/Tk pipeline in isolation. The
+    # full workbench also starts a separate 3-second chart-alert timer, whose
+    # modal lock warning can capture this test's deliberately exclusive lock.
+    window=ttk.Window(themename='darkly')
+    window.watch=WatchPanel(window,store=store,background_reads=True)
+    window.watch.pack()
     db=sqlite3.connect(store.path)
     try:
         window.watch.reload();spin(window,lambda:bool(window.watch.rows()))
