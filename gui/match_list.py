@@ -54,6 +54,10 @@ class MatchList(CandidateTabs):
         self._filter_values = {}
         self._listing_font = tkfont.Font(root=self,font=ttk.Style().lookup('Treeview','font') or 'TkDefaultFont')
         self._template_labels = {}
+        self._background_reads = False
+        self._list_reader = self._list_poll = None
+        self._loading = False
+        self.bind('<Destroy>',self._stop_reader,add='+')
         self.task_status = tk.StringVar()
         ttk.Label(self,textvariable=self.task_status,foreground=MUTED,font=('Microsoft YaHei UI',8)).grid(
             row=0,column=0,sticky=tk.E,padx=2)
@@ -80,12 +84,25 @@ class MatchList(CandidateTabs):
             self.tree.column(column,width=size,minwidth=size,stretch=False)
         self.tree.column('match',width=max(60,width-number-code-name-3),minwidth=60,stretch=True)
 
-    def build_tabs(self, strategies):
+    def build_tabs(self, strategies, notify=True):
         self._labels = dict(strategies)
         self._buttons = {}
-        self._choose(None)
+        self._choose(None,notify=notify)
 
     def load_from_store(self,store,timeframe='daily',asof_filter=None,source='baostock',notify=True):
+        if self._background_reads:
+            from .background_status import LatestRefresh
+            from .startup_reads import match_rows
+            if self._list_reader is None:
+                self._list_reader = LatestRefresh(lambda value,check:match_rows(value[0],value[1],check))
+            self._timeframe = timeframe
+            self._loading = True
+            self.summary.set('正在加载策略匹配…')
+            context=(timeframe,tuple(asof_filter or ()),source,tuple(self._labels.items()),
+                     getattr(self,'_pipeline_cache',None))
+            self._list_reader.submit((store.root,context,notify))
+            if self._list_poll is None:self._list_poll=self.after(30,self._poll_list)
+            return
         from .data import load_candidates, code_names, data_inputs, snapshot_inputs
         from workbench.scan_cache import engine_inputs, file_state
         from workbench.sources import market_source
@@ -136,6 +153,30 @@ class MatchList(CandidateTabs):
         self._refresh_filters()
         self._choose(self._filter_key,notify=notify)
         self._show_shape_error()
+
+    def _poll_list(self):
+        self._list_poll=None
+        reply=self._list_reader.poll()
+        if reply is None:
+            self._list_poll=self.after(30,self._poll_list);return
+        _,request,value,error=reply
+        self._loading=False
+        from workbench.startup_metrics import record
+        if error is not None:
+            self.summary.set(f'策略匹配读取失败，原列表保留：{error}')
+            record('candidates.failed',error_type=type(error).__name__);return
+        self._rows,self._all_rows=value['rows'],value['all_rows']
+        self._template_labels,self._shape_error=value['templates'],value['error']
+        self._pipeline_cache,self._source=value['cache'],value['source']
+        self._refresh_filters();self._choose(self._filter_key,notify=request[2]);self._show_shape_error()
+        record('candidates.ready',rows=len(self._all_rows))
+
+    def _stop_reader(self,event):
+        if event.widget is not self:return
+        if self._list_reader is not None:self._list_reader.close()
+        if self._list_poll is not None:
+            try:self.after_cancel(self._list_poll)
+            except tk.TclError:pass
 
     def _show_shape_error(self):
         if self._shape_error:

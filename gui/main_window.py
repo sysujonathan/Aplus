@@ -114,6 +114,10 @@ class AplusMainWindow(ttk.Window):
         self._case_comparisons = []
         self.auto_quote_var = tk.BooleanVar(value=self.store.holding_auto_quotes() if self.store else False)
         self._build_ui()
+        self.candidates._background_reads = True
+        self.toolbar.on_dates_ready = self._startup_candidates
+        self._startup_layout = bool(self.chart.controls and self.chart.controls.current['panes'])
+        self._initial_candidates = True
         self._shape_last_run = None
         if self.service is not None:
             self.after(1000,self._poll_shape_results)
@@ -156,14 +160,14 @@ class AplusMainWindow(ttk.Window):
     def _startup_watch(self):
         if self._closing:
             return
+        self.chart.restore_saved_layout()
         self.watch.reload()
-        self.after_idle(lambda: self.after(0, self._startup_candidates))
+        if not getattr(self.toolbar,'_dates_pending',False):self._startup_candidates()
 
     def _startup_candidates(self):
         if self._closing:
             return
-        self._load_strategies()  # Original callbacks select/render the same first page.
-        self.after_idle(self.chart.restore_saved_layout)
+        self._load_strategies()
 
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
@@ -211,6 +215,7 @@ class AplusMainWindow(ttk.Window):
             on_date_change=self._on_date_change,
             on_job_finished=self._on_job_finished,
             on_chart_page=self._on_chart_page,
+            background_reads=True,
         )
         self.toolbar.grid(row=0, column=0, sticky=tk.EW)
 
@@ -267,6 +272,7 @@ class AplusMainWindow(ttk.Window):
             on_alert=self._watch_alert,
             on_compare=self._watch_compare,
             auto_quotes=lambda:bool(self.auto_quote_var.get()),
+            background_reads=True,
         )
         self.watch.grid(row=2, column=0, sticky=tk.NSEW)
         self._sidebar_width = self.watch.views.data.get('sidebarWidth')
@@ -828,7 +834,9 @@ class AplusMainWindow(ttk.Window):
     # ---- 策略 Tab（动态取真实名称，只读，不碰冻结文件）----
     def _load_strategies(self):
         self._cur_date = self.toolbar.selected_date()
-        self._candidate_source = self._source_for_current_date(self._tf_var.get())
+        if getattr(self.toolbar,'_dates_pending',False):
+            self.candidates.summary.set('正在读取匹配日期…')
+            return
         try:
             from core.strategy_registry import StrategyRegistry as R
 
@@ -845,17 +853,21 @@ class AplusMainWindow(ttk.Window):
                 ("STRATEGY_GAP_H2", "GAP H2"),
                 ("STRATEGY_AWIL", "AIL"),
             ]
-        self.candidates.build_tabs(strategies)
+        self.candidates.build_tabs(strategies,notify=False)
         if self.store is not None:
             self.candidates.load_from_store(
                 self.store,
                 timeframe=self._tf_var.get(),
                 asof_filter=self._cur_date,
-                source=self._candidate_source,
+                source=None,
             )
 
     # ---- 候选与多图联动 ----
     def _on_candidate_rows(self, rows):
+        self._candidate_source=self.candidates._source
+        if getattr(self,'_initial_candidates',False):
+            self._initial_candidates=False
+            if self._startup_layout or self._chart_mode != 'candidates':return
         self._chart_mode = "candidates"
         self.toolbar.set_chart_source("匹配")
         self.chart.set_items(chart_items(rows, "candidate"))

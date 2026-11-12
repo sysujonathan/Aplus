@@ -164,10 +164,14 @@ def sync_start_date(store, full_history=False, timeframe='daily'):
 class ToolBar(ttk.Frame):
     def __init__(self, parent, service=None, store=None, tf_var=None,
                  on_timeframe_change=None, on_date_change=None, on_job_finished=None,
-                 on_chart_page=None):
+                 on_chart_page=None, background_reads=False):
         super().__init__(parent)
         self.service = service
         self.store = store
+        self._background_reads = background_reads
+        self._dates_reader = self._dates_poll = None
+        self._dates_pending = self._dates_select_latest = False
+        self._dates_latest = self._dates_error = None
         self._tf_var = tf_var or tk.StringVar(value="daily")
         self._on_tf = on_timeframe_change
         self._on_date = on_date_change
@@ -469,6 +473,8 @@ class ToolBar(ttk.Frame):
     def _cancel_responsive(self, event):
         if event.widget is not self:
             return
+        if self._dates_reader is not None:self._dates_reader.close()
+        if self._dates_poll is not None:self.after_cancel(self._dates_poll)
         if getattr(self, '_initial_status', None):
             self.after_cancel(self._initial_status)
             self._initial_status = None
@@ -608,6 +614,12 @@ class ToolBar(ttk.Frame):
     def _select_latest_date(self):
         if not self.store:
             return
+        if getattr(self,'_background_reads',False) is True:
+            if self._dates_pending:
+                self._dates_select_latest=True
+            elif self._dates_latest:
+                self._select_date(self._dates_latest)
+            return
         from .data import latest_candidate_date
 
         day = latest_candidate_date(self.store, self._tf_var.get())
@@ -666,7 +678,17 @@ class ToolBar(ttk.Frame):
         return None
 
     # ---- 交易日三联 Combobox 联动 ----
-    def _load_date_options(self):
+    def _load_date_options(self, rows=None):
+        if rows is None and getattr(self,'_background_reads',False) is True and self.store:
+            from .background_status import LatestRefresh
+            from .startup_reads import date_options
+            if self._dates_reader is None:
+                self._dates_reader=LatestRefresh(lambda value,check:date_options(value[0],value[1],check))
+            self._dates_pending=True;self._dates_error=None
+            self._dates_selection=self.selected_date()
+            self._dates_reader.submit((self.store.root,self._tf_var.get()))
+            if self._dates_poll is None:self._dates_poll=self.after(30,self._poll_dates)
+            return
         self._all_years = []
         self._all_months = []
         self._all_days = []
@@ -677,15 +699,13 @@ class ToolBar(ttk.Frame):
             self.month_combo["values"] = [_ALL]
             self.day_combo["values"] = [_ALL]
             return
-        rows = []
-        try:
-            from .data import candidate_dates
-
-            rows = [{"asof": value} for value in candidate_dates(
-                self.store, self._tf_var.get()
-            )]
-        except Exception:
+        if rows is None:
             rows = []
+            try:
+                from .data import candidate_dates
+                rows = [{"asof": value} for value in candidate_dates(self.store,self._tf_var.get())]
+            except Exception:
+                rows = []
         for r in rows:
             ymd = self._parse_asof(r["asof"])
             if ymd is None:
@@ -717,6 +737,31 @@ class ToolBar(ttk.Frame):
         # 当前年月联动，不能把其他月份出现过的日号塞进当前月份。
         self._refresh_months()
         self._refresh_days()
+
+    def _poll_dates(self):
+        self._dates_poll=None
+        reply=self._dates_reader.poll()
+        if reply is None:
+            self._dates_poll=self.after(30,self._poll_dates);return
+        _,_,value,error=reply
+        self._dates_pending=False
+        from workbench.startup_metrics import record
+        if error is not None:
+            self._dates_error=str(error)
+            self.set_status(f'日期读取失败，保留原选择：{error}')
+            record('toolbar.dates.failed',error_type=type(error).__name__)
+            return
+        unchanged=self.selected_date()==self._dates_selection
+        self._load_date_options(rows=[{'asof':day} for day in value['dates']])
+        self._dates_latest=value['latest']
+        if self._dates_select_latest and unchanged:
+            if value['latest']:self._select_date(value['latest'])
+            else:
+                for variable in (self.year_var,self.month_var,self.day_var):variable.set(_ALL)
+        self._dates_select_latest=False
+        record('toolbar.dates.ready',dates=len(value['dates']))
+        callback=getattr(self,'on_dates_ready',None)
+        if callback:callback()
 
     @staticmethod
     def _parse_asof(asof):

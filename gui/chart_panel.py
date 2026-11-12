@@ -775,6 +775,11 @@ class ChartGrid(ttk.Frame):
         if interactive:
             from .workspace_controls import WorkspaceControls
             self.controls = WorkspaceControls(self)
+            if self.controls.current['panes']:
+                saved=self.controls.current
+                self._shape=(saved['rows'],saved['columns'])
+                self._layout_count=saved['rows']*saved['columns']
+                self._active_slot=saved['active']
         self.host = native_ttk.Frame(self, style="ChartHost.TFrame")
         self.host.grid(row=1 if interactive else 0, column=1 if interactive else 0, sticky=tk.NSEW)
         self._build_slots()
@@ -1020,7 +1025,7 @@ class ChartGrid(ttk.Frame):
                 label = item.name or item.code or "加载中"
                 slot.show_placeholder(label)
                 self.after(
-                    index * 12,
+                    0 if index==self._active_slot else 100+index*60,
                     lambda i=index, value=item, generation=token: self._render_slot(
                         i, value, generation
                     ),

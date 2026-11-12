@@ -32,9 +32,13 @@ _PLAN_STATES = ("观察", "计划交易", "已手工入场", "已手工退出", 
 
 class WatchPanel(ttk.Frame):
     def __init__(self, parent, store=None, on_select=None, on_drag_motion=None,
-                 on_drop=None, on_drag_end=None, on_page_request=None, on_alert=None, on_compare=None, auto_quotes=None):
+                 on_drop=None, on_drag_end=None, on_page_request=None, on_alert=None, on_compare=None, auto_quotes=None,
+                 background_reads=False):
         super().__init__(parent)
         self.store = store
+        self._background_reads = background_reads
+        self._reload_reader = self._reload_poll = None
+        self._loading = False
         self.on_select = on_select
         self.on_drag_motion = on_drag_motion
         self.on_drop = on_drop
@@ -150,6 +154,17 @@ class WatchPanel(ttk.Frame):
     # ---- 读：观察池（active=1 的关注 + 关联观察与计划状态）----
     def reload(self):
         """从 store 重读观察池。任何写操作后由主窗口/本面板调用刷新。"""
+        if self._background_reads and self.store is not None:
+            from .background_status import LatestRefresh
+            from .startup_reads import watch_rows
+            if self._reload_reader is None:
+                self._reload_reader = LatestRefresh(lambda root,check:watch_rows(root,check))
+            self._loading = True
+            self.hint.set('正在加载关注列表…')
+            self._reload_reader.submit(self.store.root)
+            if self._reload_poll is None:
+                self._reload_poll = self.after(30,self._poll_reload)
+            return
         self._all_rows = []
         if self.store is None:
             return
@@ -200,6 +215,24 @@ class WatchPanel(ttk.Frame):
             self._all_rows.append(item)
         self._render_rows()
         self._request_quotes()
+
+    def _poll_reload(self):
+        self._reload_poll = None
+        reply = self._reload_reader.poll()
+        if reply is None:
+            self._reload_poll = self.after(30,self._poll_reload)
+            return
+        self._loading = False
+        _,_,rows,error = reply
+        from workbench.startup_metrics import record
+        if error is not None:
+            self.hint.set(f'关注列表读取失败，原列表保留；请重试：{error}')
+            record('watch.failed',error_type=type(error).__name__)
+            return
+        self._all_rows = rows
+        self.hint.set('自选表设置无法读取，原设置已保留；暂用全部关注' if self.views.error else '拖动排序 · 拖出列表放入图格')
+        self._render_rows();self._request_quotes()
+        record('watch.ready',rows=len(rows))
 
     def _render_rows(self):
         if not hasattr(self, 'tree'):
@@ -344,6 +377,11 @@ class WatchPanel(ttk.Frame):
         self._quotes = select_quotes(self._history_quotes, self._live_quotes, codes, failed, china_now(), None)
 
     def _destroyed(self, event):
+        if event.widget is self:
+            if self._reload_reader is not None:self._reload_reader.close()
+            if self._reload_poll is not None:
+                try:self.after_cancel(self._reload_poll)
+                except tk.TclError:pass
         if event.widget is self and self._quote_timer:
             self._live_poller.invalidate()
             self.after_cancel(self._quote_timer)
