@@ -786,12 +786,18 @@ class WorkspaceControls:
         self.grid._display_items = [ChartItem(**pane['item']) if pane.get('item') else None for pane in panes]
         self.grid._display_items += [None] * (self.grid._layout_count-len(panes))
         self.grid._active_slot = layout['active']
+        self.grid._render_token += 1
+        token = self.grid._render_token
         for index,slot in enumerate(self.grid._slots):
             slot._workspace_descriptor = self.descriptor(index)
             slot._workspace_restore = panes[index] if index<len(panes) else {}
             slot._workspace_restore_sent = False
             item = self.grid._display_items[index]
-            if item:self.grid._show_item(slot,item)
+            if item:
+                slot.show_placeholder(item.name or item.code or '加载中')
+                self.grid.after(0 if index==layout['active'] else 180+index*80,
+                    lambda i=index,value=item,generation=token:
+                        self.grid._render_slot(i,value,generation))
             else:slot.show_placeholder()
         self.grid._refresh_active_styles()
         self._restoring=False

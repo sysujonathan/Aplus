@@ -17,6 +17,8 @@ if ROOT not in sys.path:
 
 LOG_PATH = os.path.join(os.environ.get("TEMP", "."), "aplus_dashboard.log")
 _MUTEX_NAME = "Local\\AplusDesktopWorkbench"
+# Installed bootstrap supplies the existing conservative maintenance callback.
+idle_maintenance = None
 
 
 def acquire_single_instance(notify=True, name=_MUTEX_NAME):
@@ -51,16 +53,26 @@ def release_single_instance(handle):
 
 
 def build_backend():
-    """尝试构建真实后端；失败返回 (None, None)，外壳以调试模式启动。"""
-    try:
+    """Build the real backend on the startup worker; failures remain visible."""
+    from workbench.startup_metrics import span
+    with span('backend.import'):
         from workbench.store import Store
         from workbench.acceleration_profile import configure_service
-
+    with span('backend.store'):
         store = Store()
+    with span('backend.service'):
         service = configure_service(store)
-        return service, store
-    except Exception:
-        return None, None
+    return service, store
+
+
+def prepare_workbench():
+    from workbench.startup_metrics import span
+    service,store=build_backend()
+    if service is None or store is None:
+        raise RuntimeError('本地数据或后端未就绪，未打开空白工作台。')
+    with span('window.import'):
+        from gui.main_window import AplusMainWindow
+    return service,store,AplusMainWindow
 
 
 def main():
@@ -73,10 +85,16 @@ def main():
             filename=LOG_PATH, encoding="utf-8", level=logging.WARNING,
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
-        from gui.main_window import AplusMainWindow
-
-        service, store = build_backend()
-        app = AplusMainWindow(service=service, store=store, enable_tray=True)
+        from gui.startup_loading import initialize
+        from workbench.startup_metrics import span, record
+        prepared=initialize(prepare_workbench)
+        if prepared is None:return
+        service,store,window_type=prepared
+        with span('window.construct'):
+            app = window_type(service=service, store=store, enable_tray=True)
+        if idle_maintenance:
+            app.schedule_startup_maintenance(idle_maintenance)
+        app.after_idle(lambda:record('window.usable'))
         ack = os.environ.pop("APLUS_UPDATE_ACK", None)
         if ack and service is not None and store is not None:
             # A spawn is not startup success. The helper waits for the actual
@@ -88,10 +106,20 @@ def main():
             if ack_path.name == "started.json" and ack_path.parent.parent == base:
                 app.after_idle(lambda: write_json(ack_path, {"started": True}))
         app.mainloop()
-    except Exception:
+    except Exception as exc:
         logging.getLogger(__name__).exception("桌面工作台启动或运行失败")
+        try:
+            from tkinter import messagebox
+            messagebox.showerror('工作台打开失败',
+                '工作台创建或运行失败，请关闭后重试。原数据不会被空库替代。\n'
+                +str(exc)+'\n诊断日志：'+LOG_PATH)
+        except Exception:
+            logging.getLogger(__name__).exception('无法显示启动错误提示')
         sys.exit(1)
     finally:
+        from workbench import startup_metrics
+        if startup_metrics.early_watchdog:
+            startup_metrics.early_watchdog.stop();startup_metrics.early_watchdog=None
         release_single_instance(mutex)
 
 
