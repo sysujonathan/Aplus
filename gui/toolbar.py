@@ -1009,15 +1009,8 @@ class ToolBar(ttk.Frame):
             if day != expected_day(self.store,completed_date(),source):
                 raise ValueError('当前查看的是历史日期；请切回最近交易日后补拉，避免按旧回执更新新行情')
             return self._repair_tickflow(codes,timeframe,include_history)
-        def verify_selected(codes, timeframe, retry):
-            if self._job_id or market_source(self.store) != source:
-                return False
-            self._auto_scan_after_sync = False
-            self._submit_job('verify_status','核验缺日',dict(source=source,boards=self._selected_boards(),
-                codes=codes,timeframe=timeframe,asof=day,retry=retry))
-            return bool(self._job_id)
         show_integrity(self,report,repair_selected,store=self.store,on_changed=self._gap_decisions_changed,
-                       on_verify=verify_selected, repair_blocked=self._repair_block_reason)
+                       repair_blocked=self._repair_block_reason)
 
     def _gap_decisions_changed(self):
         self._load_market_status(force=True)

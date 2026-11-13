@@ -10,7 +10,7 @@ def verify_status_targets(store, targets, provider_factory, job=None, retry=Fals
                           check_stop=lambda:None, progress=lambda *args:None,
                           cancel_event=None, budget_seconds=None, request_timeout=None,
                           min_interval=0, refresh_index=True, on_attempt=lambda code, dates:None,
-                          preserve_order=False):
+                          preserve_order=False, on_result=lambda code, dates, unknown:None):
     refresh_status_index(store, verify_files=refresh_index)
     deadline = None if budget_seconds is None else time.monotonic() + budget_seconds
     last_request = None
@@ -78,6 +78,7 @@ def verify_status_targets(store, targets, provider_factory, job=None, retry=Fals
                     unknown = sorted((tried | set(needed)) - set(known) - set(proven))
                     store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                                   (key, dumps(dict(unknown=unknown, checked=now()))))
+                    on_result(code, needed, unknown)
                 except (ProviderError, TimeoutError) as exc:
                     guard.failure(exc)
                     report['errors'].append(dict(code=code, **error_detail(exc,'baostock','trading_status')))

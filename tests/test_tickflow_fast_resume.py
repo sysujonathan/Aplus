@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tests.test_workbench import store, frame, wait_for
-from tests.test_premarket_resume import seeded, proxy
+from tests.test_premarket_resume import seeded, proxy, isolated_status_provider
 from workbench.market import save_dataset, load_dataset
 from workbench.premarket import resume_summary
 from workbench.premarket_resume import continue_sync, ordinary_update_codes
@@ -69,6 +69,10 @@ def test_ordinary_routing_does_not_hide_interior_holes_or_trust_corrupt_finished
     start, day, codes = tail_fixture(store, frame)
     did = save_dataset(store, codes[2], frame.drop(index=100), 'tickflow', '前复权')
     save_coverage(store, codes[2], did, start, day, 'tickflow')
+    from workbench.trading_status import save_status_rows
+    missing=frame.date.iloc[100]
+    save_status_rows(store,codes[2],missing,missing,
+                     [dict(code=codes[2],date=missing,tradestatus='1',volume='')])
     calls = []
     def raw(job, spec):
         calls.append(spec)

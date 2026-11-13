@@ -239,6 +239,8 @@ def check_native_review():
                 yield child; yield from descendants(child)
         widgets=list(descendants(window)); tree=next(w for w in widgets if isinstance(w,ttk.Treeview))
         buttons={str(w.cget('text')):w for w in widgets if isinstance(w,ttk.Button)}
+        assert not any('核验缺日' in text for text in buttons)
+        assert not any(isinstance(w,ttk.Checkbutton) and '重查上次' in str(w.cget('text')) for w in widgets)
         root.update(); assert all(not tree.item(iid,'open') for iid in tree.get_children())
         assert not any(isinstance(w,tk.Text) for w in widgets)
         tree.selection_set('group:history'); root.update(); buttons['忽略提醒'].invoke(); root.update()

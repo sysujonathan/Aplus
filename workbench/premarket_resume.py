@@ -84,7 +84,7 @@ def continue_sync(service, job, spec):
     require_update_source(source)
     asof = min(spec.get('end') or completed_date(), completed_date())
     tf = spec.get('scan_timeframe', 'daily')
-    raw = dict(spec, resume=False)
+    raw = dict(spec, resume=False, scan_timeframe=tf)
     if spec.get('force') or spec.get('full_history') or spec.get('repair_codes') or 'boards' not in spec:
         return service._sync_once(job, raw)
     raw['transport_retry_budget'] = {'used': False}
@@ -127,6 +127,19 @@ def continue_sync(service, job, spec):
         if not audit or not audit.get('scope_valid'):
             return result
     service.check_stop(job)
+    if tf == 'daily':
+        # Resolve missing-date evidence before choosing another price request.
+        # The daily closure owns its single, evidence-directed repair pass.
+        from .status_maintenance import maintain_daily_status
+        result['resume'] = dict(reused=audit['ready'] if warm and not ordinary else result.get('skipped',0),
+            repair_codes=[],unchanged=[],scope_reused=warm,ordinary_increment=ordinary)
+        if cooling:
+            result['resume']['waiting_for_cooldown'] = True
+        result = maintain_daily_status(service, job, raw, result)
+        result['resume']['repair_codes'] = result.get('status_price_repair',{}).get('codes',[])
+        current = {r['code']:r for r in latest_datasets(store,source)}
+        result['resume']['unchanged'] = unchanged_repairs(store,source,audit['expected_day'],current)
+        return result
     codes, unchanged = price_repair_codes(store, source, audit)
     # Failed transport already made its one attempt. No second connection after
     # a restriction/timeout, even if local gaps still suggest missing prices.

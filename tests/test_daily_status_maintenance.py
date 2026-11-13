@@ -39,14 +39,15 @@ def receipt(store, day, *, daily_only=False):
         integrity=integrity,errors=copy.deepcopy(integrity['scan']['gaps']))
 
 
-def run(store, result, day, job='test', **spec):
+def run(store, result, day, job='test', price_sync=None, progress=None, **spec):
     store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
         (job,'sync','running','2026-11-13',dumps({})))
     stop = Event()
     def check(_job):
         if stop.is_set(): raise InterruptedError('stopped fixture')
     service = SimpleNamespace(store=store,cancel_flags={job:stop},check_stop=check,
-                              progress=lambda *args:None)
+                              progress=progress or (lambda *args:None))
+    service._sync_once = price_sync or (lambda *args:dict(datasets=[],errors=[]))
     return maintain_daily_status(service,job,dict(source='tickflow',boards=['沪深主板'],
         end=day,scan_timeframe='daily',**spec),result)
 
@@ -120,18 +121,18 @@ def test_unknown_backoff_survives_restart_but_new_missing_day_is_not_delayed(sto
     assert len(calls)==2
 
 
-def test_one_parent_job_has_one_five_stock_budget_and_next_job_rotates(store,vendor):
+def test_one_parent_job_verifies_entire_scope_and_restart_reuses_all_facts(store,vendor):
     _,calls=vendor
     codes,_,hole,day=setup(store,count=8)
     run(store,receipt(store,day),day,premarket_parent='parent')
-    assert len(calls)==5
+    assert len(calls)==8
     run(store,receipt(store,day),day,job='same-parent',premarket_parent='parent')
-    assert len(calls)==5
+    assert len(calls)==8
     run(Store(store.root),receipt(store,day),day,job='next-parent',premarket_parent='next')
     assert len(calls)==8 and {c for c,_,_ in calls}==set(codes)
 
 
-def test_daily_priority_reserves_one_historical_slot_and_caches_normal_facts(store):
+def test_daily_and_weekly_targets_are_all_selected_and_normal_facts_reused(store):
     codes,full,hole,day=setup(store,count=7)
     records={r['code']:r for r in store.rows('SELECT * FROM datasets')}
     daily=audit_scope(store,['沪深主板'],day,source='tickflow',timeframe='daily')
@@ -139,7 +140,7 @@ def test_daily_priority_reserves_one_historical_slot_and_caches_normal_facts(sto
     daily['gaps']=daily['gaps'][:6]
     weekly['gaps']=weekly['gaps'][6:]
     selected,_=select_targets(store,dict(daily=daily,weekly=weekly),records,'tickflow',day)
-    assert len(selected)==5 and codes[-1] in selected
+    assert len(selected)==7 and codes[-1] in selected
     save_status_rows(store,codes[0],hole,hole,[dict(code=codes[0],date=hole,tradestatus='1',volume='')])
     selected,_=select_targets(store,dict(daily=daily,weekly=weekly),records,'tickflow',day)
     assert codes[0] not in selected
@@ -286,8 +287,8 @@ def test_daily_maintenance_refreshes_only_selected_price_files(store,vendor,monk
         checked.append(args[1]);return original(*args,**kwargs)
     monkeypatch.setattr(market_module,'verify_dataset',verify)
     report=run(store,initial,day)
-    assert len(set(checked))==5 and len(checked)==10
-    assert report['scan_readiness']['ready']==5 and len(report['scan_readiness']['gaps'])==3
+    assert len(set(checked))==8 and len(checked)==16
+    assert report['scan_readiness']['ready']==8 and not report['scan_readiness']['gaps']
 
 
 def test_existing_unknown_can_be_retried_after_backoff(store,vendor):
@@ -300,3 +301,132 @@ def test_existing_unknown_can_be_retried_after_backoff(store,vendor):
     store.execute('UPDATE meta SET value=? WHERE key=?',(dumps(state),key))
     run(Store(store.root),receipt(store,day),day,job='again')
     assert len(calls)==2
+
+
+def test_all_663_targets_are_selected_without_arbitrary_stock_or_time_quota(store):
+    _,_,hole,day=setup(store)
+    codes=[f'sh.{600000+n:06}' for n in range(663)]
+    audit=dict(scope_valid=True,expected_day=day,
+               gaps=[dict(code=c,category='input_gap',dates=[hole]) for c in codes])
+    targets,count=select_targets(store,{'daily':audit},{},'tickflow',day)
+    assert count==663 and set(targets)==set(codes)
+
+
+@pytest.mark.parametrize('old_weekly', [False,True])
+def test_explicit_trading_hole_is_repaired_once_from_selected_source(store,vendor,old_weekly):
+    cls,calls=vendor;cls.outcome='1'
+    codes,full,hole,day=setup(store)
+    if old_weekly:
+        hole=full.date.iloc[100]
+        did=save_dataset(store,codes[0],full[full.date!=hole],'tickflow','前复权')
+        save_quality(store,did,describe_history(store,codes[0],full[full.date!=hole],full.date.iloc[0],day))
+    requested=[]
+    def repair(job,spec):
+        requested.append(spec)
+        assert spec['source']=='tickflow' and spec['repair_codes']==codes
+        assert spec['repair_scope']=='scan' and spec['scan_timeframe']=='weekly' and not spec['force']
+        did=save_dataset(store,codes[0],full,'tickflow','前复权',job)
+        return dict(datasets=[did],errors=[])
+    original=store.rows('SELECT id FROM datasets')
+    report=run(store,receipt(store,day),day,price_sync=repair)
+    assert report['scan_readiness']['complete'] and report['scan_periods']['weekly']['complete']
+    assert report['errors']==[] and len(requested)==1 and len(calls)==1
+    assert all(store.rows('SELECT id FROM datasets WHERE id=?',(r['id'],)) for r in original)
+    run(Store(store.root),receipt(store,day),day,job='again',price_sync=repair)
+    assert len(requested)==1 and len(calls)==1
+
+
+def test_unknown_is_not_redownloaded_and_no_extra_foreground_status_is_emitted(store,vendor):
+    cls,_=vendor;cls.outcome='unknown'
+    _,_,_,day=setup(store)
+    messages=[]
+    run(store,receipt(store,day),day,price_sync=lambda *_:pytest.fail('未知不能当成有交易而补拉'),
+        progress=lambda *args:messages.append(args))
+    assert messages==[]
+    assert not store.rows("SELECT key FROM meta WHERE key LIKE 'status_maintenance:price:%'")
+
+
+def test_empty_dataset_uses_exact_status_but_never_invents_price_history(store,vendor):
+    from workbench.readiness import save_directory
+    cls,calls=vendor
+    full=bars(900);code='sh.600000'
+    _,day=market(store,full,'tickflow',[code])
+    report=run(store,receipt(store,day),day,
+               price_sync=lambda *_:pytest.fail('明确停牌不下载价格'))
+    assert calls==[(code,day,day)] and report['scan_readiness']['suspended']==1
+    assert report['integrity']['current_halts'][0]['code']==code
+    assert store.rows('SELECT * FROM datasets')==[]
+
+
+def test_killed_request_does_not_mark_unfinished_code_as_backed_off(store,vendor):
+    cls,calls=vendor
+    codes,_,hole,day=setup(store,count=3)
+    class Cancelled(cls):
+        def trading_status(self,code,a,b):
+            if code==codes[1]:raise InterruptedError('simulate close during request')
+            return super().trading_status(code,a,b)
+    import workbench.status_maintenance as maintenance
+    from unittest.mock import patch
+    with patch.object(maintenance,'BaoStock',Cancelled),pytest.raises(InterruptedError):
+        run(store,receipt(store,day),day)
+    assert status_facts(Store(store.root),codes[0])[0][hole]=='0'
+    assert not store.rows('SELECT value FROM meta WHERE key=?',(ATTEMPT_PREFIX+codes[1],))
+    run(Store(store.root),receipt(store,day),day,job='restart')
+    assert [c for c,_,_ in calls]==codes
+
+
+def test_network_failure_does_not_block_other_healthy_stock_or_guess_halt(store,vendor):
+    cls,calls=vendor;cls.outcome='error'
+    codes,full,hole,day=setup(store,count=2)
+    save_dataset(store,codes[0],full,'tickflow','前复权')
+    report=run(store,receipt(store,day),day)
+    assert report['scan_readiness']['ready']==1 and report['scan_readiness']['scan_allowed']
+    assert len(calls)==1 and not status_facts(store,codes[1])[0]
+
+
+def test_known_old_identity_is_not_sent_to_price_or_status_providers(store,vendor):
+    _,calls=vendor
+    _,_,_,day=setup(store)
+    audit=dict(scope_valid=True,expected_day=day,gaps=[
+        dict(code=c,category='missing_dataset') for c in ('sh.601313','sz.002525')])
+    assert select_targets(store,{'daily':audit},{},'tickflow',day)==({},0)
+    assert not calls
+
+
+def test_weekly_history_and_forming_week_daily_holes_are_both_repaired(store,vendor):
+    cls,_=vendor;cls.outcome='1'
+    code='sh.600000';full=bars(902)  # Tuesday: latest daily is after the completed Friday.
+    first,day=market(store,full,'tickflow',[code])
+    old,recent=full.date.iloc[100],full.date.iloc[-2]
+    missing={old,recent}
+    did=save_dataset(store,code,full[~full.date.isin(missing)],'tickflow','前复权')
+    save_quality(store,did,describe_history(store,code,full[~full.date.isin(missing)],first,day))
+    save_status_rows(store,code,old,recent,[dict(code=code,date=d,tradestatus='1',volume='') for d in missing])
+    requests=[]
+    def repair(job,spec):
+        requests.append(spec['scan_timeframe'])
+        missing.discard(old if spec['scan_timeframe']=='weekly' else recent)
+        did=save_dataset(store,code,full[~full.date.isin(missing)],'tickflow','前复权',job)
+        return dict(datasets=[did],errors=[])
+    report=run(store,receipt(store,day),day,price_sync=repair)
+    assert requests==['weekly','daily']
+    assert report['scan_readiness']['complete'] and report['scan_periods']['weekly']['complete']
+    assert not report['errors'] and not missing
+
+
+def test_baostock_daily_resume_also_selects_old_weekly_holes_without_integrity_receipt(store,vendor):
+    _,calls=vendor
+    full=bars(900);code='sh.600000';hole=full.date.iloc[100]
+    first,day=market(store,full,'baostock',[code])
+    data=full[full.date!=hole]
+    did=save_dataset(store,code,data,'baostock','前复权')
+    save_quality(store,did,describe_history(store,code,data,first,day,source='baostock'))
+    audit=audit_scope(store,['沪深主板'],day,source='baostock',timeframe='daily',verify_files=True)
+    assert audit['complete']
+    stop=Event()
+    service=SimpleNamespace(store=store,check_stop=lambda *_:None,cancel_flags={'baostock-test':stop},
+                            progress=lambda *_:pytest.fail('不新增前台文字'),
+                            _sync_once=lambda *_:pytest.fail('停牌不补拉价格'))
+    out=maintain_daily_status(service,'baostock-test',dict(source='baostock',boards=['沪深主板'],
+        scan_timeframe='daily'),dict(scan_readiness=audit,errors=[]))
+    assert calls==[(code,hole,hole)] and out['scan_periods']['weekly']['complete']
