@@ -1,4 +1,5 @@
 """Bounded, optional status-only review; price sync never depends on this network."""
+import time
 from .provider_guard import ProviderGuard, ProviderError, error_detail
 from .store import dumps, now
 from .trading_status import (refresh_status_index, status_facts, halt_evidence,
@@ -7,8 +8,12 @@ from .trading_status import (refresh_status_index, status_facts, halt_evidence,
 
 def verify_status_targets(store, targets, provider_factory, job=None, retry=False,
                           check_stop=lambda:None, progress=lambda *args:None,
-                          cancel_event=None):
-    refresh_status_index(store, verify_files=True)
+                          cancel_event=None, budget_seconds=None, request_timeout=None,
+                          min_interval=0, refresh_index=True, on_attempt=lambda code, dates:None,
+                          preserve_order=False):
+    refresh_status_index(store, verify_files=refresh_index)
+    deadline = None if budget_seconds is None else time.monotonic() + budget_seconds
+    last_request = None
     # Validate the entire specification before opening any vendor connection.
     targets = {code:sorted(set(days)) for code, days in targets.items() if days}
     for code, days in targets.items():
@@ -19,7 +24,8 @@ def verify_status_targets(store, targets, provider_factory, job=None, retry=Fals
     provider = None
     guard = ProviderGuard(store, 'baostock')
     try:
-        for n, (code, dates) in enumerate(sorted(targets.items())):
+        items = list(targets.items()) if preserve_order else sorted(targets.items())
+        for n, (code, dates) in enumerate(items):
             check_stop()
             progress(n, len(targets), f'核验缺日状态 · {code} · {dates[0]}～{dates[-1]}（不下载价格）')
             known, _ = status_facts(store, code)
@@ -32,14 +38,36 @@ def verify_status_targets(store, targets, provider_factory, job=None, retry=Fals
             if not retry:
                 needed = [d for d in needed if d not in tried]
             if needed:
+                if last_request is not None and min_interval:
+                    delay = max(0, min_interval - (time.monotonic() - last_request))
+                    if deadline is not None:
+                        delay = min(delay, max(0, deadline-time.monotonic()))
+                    if cancel_event is not None:
+                        cancel_event.wait(delay)
+                    else:
+                        time.sleep(delay)
+                    check_stop()
+                if deadline is not None and deadline-time.monotonic() <= .5:
+                    report['budget_exhausted'] = True
+                    break
                 guard.check()
                 if provider is None:
                     provider = provider_factory()
                     if cancel_event is not None:
                         provider.cancel_event = cancel_event
                     provider.on_wait = lambda op,seconds:progress(n,len(targets),f'核验缺日状态 · {code} · 等待 {seconds}秒')
+                    if request_timeout is not None:
+                        provider.login_timeout = min(request_timeout, deadline-time.monotonic()) if deadline is not None else request_timeout
+                        provider.logout_timeout = .5
                     provider.__enter__()
+                if deadline is not None and deadline-time.monotonic() <= .5:
+                    report['budget_exhausted'] = True
+                    break
+                if request_timeout is not None:
+                    provider.query_timeout = min(request_timeout, max(.01, deadline-time.monotonic()-.3)) if deadline is not None else request_timeout
                 try:
+                    last_request = time.monotonic()
+                    on_attempt(code, needed)
                     raw = provider.trading_status(code, needed[0], needed[-1])
                     rows = validate_status_rows(code, needed[0], needed[-1], raw.to_dict(orient='records'))
                     # Keep only explicitly requested dates; no prices or range inference.

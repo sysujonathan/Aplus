@@ -226,6 +226,9 @@ def sync_stock(store, provider, code, start, end, job=None, force=False, source=
             action = 'refreshed'
         else:
             frame = pd.concat([old, *pieces], ignore_index=True).drop_duplicates('date', keep='last')
+    # Repairs can append older overlap rows after the latest tail. Certify the
+    # same canonical ordering that save_dataset will persist, never concat order.
+    frame = validate_bars(frame)
     quality = None
     if track_quality:
         from .history_quality import describe_history, save_quality

@@ -127,7 +127,7 @@ def run_premarket(service, job, spec):
             proxy.store.execute('UPDATE jobs SET status=?,finished=?,message=?,result=? WHERE id=?',
                                 (status, now(), message, dumps(result), child))
             with notice_lock:
-                summary = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery') if k in result}
+                summary = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery','status_maintenance_summary') if k in result}
                 if result.get('resume'):
                     summary['resume'] = resume_summary(result['resume'])
                 if kind == 'scan':

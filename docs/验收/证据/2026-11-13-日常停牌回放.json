@@ -1,0 +1,45 @@
+{
+  "transport": "captured genuine BaoStock responses; no network",
+  "stocks": 27,
+  "before_ready": 19,
+  "after_ready": 27,
+  "runs": [
+    {
+      "seconds": 4.766,
+      "queries": 5,
+      "summary": {
+        "checked": 5,
+        "halted": 5,
+        "unknown": 0,
+        "deferred": 22,
+        "errors": 0,
+        "budget_exhausted": false
+      },
+      "ready": 23
+    },
+    {
+      "seconds": 4.625,
+      "queries": 5,
+      "summary": {
+        "checked": 5,
+        "halted": 5,
+        "unknown": 0,
+        "deferred": 17,
+        "errors": 0,
+        "budget_exhausted": false
+      },
+      "ready": 27
+    }
+  ],
+  "prices_unchanged": true,
+  "weekly_bars_unchanged": true,
+  "formal_database_opened": false,
+  "production_files": {
+    "workbench/status_maintenance.py": "9e31b07285d8698eaa31338eb9fd4ee557b4d9ed18c5d728993b76ccd2d65165",
+    "workbench/status_review.py": "b6c61b08a780bdc3836b3ad7ef73349a7fc43e8020e3580465b2a8c476cad57f",
+    "workbench/history_quality.py": "e8beeb21f14caa20c280f06a75c9d332e1dfd2467c9073ce1cb5267fc3aac354",
+    "workbench/readiness.py": "55473a2939f5d4fab3a221bcbef6682f642b869ff70d3547644ae0e1fd6e1f80",
+    "workbench/sync.py": "09ce02f3d51ddf333d51639a5ba056c4a66fd00184c34a366c1a09f3ee8cc528",
+    "workbench/service.py": "87de3bf964678713c408811c856530aed483d2933c54bcf5c87df4a4dbc32481"
+  }
+}
