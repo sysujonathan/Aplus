@@ -8,13 +8,13 @@ import sys
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL
-from workbench.h2_replay_service import load_receipt
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, MODEL as CURRENT_MODEL
+from workbench.h2_replay_service import ITERATION_BASELINE_PURPOSE, load_receipt
 from workbench.market import save_dataset
 from workbench.service import Service
 from workbench.stop_research import MODEL
 from workbench.stop_research_service import load_experiment
-from workbench.store import Store, dumps
+from workbench.store import SUPPORTED_SCHEMA_VERSIONS, Store, dumps
 from workbench.strategies import verify_frozen
 
 
@@ -40,7 +40,7 @@ def main():
     db=sqlite3.connect((source/'workbench.sqlite3').as_uri()+'?mode=ro',uri=True)
     db.row_factory=sqlite3.Row
     version=db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if not version or version[0] not in ('4','5','6','7','8'):
+    if not version or version[0] not in SUPPORTED_SCHEMA_VERSIONS:
         raise ValueError('源目录不是兼容的新 Aplus 数据仓')
     store=Store(destination);ids=[]
     for code in ('sz.002870','sz.300870','sz.300837','sz.301387'):
@@ -55,7 +55,10 @@ def main():
     if calendar.exists():store.write_artifact('trading_calendar.json',calendar.read_bytes())
     service=Service(store)
     try:
-        baseline=service.submit('backtest',dict(execution_model=BASE_MODEL,strategy='STRATEGY_GAP_H2',timeframe='daily',datasets=ids,start='2026-01-01',end='2026-09-30'))
+        current=service.submit('backtest',dict(execution_model=CURRENT_MODEL,strategy='STRATEGY_GAP_H2',timeframe='daily',datasets=ids,start='2026-01-01',end='2026-09-30'))
+        wait(store,current)
+        baseline=service.submit('backtest',dict(execution_model=BASE_MODEL,
+            purpose=ITERATION_BASELINE_PURPOSE,baseline_source_job=current))
         source_status=wait(store,baseline)['status']
         _,base_report,original=load_receipt(store,baseline)
         job=service.submit('backtest',dict(execution_model=MODEL,source_job=baseline))
@@ -72,7 +75,7 @@ def main():
         evidence=dict(source_status=source_status,status=job_status,real_data=True,
                       opportunities=report['opportunities'],comparable=report['comparable'],groups=report['groups'],
                       baseline_unchanged=True,formal_tables_empty=True,frozen_unchanged=True,
-                      job=job,second=second,source=baseline,
+                      job=job,second=second,source=baseline,baseline_source_job=current,
                       note='四只真实行情快照的工程与图表验收；不是全市场表现或长期实际使用验收。')
         if args.screenshot:
             from gui.main_window import AplusMainWindow

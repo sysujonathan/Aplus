@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SUPPORTED_SCHEMA_VERSIONS = frozenset(str(version) for version in range(1, 10))
 
 
 def resolve_runtime_root(root=None):
@@ -100,7 +101,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS events_job ON events(job_id,seq);
             """)
             version = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-            if version not in {'1', '2', '3', '4', '5', '6', '7', '8', '9'}:
+            if version not in SUPPORTED_SCHEMA_VERSIONS:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             db.execute("CREATE TABLE IF NOT EXISTS sync_coverage(code TEXT PRIMARY KEY, "
                        "dataset_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL)")
@@ -207,7 +208,7 @@ class Store:
             has_meta = source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
             row = source.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() if has_meta else None
             version = str(row[0]) if row else '1'
-            if version not in {'1', '2', '3', '4', '5', '6', '7', '8', '9'}:
+            if version not in SUPPORTED_SCHEMA_VERSIONS:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             if version == '9':
                 return
