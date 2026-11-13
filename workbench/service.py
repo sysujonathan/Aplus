@@ -223,8 +223,11 @@ class Service:
     def _sync(self, job,spec):
         if spec.get('resume'):
             from .premarket_resume import continue_sync
-            return continue_sync(self, job, spec)
-        return self._sync_once(job, spec)
+            result = continue_sync(self, job, spec)
+        else:
+            result = self._sync_once(job, spec)
+        from .status_maintenance import maintain_daily_status
+        return maintain_daily_status(self, job, spec, result)
 
     def _sync_once(self, job,spec):
         source=spec.get('source','baostock')

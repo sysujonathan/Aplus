@@ -16,6 +16,7 @@ from .trading_status import halt_evidence, evidence_version
 
 SCAN_BARS = 300
 MIN_BARS = 125
+WINDOW_VERSION = 1
 
 
 def calendar_of(store, source='tickflow'):
@@ -47,11 +48,11 @@ def describe_history(store, code, frame, start, end, calendar=None, source='tick
     return dict(start=start, end=end, first_bar=first_bar, last_bar=max(actual),
                 missing_dates=missing, suspended_dates=suspended, evidence=evidence,
                 complete=not missing, prefix_unverified=start < first_bar, evidence_version=evidence_version(store, code),
-                windows=scan_windows(frame, end))
+                windows=scan_windows(frame, end), window_version=WINDOW_VERSION)
 
 
 def scan_windows(frame, day):
-    dates = frame.loc[frame.date <= day, 'date'].tolist()
+    dates = sorted(set(frame.loc[frame.date <= day, 'date']))
     daily = dates[-SCAN_BARS:]
     # Match weekly_bars' W-FRI labels and exclusion of unfinished weeks.
     labels = pd.to_datetime(pd.Series(dates, dtype=str)).dt.to_period('W-FRI').dt.end_time.dt.strftime('%Y-%m-%d')
@@ -81,7 +82,8 @@ def quality_for(store, record, day=None, calendar=None, cache_only=False, prefet
         cache = store._history_quality_cache = {}
     version = evidence_version(store, record['code'])
     key = (record['id'], day, version)
-    if quality and day == quality['end'] and quality.get('evidence_version') == version:
+    if (quality and quality.get('window_version') == WINDOW_VERSION
+            and day == quality['end'] and quality.get('evidence_version') == version):
         return quality
     if cache_only and key not in cache:
         raise ValueError('扫描区间待核验；请更新一次所选来源行情，后台登记完整性')

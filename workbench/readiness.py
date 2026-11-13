@@ -204,7 +204,7 @@ def check_response_dates(store, frame, start, end):
 
 
 def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=None, history_cache_only=False,
-                verify_files=False, check_stop=None, progress=None):
+                verify_files=False, check_stop=None, progress=None, codes=None):
     """Cheap UI check; actual files still hash-validated before strategy execution.
 
     Current halts require this day's directory or explicit dated evidence.
@@ -221,7 +221,10 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
         directory = pd.read_csv(directory_file(store, source), dtype=str)
         if 'code' not in directory:
             raise ValueError('股票目录缺少代码列，请重新获取目录')
-        codes = select_board_codes(directory, boards)
+        selected = select_board_codes(directory, boards)
+        if codes is not None and not set(codes).issubset(selected):
+            raise ValueError('局部核验标的不属于当前已核验范围')
+        codes = selected if codes is None else [c for c in selected if c in set(codes)]
         report['expected'] = len(codes)
         directory_day = directory_date(store, source)
         if directory_day != day:
