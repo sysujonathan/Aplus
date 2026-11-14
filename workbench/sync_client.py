@@ -93,6 +93,8 @@ def apply_sync_source(store, source_dir):
             content = (source_dir / relative).read_bytes()
             if digest(content) != row['sha256']:
                 raise ValueError('calendar digest mismatch')
+            # Publish to TickFlow's effective calendar; preserve other sources.
+            relative = 'sources/tickflow/trading_calendar.json'
             target = store.root / relative
             if not target.exists() or target.read_bytes() != content:
                 writes.append((relative, content))
@@ -114,10 +116,13 @@ def apply_sync_source(store, source_dir):
             current_ids = {row['id'] for row in observations}
             tracked = db.execute("SELECT value FROM meta WHERE key='sync_observation_ids'").fetchone()
             tracked = json.loads(tracked['value']) if tracked else {}
-            removed = 0
-            if tracked.get('asof') == asof:
-                for oid in set(tracked['ids']) - current_ids:
-                    removed += db.execute('DELETE FROM observations WHERE asof=? AND id=?', (asof, oid)).rowcount
+            withdrawn = db.execute("SELECT value FROM meta WHERE key='sync_withdrawn_observation_ids'").fetchone()
+            withdrawn = set(json.loads(withdrawn['value'])) if withdrawn else set()
+            removed_ids = set(tracked['ids']) - current_ids if tracked.get('asof') == asof else set()
+            removed = len(removed_ids)
+            # Keep archives addressable by watchlists, plans and charts.
+            # Retain withdrawals across revisions/days; reintroduced IDs reactivate.
+            withdrawn = (withdrawn | removed_ids) - current_ids
             counts = []
             for table, columns, rows in [('datasets', DATASET_COLUMNS, datasets), ('observations', OBSERVATION_COLUMNS, observations)]:
                 count = 0
@@ -126,6 +131,7 @@ def apply_sync_source(store, source_dir):
                 counts.append(count)
             metadata = dict(sync_asof=asof, sync_digest=manifest['sha256'], sync_applied_at=now(),
                             sync_coverage=coverage, daily_market_source=manifest['source'],
+                            sync_withdrawn_observation_ids=dumps(sorted(withdrawn)),
                             sync_observation_ids=dumps({'asof': asof, 'ids': sorted(current_ids)}))
             if 'universe_date' in manifest:
                 metadata['universe_date:tickflow'] = manifest['universe_date']
