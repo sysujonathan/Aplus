@@ -23,6 +23,21 @@ from gui.candidate_tabs import candidate_repeat_counts, collapse_candidate_rows
 from gui.data import load_candidates
 
 
+@pytest.fixture(autouse=True)
+def isolated_status_provider(monkeypatch):
+    """The new optional state dependency must never use the real vendor here."""
+    import workbench.status_maintenance as maintenance
+    class Unknown:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def trading_status(self,*args):
+            return pd.DataFrame(columns=['date','code','tradestatus','volume'])
+    monkeypatch.setattr(maintenance,'BaoStock',Unknown)
+    monkeypatch.setattr(maintenance,'baostock_connection_active',lambda:False)
+    original=maintenance.verify_status_targets
+    monkeypatch.setattr(maintenance,'verify_status_targets',lambda *a,**k:original(*a,**dict(k,min_interval=0)))
+
+
 def seeded(store, frame, source='baostock', holes=(), codes=('sh.600000',), status='1'):
     day=frame.date.iloc[-1]; start=frame.date.iloc[0]
     job='scope-'+source
@@ -39,6 +54,11 @@ def seeded(store, frame, source='baostock', holes=(), codes=('sh.600000',), stat
         did=save_dataset(store,code,bars,source,ADJUSTMENTS[source],job)
         save_coverage(store,code,did,start,day,source)
         ids.append(did)
+        if holes:
+            from workbench.trading_status import save_status_rows
+            dates=sorted(frame.date.iloc[list(holes)].tolist())
+            save_status_rows(store,code,dates[0],dates[-1],
+                [dict(code=code,date=day,tradestatus='1',volume='') for day in dates])
     return start,day,ids
 
 
@@ -86,7 +106,7 @@ def test_plain_interior_hole_is_repaired_once_then_scanned_without_manual_steps(
         spec=dict(sources=[source],boards=['沪深主板'],strategies=['STRATEGY_3K'],
                   timeframe='daily',start=start,end=day)
         first=wait_for(store,service.submit('premarket',spec))
-        assert first['status']=='completed' and len(calls)==1 and scans==[source]
+        assert first['status']=='completed' and len(calls)==1 and scans==[source],first['result']
         assert len(store.rows('SELECT * FROM datasets'))==2  # Old snapshot intact.
         second=wait_for(store,service.submit('premarket',spec))
         assert second['status']=='completed' and len(calls)==1  # No repeated pull.
