@@ -2,8 +2,10 @@
 from datetime import date
 import json
 import logging
+import os
 from pathlib import Path
 import re
+import sys
 
 from .snapshot import snapshot_digest
 from .store import digest, dumps, now
@@ -29,6 +31,54 @@ def find_sync_source(root) -> Path | None:
         )
     except (OSError, ValueError):
         return None
+
+
+def _sync_search_roots():
+    """Probe drive roots only; never traverse the filesystem."""
+    if sys.platform != 'win32':
+        return []
+    roots = []
+    for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+        root = Path(f'{letter}:\\')
+        try:
+            if root.is_dir():
+                roots.append(root)
+        except OSError:
+            continue
+    return roots
+
+
+def locate_sync_source(store, search_roots=None) -> Path | None:
+    """Prefer an explicit override, then memory, then known Drive locations."""
+    if 'APLUS_SYNC_DIR' in os.environ:
+        return find_sync_source(os.environ['APLUS_SYNC_DIR'])
+
+    def remember(source):
+        source = source.resolve()
+        store.execute(
+            "INSERT INTO meta(key,value) VALUES('sync_dir',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(source),))
+        return source
+
+    saved = store.rows("SELECT value FROM meta WHERE key='sync_dir'")
+    if saved:
+        source = find_sync_source(saved[0]['value'])
+        if source is not None:
+            return remember(source)
+    roots = _sync_search_roots() if search_roots is None else search_roots
+    for root in roots:
+        for layer in ('', '我的云端硬盘', 'My Drive'):
+            candidate = Path(root) / layer / '02-交易原件' / 'Aplus桌面同步源'
+            # Discovery requires the manifest in this exact directory, not a child.
+            try:
+                if not (candidate / 'manifest.json').is_file():
+                    continue
+            except OSError:
+                continue
+            source = find_sync_source(candidate)
+            if source == candidate:
+                return remember(source)
+    return None
 
 
 def rejection_message(store):
