@@ -1172,8 +1172,8 @@ class ToolBar(ttk.Frame):
             self._header_data_var.set('正在忙，稍后再试')
             return
         root = os.environ.get('APLUS_SYNC_DIR')
-        from workbench.sync_client import find_sync_source
-        source = find_sync_source(root)
+        from workbench.sync_client import locate_sync_source
+        source = locate_sync_source(self.store)
         if source is None:
             self._header_data_var.set('未配置同步来源')
             logging.getLogger(__name__).warning('No desktop synchronization source: %s', root)
