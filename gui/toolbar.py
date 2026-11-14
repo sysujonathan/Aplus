@@ -5,6 +5,7 @@ from datetime import date
 import json
 import logging
 import os
+import queue
 import threading
 import time
 import tkinter as tk
@@ -1171,38 +1172,55 @@ class ToolBar(ttk.Frame):
         if self._job_id or self._desktop_sync_running:
             self._header_data_var.set('正在忙，稍后再试')
             return
-        root = os.environ.get('APLUS_SYNC_DIR')
-        from workbench.sync_client import locate_sync_source
-        source = locate_sync_source(self.store)
-        if source is None:
-            self._header_data_var.set('未配置同步来源')
-            logging.getLogger(__name__).warning('No desktop synchronization source: %s', root)
-            return
         self._desktop_sync_running = True
         self.btn_desktop_sync.state(['disabled'])
+
+        replies = queue.Queue(maxsize=1)
 
         def finished(result):
             from .data import invalidate
             self._desktop_sync_running = False
             self.btn_desktop_sync.state(['!disabled'])
-            invalidate(self.store)
-            if self._on_job_finished:
-                self._on_job_finished('同步', 'completed' if result['status'] != 'rejected' else 'failed', None)
+            if result['status'] != 'missing':
+                invalidate(self.store)
+                if self._on_job_finished:
+                    self._on_job_finished('同步', 'completed' if result['status'] != 'rejected' else 'failed', None)
             self._header_data_var.set(result['message'])
 
-        def run():
-            from workbench.sync_client import apply_sync_source, rejection_message
+        def poll():
             try:
-                result = apply_sync_source(self.store, source)
+                result = replies.get_nowait()
+            except queue.Empty:
+                self.after(50, poll)
+                return
+            finished(result)
+
+        def run():
+            from workbench.sync_client import locate_sync_source, apply_sync_source, rejection_message
+            try:
+                source = locate_sync_source(self.store)
+                if source is None:
+                    logging.getLogger(__name__).warning(
+                        'No desktop synchronization source: %s', os.environ.get('APLUS_SYNC_DIR'))
+                    result = {'status': 'missing', 'message': '未配置同步来源'}
+                else:
+                    result = apply_sync_source(self.store, source)
             except Exception:
                 logging.getLogger(__name__).exception('Desktop synchronization failed')
-                result = {'status': 'rejected', 'message': rejection_message(self.store)}
-            try:
-                self.after(0, finished, result)
-            except (RuntimeError, tk.TclError):
-                logging.getLogger(__name__).info('Toolbar closed before synchronization finished')
+                try:
+                    message = rejection_message(self.store)
+                except Exception:
+                    logging.getLogger(__name__).exception('Synchronization failure date unavailable')
+                    message = '同步失败，仍为 原有 数据'
+                result = {'status': 'rejected', 'message': message}
+            replies.put_nowait(result)
 
-        threading.Thread(target=run, name='desktop-sync', daemon=True).start()
+        self.after(50, poll)
+        try:
+            threading.Thread(target=run, name='desktop-sync', daemon=True).start()
+        except Exception:
+            logging.getLogger(__name__).exception('Desktop synchronization could not start')
+            replies.put_nowait({'status': 'rejected', 'message': '同步失败，仍为 原有 数据'})
 
     def _on_sync(self, chained=False):
         if self.store and market_source(self.store) not in UPDATE_SOURCES:

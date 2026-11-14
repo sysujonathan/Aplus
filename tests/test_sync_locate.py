@@ -116,20 +116,166 @@ def test_corrupt_manifest_rejected_after_discovery(store, tmp_path):
     assert {table: store.rows(f'SELECT * FROM {table}') for table in before} == before
 
 
-def test_toolbar_uses_locator_and_preserves_missing_message(store, monkeypatch):
+@pytest.fixture
+def toolbar(store):
+    import threading
+    import tkinter as tk
     from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    # Tcl timers exercise the real Tk event queue without requiring a display.
+    root = tk.Tcl()
+    main_thread = threading.get_ident()
+
+    def after(*args):
+        assert threading.get_ident() == main_thread
+        return root.after(*args)
+
+    bar = SimpleNamespace(_job_id=None, _desktop_sync_running=False,
+                          store=store, _header_data_var=Mock(),
+                          btn_desktop_sync=Mock(), _on_job_finished=Mock(), after=after)
+    yield bar, root
+    for timer in root.tk.call('after', 'info'):
+        root.after_cancel(timer)
+
+
+def drain(toolbar):
+    import time
+    bar, root = toolbar
+    deadline = time.monotonic() + 4
+    while bar._desktop_sync_running and time.monotonic() < deadline:
+        root.eval('update')
+        time.sleep(.005)
+    assert not bar._desktop_sync_running
+    bar.btn_desktop_sync.state.assert_called_with(['!disabled'])
+
+
+def test_toolbar_uses_locator_and_preserves_missing_message(toolbar, monkeypatch):
     from unittest.mock import Mock
     from gui.toolbar import ToolBar
 
-    toolbar = SimpleNamespace(_job_id=None, _desktop_sync_running=False,
-                              store=store, _header_data_var=Mock())
+    bar, _ = toolbar
     locator = Mock(return_value=None)
     monkeypatch.setattr(sync_client, 'locate_sync_source', locator)
-    ToolBar._on_desktop_sync(toolbar)
-    locator.assert_called_once_with(store)
-    toolbar._header_data_var.set.assert_called_once_with('未配置同步来源')
+    ToolBar._on_desktop_sync(bar)
+    drain(toolbar)
+    locator.assert_called_once_with(bar.store)
+    bar._header_data_var.set.assert_called_once_with('未配置同步来源')
+    bar._on_job_finished.assert_not_called()
     locator.reset_mock()
-    toolbar._job_id = 'busy'
-    ToolBar._on_desktop_sync(toolbar)
+    bar._job_id = 'busy'
+    ToolBar._on_desktop_sync(bar)
     locator.assert_not_called()
-    toolbar._header_data_var.set.assert_called_with('正在忙，稍后再试')
+    bar._header_data_var.set.assert_called_with('正在忙，稍后再试')
+
+
+@pytest.mark.parametrize('slow', ['database', 'drive'])
+def test_toolbar_locator_io_keeps_tk_responsive(toolbar, tmp_path, monkeypatch, slow):
+    import sqlite3
+    import threading
+    import time
+    from gui.toolbar import ToolBar
+
+    bar, root = toolbar
+    expected = source(tmp_path / RELATIVE)
+    entered = threading.Event()
+    released = threading.Event()
+    worker_threads = []
+    main_thread = threading.get_ident()
+    original_rows, original_execute = bar.store.rows, bar.store.execute
+
+    def rows(*args, **kwargs):
+        worker_threads.append(threading.get_ident())
+        entered.set()
+        return original_rows(*args, **kwargs)
+
+    def execute(*args, **kwargs):
+        worker_threads.append(threading.get_ident())
+        return original_execute(*args, **kwargs)
+
+    monkeypatch.setattr(bar.store, 'rows', rows)
+    monkeypatch.setattr(bar.store, 'execute', execute)
+
+    def roots():
+        worker_threads.append(threading.get_ident())
+        if slow == 'drive':
+            entered.set()
+            time.sleep(.7)
+            released.set()
+        return [tmp_path]
+
+    monkeypatch.setattr(sync_client, '_sync_search_roots', roots)
+    applied = []
+
+    def apply(store, path):
+        worker_threads.append(threading.get_ident())
+        applied.append(path)
+        return {'status': 'applied', 'message': '同步完成'}
+
+    monkeypatch.setattr(sync_client, 'apply_sync_source', apply)
+    locker = None
+    if slow == 'database':
+        locked = threading.Event()
+
+        def lock():
+            with sqlite3.connect(bar.store.path) as db:
+                db.execute('BEGIN EXCLUSIVE')
+                locked.set()
+                time.sleep(.7)
+                db.rollback()
+            released.set()
+
+        locker = threading.Thread(target=lock)
+        locker.start()
+        assert locked.wait(1)
+
+    started = time.monotonic()
+    ToolBar._on_desktop_sync(bar)
+    elapsed = time.monotonic() - started
+    assert elapsed < .2, elapsed
+    assert bar._desktop_sync_running
+    assert entered.wait(.2)
+    # Repeated clicks must not launch another locator while this one is blocked.
+    ToolBar._on_desktop_sync(bar)
+    heartbeats = []
+    root.after(20, lambda: heartbeats.append((time.monotonic(), released.is_set())))
+    drain(toolbar)
+    if locker:
+        locker.join(1)
+    assert heartbeats and heartbeats[0][1] is False
+    assert heartbeats[0][0] - started < .3
+    assert released.is_set()
+    assert applied == [expected.resolve()]
+    assert all(thread != main_thread for thread in worker_threads)
+    assert original_rows("SELECT value FROM meta WHERE key='sync_dir'") == [{'value': str(expected.resolve())}]
+    bar._on_job_finished.assert_called_once_with('同步', 'completed', None)
+    bar._header_data_var.set.assert_called_with('同步完成')
+
+
+@pytest.mark.parametrize('stage', ['locate', 'remember', 'apply', 'failure-message', 'thread-start'])
+def test_toolbar_sync_failures_restore_button(toolbar, monkeypatch, stage):
+    from unittest.mock import Mock
+    from gui.toolbar import ToolBar
+    import gui.toolbar as module
+
+    bar, _ = toolbar
+    if stage == 'thread-start':
+        monkeypatch.setattr(module.threading, 'Thread', Mock(side_effect=RuntimeError('start')))
+    elif stage in ('locate', 'failure-message'):
+        monkeypatch.setattr(sync_client, 'locate_sync_source', Mock(side_effect=OSError('drive')))
+    elif stage == 'remember':
+        monkeypatch.setattr(bar.store, 'execute', Mock(side_effect=OSError('write')))
+        # Exercise the real remembered-path persistence.
+        saved = source(bar.store.root / 'saved')
+        original_rows = bar.store.rows
+        monkeypatch.setattr(bar.store, 'rows', lambda sql: [{'value': str(saved)}]
+                            if "key='sync_dir'" in sql else original_rows(sql))
+    else:
+        monkeypatch.setattr(sync_client, 'locate_sync_source', Mock(return_value=bar.store.root))
+        monkeypatch.setattr(sync_client, 'apply_sync_source', Mock(side_effect=OSError('apply')))
+    if stage == 'failure-message':
+        monkeypatch.setattr(bar.store, 'rows', Mock(side_effect=OSError('database')))
+    ToolBar._on_desktop_sync(bar)
+    drain(toolbar)
+    bar._header_data_var.set.assert_called_with('同步失败，仍为 原有 数据')
+    bar._on_job_finished.assert_called_once_with('同步', 'failed', None)
