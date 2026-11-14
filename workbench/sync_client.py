@@ -85,32 +85,58 @@ def apply_sync_source(store, source_dir):
             target = store.root / DIRECTORY
             if not target.exists() or target.read_bytes() != content:
                 writes.append((DIRECTORY, content))
+        if 'calendar' in manifest:
+            row = manifest['calendar']
+            relative = row['path']
+            if relative not in ('trading_calendar.json', 'sources/tickflow/trading_calendar.json'):
+                raise ValueError('unsupported calendar file')
+            content = (source_dir / relative).read_bytes()
+            if digest(content) != row['sha256']:
+                raise ValueError('calendar digest mismatch')
+            target = store.root / relative
+            if not target.exists() or target.read_bytes() != content:
+                writes.append((relative, content))
         coverage = dumps(manifest['coverage'])
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         logger.warning('Synchronization rejected: %s', exc)
         return dict(status='rejected', message=rejection_message(store))
-    # Directory content is mutable: restore it if artifact/DB writes fail.
-    directory = store.root / DIRECTORY
-    previous = directory.read_bytes() if directory.exists() else None
+    # Mutable inventories share the artifact/DB failure boundary.
+    previous = {}
+    for relative, _ in writes:
+        if relative == DIRECTORY or relative.endswith('trading_calendar.json'):
+            target = store.root / relative
+            previous[relative] = target.read_bytes() if target.exists() else None
     try:
         for relative, content in writes:
             store.write_artifact(relative, content)
         with store.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            current_ids = {row['id'] for row in observations}
+            tracked = db.execute("SELECT value FROM meta WHERE key='sync_observation_ids'").fetchone()
+            tracked = json.loads(tracked['value']) if tracked else {}
+            removed = 0
+            if tracked.get('asof') == asof:
+                for oid in set(tracked['ids']) - current_ids:
+                    removed += db.execute('DELETE FROM observations WHERE asof=? AND id=?', (asof, oid)).rowcount
             counts = []
             for table, columns, rows in [('datasets', DATASET_COLUMNS, datasets), ('observations', OBSERVATION_COLUMNS, observations)]:
                 count = 0
                 for row in rows:
                     count += db.execute(f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(row[k] for k in columns)).rowcount
                 counts.append(count)
-            for key, value in dict(sync_asof=asof, sync_digest=manifest['sha256'], sync_applied_at=now(), sync_coverage=coverage, daily_market_source=manifest['source']).items():
+            metadata = dict(sync_asof=asof, sync_digest=manifest['sha256'], sync_applied_at=now(),
+                            sync_coverage=coverage, daily_market_source=manifest['source'],
+                            sync_observation_ids=dumps({'asof': asof, 'ids': sorted(current_ids)}))
+            if 'universe_date' in manifest:
+                metadata['universe_date:tickflow'] = manifest['universe_date']
+            for key, value in metadata.items():
                 db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
     except Exception:
-        if any(relative == DIRECTORY for relative, _ in writes):
-            if previous is None:
-                directory.unlink(missing_ok=True)
+        for relative, content in previous.items():
+            if content is None:
+                (store.root / relative).unlink(missing_ok=True)
             else:
-                store.write_artifact(DIRECTORY, previous)
+                store.write_artifact(relative, content)
         logger.exception('Synchronization failed; DB rolled back, unreferenced market artifacts may remain')
         raise
-    return dict(status='applied', message=f'已同步到 {asof} 数据', asof=asof, datasets_added=counts[0], observations_added=counts[1])
+    return dict(status='applied', message=f'已同步到 {asof} 数据', asof=asof, datasets_added=counts[0], observations_added=counts[1], observations_removed=removed)
