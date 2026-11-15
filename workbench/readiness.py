@@ -151,6 +151,9 @@ def expected_day(store, asof, source='baostock'):
 
 def extend_exchange_calendar(store,start,end,job=None,source='baostock'):
     """Keep verified historical dates; extend only published exchange years."""
+    if source == 'tickflow':
+        from .tickflow_calendar import extend_calendar
+        return extend_calendar(store, start, end, job)
     from datetime import date,timedelta
     from .exchange_calendar import is_trading_day, SCHEDULES
     path=calendar_file(store, source)
