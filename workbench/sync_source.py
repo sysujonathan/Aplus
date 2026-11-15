@@ -8,6 +8,7 @@ import tempfile
 
 from .market import latest_datasets
 from .snapshot import snapshot_digest
+from .sources import calendar_file, directory_date
 from .store import digest, dumps, now
 from .strategies import scan_engine_version
 
@@ -40,6 +41,12 @@ def write_sync_source(store, asof=None, out_dir=None):
         if not rows or rows[0]['dataset_id'] not in ids:
             raise ValueError(f'快照命中缺少观测或最新行情：{oid}')
         observations.append({k: rows[0][k] for k in OBSERVATION_COLUMNS})
+    calendar = calendar_file(store, 'tickflow')
+    universe_date = directory_date(store, 'tickflow')
+    if not calendar.is_file() or not universe_date:
+        raise ValueError('同步源缺少交易日历或目录日期')
+    calendar_content = calendar.read_bytes()
+    calendar_path = calendar.relative_to(store.root).as_posix()
     out = Path(out_dir) if out_dir else store.root / 'sync-source' / asof
     out.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix='.sync-', dir=out.parent))
@@ -64,10 +71,15 @@ def write_sync_source(store, asof=None, out_dir=None):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
             directories.append({'path': DIRECTORY, 'sha256': digest(content)})
+        target = temporary / calendar_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(calendar_content)
         manifest = dict(kind='aplus-sync-source', schema=1, asof=asof, source='tickflow',
                         timeframe='daily', generated_at=now(), engine=scan_engine_version(),
                         frozen_sha256=frozen_sha256(), datasets=datasets, observations=observations,
-                        coverage=snapshot['coverage'], directories=directories)
+                        coverage=snapshot['coverage'], directories=directories,
+                        calendar={'path': calendar_path, 'sha256': digest(calendar_content)},
+                        universe_date=universe_date)
         manifest['sha256'] = snapshot_digest(manifest)
         (temporary / 'manifest.json').write_text(dumps(manifest), encoding='utf-8')
         temporary.rename(out)

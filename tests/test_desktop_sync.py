@@ -7,7 +7,8 @@ import pytest
 from gui.data import candidate_dates, load_candidates, load_observation_candles
 from workbench.market import latest_datasets, save_dataset
 from workbench.snapshot import ReadOnlyStore, snapshot_digest
-from workbench.sources import market_source
+from workbench.sources import market_source, directory_date
+from workbench.readiness import expected_day, audit_scope
 from workbench.store import Store, dumps
 from workbench.sync_client import apply_sync_source, find_sync_source
 from workbench.sync_source import write_sync_source
@@ -62,6 +63,8 @@ def sample(tmp_path, monkeypatch):
     directory = source.root / 'sources/tickflow'
     directory.mkdir(parents=True)
     (directory / 'universe.csv').write_text('code,code_name\nsh.600000,样本\n', encoding='utf-8')
+    source.write_artifact('sources/tickflow/trading_calendar.json', dumps(dict(start=ASOF, end=ASOF, trading_days=[ASOF])).encode())
+    source.execute("INSERT INTO meta VALUES('universe_date:tickflow', ?)", (ASOF,))
     out = write_sync_source(ReadOnlyStore(source.root))
     return source, desktop, out
 
@@ -201,13 +204,17 @@ def test_database_failure_rolls_back(sample, monkeypatch):
     assert not (desktop.root / 'sources/tickflow/universe.csv').exists()
 
 
-@pytest.mark.parametrize('missing', ['snapshot', 'observation', 'market'])
+@pytest.mark.parametrize('missing', ['snapshot', 'observation', 'market', 'calendar', 'universe-date'])
 def test_export_failure_no_partial_output(sample, missing):
     source, _, _ = sample
     if missing == 'snapshot':
         (source.root / 'snapshots' / ASOF / 'snapshot.json').unlink()
     elif missing == 'observation':
         source.execute("DELETE FROM observations WHERE id='obs-0'")
+    elif missing == 'calendar':
+        (source.root / 'sources/tickflow/trading_calendar.json').unlink()
+    elif missing == 'universe-date':
+        source.execute("DELETE FROM meta WHERE key='universe_date:tickflow'")
     else:
         (source.root / source.rows('SELECT path FROM datasets')[0]['path']).unlink()
     target = source.root / 'failed-export'
@@ -227,3 +234,231 @@ def test_existing_dataset_skips_source_file(sample, monkeypatch):
         pytest.fail('up-to-date must not write artifacts')
     monkeypatch.setattr(desktop, 'write_artifact', unexpected)
     assert apply_sync_source(desktop, out)['status'] == 'up-to-date'
+
+
+@pytest.mark.parametrize('root_calendar', [False, True])
+def test_calendar_and_directory_date(sample, root_calendar):
+    source, desktop, out = sample
+    relative = 'sources/tickflow/trading_calendar.json'
+    content = (source.root / relative).read_bytes()
+    source.write_artifact('trading_calendar.json', b'stale root calendar')
+    if root_calendar:
+        (source.root / relative).unlink()
+        relative = 'trading_calendar.json'
+        source.write_artifact(relative, content)
+    out = write_sync_source(ReadOnlyStore(source.root), ASOF, source.root / 'calendar-export')
+    manifest = json.loads((out / 'manifest.json').read_text())
+    assert manifest['schema'] == 1
+    assert manifest['calendar']['path'] == relative
+    assert apply_sync_source(desktop, out)['status'] == 'applied'
+    assert (desktop.root / 'sources/tickflow/trading_calendar.json').read_bytes() == content
+    assert directory_date(desktop, 'tickflow') == ASOF
+    assert expected_day(desktop, ASOF, 'tickflow') == ASOF
+    assert audit_scope(desktop, ['沪深主板'], ASOF, source='tickflow')['scope_valid'] is True
+
+
+def test_old_manifest_preserves_calendar_and_date(sample):
+    _, desktop, out = sample
+    relative = 'sources/tickflow/trading_calendar.json'
+    desktop.write_artifact(relative, b'old calendar')
+    desktop.execute("INSERT INTO meta VALUES('universe_date:tickflow', 'old-date')")
+    edit(out, lambda m: (m.pop('calendar'), m.pop('universe_date')))
+    assert apply_sync_source(desktop, out)['status'] == 'applied'
+    assert (desktop.root / relative).read_bytes() == b'old calendar'
+    assert directory_date(desktop, 'tickflow') == 'old-date'
+
+
+@pytest.mark.parametrize('kind', ['digest', 'path'])
+def test_bad_calendar_rejected(sample, kind):
+    _, desktop, out = sample
+    if kind == 'digest':
+        (out / 'sources/tickflow/trading_calendar.json').write_bytes(b'corrupt')
+    else:
+        edit(out, lambda m: m['calendar'].update(path='../outside'))
+    before = state(desktop)
+    assert apply_sync_source(desktop, out)['status'] == 'rejected'
+    assert state(desktop) == before
+    assert not (desktop.root / 'sources/tickflow/trading_calendar.json').exists()
+
+
+@pytest.mark.parametrize('root_calendar', [False, True])
+@pytest.mark.parametrize('existing', [False, True])
+@pytest.mark.parametrize('failure', ['artifact', 'database'])
+def test_calendar_failure_restores_inventory(sample, monkeypatch, existing, failure, root_calendar):
+    _, desktop, out = sample
+    relative = 'sources/tickflow/trading_calendar.json'
+    if root_calendar:
+        content = (out / relative).read_bytes()
+        (out / 'trading_calendar.json').write_bytes(content)
+        edit(out, lambda m: m['calendar'].update(path='trading_calendar.json'))
+    if existing:
+        desktop.write_artifact(relative, b'old calendar')
+        desktop.write_artifact('sources/tickflow/universe.csv', b'old directory')
+        desktop.execute("INSERT INTO meta VALUES('universe_date:tickflow', 'old-date')")
+    before = state(desktop)
+    original = desktop.connect
+    @contextmanager
+    def failing():
+        with original() as db:
+            db.execute("CREATE TEMP TRIGGER fail_sync BEFORE INSERT ON meta BEGIN SELECT RAISE(ABORT, 'injected'); END")
+            yield db
+    if failure == 'database':
+        monkeypatch.setattr(desktop, 'connect', failing)
+    else:
+        write = desktop.write_artifact
+        def fail_after_calendar(path, content, *args, **kwargs):
+            result = write(path, content, *args, **kwargs)
+            if path == relative and content != b'old calendar':
+                raise RuntimeError('injected')
+            return result
+        monkeypatch.setattr(desktop, 'write_artifact', fail_after_calendar)
+    with pytest.raises(Exception, match='injected'):
+        apply_sync_source(desktop, out)
+    monkeypatch.setattr(desktop, 'connect', original)
+    assert state(desktop) == before
+    for path, content in [(relative, b'old calendar'), ('sources/tickflow/universe.csv', b'old directory')]:
+        if existing:
+            assert (desktop.root / path).read_bytes() == content
+        else:
+            assert not (desktop.root / path).exists()
+
+
+def corrected_export(source):
+    path = source.root / 'snapshots' / ASOF / 'snapshot.json'
+    snapshot = json.loads(path.read_text())
+    snapshot['hits'] = [dict(observation_id='obs-1')]
+    path.write_text(dumps(snapshot))
+    return write_sync_source(ReadOnlyStore(source.root), ASOF, source.root / 'corrected')
+
+
+def test_withdrawn_sync_candidate_removed(sample):
+    source, desktop, out = sample
+    assert apply_sync_source(desktop, out)['observations_removed'] == 0
+    datasets = desktop.rows('SELECT * FROM datasets')
+    result = apply_sync_source(desktop, corrected_export(source))
+    assert result['status'] == 'applied'
+    assert result['observations_removed'] == 1
+    assert {r['observation_id'] for rows in load_candidates(desktop, 'daily', source='tickflow').values() for r in rows} == {'obs-1'}
+    assert desktop.rows("SELECT id FROM observations WHERE id='obs-0'") == [{'id': 'obs-0'}]
+    assert desktop.rows('SELECT * FROM datasets') == datasets
+    tracked = json.loads(desktop.rows("SELECT value FROM meta WHERE key='sync_observation_ids'")[0]['value'])
+    assert tracked == dict(asof=ASOF, ids=['obs-1'])
+
+
+def test_sync_preserves_local_same_day_candidate(sample):
+    source, desktop, out = sample
+    assert apply_sync_source(desktop, out)['status'] == 'applied'
+    desktop.execute("INSERT INTO observations SELECT 'local', job_id, code, strategy, version, timeframe, asof, setup_date, dataset_id, payload, created FROM observations WHERE id='obs-0'")
+    assert apply_sync_source(desktop, corrected_export(source))['observations_removed'] == 1
+    assert {r['id'] for r in desktop.rows('SELECT id FROM observations')} == {'local', 'obs-0', 'obs-1'}
+
+
+def test_first_sync_preserves_untracked_observation(sample):
+    source, desktop, out = sample
+    row = source.rows("SELECT * FROM observations WHERE id='obs-0'")[0]
+    desktop.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)', tuple(row.values()))
+    result = apply_sync_source(desktop, corrected_export(source))
+    assert result['observations_removed'] == 0
+    assert len(desktop.rows('SELECT * FROM observations')) == 2
+
+
+def test_cross_day_sync_preserves_history(sample):
+    _, desktop, out = sample
+    assert apply_sync_source(desktop, out)['status'] == 'applied'
+    def next_day(manifest):
+        manifest['asof'] = '2026-11-12'
+        manifest['observations'] = [dict(manifest['observations'][1], id='next-day', asof='2026-11-12')]
+    edit(out, next_day)
+    assert apply_sync_source(desktop, out)['observations_removed'] == 0
+    assert {r['id'] for r in desktop.rows('SELECT id FROM observations WHERE asof=?', (ASOF,))} == {'obs-0', 'obs-1'}
+
+
+def test_withdrawal_rolls_back_on_failure(sample, monkeypatch):
+    source, desktop, out = sample
+    apply_sync_source(desktop, out)
+    out = corrected_export(source)
+    before = state(desktop)
+    original = desktop.connect
+    @contextmanager
+    def failing():
+        with original() as db:
+            db.execute("CREATE TEMP TRIGGER fail_sync BEFORE INSERT ON meta BEGIN SELECT RAISE(ABORT, 'injected'); END")
+            yield db
+    monkeypatch.setattr(desktop, 'connect', failing)
+    with pytest.raises(Exception, match='injected'):
+        apply_sync_source(desktop, out)
+    monkeypatch.setattr(desktop, 'connect', original)
+    assert state(desktop) == before
+
+
+def test_empty_sync_list_withdraws_all_tracked_candidates(sample):
+    _, desktop, out = sample
+    apply_sync_source(desktop, out)
+    edit(out, lambda m: m.update(observations=[]))
+    assert apply_sync_source(desktop, out)['observations_removed'] == 2
+    assert len(desktop.rows('SELECT * FROM observations')) == 2
+    assert load_candidates(desktop, 'daily', source='tickflow') == {}
+    assert len(desktop.rows('SELECT * FROM datasets')) == 2
+
+
+@pytest.mark.parametrize('preexisting', [False, True])
+def test_withdrawal_preserves_user_links_and_chart(sample, preexisting):
+    from gui.startup_reads import watch_rows
+    source, desktop, out = sample
+    if preexisting:
+        row = source.rows("SELECT * FROM observations WHERE id='obs-0'")[0]
+        desktop.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)', tuple(row.values()))
+    apply_sync_source(desktop, out)
+    desktop.watch('obs-0')
+    pid = desktop.save_plan('obs-0', '计划交易', 11, 9, 15, 100, 'regression')
+    corrected = corrected_export(source)
+    apply_sync_source(desktop, corrected)
+    assert {r['observation_id'] for rows in load_candidates(desktop, 'daily').values() for r in rows} == {'obs-1'}
+    plan = desktop.rows('SELECT p.id,o.strategy,o.dataset_id FROM plans p JOIN observations o ON o.id=p.observation_id WHERE p.id=?', (pid,))
+    assert len(plan) == 1
+    assert plan[0]['strategy'] == 'STRATEGY_GAP_H2'
+    watch = watch_rows(desktop.root)
+    assert len(watch) == 1
+    assert watch[0]['observation_id'] == 'obs-0'
+    assert watch[0]['strategy'] == 'STRATEGY_GAP_H2'
+    assert watch[0]['manual'] is False
+    assert watch[0]['state'] == '计划交易'
+    frame, record, payload = load_observation_candles(desktop, watch[0]['observation_id'])
+    assert len(frame) == 1 and record['id'] == plan[0]['dataset_id']
+    assert payload['entry'] == 11
+    # Updating the existing plan still resolves the archived signal.
+    assert desktop.save_plan('obs-0', '观察', 11, 9, 15, 100, '') == pid
+    # Further same-day and next-day revisions must not revive the withdrawal.
+    edit(corrected, lambda m: m.update(coverage={'ready': 1}))
+    apply_sync_source(desktop, corrected)
+    edit(corrected, lambda m: m.update(asof='2026-11-12', observations=[]))
+    apply_sync_source(desktop, corrected)
+    assert {r['observation_id'] for rows in load_candidates(desktop, 'daily').values() for r in rows} == {'obs-1'}
+    assert len(load_observation_candles(desktop, 'obs-0')[0]) == 1
+
+
+def test_root_calendar_replaces_effective_tickflow_calendar(sample):
+    source, desktop, _ = sample
+    relative = 'sources/tickflow/trading_calendar.json'
+    content = (source.root / relative).read_bytes()
+    (source.root / relative).unlink()
+    source.write_artifact('trading_calendar.json', content)
+    out = write_sync_source(ReadOnlyStore(source.root), ASOF, source.root / 'root-export')
+    assert json.loads((out / 'manifest.json').read_text())['calendar']['path'] == 'trading_calendar.json'
+    older = dumps(dict(start='2026-11-10', end='2026-11-10', trading_days=['2026-11-10'])).encode()
+    for path in [relative, 'trading_calendar.json', 'sources/tencent/trading_calendar.json']:
+        desktop.write_artifact(path, older)
+    assert apply_sync_source(desktop, out)['status'] == 'applied'
+    assert (desktop.root / relative).read_bytes() == content
+    for path in ['trading_calendar.json', 'sources/tencent/trading_calendar.json']:
+        assert (desktop.root / path).read_bytes() == older
+    assert expected_day(desktop, ASOF, 'tickflow') == ASOF
+    assert audit_scope(desktop, ['沪深主板'], ASOF, source='tickflow')['scope_valid'] is True
+
+
+def test_reintroduced_sync_candidate_reactivates_archive(sample):
+    source, desktop, out = sample
+    apply_sync_source(desktop, out)
+    apply_sync_source(desktop, corrected_export(source))
+    assert apply_sync_source(desktop, out)['observations_added'] == 0
+    assert {r['observation_id'] for rows in load_candidates(desktop, 'daily').values() for r in rows} == {'obs-0', 'obs-1'}

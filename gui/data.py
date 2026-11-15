@@ -306,6 +306,9 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     # result per stock/strategy/period/day. New cached no-signal judgments also
     # suppress stale old hits; lack of a newer judgment is not an empty result.
     from workbench.scan_cache import filter_candidate_revisions
+    withdrawn = store.rows("SELECT value FROM meta WHERE key='sync_withdrawn_observation_ids'")
+    withdrawn = set(json.loads(withdrawn[0]['value'])) if withdrawn else set()
+    rows = [row for row in rows if row['id'] not in withdrawn]
     rows = filter_candidate_revisions(store, rows, source, timeframe)
     seen = set()
     names = code_names(store)
