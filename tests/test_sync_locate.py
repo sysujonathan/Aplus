@@ -162,7 +162,7 @@ def test_toolbar_uses_locator_and_preserves_missing_message(toolbar, monkeypatch
     ToolBar._on_desktop_sync(bar)
     drain(toolbar)
     locator.assert_called_once_with(bar.store)
-    bar._header_data_var.set.assert_called_once_with('未配置同步来源')
+    bar._header_data_var.set.assert_called_with(sync_client.missing_sync_message(bar.store))
     bar._on_job_finished.assert_not_called()
     locator.reset_mock()
     bar._job_id = 'busy'
@@ -279,8 +279,10 @@ def test_toolbar_sync_failures_restore_button(toolbar, monkeypatch, stage):
         monkeypatch.setattr(bar.store, 'rows', Mock(side_effect=OSError('database')))
     ToolBar._on_desktop_sync(bar)
     drain(toolbar)
-    bar._header_data_var.set.assert_called_with('同步失败，仍为 原有 数据')
-    bar._on_job_finished.assert_called_once_with('同步', 'failed', {'status': 'rejected', 'message': '同步失败，仍为 原有 数据'})
+    message = bar._header_data_var.set.call_args.args[0]
+    assert message.startswith('同步失败，仍为 原有 数据。')
+    assert '重试' in message and '日志' in message
+    bar._on_job_finished.assert_called_once_with('同步', 'failed', {'status': 'rejected', 'message': message})
 
 
 @pytest.mark.parametrize('outcome', ['applied', 'rejected', 'exception', 'closed'])

@@ -48,6 +48,14 @@ def _sync_search_roots():
     return roots
 
 
+def _sync_candidates(roots):
+    """Known layouts only, including the verified server-side backup parent."""
+    for root in roots:
+        for layer in ('', '我的云端硬盘', 'My Drive'):
+            for parent in ('', 'CyberMe原件备份'):
+                yield Path(root) / layer / parent / '02-交易原件' / 'Aplus桌面同步源'
+
+
 def locate_sync_source(store, search_roots=None) -> Path | None:
     """Prefer an explicit override, then memory, then known Drive locations."""
     if 'APLUS_SYNC_DIR' in os.environ:
@@ -66,24 +74,66 @@ def locate_sync_source(store, search_roots=None) -> Path | None:
         if source is not None:
             return remember(source)
     roots = _sync_search_roots() if search_roots is None else search_roots
-    for root in roots:
-        for layer in ('', '我的云端硬盘', 'My Drive'):
-            candidate = Path(root) / layer / '02-交易原件' / 'Aplus桌面同步源'
-            # Discovery requires the manifest in this exact directory, not a child.
-            try:
-                if not (candidate / 'manifest.json').is_file():
-                    continue
-            except OSError:
+    for candidate in _sync_candidates(roots):
+        # Discovery requires the manifest in this exact directory, not a child.
+        try:
+            if not (candidate / 'manifest.json').is_file():
                 continue
-            source = find_sync_source(candidate)
-            if source == candidate:
-                return remember(source)
+        except OSError:
+            continue
+        source = find_sync_source(candidate)
+        if source == candidate:
+            return remember(source)
     return None
 
 
-def rejection_message(store):
+def missing_sync_message(store, search_roots=None):
+    """Explain discovery failure without changing locator precedence or layout."""
+    if 'APLUS_SYNC_DIR' in os.environ:
+        return ('指定的同步来源不可用：请检查 APLUS_SYNC_DIR，或清除该设置后重试；'
+                '来源根目录必须有 manifest.json')
+    saved = store.rows("SELECT value FROM meta WHERE key='sync_dir'")
+    candidates = [Path(saved[0]['value'])] if saved else []
+    roots = _sync_search_roots() if search_roots is None else search_roots
+    candidates.extend(_sync_candidates(roots))
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                return ('同步源为空或不完整：根目录缺少 manifest.json；'
+                        '请等待 Google Drive 下载完成，仍缺少时请联系服务端重新发布')
+        except OSError:
+            continue
+    return ('未找到同步源文件夹：请确认 Google Drive 已登录并同步了 '
+            '02-交易原件/Aplus桌面同步源；镜像到其他位置时请设置 APLUS_SYNC_DIR')
+
+
+def rejection_message(store, reason=None):
     rows = store.rows("SELECT value FROM meta WHERE key='sync_asof'")
-    return f"同步失败，仍为 {rows[0]['value'] if rows else '原有'} 数据"
+    message = f"同步失败，仍为 {rows[0]['value'] if rows else '原有'} 数据"
+    reason = reason or '请检查 Google Drive 连接及本地磁盘空间后重试；仍失败时请提供桌面日志'
+    return f'{message}。{reason}'
+
+
+def sync_age_days(asof):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone(timedelta(hours=8))).date() - date.fromisoformat(asof)).days
+
+
+def _rejection_reason(exc):
+    if isinstance(exc, FileNotFoundError):
+        return '同步源文件未下载齐；请将同步源设为“可离线使用”，等待 Drive 下载完成后重试'
+    if isinstance(exc, PermissionError):
+        return '无法读取同步源；请检查文件权限及 Google Drive 登录状态后重试'
+    if isinstance(exc, OSError):
+        return '无法读取同步源；请检查 Google Drive 连接并等待下载完成后重试'
+    detail = str(exc)
+    if detail.startswith('version mismatch'):
+        return '同步源与桌面版本不一致；请更新桌面程序，并让服务端用相同版本重新发布'
+    if detail.startswith('同步源'):
+        return detail
+    if detail == 'stale or invalid asof':
+        return '同步源日期无效或早于本地数据；请联系服务端发布最新同步源'
+    return '同步源内容校验失败；请等待 Drive 下载完成，仍失败时请联系服务端重新发布'
 
 
 def apply_sync_source(store, source_dir):
@@ -98,6 +148,11 @@ def apply_sync_source(store, source_dir):
         asof = manifest['asof']
         if date.fromisoformat(asof).isoformat() != asof or asof < saved.get('sync_asof', ''):
             raise ValueError('stale or invalid asof')
+        age = sync_age_days(asof)
+        if age < 0:
+            raise ValueError('同步源日期在未来；请核对电脑日期及服务端快照日期')
+        if age > 7:
+            raise ValueError(f'同步源已过期 {age} 天；请联系服务端发布最新同步源')
         unchanged = asof == saved.get('sync_asof') and manifest['sha256'] == saved.get('sync_digest')
         if manifest['source'] != 'tickflow' or manifest['timeframe'] != 'daily':
             raise ValueError('unsupported source/timeframe')
@@ -162,7 +217,7 @@ def apply_sync_source(store, source_dir):
             return dict(status='up-to-date', message=f'已是最新（{asof}）', asof=asof, datasets_added=0, observations_added=0)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         logger.warning('Synchronization rejected: %s', exc)
-        return dict(status='rejected', message=rejection_message(store))
+        return dict(status='rejected', message=rejection_message(store, _rejection_reason(exc)))
     # Mutable inventories share the artifact/DB failure boundary.
     previous = {}
     for relative, _ in writes:

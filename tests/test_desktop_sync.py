@@ -48,6 +48,8 @@ def test_find_sync_source_root_precedes_child(tmp_path):
 
 @pytest.fixture
 def sample(tmp_path, monkeypatch):
+    # Synthetic dates remain deterministic when real delivery freshness advances.
+    monkeypatch.setattr('workbench.sync_client.sync_age_days', lambda _: 1)
     monkeypatch.delenv('APLUS_SNAPSHOT_DIR', raising=False)
     monkeypatch.delenv('APLUS_SNAPSHOT_URL', raising=False)
     monkeypatch.setattr('workbench.sync_source.load_snapshot', lambda path: load_snapshot(path, today=ASOF))
