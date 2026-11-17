@@ -14,7 +14,39 @@ from .chart_annotations import (GAP_STRATEGIES, annotation_kwargs, gap_annotatio
     info_panel_lines, marker_specs, owns_risk_lines, restyle_strategy_annotations,
     signal_context, trend_specs)
 from .chart_renderer import serialized_render
-from .theme import STOP, TARGET
+from .theme import ANNOTATION, STOP, TARGET
+
+
+def _h2_plan_levels(payload):
+    # Mirror the snapshot's current and archived plan line contracts.
+    current = str(payload.get('pricing_basis', '')).startswith('gap-floor-sl-2r-')
+    levels = [
+        ('entry_plan_price', 'entry', 'Entry', TARGET, [2, 4]),
+        ('sl_plan_price', 'stop', 'SL', STOP, [6, 3, 2, 3]),
+        ('sl1_plan_price', None, 'SL1', ANNOTATION, [2, 4]),
+        ('tp_plan_price', 'target', '2R', TARGET, [6, 4]),
+        ('mm_target', None, 'MM', ANNOTATION, [6, 4]),
+    ] if current else [
+        ('entry_plan_price', 'entry', 'Entry', TARGET, [2, 4]),
+        ('sl1_plan_price', 'stop', 'SL1', STOP, [6, 3, 2, 3]),
+        ('mm_target', 'target', 'MM', TARGET, [6, 4]),
+    ]
+    result = []
+    for key, fallback, label, color, dash in levels:
+        if key != 'mm_target' and payload.get('pending_state') != 'PENDING':
+            continue
+        value = payload.get(key)
+        if value is None and fallback:
+            value = payload.get(fallback)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(value) and value > 0:
+            available_date = (payload.get('plan_asof') or '9999') if key != 'mm_target' else None
+            result.append(dict(value=value, label=label, color=color, dash=dash,
+                               availableDate=available_date))
+    return result
 
 
 @serialized_render
@@ -32,8 +64,10 @@ def strategy_evidence(context):
                              instrument_type=context.get('instrument_type'))
             decimals = max(0, -Decimal(str(tick)).as_tuple().exponent)
         return mtr_evidence(context['frame'], payload, decimals=decimals)
-    if strategy is None or payload.get('plan_kind') == 'gap-h2-next-session':
-        return {'items': [], 'facts': []}  # H2 uses its dedicated plan adapter.
+    if payload.get('plan_kind') == 'gap-h2-next-session':
+        return {'items': [], 'facts': [], 'planLevels': _h2_plan_levels(payload)}
+    if strategy is None:
+        return {'items': [], 'facts': []}
     from matplotlib.figure import Figure
     from matplotlib.colors import to_hex
     from matplotlib.patches import Rectangle

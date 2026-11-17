@@ -209,7 +209,7 @@ function priceTag(ctx, value, py, color, width, right, subtitle = '') {
   ctx.fillStyle = light?'#111':'#fff'; ctx.font = 'bold 12px Segoe UI'; ctx.textAlign = 'center'; ctx.fillText(value, width - right / 2, py + 4);
   if (subtitle) {
     ctx.font = '11px Segoe UI';
-    ctx.fillText(subtitle, width - right / 2, py + 18);
+    ctx.fillText(subtitle, width - right / 2, py + 18, right - 4);
   }
 }
 
