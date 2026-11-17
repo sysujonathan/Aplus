@@ -1,0 +1,4 @@
+{"stage": "watch.prepare", "elapsed_ms": 52.267, "thread": "MainThread", "state": "started"}
+{"stage": "watch.prepare", "elapsed_ms": 56.108, "thread": "MainThread", "state": "completed", "io": {}, "duration_ms": 3.844, "thread_cpu_ms": 3.843}
+{"stage": "watch.prepare", "elapsed_ms": 275.236, "thread": "MainThread", "state": "started"}
+{"stage": "watch.prepare", "elapsed_ms": 278.475, "thread": "MainThread", "state": "completed", "io": {}, "duration_ms": 3.24, "thread_cpu_ms": 3.24}

@@ -1184,7 +1184,7 @@ class ToolBar(ttk.Frame):
             if result['status'] != 'missing':
                 invalidate(self.store)
                 if self._on_job_finished:
-                    self._on_job_finished('同步', 'completed' if result['status'] != 'rejected' else 'failed', None)
+                    self._on_job_finished('同步', 'completed' if result['status'] != 'rejected' else 'failed', result)
             self._header_data_var.set(result['message'])
 
         def poll():
@@ -1197,7 +1197,10 @@ class ToolBar(ttk.Frame):
 
         def run():
             from workbench.sync_client import locate_sync_source, apply_sync_source, rejection_message
+            reserved = False
             try:
+                self.service.reserve_idle('正在同步桌面成果，请等待同步结束后再开始任务')
+                reserved = True
                 source = locate_sync_source(self.store)
                 if source is None:
                     logging.getLogger(__name__).warning(
@@ -1213,6 +1216,10 @@ class ToolBar(ttk.Frame):
                     logging.getLogger(__name__).exception('Synchronization failure date unavailable')
                     message = '同步失败，仍为 原有 数据'
                 result = {'status': 'rejected', 'message': message}
+            finally:
+                # Release after all writes, including when the window has closed.
+                if reserved:
+                    self.service.release_idle()
             replies.put_nowait(result)
 
         self.after(50, poll)

@@ -82,7 +82,7 @@ class Service:
                 ProviderGuard(self.store,spec['source']).check()
         with self.lock:
             if self._code_update_reserved:
-                raise ValueError('正在准备版本更新，请完成更新或取消后再开始任务')
+                raise ValueError(self._idle_reservation_message)
             if self.store.rows("SELECT id FROM jobs WHERE status IN ('running','queued')"):
                 raise ValueError('已有任务正在运行。请等待结束或停止后再开始，避免争用行情连接')
             for key, pending in self.cancel_flags.items():
@@ -95,17 +95,24 @@ class Service:
             self.pool.submit(self._execute, job,kind,spec)
         return job
 
-    def reserve_code_update(self):
-        """No job can enter between the idle check and code-update reservation."""
+    def reserve_idle(self, message):
+        """Reserve the existing idle gate under the same lock used by submit."""
         with self.lock:
             if self._code_update_reserved or self.cancel_flags or self.store.rows(
                     "SELECT id FROM jobs WHERE status IN ('queued','running')"):
-                raise ValueError('行情、扫描或研究任务尚未结束，请等待后再更新版本')
+                raise ValueError('行情、扫描、研究或预留任务尚未结束，请等待后再试')
             self._code_update_reserved = True
+            self._idle_reservation_message = message
 
-    def release_code_update(self):
+    def release_idle(self):
         with self.lock:
             self._code_update_reserved = False
+
+    def reserve_code_update(self):
+        self.reserve_idle('正在准备版本更新，请完成更新或取消后再开始任务')
+
+    def release_code_update(self):
+        self.release_idle()
 
     def shape_tasks(self):
         from .shape_tasks import runner

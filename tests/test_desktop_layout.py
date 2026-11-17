@@ -582,3 +582,18 @@ def test_desktop_launcher_rejects_second_instance_without_opening_backend():
         assert acquire_single_instance(notify=False, name=name) is None
     finally:
         release_single_instance(first)
+
+
+def test_finished_desktop_sync_selects_date_source_and_results():
+    from workbench.sources import SOURCES
+    window = Mock(store=object())
+    window.toolbar.selected_date.side_effect = [('2026', '11', '10'), ('2026', '11', '11')]
+    window.toolbar._select_date.return_value = True
+    window._tf_var.get.return_value = 'daily'
+    AplusMainWindow._on_job_finished(window, '同步', 'completed', {'asof': '2026-11-11'})
+    window._tf_var.set.assert_called_once_with('daily')
+    window.toolbar.source_var.set.assert_called_once_with(SOURCES['tickflow'])
+    window.toolbar._select_date.assert_called_once_with('2026-11-11')
+    assert window._cur_date == ('2026', '11', '11')
+    window.candidates.load_from_store.assert_called_once_with(
+        window.store, timeframe='daily', asof_filter=('2026', '11', '11'), source='tickflow')
