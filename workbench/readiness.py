@@ -45,7 +45,7 @@ def reusable_baostock_basics(store, directory, day):
         return None
 
 
-def save_directory(store, directory, day, job=None, basics=None, retired_codes=None, source='baostock'):
+def save_directory(store, directory, day, job=None, basics=None, retired_codes=None, source='baostock', *, metadata_codes=()):
     """Never silently reduce an established universe after a short provider reply."""
     if directory.empty or 'code' not in directory or directory.code.duplicated().any():
         raise ValueError('股票目录为空、缺代码或有重复，未覆盖原目录')
@@ -74,7 +74,7 @@ def save_directory(store, directory, day, job=None, basics=None, retired_codes=N
     if path.exists():
         old = pd.read_csv(path, dtype=str)
         removed = set(old.code) - set(directory.code)
-        missing = sorted(removed - retired)
+        missing = sorted(removed - retired - set(metadata_codes))
         if (missing and source == 'baostock' and basics is not None and
                 set(old.columns) == {'code','code_name','tradeStatus','ipoDate'} and
                 old.tradeStatus.eq('unknown').all()):
@@ -343,11 +343,18 @@ def audit_scope(store, boards, asof, dataset_ids=None, source=None, timeframe=No
     return report
 
 
-def filter_tickflow_directory(store, directory, day, job=None):
-    """Exclude only retired codes proven by an existing dated security archive.
+# After manual review, add normalized exchange-prefixed codes here to bypass
+# metadata only. Dated retirement evidence still takes precedence.
+DIRECTORY_METADATA_ALLOWLIST = frozenset()
 
-    No BaoStock network dependency. Unknown listings stay visible for per-stock
-    validation; missing bars or a name containing '退' are not retirement proof.
+
+def filter_tickflow_directory(store, directory, day, job=None):
+    """Exclude dated retirements and, separately, names containing 退 or total_shares == 0.
+
+    On 2026-11-12 this rule caught 137/265 zombie codes with zero active-stock
+    false positives. 萃华退 (sz.002731) still traded in its delisting period
+    and was correctly excluded from buy scans. Metadata is screening evidence,
+    not proof of retirement. Missing metadata is allowed and no prices are read.
     """
     files = sorted((store.root/'directories').glob('*-basics.csv'))
     files = [p for p in files if p.name[:10] <= day]
@@ -360,8 +367,17 @@ def filter_tickflow_directory(store, directory, day, job=None):
         if pd.to_datetime(rows.outDate, format='%Y-%m-%d', errors='coerce').isna().any():
             raise ValueError('证券档案退市日期无效，未缩小目录')
         retired = set(rows.loc[rows.outDate <= day, 'code'])
-    excluded = sorted(set(directory.code) & retired)
+    excluded = sorted(set(directory.code) & retired) if retired else []
     if excluded:
         store.event(job, 'TickFlow 目录排除已确认退市证券', codes=excluded,
                     evidence=str(files[-1].relative_to(store.root)), archive_date=files[-1].name[:10])
-    return directory[~directory.code.isin(retired)].reset_index(drop=True), retired, excluded
+    metadata = set()
+    if 'code_name' in directory:
+        metadata.update(directory.loc[directory.code_name.str.contains('退', regex=False, na=False), 'code'])
+    if 'total_shares' in directory:
+        zero_shares = pd.to_numeric(directory.total_shares, errors='coerce').eq(0)
+        metadata.update(directory.loc[zero_shares, 'code'])
+    metadata.difference_update(retired, DIRECTORY_METADATA_ALLOWLIST)
+    if excluded or metadata:
+        directory = directory.loc[~directory.code.isin(retired | metadata)]
+    return directory.reset_index(drop=True), retired, excluded, sorted(metadata)

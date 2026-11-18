@@ -149,3 +149,19 @@ def test_verified_connection_keeps_request_and_response_contract(monkeypatch):
     assert request.full_url == 'https://free-api.tickflow.org/v1/exchanges/SH/instruments?type=stock'
     assert kwargs == {'timeout': 15}
     assert request.get_header('Accept') == 'application/json'
+
+
+def test_universe_keeps_share_metadata_and_missing_values(monkeypatch):
+    from workbench.tickflow import TickFlow
+
+    provider = TickFlow()
+    payload = [
+        {'symbol': '600000.SH', 'name': '正常股',
+         'ext': {'listing_date': '2024-01-01', 'total_shares': 100, 'float_shares': 0}},
+        {'symbol': '600001.SH', 'name': '待核对', 'ext': None},
+    ]
+    monkeypatch.setattr(provider, '_query', lambda op, args: payload if args == ['SH'] else [])
+    directory = provider.universe('2024-02-01')
+    assert list(directory.code) == ['sh.600000', 'sh.600001']
+    assert list(directory.loc[0, ['total_shares', 'float_shares']]) == [100, 0]
+    assert directory.loc[1, ['total_shares', 'float_shares']].isna().all()

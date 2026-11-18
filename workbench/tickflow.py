@@ -173,20 +173,26 @@ class TickFlow(BaoStock):
 
     def universe(self,day):
         rows=[]
+        listing_dates=set()
         for exchange in ('SH','SZ','BJ'):
+            prefix=exchange.lower()+'.'
             for item in self._query('instruments',[exchange]):
                 # Preserve explicit exchange identity (especially old BJ prefixes).
-                code=exchange.lower()+'.'+item['symbol'].split('.')[0]
+                code=prefix+item['symbol'].partition('.')[0]
                 if board_of(code) is None:
                     continue
-                listing=(item.get('ext') or {}).get('listing_date','')
-                if listing:
+                ext=item.get('ext') or {}
+                listing=ext.get('listing_date','')
+                if listing and listing not in listing_dates:
                     date.fromisoformat(listing)  # malformed metadata must not narrow the universe
+                    listing_dates.add(listing)
                 # Retain unknown entries for per-stock validation, never silently
                 # exclude a security or abort all downloads because one date is absent.
                 if not listing or listing<=day:
-                    rows.append(dict(code=code,code_name=item.get('name',''),tradeStatus='unknown',ipoDate=listing))
-        return pd.DataFrame(rows)
+                    rows.append((code,item.get('name',''),'unknown',listing,
+                                 ext.get('total_shares'),ext.get('float_shares')))
+        return pd.DataFrame(rows, columns=['code','code_name','tradeStatus','ipoDate',
+                                           'total_shares','float_shares'])
 
     def fetch_unadjusted(self,code,start,end):
         raw=self._query('batch',[[code],start,end,'none'])

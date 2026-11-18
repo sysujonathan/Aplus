@@ -306,3 +306,50 @@ def test_tencent_isolated_failure_continues_but_outage_and_limits_stop(store,mon
             retry=legacy_sync_fixture(service,dict(source='tencent',boards=['沪深主板'],start=first,end=last))
             assert retry['status']=='completed' and calls==['sh.600000']
     finally:service.pool.shutdown()
+
+
+def test_tencent_shared_metadata_filter_does_not_retain_excluded_old_member(store, monkeypatch):
+    data = bars()
+    codes = ['sh.600000', 'sh.600001']
+    first, last = scope(store, data, codes)
+    save_directory(store, pd.DataFrame({
+        'code': codes, 'code_name': ['正常股', '测试退'], 'tradeStatus': 'unknown',
+    }), last, source='tencent')
+    calls = []
+
+    class Provider:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def fetch(self, code, *_):
+            calls.append(code)
+            return data.copy()
+
+    monkeypatch.setattr('workbench.tencent_service.Tencent', Provider)
+    service = Service(store)
+    try:
+        row = legacy_sync_fixture(service, dict(source='tencent', boards=['沪深主板'],
+                                               start=first, end=last))
+        result = json.loads(row['result'])
+        assert row['status'] == 'completed', row['message']
+        assert result['excluded_by_metadata'] == ['sh.600001']
+        assert result['excluded_retired'] == result['directory_pending'] == []
+        assert calls == ['sh.600000']
+    finally:
+        service.pool.shutdown()
+
+
+def test_filtered_tickflow_catalog_cannot_explain_missing_tencent_member(store):
+    from workbench.tencent_service import local_public_catalog
+
+    previous, current = '2024-01-02', '2024-01-03'
+    save_directory(store, pd.DataFrame({
+        'code': ['sh.600000', 'sh.600001'], 'tradeStatus': 'unknown',
+    }), previous, source='tencent')
+    save_directory(store, pd.DataFrame({
+        'code': ['sh.600000'], 'tradeStatus': 'unknown',
+    }), current, source='tickflow')
+    assert local_public_catalog(store, current) == (None, None)
