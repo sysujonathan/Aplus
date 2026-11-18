@@ -243,8 +243,7 @@ class OrderedComputations:
 def open_computations(store, spec, strategies, records, lookups, cached, stop, accelerated,
                       *, start_index=0, decision=None):
     decision = {} if decision is None else decision
-    decision.update(worker_selection(), stock_index=start_index)
-    workers = decision['workers']
+    decision.update(stock_index=start_index, workers=1, retryable=False)
     def serial(reason):
         decision.update(reason=reason, retryable=False)
         return None
@@ -276,7 +275,10 @@ def open_computations(store, spec, strategies, records, lookups, cached, stop, a
                     dict(id=item.id, version=item.version, params=item.params) for item in missing])))
     if len(tasks) < MIN_STOCKS:
         return serial('below_parallel_threshold')
-    decision['pending_stocks'] = len(tasks)
+    # Fixed serial gates need no resource probe. Besides avoiding needless
+    # work, their receipt stays independent of fluctuating desktop memory.
+    decision.update(worker_selection(), pending_stocks=len(tasks))
+    workers = decision['workers']
     if workers < 2:
         return None  # Only transient resource decisions permit a bounded retry.
     return OrderedComputations(tasks, min(workers, len(tasks)), stop)

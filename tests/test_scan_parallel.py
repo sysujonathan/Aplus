@@ -344,9 +344,13 @@ def test_transient_memory_gate_retries_without_recomputing_committed_stocks(stor
 
 def test_serial_sources_plugins_and_fast_reject_keep_existing_route(store, frame, monkeypatch):
     enable(monkeypatch)
+    monkeypatch.setattr('workbench.scan_parallel.worker_selection',
+                        lambda: pytest.fail('固定串行资格不应探测动态资源'))
     did = save_dataset(store, 'sh.600000', frame, 'baostock', '前复权')
     _, row, report = run_scan(store, [did])
     assert row['status'] == 'completed' and 'execution' not in report
+    assert report['parallel_decisions'] == [dict(stock_index=0, workers=1, retryable=False,
+                                                reason='unsupported_source_or_metadata')]
     assert open_computations(store, {}, [], {}, [], {}, threading.Event(), True) is None
 
 

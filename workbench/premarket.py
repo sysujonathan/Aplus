@@ -223,7 +223,10 @@ def run_premarket(service, job, spec):
                 status, message = 'partial', '暂无合格行情，先核验缺日'
         if (sync_result.get('status_maintenance_pending') and status not in ('failed', 'cancelled')
                 and not stop.is_set()):
-            scanned = set(result.get('datasets', []))
+            # Coverage is authoritative for scan receipts that do not repeat
+            # the dataset list. A complete receipt must not trigger a second
+            # scan merely because that optional top-level field is absent.
+            scanned = set(result.get('datasets', result.get('coverage', {}).get('eligible_ids', [])))
             from .status_maintenance import maintain_daily_status
             def close_status(child, request):
                 updated = maintain_daily_status(proxy, child, request, copy.deepcopy(sync_result))

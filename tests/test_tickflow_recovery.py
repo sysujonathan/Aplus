@@ -246,5 +246,6 @@ def test_one_key_recovers_missing_gh2_stock_and_only_scans_after_its_tail_is_sav
         assert calls == [[codes[0]],[codes[0]]] and result['scan_readiness']['ready'] == 2
         assert result['transport_recovery']['recovered'] and not result['errors']
         assert seen == [2]
+        assert len(parent['sources']['tickflow']['scan_jobs']) == 1
     finally:
         service.pool.shutdown()
