@@ -98,12 +98,11 @@ def apply_sync_source(store, source_dir):
         asof = manifest['asof']
         if date.fromisoformat(asof).isoformat() != asof or asof < saved.get('sync_asof', ''):
             raise ValueError('stale or invalid asof')
-        if asof == saved.get('sync_asof') and manifest['sha256'] == saved.get('sync_digest'):
-            return dict(status='up-to-date', message=f'已是最新（{asof}）', asof=asof, datasets_added=0, observations_added=0)
+        unchanged = asof == saved.get('sync_asof') and manifest['sha256'] == saved.get('sync_digest')
         if manifest['source'] != 'tickflow' or manifest['timeframe'] != 'daily':
             raise ValueError('unsupported source/timeframe')
         datasets, observations = manifest['datasets'], manifest['observations']
-        existing = {r['id'] for r in store.rows('SELECT id FROM datasets')}
+        existing = {r['id']: r for r in store.rows('SELECT * FROM datasets')}
         ids = set()
         writes = []
         for row in datasets:
@@ -113,7 +112,17 @@ def apply_sync_source(store, source_dir):
                 raise ValueError('duplicate dataset')
             ids.add(row['id'])
             if row['id'] in existing:
-                continue
+                local = existing[row['id']]
+                if local['path'] != row['path']:
+                    raise ValueError('registered market path mismatch')
+                try:
+                    content = (store.root / local['path']).read_bytes()
+                except OSError:
+                    pass  # Recover from the validated source below.
+                else:
+                    if digest(content) != row['sha256']:
+                        raise ValueError('existing market file modified externally')
+                    continue
             content = (source_dir / row['path']).read_bytes()
             if digest(content) != row['sha256']:
                 raise ValueError('market digest mismatch')
@@ -149,6 +158,8 @@ def apply_sync_source(store, source_dir):
             if not target.exists() or target.read_bytes() != content:
                 writes.append((relative, content))
         coverage = dumps(manifest['coverage'])
+        if unchanged and not writes:
+            return dict(status='up-to-date', message=f'已是最新（{asof}）', asof=asof, datasets_added=0, observations_added=0)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         logger.warning('Synchronization rejected: %s', exc)
         return dict(status='rejected', message=rejection_message(store))

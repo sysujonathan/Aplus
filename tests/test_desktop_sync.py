@@ -6,7 +6,8 @@ import pytest
 
 from gui.data import candidate_dates, load_candidates, load_observation_candles
 from workbench.market import latest_datasets, save_dataset
-from workbench.snapshot import ReadOnlyStore, snapshot_digest
+from workbench.snapshot import ReadOnlyStore, snapshot_digest, load_snapshot, SNAPSHOT_KIND
+from workbench.strategies import scan_engine_version, verify_frozen
 from workbench.sources import market_source, directory_date
 from workbench.readiness import expected_day, audit_scope
 from workbench.store import Store, dumps
@@ -49,6 +50,7 @@ def test_find_sync_source_root_precedes_child(tmp_path):
 def sample(tmp_path, monkeypatch):
     monkeypatch.delenv('APLUS_SNAPSHOT_DIR', raising=False)
     monkeypatch.delenv('APLUS_SNAPSHOT_URL', raising=False)
+    monkeypatch.setattr('workbench.sync_source.load_snapshot', lambda path: load_snapshot(path, today=ASOF))
     source = Store(tmp_path / 'server')
     desktop = Store(tmp_path / 'desktop')
     for index, code in enumerate(['sh.600000', 'sz.000001']):
@@ -59,7 +61,17 @@ def sample(tmp_path, monkeypatch):
                         dumps(dict(entry=11, stop=9, target=15, plan=dict(entry=11, stop=9, target=15))), ASOF))
     path = source.root / 'snapshots' / ASOF
     path.mkdir(parents=True)
-    (path / 'snapshot.json').write_text(dumps(dict(asof=ASOF, hits=[dict(observation_id=f'obs-{i}') for i in range(2)], coverage={'ready': 2})), encoding='utf-8')
+    snapshot = dict(kind=SNAPSHOT_KIND, schema_version=1, asof=ASOF,
+                    generated_at=ASOF+'T18:00:00+08:00', source='tickflow',
+                    engine_version=scan_engine_version(include_frozen=False), frozen_digest=verify_frozen(),
+                    timeframe='daily', boards=[], strategies=['STRATEGY_GAP_H2'],
+                    observation_ids=['obs-0', 'obs-1'], charts={},
+                    chart_errors={'obs-0': 'synthetic', 'obs-1': 'synthetic'}, coverage={'ready': 2},
+                    hits=[dict(observation_id=r['id'], code=r['code'], strategy=r['strategy'],
+                               version=r['version'], setup_date=ASOF, asof=ASOF, timeframe='daily',
+                               entry=11, stop=9, target=15) for r in source.rows('SELECT * FROM observations')])
+    snapshot['sha256'] = snapshot_digest(snapshot)
+    (path / 'snapshot.json').write_text(dumps(snapshot), encoding='utf-8')
     directory = source.root / 'sources/tickflow'
     directory.mkdir(parents=True)
     (directory / 'universe.csv').write_text('code,code_name\nsh.600000,样本\n', encoding='utf-8')
@@ -227,6 +239,7 @@ def test_existing_dataset_skips_source_file(sample, monkeypatch):
     source, desktop, out = sample
     row = source.rows('SELECT * FROM datasets')[0]
     desktop.execute('INSERT INTO datasets VALUES(?,?,?,?,?,?,?,?,?,?,?)', tuple(row.values()))
+    desktop.write_artifact(row['path'], (out / row['path']).read_bytes())
     (out / row['path']).unlink()
     assert apply_sync_source(desktop, out)['status'] == 'applied'
     assert len(desktop.rows('SELECT * FROM datasets')) == 2
@@ -326,7 +339,10 @@ def test_calendar_failure_restores_inventory(sample, monkeypatch, existing, fail
 def corrected_export(source):
     path = source.root / 'snapshots' / ASOF / 'snapshot.json'
     snapshot = json.loads(path.read_text())
-    snapshot['hits'] = [dict(observation_id='obs-1')]
+    snapshot['hits'] = [h for h in snapshot['hits'] if h['observation_id'] == 'obs-1']
+    snapshot['observation_ids'] = ['obs-1']
+    snapshot['chart_errors'] = {'obs-1': 'synthetic'}
+    snapshot['sha256'] = snapshot_digest(snapshot)
     path.write_text(dumps(snapshot))
     return write_sync_source(ReadOnlyStore(source.root), ASOF, source.root / 'corrected')
 
@@ -462,3 +478,42 @@ def test_reintroduced_sync_candidate_reactivates_archive(sample):
     apply_sync_source(desktop, corrected_export(source))
     assert apply_sync_source(desktop, out)['observations_added'] == 0
     assert {r['observation_id'] for rows in load_candidates(desktop, 'daily').values() for r in rows} == {'obs-0', 'obs-1'}
+
+
+@pytest.mark.parametrize('field', ['engine_version', 'frozen_digest', 'sha256'])
+def test_export_rejects_snapshot_anchor(sample, field):
+    source, _, _ = sample
+    path = source.root / 'snapshots' / ASOF / 'snapshot.json'
+    data = json.loads(path.read_text())
+    data[field] = 'broken'
+    if field != 'sha256':
+        data['sha256'] = snapshot_digest(data)
+    path.write_text(dumps(data))
+    target = source.root / 'bad-anchor'
+    with pytest.raises(ValueError, match='SHA|版本锚'):
+        write_sync_source(ReadOnlyStore(source.root), ASOF, target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize('repeat', [False, True])
+@pytest.mark.parametrize('recoverable', [False, True])
+def test_registered_missing_dataset_repaired_or_rejected(sample, repeat, recoverable):
+    source, desktop, out = sample
+    row = source.rows('SELECT * FROM datasets')[0]
+    if repeat:
+        apply_sync_source(desktop, out)
+        (desktop.root / row['path']).unlink()
+    else:
+        desktop.execute('INSERT INTO datasets VALUES(?,?,?,?,?,?,?,?,?,?,?)', tuple(row.values()))
+    content = (out / row['path']).read_bytes()
+    if not recoverable:
+        (out / row['path']).unlink()
+    before = state(desktop)
+    result = apply_sync_source(desktop, out)
+    if recoverable:
+        assert result['status'] == 'applied'
+        assert (desktop.root / row['path']).read_bytes() == content
+        assert len(load_observation_candles(desktop, 'obs-0')[0]) == 1
+    else:
+        assert result['status'] == 'rejected'
+        assert state(desktop) == before

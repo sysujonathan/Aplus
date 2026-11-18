@@ -1094,10 +1094,16 @@ class AplusMainWindow(ttk.Window):
         try:
             # 行情更新只扩充可选日期，不打断交易员正在复核的旧信号；
             # 扫描产出属于用户刚发起的当前任务，应立即显示该次实际扫描日。
+            synced = kind == '同步' and status == 'completed' and (result or {}).get('asof')
+            if synced:
+                from workbench.sources import SOURCES
+                self._tf_var.set('daily')
+                self.chart.set_timeframe('daily')
+                self.toolbar.source_var.set(SOURCES['tickflow'])
             selected_date = self.toolbar.selected_date()
             self.toolbar._load_date_options()
             scanned_day = (result or {}).get('asof') if (
-                kind == '扫描策略' and status in ('completed','partial')) else None
+                kind == '扫描策略' and status in ('completed','partial')) else (synced or None)
             if kind == '一键盘前':
                 from workbench.sources import market_source
                 item = (result or {}).get('sources', {}).get(market_source(self.store), {})
@@ -1109,7 +1115,7 @@ class AplusMainWindow(ttk.Window):
             if scanned_day and self.toolbar._select_date(scanned_day):
                 selected_date = self.toolbar.selected_date()
             self._cur_date = selected_date
-            self._candidate_source = self._source_for_current_date(self._tf_var.get())
+            self._candidate_source = 'tickflow' if synced else self._source_for_current_date(self._tf_var.get())
             self.candidates.load_from_store(
                 self.store, timeframe=self._tf_var.get(),
                 asof_filter=getattr(self, "_cur_date", None),

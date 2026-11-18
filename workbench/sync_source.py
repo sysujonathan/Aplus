@@ -1,13 +1,12 @@
 """Read-only export of server results for desktop synchronization."""
 from datetime import date
-import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
 
 from .market import latest_datasets
-from .snapshot import snapshot_digest
+from .snapshot import load_snapshot, snapshot_digest
 from .sources import calendar_file, directory_date
 from .store import digest, dumps, now
 from .strategies import scan_engine_version
@@ -30,7 +29,7 @@ def write_sync_source(store, asof=None, out_dir=None):
         asof = dates[-1]
     if date.fromisoformat(asof).isoformat() != asof:
         raise ValueError('无效快照日期')
-    snapshot = json.loads((snapshots / asof / 'snapshot.json').read_text(encoding='utf-8'))
+    snapshot = load_snapshot(snapshots / asof / 'snapshot.json')
     if snapshot['asof'] != asof:
         raise ValueError('快照日期不一致')
     datasets = [{k: r[k] for k in DATASET_COLUMNS} for r in latest_datasets(store, 'tickflow')]

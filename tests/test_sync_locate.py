@@ -131,7 +131,9 @@ def toolbar(store):
         assert threading.get_ident() == main_thread
         return root.after(*args)
 
-    bar = SimpleNamespace(_job_id=None, _desktop_sync_running=False,
+    from workbench.service import Service
+    service = Service(store)
+    bar = SimpleNamespace(service=service, _job_id=None, _desktop_sync_running=False,
                           store=store, _header_data_var=Mock(),
                           btn_desktop_sync=Mock(), _on_job_finished=Mock(), after=after)
     yield bar, root
@@ -248,7 +250,7 @@ def test_toolbar_locator_io_keeps_tk_responsive(toolbar, tmp_path, monkeypatch, 
     assert applied == [expected.resolve()]
     assert all(thread != main_thread for thread in worker_threads)
     assert original_rows("SELECT value FROM meta WHERE key='sync_dir'") == [{'value': str(expected.resolve())}]
-    bar._on_job_finished.assert_called_once_with('同步', 'completed', None)
+    bar._on_job_finished.assert_called_once_with('同步', 'completed', {'status': 'applied', 'message': '同步完成'})
     bar._header_data_var.set.assert_called_with('同步完成')
 
 
@@ -278,4 +280,65 @@ def test_toolbar_sync_failures_restore_button(toolbar, monkeypatch, stage):
     ToolBar._on_desktop_sync(bar)
     drain(toolbar)
     bar._header_data_var.set.assert_called_with('同步失败，仍为 原有 数据')
-    bar._on_job_finished.assert_called_once_with('同步', 'failed', None)
+    bar._on_job_finished.assert_called_once_with('同步', 'failed', {'status': 'rejected', 'message': '同步失败，仍为 原有 数据'})
+
+
+@pytest.mark.parametrize('outcome', ['applied', 'rejected', 'exception', 'closed'])
+def test_sync_reserves_shared_service_until_worker_exits(toolbar, monkeypatch, outcome):
+    import threading
+    import time
+    from unittest.mock import Mock
+    from gui.toolbar import ToolBar
+
+    bar, root = toolbar
+    entered, release = threading.Event(), threading.Event()
+    monkeypatch.setattr(sync_client, 'locate_sync_source', lambda _: bar.store.root)
+
+    def apply(*args):
+        entered.set()
+        assert release.wait(3)
+        if outcome == 'exception':
+            raise OSError('injected')
+        return dict(status='rejected' if outcome == 'rejected' else 'applied', message='done', asof='2026-11-11')
+
+    monkeypatch.setattr(sync_client, 'apply_sync_source', apply)
+    ToolBar._on_desktop_sync(bar)
+    assert entered.wait(2)
+    try:
+        bar.set_status = Mock()
+        ToolBar._submit_job(bar, 'scan', '扫描策略', {})
+        assert '正在同步' in bar.set_status.call_args.args[0]
+        assert not bar.store.rows('SELECT * FROM jobs')
+        with pytest.raises(ValueError):
+            bar.service.reserve_code_update()
+        if outcome == 'closed':
+            # Destroying Tk removes timers; it must not release a live writer.
+            for timer in root.tk.call('after', 'info'):
+                root.after_cancel(timer)
+            assert bar.service._code_update_reserved
+    finally:
+        release.set()
+    deadline = time.monotonic() + 3
+    while bar.service._code_update_reserved and time.monotonic() < deadline:
+        time.sleep(.005)
+    assert not bar.service._code_update_reserved
+    if outcome != 'closed':
+        drain(toolbar)
+    bar.service.reserve_code_update()
+    bar.service.release_code_update()
+
+
+def test_desktop_sync_cannot_release_another_reservation(toolbar, monkeypatch):
+    from unittest.mock import Mock
+    from gui.toolbar import ToolBar
+    bar, _ = toolbar
+    locate = Mock()
+    monkeypatch.setattr(sync_client, 'locate_sync_source', locate)
+    bar.service.reserve_code_update()
+    try:
+        ToolBar._on_desktop_sync(bar)
+        drain(toolbar)
+        locate.assert_not_called()
+        assert bar.service._code_update_reserved
+    finally:
+        bar.service.release_code_update()
