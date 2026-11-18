@@ -135,7 +135,8 @@ def test_delisted_is_excluded_only_with_dated_archive_unknown_is_retained(store)
     basics = pd.DataFrame(dict(code=['sh.600000','sh.600001'], type=['1','1'],
         outDate=['','2024-01-02']))
     store.write_artifact('directories/2024-01-01-basics.csv', basics.to_csv(index=False).encode())
-    eligible, retired, excluded = filter_tickflow_directory(store, directory, '2024-01-03')
+    eligible, retired, excluded, metadata = filter_tickflow_directory(store, directory, '2024-01-03')
+    assert metadata == []
     assert excluded == ['sh.600001'] and eligible.code.tolist() == ['sh.600000','sz.002525']
     save_directory(store, eligible, '2024-01-03', retired_codes=retired)
     assert (store.root/'directories/2024-01-01.csv').exists()
@@ -206,3 +207,20 @@ def test_tampered_tickflow_file_still_fails_before_strategy_call(store, monkeypa
         assert row['status'] == 'partial' and result['success'] == 0 and '校验' in result['errors'][0]['error']
     finally:
         service.pool.shutdown()
+
+
+def test_directory_metadata_respects_archive_precedence_and_reviewed_allowlist(store, monkeypatch):
+    directory = pd.DataFrame({
+        'code': ['sh.600000', 'sh.600001', 'sh.600002', 'sh.600003', 'sh.600004', 'sh.600005'],
+        'code_name': ['正常股', '测试退', '零股本', '已复核退', '档案退', None],
+        'total_shares': [100, 100, '0.0', 0, 0, None],
+    })
+    monkeypatch.setattr('workbench.readiness.DIRECTORY_METADATA_ALLOWLIST',
+                        frozenset({'sh.600003', 'sh.600004'}))
+    store.write_artifact('directories/2024-01-01-basics.csv',
+                         b'code,type,outDate\nsh.600004,1,2024-01-02\n')
+    eligible, retired, archived, metadata = filter_tickflow_directory(store, directory, '2024-01-03')
+    assert eligible.code.tolist() == ['sh.600000', 'sh.600003', 'sh.600005']
+    assert retired == {'sh.600004'}
+    assert archived == ['sh.600004']
+    assert metadata == ['sh.600001', 'sh.600002']

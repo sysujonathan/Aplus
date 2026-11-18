@@ -40,15 +40,15 @@ def sync_tickflow(service, job, spec):
             else:
                 directory=provider.universe(end)
                 report_scope_reused=False
-            directory, retired, excluded = filter_tickflow_directory(service.store, directory, end, job)
-            save_directory(service.store,directory,end,job,retired_codes=retired,source='tickflow')
+            directory, retired, excluded, metadata = filter_tickflow_directory(service.store, directory, end, job)
+            save_directory(service.store,directory,end,job,retired_codes=retired,source='tickflow',metadata_codes=metadata)
             codes=select_board_codes(directory,spec['boards'])
         else:
             codes=list(dict.fromkeys(spec['codes']))
         repair = set(spec.get('repair_codes') or [])
         increments = set(spec.get('increment_codes') or [])
         if increments:
-            if 'boards' not in spec or not increments.issubset(set(codes)):
+            if 'boards' not in spec or not increments.issubset(set(codes) | set(metadata)):
                 raise ValueError('续做标的必须属于已核验的所选板块')
             codes = [c for c in codes if c in increments]
         selective = bool(repair and spec.get('repair_scope') == 'scan' and not spec.get('force'))
@@ -61,7 +61,8 @@ def sync_tickflow(service, job, spec):
         codes = [c for c in codes if c not in proven_halts and (not repair or c in repair)]
         report=dict(source='tickflow',requested=len(codes),success=0,errors=[],datasets=[],connections=1,
             end_requested=end,skipped=0,downloaded=0,updated=0,refreshed=0,suspended=0,boards=spec.get('boards',[]),
-            excluded_retired=excluded if 'boards' in spec else [], history_warnings=[],
+            excluded_retired=excluded if 'boards' in spec else [],
+            excluded_by_metadata=metadata if 'boards' in spec else [], history_warnings=[],
             confirmed_halts=proven_halts, repair_codes=sorted(repair), processed=0,
             timings=dict(planned_batch_requests=0,planned_batch_seconds=0,stock_processing_seconds=0))
         report['scope_reused']=report_scope_reused if 'boards' in spec else False

@@ -18,6 +18,7 @@ def local_public_catalog(store,day):
     """
     import pandas as pd
     candidates=[]
+    tencent_path=directory_file(store,'tencent')
     for source in SOURCES:
         if source=='tencent' or directory_date(store,source)!=day:
             continue
@@ -27,6 +28,11 @@ def local_public_catalog(store,day):
         if frame.empty or 'code' not in frame or frame.code.duplicated().any():continue
         from .market import code_of
         if any(code_of(c)!=c for c in frame.code):continue
+        if source=='tickflow' and tencent_path.exists():
+            old_codes=pd.read_csv(tencent_path,dtype=str,usecols=['code']).code
+            if not old_codes.isin(frame.code).all():
+                # A filtered TickFlow catalog cannot explain missing Tencent members.
+                continue
         columns=['code']+(['code_name'] if 'code_name' in frame else [])
         catalog=frame[columns].copy(); catalog['tradeStatus']='unknown'
         candidates.append((catalog,source))
@@ -34,7 +40,7 @@ def local_public_catalog(store,day):
     return max(candidates,key=lambda item:len(item[0])) if candidates else (None,None)
 
 
-def retain_unconfirmed_members(store, directory, retired, day, job=None):
+def retain_unconfirmed_members(store, directory, retired, day, job=None, *, metadata_codes=()):
     """Retain small roster omissions as excluded identities, never retirement."""
     import pandas as pd
     from .market import code_of
@@ -46,7 +52,7 @@ def retain_unconfirmed_members(store, directory, retired, day, job=None):
     missing=[]
     if path.exists():
         old=pd.read_csv(path,dtype=str).fillna('')
-        missing=sorted(set(old.code)-set(directory.code)-set(retired))
+        missing=sorted(set(old.code)-set(directory.code)-set(retired)-set(metadata_codes))
         # Major truncation still blocks, rather than certifying an entire board.
         if len(missing)>max(1,int(len(old)*0.01)):
             raise ValueError(f'腾讯公共目录大量缺失 {len(missing)} 只，停止更新；原目录保留')
@@ -70,6 +76,7 @@ def sync_tencent(service, job, spec):
     report=dict(source='tencent',adjustment='不复权',requested=0,success=0,errors=[],datasets=[],
         skipped=0,downloaded=0,updated=0,refreshed=0,suspended=0,connections=1,
         end_requested=end,boards=spec.get('boards',[]),processed=0,
+        excluded_retired=[],excluded_by_metadata=[],
         catalog_source='sina_public_securities_only',repair_codes=spec.get('repair_codes',[]),
         limitations=['腾讯历史为不复权：除权除息可能形成价格跳空，跨除权回测不包含分红及股数调整；不与其他来源混算'])
     repair=set(spec.get('repair_codes') or [])
@@ -99,17 +106,18 @@ def sync_tencent(service, job, spec):
             if report['unsupported_directory']:
                 report['limitations'].append(f"公共目录有 {len(report['unsupported_directory'])} 只板块身份尚未适配；保留目录记录，不纳入扫描范围")
             from .readiness import filter_tickflow_directory
-            directory,retired,excluded=filter_tickflow_directory(service.store,directory,end,job)
             if report['catalog_reused']:
                 import json
                 rows=service.store.rows('SELECT value FROM meta WHERE key=?',('tencent_directory_pending',))
                 old_pending=json.loads(rows[0]['value']) if rows else {}
                 if old_pending.get('day')==end and old_pending.get('codes'):
                     directory=provider.universe(end)
-                    directory,retired,excluded=filter_tickflow_directory(service.store,directory,end,job)
-            directory,pending=retain_unconfirmed_members(service.store,directory,retired,end,job)
+            directory,retired,excluded,metadata=filter_tickflow_directory(service.store,directory,end,job)
+            report['excluded_retired']=excluded
+            report['excluded_by_metadata']=metadata
+            directory,pending=retain_unconfirmed_members(service.store,directory,retired,end,job,metadata_codes=metadata)
             with service.store.atomic_write():
-                save_directory(service.store,directory,end,job,retired_codes=retired,source='tencent')
+                save_directory(service.store,directory,end,job,retired_codes=retired,source='tencent',metadata_codes=metadata)
                 service.store.execute('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                     ('tencent_directory_pending',dumps(pending)))
             report['directory_pending']=pending['codes']

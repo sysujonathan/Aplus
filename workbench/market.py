@@ -15,17 +15,18 @@ FIELDS = ["date", "open", "high", "low", "close", "volume"]
 BOARDS = ('沪深主板', '创业板', '科创板', '北交所')
 
 
+_BOARD_PATTERN = re.compile(
+    r'(?P<main>sh\.(?:600|601|603|605)\d{3}|sz\.(?:000|001|002|003)\d{3})'
+    r'|(?P<growth>sz\.(?:300|301)\d{3})'
+    r'|(?P<star>sh\.688\d{3})'
+    r'|(?P<beijing>bj\.(?:920\d{3}|[48]\d{5}))'
+)
+_BOARD_BY_GROUP = dict(zip(('main', 'growth', 'star', 'beijing'), BOARDS))
+
+
 def board_of(code):
-    code = str(code).lower().strip()
-    if re.fullmatch(r'(sh\.(600|601|603|605)\d{3}|sz\.(000|001|002|003)\d{3})', code):
-        return '沪深主板'
-    if re.fullmatch(r'sz\.(300|301)\d{3}', code):
-        return '创业板'
-    if re.fullmatch(r'sh\.688\d{3}', code):
-        return '科创板'
-    if re.fullmatch(r'bj\.(920\d{3}|[48]\d{5})', code):
-        return '北交所'
-    return None
+    match = _BOARD_PATTERN.fullmatch(str(code).lower().strip())
+    return _BOARD_BY_GROUP[match.lastgroup] if match else None
 
 
 def select_board_codes(universe, boards):

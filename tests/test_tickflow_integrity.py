@@ -237,3 +237,30 @@ def test_integrity_window_repair_selection_is_explicit_and_read_only(store):
         assert calls==[(['sh.600000'],'daily',True)] and store.rows('SELECT count(*) AS n FROM datasets')[0]['n']==before
     finally:
         root.destroy()
+
+
+def test_directory_metadata_removes_old_members_before_request_and_lists_receipt(store, monkeypatch):
+    data = bars()
+    codes = ['sh.600000', 'sh.600001', 'sh.600002']
+    first, last = scope(store, data, codes)
+    save_directory(store, pd.DataFrame({'code': codes, 'tradeStatus': 'unknown'}),
+                   last, source='tickflow')
+    store.write_artifact(f'directories/{last}-basics.csv',
+                         f'code,type,outDate\nsh.600002,1,{last}\n'.encode())
+    provider = provider_for(monkeypatch, data)
+    monkeypatch.setattr(provider, 'universe', lambda self, end: pd.DataFrame({
+        'code': codes, 'tradeStatus': 'unknown', 'code_name': ['正常股', '测试退', '档案股'],
+        'total_shares': [100, 100, 0],
+    }))
+    service = Service(store)
+    try:
+        row = wait_for(store, service.submit('sync', dict(source='tickflow', boards=['沪深主板'],
+                                                          start=first, end=last)))
+        result = json.loads(row['result'])
+        assert row['status'] == 'completed', row['message']
+        assert result['excluded_retired'] == ['sh.600002']
+        assert result['excluded_by_metadata'] == ['sh.600001']
+        assert provider.calls == [['sh.600000']]
+        assert pd.read_csv(directory_file(store, 'tickflow')).code.tolist() == ['sh.600000']
+    finally:
+        service.pool.shutdown()
