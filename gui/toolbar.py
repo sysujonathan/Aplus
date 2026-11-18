@@ -1174,6 +1174,7 @@ class ToolBar(ttk.Frame):
             return
         self._desktop_sync_running = True
         self.btn_desktop_sync.state(['disabled'])
+        self._header_data_var.set('正在查找同步源并校验数据，请稍候…')
 
         replies = queue.Queue(maxsize=1)
 
@@ -1196,7 +1197,7 @@ class ToolBar(ttk.Frame):
             finished(result)
 
         def run():
-            from workbench.sync_client import locate_sync_source, apply_sync_source, rejection_message
+            from workbench.sync_client import locate_sync_source, apply_sync_source, rejection_message, missing_sync_message
             reserved = False
             try:
                 self.service.reserve_idle('正在同步桌面成果，请等待同步结束后再开始任务')
@@ -1205,7 +1206,7 @@ class ToolBar(ttk.Frame):
                 if source is None:
                     logging.getLogger(__name__).warning(
                         'No desktop synchronization source: %s', os.environ.get('APLUS_SYNC_DIR'))
-                    result = {'status': 'missing', 'message': '未配置同步来源'}
+                    result = {'status': 'missing', 'message': missing_sync_message(self.store)}
                 else:
                     result = apply_sync_source(self.store, source)
             except Exception:
@@ -1214,7 +1215,7 @@ class ToolBar(ttk.Frame):
                     message = rejection_message(self.store)
                 except Exception:
                     logging.getLogger(__name__).exception('Synchronization failure date unavailable')
-                    message = '同步失败，仍为 原有 数据'
+                    message = '同步失败，仍为 原有 数据。请检查 Google Drive 连接及本地磁盘空间后重试；仍失败时请提供桌面日志'
                 result = {'status': 'rejected', 'message': message}
             finally:
                 # Release after all writes, including when the window has closed.
@@ -1227,7 +1228,7 @@ class ToolBar(ttk.Frame):
             threading.Thread(target=run, name='desktop-sync', daemon=True).start()
         except Exception:
             logging.getLogger(__name__).exception('Desktop synchronization could not start')
-            replies.put_nowait({'status': 'rejected', 'message': '同步失败，仍为 原有 数据'})
+            replies.put_nowait({'status': 'rejected', 'message': '同步失败，仍为 原有 数据。请检查 Google Drive 连接及本地磁盘空间后重试；仍失败时请提供桌面日志'})
 
     def _on_sync(self, chained=False):
         if self.store and market_source(self.store) not in UPDATE_SOURCES:
