@@ -17,7 +17,7 @@ from workbench.h2_replay_service import (ITERATION_BASELINE_PURPOSE, available_s
 from workbench.market import BOARDS, completed_date
 from .data import code_names
 from .h2_replay_chart import render_replay
-from .research_views import (comparison_rows, holding_distribution, outcome, receipt_time,
+from .research_views import (ANNUAL_COLUMNS, comparison_rows, holding_distribution, outcome, receipt_time,
                              scope_caption, trade_statistics)
 from .toolbar import format_board_scope
 from .theme import CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP
@@ -342,6 +342,7 @@ class AfterhoursPage(ttk.Frame):
         self.distribution.set('')
         self.result_title.set('暂无回测记录')
         self.result_context.set('')
+        self.annual_button.configure(state=tk.DISABLED)
         self.completeness.set('可开始新回测，或从“已删除 / 恢复”找回记录。')
         if not self.job:
             self.status.set('暂无回测记录；可新建回测或恢复已删除记录。')
@@ -505,7 +506,7 @@ class AfterhoursPage(ttk.Frame):
         self._preview_trade, self._preview_index = record, 0
         self.preview_navigation.reset(False)
         self._preview_group = '全部'
-        self.preview_title.set(f'{record["code"]} · {self._names.get(record["code"], "")} · H2 {record["setup_date"]}')
+        self.preview_title.set(f'{record["code"]} · {self._names.get(record["code"], "")} · H2 {record.get("setup_date") or "日期缺失"}')
         events = [f'{e["date"]} · {e.get("text", e["kind"])}' for e in record['events']]
         self.preview_event_box.configure(values=events)
         if events:
@@ -560,7 +561,7 @@ class AfterhoursPage(ttk.Frame):
         self.preview_navigation.reset(False)
         self._preview_group = group
         self._preview_index = 0
-        self.preview_title.set(f'{record["code"]} · H2 {record["setup_date"]}')
+        self.preview_title.set(f'{record["code"]} · H2 {record.get("setup_date") or "日期缺失"}')
         values = [f'{e["date"]} · {e.get("text", e["kind"])}' for e in record['events']]
         self.preview_event_box.configure(values=values)
         if values:
@@ -695,7 +696,9 @@ class AfterhoursPage(ttk.Frame):
         if performance:
             self.status.set(self.status.get() + f' · 耗时 {performance["elapsed_seconds"]:.1f} 秒'
                             + f' · 复用 {performance["reused"]} 个标的')
-        descriptive = self._update_trade_statistics()
+        descriptive = self._update_trade_statistics(report)
+        self.annual = descriptive['annual']
+        self.annual_button.configure(state=tk.NORMAL)
         bars = descriptive['holding']['median']
         values = [str(report['opportunities']), str(report['filled']),
                   number(report['win_rate'], '%', True), number(report['mean_r'], 'R'),
@@ -713,8 +716,12 @@ class AfterhoursPage(ttk.Frame):
         for group, tree in self.boundary_trees.items():
             tree.delete(*tree.get_children())
             for identity in report['boundaries'][group]:
-                r = lookup[identity]
-                tree.insert('', tk.END, iid=identity, values=(f'{r["code"]} / {r["setup_date"][5:]}', number(r['r_multiple'], 'R')), tags=(group,))
+                r = lookup.get(identity)
+                if r is None:
+                    continue
+                stamp = (r.get('setup_date') or '')[5:] or '日期缺失'
+                tree.insert('', tk.END, iid=identity, values=(f'{r["code"]} / {stamp}',
+                            number(r.get('r_multiple'), 'R')), tags=(group,))
         labels = ['< -2R', '-2 至 -1R', '-1 至 0R', '0 至 1R', '1 至 2R', '≥ 2R']
         self.distribution.set('\n'.join(f'{label:12}  {count} 笔' for label, count in zip(labels, report['distribution'])))
         self._histogram()
@@ -742,8 +749,31 @@ class AfterhoursPage(ttk.Frame):
             self.histogram.create_text(width-2, y, text=f'{value/sum(values):.0%}', fill=MUTED, anchor=tk.E,
                                        font=('Consolas', -font_size))
 
-    def _update_trade_statistics(self):
-        descriptive = trade_statistics(self.records)
+    def _show_annual_statistics(self):
+        from .afterhours_workspace import tree
+        rows, note = self.annual
+        dialog = ttk.Toplevel(master=self)
+        dialog.title('分年统计 · ' + self.result_title.get())
+        dialog.transient(self.winfo_toplevel())
+        ttk.Label(dialog, text='按 H2 形态成立年归组 · 信号数沿用机会数口径', padding=8).pack(anchor=tk.W)
+        if note:
+            ttk.Label(dialog, text=note, padding=8).pack(anchor=tk.W)
+        if not rows:
+            return
+        host = ttk.Frame(dialog, padding=8)
+        host.pack(fill=tk.BOTH, expand=True)
+        widget = tree(host, [(str(i), label, width, tk.W)
+                             for i, (label, width) in enumerate(zip(ANNUAL_COLUMNS, (135, 85, 95, 145, 145)))])
+        widget.configure(height=min(len(rows), 12))
+        widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = ttk.Scrollbar(host, command=widget.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        widget.configure(yscrollcommand=scroll.set)
+        for row in rows:
+            widget.insert('', tk.END, values=row)
+
+    def _update_trade_statistics(self, report=None):
+        descriptive = trade_statistics(self.records, report)
         self.aux_stats['win'].set(number(descriptive['average_win_r'], 'R'))
         self.aux_stats['loss'].set(number(descriptive['average_loss_r'], 'R'))
         self.aux_stats['exits'].set(' / '.join(f'{row["label"]} {row["share"]:.1%}'
@@ -799,15 +829,29 @@ class AfterhoursPage(ttk.Frame):
             if category == '持仓未结束' and r['status'] != 'open':
                 continue
             rows.append(r)
-        def key(r):
-            entry, stop, risk = list_prices(r)
-            return {'date': r['setup_date'], 'code': r['code'], 'name': self._names.get(r['code'], ''),
-                    'entry': entry, 'stop': stop, 'risk': risk, 'result': outcome(r), 'r': r.get('r_multiple')}[self._sort_column]
-        rows = sorted([r for r in rows if key(r) is not None], key=key, reverse=self._sort_desc) + [r for r in rows if key(r) is None]
+        sort_key = {
+            'date': lambda record: record.get('setup_date'),
+            'code': lambda record: record['code'],
+            'name': lambda record: self._names.get(record['code'], ''),
+            'entry': lambda record: list_prices(record)[0],
+            'stop': lambda record: list_prices(record)[1],
+            'risk': lambda record: list_prices(record)[2],
+            'result': outcome,
+            'r': lambda record: record.get('r_multiple'),
+        }[self._sort_column]
+        ranked, unranked = [], []
+        for record in rows:
+            value = sort_key(record)
+            if value is None:
+                unranked.append(record)
+            else:
+                ranked.append((value, record))
+        ranked.sort(key=lambda item: item[0], reverse=self._sort_desc)
+        rows = [record for _, record in ranked] + unranked
         self._visible_ids = [r['id'] for r in rows]
         for r in rows:
             entry, stop, risk = list_prices(r)
-            self.tree.insert('', tk.END, iid=r['id'], values=(r['setup_date'], r['code'], self._names.get(r['code'], ''),
+            self.tree.insert('', tk.END, iid=r['id'], values=(r.get('setup_date') or '日期缺失', r['code'], self._names.get(r['code'], ''),
                              number(entry), number(stop), number(risk, '%'), outcome(r), number(r.get('r_multiple'), 'R')),
                              tags=('profit',) if (r.get('r_multiple') or 0)>0 else ('loss',) if (r.get('r_multiple') or 0)<0 else ())
         if old and self.tree.exists(old[0]):
@@ -847,7 +891,7 @@ class AfterhoursPage(ttk.Frame):
         self.detail.focus_set()
         code = self._trade['code']
         identity = ' · '.join(part for part in (code, self._names.get(code, '')) if part)
-        self.detail_title.set(f'{identity} · H2 {self._trade["setup_date"]} · {LABELS[self._trade["status"]]}')
+        self.detail_title.set(f'{identity} · H2 {self._trade.get("setup_date") or "日期缺失"} · {LABELS[self._trade["status"]]}')
         self.timeline.delete(*self.timeline.get_children())
         titles = {'setup': '待挂机会形成', 'plan': '更新次日计划', 'trigger': '价格触发', 'fill': '模拟成交',
                   'holding': '持仓', 'exit': '模拟退出', 't1': 'T+1 限制', 'blocked': '成交受限'}

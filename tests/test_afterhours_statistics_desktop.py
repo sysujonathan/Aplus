@@ -2,6 +2,8 @@
 from copy import deepcopy
 import json
 import os
+from tkinter import Toplevel
+from tkinter.ttk import Treeview
 from unittest.mock import Mock
 
 import pytest
@@ -117,6 +119,14 @@ def test_statistics_filters_legacy_receipts_and_layout_are_read_only(tmp_path, h
         assert page.aux_stats['exits'].get() == '—'
         assert '—' in page.aux_stats['excess'].get()
         assert page.tree.heading('stop', 'text') == 'SL1'
+        page.annual_button.invoke()
+        dialog = next(widget for widget in page.winfo_children() if isinstance(widget, Toplevel))
+        annual = next(widget for frame in dialog.winfo_children() for widget in frame.winfo_children()
+                      if isinstance(widget, Treeview))
+        values = [annual.item(iid, 'values') for iid in annual.get_children()]
+        assert sum(int(row[2]) for row in values) == report['closed_trades']
+        assert any('缺有效R' in row[4] for row in values)
+        dialog.destroy()
         page._clear_history_result()
         assert all(v.get() == '—' for v in page.stats)
         assert page._holding_data['total'] == 0
