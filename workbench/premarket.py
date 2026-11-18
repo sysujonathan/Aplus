@@ -77,7 +77,7 @@ def run_premarket(service, job, spec):
         proxy.store = stores[source]
         receipt = report['sources'][source]
 
-        def stage(kind, stage_spec, phase):
+        def stage(kind, stage_spec, phase, handler=None):
             child = uuid.uuid4().hex[:16]
             stage_spec = dict(stage_spec, premarket_parent=job)
             proxy.cancel_flags = {child: stop}
@@ -103,7 +103,8 @@ def run_premarket(service, job, spec):
             metrics_before = proxy.store.metrics()
             try:
                 proxy.check_stop(child)
-                result = getattr(proxy, '_'+kind)(child, stage_spec)
+                result = (handler(child, stage_spec) if handler else
+                          getattr(proxy, '_'+kind)(child, stage_spec))
                 status = 'partial' if result.get('errors') or result.get('complete') is False else 'completed'
                 if stop.is_set(): status = 'cancelled'
                 message = result.get('stop_reason', '完成')
@@ -127,7 +128,7 @@ def run_premarket(service, job, spec):
             proxy.store.execute('UPDATE jobs SET status=?,finished=?,message=?,result=? WHERE id=?',
                                 (status, now(), message, dumps(result), child))
             with notice_lock:
-                summary = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery','status_maintenance_summary') if k in result}
+                summary = {k: result[k] for k in ('asof','success','signals','reused','calculated','stage_reused','daily_batch','batch_fallback_reason','skipped','note','stop_reason','local_io','transport_recovery','status_maintenance_summary','status_maintenance_pending','execution','parallel_decisions') if k in result}
                 if result.get('resume'):
                     summary['resume'] = resume_summary(result['resume'])
                 if kind == 'scan':
@@ -151,11 +152,12 @@ def run_premarket(service, job, spec):
                     # the first pass's partial status or error evidence.
                     rank = {'completed': 0, 'partial': 1, 'failed': 2, 'cancelled': 3}
                     prior_status = receipt.get(kind+'_status', 'completed')
-                    receipt[kind+'_status'] = max((prior_status, status),
-                                                  key=lambda s: rank.get(s, 1))
+                    receipt[kind+'_status'] = (status if kind == 'scan' else
+                        max((prior_status, status), key=lambda s: rank.get(s, 1)))
                     receipt[kind+'_seconds'] = receipt.get(kind+'_seconds', 0.0) + elapsed
                     for key in ('success', 'signals', 'reused', 'calculated', 'stage_reused', 'skipped'):
-                        if isinstance(previous.get(key), (int, float)) and isinstance(summary.get(key), (int, float)):
+                        if (kind != 'scan' and isinstance(previous.get(key), (int, float))
+                                and isinstance(summary.get(key), (int, float))):
                             summary[key] = previous[key] + summary[key]
                     if isinstance(previous.get('local_io'), dict) and isinstance(summary.get('local_io'), dict):
                         merged_io = dict(previous['local_io'])
@@ -164,16 +166,22 @@ def run_premarket(service, job, spec):
                         summary['local_io'] = merged_io
                     new_errors = list(result.get('errors') or [])
                     total_errors = previous.get('error_count', len(previous.get('errors', []))) + len(new_errors)
+                    if kind == 'scan':
+                        # Final full-scope scan owns current qualification and
+                        # counts. Earlier partial evidence stays in its child.
+                        total_errors = len(new_errors)
                     if total_errors:
                         summary.update(error_count=total_errors,
-                                       errors=(list(previous.get('errors', [])) + new_errors)[:6])
+                                       errors=(new_errors if kind == 'scan' else
+                                               list(previous.get('errors', [])) + new_errors)[:6])
                 receipt[kind+'_result'] = summary
             return result, status, message
 
         target = end
         sync_spec = dict(source=source, boards=list(spec['boards']), start=spec['start'],
                          end=target, force=False, scan_timeframe=spec['timeframe'], resume=True,
-                         full_history=spec.get('full_history', False))
+                         full_history=spec.get('full_history', False),
+                         _defer_daily_status=spec['timeframe'] == 'daily')
         result, status, message = stage('sync', sync_spec, '更新')
         if status in ('failed','cancelled'):
             notice(source, '失败' if status=='failed' else '已停止', message=message, force=True)
@@ -193,6 +201,7 @@ def run_premarket(service, job, spec):
                 notice(source, '失败' if status=='failed' else '已停止', message=message, force=True)
                 return
             target = advanced
+        sync_result = result
         with notice_lock:
             receipt['asof'] = target
         notice(source, '等待扫描', 0, 0, force=True)
@@ -203,8 +212,50 @@ def run_premarket(service, job, spec):
                 return
             ids = [r['id'] for r in latest_datasets(proxy.store,source)
                    if r['timeframe']=='daily' and board_of(r['code']) in spec['boards']]
-            result, status, message = stage('scan', dict(source=source, boards=list(spec['boards']),
-                datasets=ids, strategies=list(spec['strategies']), timeframes=[spec['timeframe']], asof=target), '扫描')
+            if (not sync_result.get('status_maintenance_pending')
+                    or sync_result['scan_readiness'].get('eligible_ids')):
+                result, status, message = stage('scan', dict(source=source, boards=list(spec['boards']),
+                    datasets=ids, strategies=list(spec['strategies']), timeframes=[spec['timeframe']], asof=target), '扫描')
+            else:
+                # No qualified stock yet: do not start an empty/blocked scan.
+                # The unchanged status/price closure must qualify input first.
+                result = dict(datasets=[], coverage=sync_result['scan_readiness'])
+                status, message = 'partial', '暂无合格行情，先核验缺日'
+        if (sync_result.get('status_maintenance_pending') and status not in ('failed', 'cancelled')
+                and not stop.is_set()):
+            scanned = set(result.get('datasets', []))
+            from .status_maintenance import maintain_daily_status
+            def close_status(child, request):
+                updated = maintain_daily_status(proxy, child, request, copy.deepcopy(sync_result))
+                updated.pop('status_maintenance_pending', None)
+                updated['complete'] = bool(updated.get('scan_readiness', {}).get('complete'))
+                return updated
+            maintained, maintenance_status, maintenance_message = stage(
+                'verify_status', dict(sync_spec, end=target, _defer_daily_status=False),
+                '核验缺日', handler=close_status)
+            if maintenance_status in ('failed', 'cancelled'):
+                notice(source, '已停止' if maintenance_status == 'cancelled' else '未完成',
+                       message=maintenance_message, force=True)
+                with notice_lock:
+                    receipt['scan_status'] = maintenance_status
+                return
+            # Evidence can qualify an existing snapshot; positive trading
+            # evidence can produce a repaired same-source snapshot. Only then
+            # run the normal full qualification gate again; cache answers for
+            # unchanged inputs are reused by the original Service.
+            ready = set(maintained.get('scan_readiness', {}).get('eligible_ids', []))
+            if (ready - scanned or
+                    (maintained.get('scan_readiness', {}).get('complete')
+                     and not result.get('coverage', {}).get('complete', True))):
+                with scan_lock:
+                    if stop.is_set():
+                        notice(source, '已停止', force=True)
+                        return
+                    ids = [r['id'] for r in latest_datasets(proxy.store,source)
+                           if r['timeframe']=='daily' and board_of(r['code']) in spec['boards']]
+                    result, status, message = stage('scan', dict(source=source, boards=list(spec['boards']),
+                        datasets=ids, strategies=list(spec['strategies']), timeframes=['daily'],
+                        asof=target), '补扫')
         notice(source, '完成' if status=='completed' else '部分完成' if status=='partial' else '已停止' if status=='cancelled' else '未完成',
                message=message, force=True)
 

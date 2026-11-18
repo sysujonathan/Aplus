@@ -13,40 +13,69 @@ from .store import ROOT
 
 MIN_STOCKS = 64
 WORKERS_ENV = 'APLUS_TICKFLOW_SCAN_WORKERS'
+MIB = 1024**2
+WORKING_SET_BUDGET = 128*MIB
+PARENT_HEADROOM = 128*MIB
+COMMIT_BUDGET = 384*MIB
+COMMIT_HEADROOM = 512*MIB
 
 
-def worker_count():
+def memory_snapshot():
+    if os.name != 'nt':
+        return dict(available_bytes=os.sysconf('SC_AVPHYS_PAGES') * os.sysconf('SC_PAGE_SIZE'))
+    import ctypes
+
+    class Memory(ctypes.Structure):
+        _fields_ = [('length', ctypes.c_ulong), ('load', ctypes.c_ulong),
+                    *[(name, ctypes.c_ulonglong) for name in
+                      ('total', 'available', 'page_total', 'page_available',
+                       'virtual_total', 'virtual_available', 'extended')]]
+    memory = Memory()
+    memory.length = ctypes.sizeof(memory)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory)):
+        raise OSError('GlobalMemoryStatusEx failed')
+    return dict(available_bytes=int(memory.available), commit_available_bytes=int(memory.page_available))
+
+
+def available_memory():
+    return memory_snapshot()['available_bytes']
+
+
+def worker_selection():
     requested = os.environ.get(WORKERS_ENV, 'auto').strip().lower()
-    maximum = min(8, max(1, (os.cpu_count() or 1) // 2))
+    cpus = os.cpu_count() or 1
+    maximum = min(8, max(1, cpus // 2))
+    decision = dict(requested=requested, cpu_count=cpus, workers=1, retryable=False)
     if requested != 'auto':
         try:
             value = int(requested)
             if not 1 <= value <= 8:
-                return 1
+                return dict(decision, reason='invalid_worker_setting')
             maximum = min(maximum, value)
         except ValueError:
-            return 1
-    # Reserve 1 GiB for desktop/Store and budget 512 MiB per Python worker.
+            return dict(decision, reason='invalid_worker_setting')
+        if value == 1:
+            return dict(decision, reason='explicit_serial')
+    if maximum < 2:
+        return dict(decision, reason='cpu_limit')
+    # Daily workers read one immutable file and enrich only a 300-bar window.
+    # Budget physical working sets separately from private committed memory.
+    # Never trade a lower physical threshold for an exhausted commit limit.
     try:
-        if os.name == 'nt':
-            import ctypes
+        memory = memory_snapshot()
+        available = memory['available_bytes']
+        maximum = min(maximum, max(1, (available - PARENT_HEADROOM) // WORKING_SET_BUDGET))
+        if 'commit_available_bytes' in memory:
+            maximum = min(maximum, max(1, (memory['commit_available_bytes'] - COMMIT_HEADROOM)
+                                      // COMMIT_BUDGET))
+    except (AttributeError, OSError, ValueError) as exc:
+        return dict(decision, reason='memory_probe_failed', retryable=True, error=type(exc).__name__)
+    return dict(decision, **memory, workers=int(maximum),
+                reason='memory_limit' if maximum < 2 else 'available', retryable=maximum < 2)
 
-            class Memory(ctypes.Structure):
-                _fields_ = [('length', ctypes.c_ulong), ('load', ctypes.c_ulong),
-                            *[(name, ctypes.c_ulonglong) for name in
-                              ('total', 'available', 'page_total', 'page_available',
-                               'virtual_total', 'virtual_available', 'extended')]]
-            memory = Memory()
-            memory.length = ctypes.sizeof(memory)
-            if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory)):
-                return 1
-            available = memory.available
-        else:
-            available = os.sysconf('SC_AVPHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
-        maximum = min(maximum, max(1, (available - 1024 ** 3) // (512 * 1024 ** 2)))
-    except (AttributeError, OSError, ValueError):
-        return 1
-    return int(maximum)
+
+def worker_count():
+    return worker_selection()['workers']
 
 
 class CPUWorker:
@@ -155,6 +184,16 @@ class OrderedComputations:
             self.pending[index] = self.pool.submit(self._compute, payload)
 
     def take(self, index, needed=True):
+        if not self.closed:
+            try:
+                memory = memory_snapshot()
+                if (memory['available_bytes'] < PARENT_HEADROOM or
+                        memory.get('commit_available_bytes', COMMIT_BUDGET) < COMMIT_BUDGET):
+                    raise MemoryError('扫描内存余量不足，关闭计算进程并回退串行')
+            except (AttributeError, OSError, ValueError, MemoryError) as exc:
+                self.failure = str(exc)
+                self.close()
+                return None
         # Cached duplicate datasets and input failures can skip speculative work.
         for old in [key for key in self.pending if key < index]:
             future = self.pending.pop(old)
@@ -201,21 +240,31 @@ class OrderedComputations:
         self.abandoned.clear()
 
 
-def open_computations(store, spec, strategies, records, lookups, cached, stop, accelerated):
-    workers = worker_count()
-    if workers < 2 or accelerated or not records:
+def open_computations(store, spec, strategies, records, lookups, cached, stop, accelerated,
+                      *, start_index=0, decision=None):
+    decision = {} if decision is None else decision
+    decision.update(worker_selection(), stock_index=start_index)
+    workers = decision['workers']
+    def serial(reason):
+        decision.update(reason=reason, retryable=False)
         return None
+    if accelerated:
+        return serial('active_fast_reject')
+    if not records:
+        return serial('missing_metadata')
     # Research plugins, BaoStock and already approved fast-reject controllers
     # retain their existing execution/authorization/fuse route.
     if any(Path(item.file).resolve().parent != ROOT / 'core' / 'strategies'
            or item.params for item in strategies):
-        return None
+        return serial('custom_strategy_or_params')
     tasks = []
     seen = set()
     for index, (did, (keys, legacy, bridged)) in enumerate(zip(spec['datasets'], lookups)):
+        if index < start_index:
+            continue  # Previously committed stocks must not be recomputed.
         record = records.get(did)
         if record is None or record['source'] != 'tickflow':
-            return None
+            return serial('unsupported_source_or_metadata')
         if did in seen and not spec.get('force'):
             continue
         seen.add(did)
@@ -226,5 +275,8 @@ def open_computations(store, spec, strategies, records, lookups, cached, stop, a
                 timeframe=spec['timeframe'], asof=spec['asof'], strategies=[
                     dict(id=item.id, version=item.version, params=item.params) for item in missing])))
     if len(tasks) < MIN_STOCKS:
-        return None
+        return serial('below_parallel_threshold')
+    decision['pending_stocks'] = len(tasks)
+    if workers < 2:
+        return None  # Only transient resource decisions permit a bounded retry.
     return OrderedComputations(tasks, min(workers, len(tasks)), stop)
