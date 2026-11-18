@@ -632,9 +632,10 @@ function renderWorkspace(mode = 'all') {
   // Strategy evidence is a daily-structure conclusion. It must not be redrawn
   // on an intraday axis where its dates do not exist as bars.
   const evidenceUnit = chartBoot.timeframe || 'daily';
+  const levelTags = [];
   if (indicatorSettings.strategy_visible !== false && activeTimeframeUnit === evidenceUnit
-      && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view);
-  drawHoldingLevels(ctx, canvas._view);
+      && (chartBoot.production || !replayActive || replayIndex >= focusIndex(57))) drawStrategyEvidence(ctx, canvas._view, levelTags);
+  drawHoldingLevels(ctx, canvas._view, levelTags);
   ctx.restore();
 
   const topContext = foregroundContext || ctx;
@@ -653,7 +654,7 @@ function renderWorkspace(mode = 'all') {
   topContext.restore();
   const countdown = typeof currentPriceCountdown === 'function' ? currentPriceCountdown(canvas._view) : '';
   canvas._view.barCloseText = countdown;
-  drawAxisPriceTags(topContext,canvas._view,countdown);
+  drawAxisPriceTags(topContext, canvas._view, countdown, levelTags);
   drawLastPrice(topContext, rows.at(-1).close, y, width, right, false);
   const legendIndex = Math.min(replayIndex, bars.length - 1) - Number(indicatorSettings.ema_offset);
   const emaValue = legendIndex <= replayIndex ? ema[legendIndex] : undefined;
@@ -704,7 +705,7 @@ function calculateEma() {
   emaSmoothing=Object.fromEntries(Object.entries(smoothed).map(([key,series])=>[key,series.length?merge(series):[]]));
 }
 
-function drawHoldingLevels(ctx, view) {
+function drawHoldingLevels(ctx, view, levelTags = []) {
   // Account levels are prices rather than dates, so they stay valid on every
   // timeframe, including the intraday axis.
   if (replayActive) return; // current account levels are not historical replay evidence
@@ -717,15 +718,16 @@ function drawHoldingLevels(ctx, view) {
   (chartBoot.holdingLevels || []).forEach(level => {
     const price = Number(intraday ? (level.unadjusted ?? level.value) : level.price);
     if (!Number.isFinite(price) || price <= 0) return;
-    ctx.save(); ctx.strokeStyle = level.color || '#b8bdc8';
+    const color = level.color || '#b8bdc8';
+    ctx.save(); ctx.strokeStyle = color;
     ctx.setLineDash(level.style === '--' ? [7, 5] : level.style === '-.' ? [7, 4, 2, 4] : []);
     ctx.beginPath(); ctx.moveTo(left, y(price)); ctx.lineTo(plotRight, y(price)); ctx.stroke();
-    ctx.fillStyle = level.color || '#b8bdc8'; ctx.font = '12px Segoe UI'; ctx.textAlign = 'left';
-    ctx.fillText(`${level.label} ${chartPrice(price)}`, left + 8, y(price) - 5); ctx.restore();
+    ctx.restore();
+    levelTags.push({value: price, color, label: level.label});
   });
 }
 
-function drawStrategyEvidence(ctx, view) {
+function drawStrategyEvidence(ctx, view, levelTags) {
   const { left, width, right, y, candleWidth, xGlobal } = view;
   const plotRight = width - right;
   if (chartBoot.production) {
@@ -772,16 +774,15 @@ function drawStrategyEvidence(ctx, view) {
       ctx.beginPath();ctx.moveTo(xGlobal(index),y(Number(gap.floor)));ctx.lineTo(plotRight,y(Number(gap.floor)));ctx.stroke();ctx.restore();
     });
     if (evidence.plan_kind === 'gap-h2-next-session' && setupIndex >= 0 && (!replayActive || replayIndex >= setupIndex)) {
-      [['entry_plan_price','Entry','#089981'],['sl1_plan_price','SL1','#f23645'],['mm_target','MM','#089981']].forEach(([key,label,color]) => {
-        if (key !== 'mm_target' && evidence.pending_state !== 'PENDING') return;
-        if (key !== 'mm_target' && replayActive && String(evidence.plan_asof || '9999') >
-            String(replayCutoffDate || bars[replayIndex].date)) return;
-        const price = Number(evidence[key] ?? evidence[key === 'entry_plan_price' ? 'entry' : key === 'sl1_plan_price' ? 'stop' : 'target']);
-        if (!Number.isFinite(price) || price <= 0) return;
-        ctx.save(); ctx.strokeStyle = color; ctx.setLineDash([5,5]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(left,y(price)); ctx.lineTo(plotRight,y(price)); ctx.stroke();
-        ctx.fillStyle=color; ctx.font='11px Segoe UI'; ctx.fillText(`${label} ${chartPrice(price)}`,left+8,y(price)-5);ctx.restore();
-      });
+      const cutoff = replayActive ? (replayCutoffDate || bars[replayIndex].date) : null;
+      for (const level of chartBoot.strategyEvidence?.planLevels || []) {
+        if (cutoff && level.availableDate && level.availableDate > cutoff) continue;
+        const py = y(level.value);
+        ctx.save(); ctx.strokeStyle = level.color; ctx.setLineDash(level.dash); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(plotRight, py); ctx.stroke();
+        ctx.restore();
+        levelTags.push(level);
+      }
     }
     return;
   }

@@ -211,3 +211,35 @@ def test_failed_embedded_context_releases_cover_only_through_save_acknowledgemen
     panel.header.grid.assert_called_once_with()
     panel.readout_frame.grid.assert_called_once_with()
     assert 'unsupported annotation' in panel.readout.set.call_args.args[0]
+
+
+def test_h2_plan_levels_match_snapshot_lines_for_three_tick_plan():
+    from decimal import Decimal
+
+    import mplfinance as mpf
+
+    from gui.chart_renderer import render_chart
+    from workbench.h2_plan import project_plan
+
+    frame = pd.DataFrame([
+        dict(date='2026-11-16', open=10.01, high=10.05, low=10.00, close=10.03),
+        dict(date='2026-11-17', open=10.04, high=10.04, low=10.03, close=10.03),
+    ]).assign(volume=100)
+    plan = project_plan(frame, dict(bo_date='2026-11-16', h2_setup_date='2026-11-17',
+                                   gap_floor=10.00, gap_top=10.02, mm_target=10.20), 'sh.600000')
+    delta = lambda a, b: Decimal(str(plan[a])) - Decimal(str(plan[b]))
+    assert delta('entry_plan_price', 'sl1_plan_price') == Decimal('0.03')
+    assert delta('gap_floor', 'sl_plan_price') == Decimal(str(plan['price_tick']))
+    levels = strategy_evidence(dict(payload=plan))['planLevels']
+    assert [level['label'] for level in levels] == ['Entry', 'SL', 'SL1', '2R', 'MM']
+    with patch.object(mpf, 'plot', wraps=mpf.plot) as plot:
+        render_chart(frame, plan, 'Synthetic H2', {'signal_column': 'signal_gap_h2'})
+    snapshot = plot.call_args.kwargs['hlines']
+    assert [level['value'] for level in levels] == snapshot['hlines']
+    assert [level['color'] for level in levels] == snapshot['colors']
+    assert levels[3]['dash'] == [6, 4] and snapshot['linestyle'][3] == '--'
+    assert [level['label'] for level in strategy_evidence(
+        dict(payload=dict(plan, pending_state='INVALID')))['planLevels']] == ['MM']
+    legacy = dict(plan, pricing_basis='', stop=plan['sl1_plan_price'], target=plan['mm_target'])
+    assert [level['label'] for level in strategy_evidence(
+        dict(payload=legacy))['planLevels']] == ['Entry', 'SL1', 'MM']

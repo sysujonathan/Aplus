@@ -112,4 +112,53 @@ vm.runInContext('updateReadout(bars[1])',context);
 assert.deepEqual(ohlc(),['2.142','2.142','2.138','2.139']);
 assert.ok([...elements.values()].some(node => node.textContent === '-0.003 (-0.14%)'));
 
+
+// H2 plan strokes keep their price coordinates while all axis tags share collision layout.
+vm.runInContext([
+  extract('prototype-interactions.js','drawStrategyEvidence'),
+  extract('prototype-interactions.js','drawHoldingLevels'),
+].join('\n'), context);
+const plan = [
+  ['Entry', 10.05], ['SL', 9.99], ['SL1', 10.02], ['2R', 10.17], ['MM', 10.20],
+];
+Object.assign(context, {
+  bars: [{date:'2026-11-17',close:10.05}], replayIndex:0, replayActive:false, activeTimeframeUnit:'daily',
+  chartBoot:{production:true,priceStep:.01,
+    evidence:{plan_kind:'gap-h2-next-session',h2_setup_date:'2026-11-17'},
+    strategyEvidence:{planLevels:plan.map(([label,value])=>
+      ({label,value,color:'#cbd5e1',dash:[6,4],availableDate:label==='MM'?null:'2026-11-18'}))},
+    holdingLevels:[{label:'摊薄成本（含税费）',price:10.01}]},
+  ema:[10.03], drawingsVisible:true, objectVisibleAtTimeframe:()=>true,
+  userObjects:[{type:'ray',a:{value:10.04},color:'#2962ff'}],
+  chartCoordinates:{indexForDate:(bars,date)=>bars.findIndex(bar=>bar.date===date)},
+  replayCutoffDate:null, levelTags:[],
+  view:{...context.view,left:8,rows:[{close:10.05}],low:9,high:11,y:value=>300-(value-10)*10},
+});
+tags=[];segments=[];
+vm.runInContext('drawStrategyEvidence(ctx,view,levelTags);drawHoldingLevels(ctx,view,levelTags)',context);
+const strokes = [...plan.map(([,value])=>value),10.01].flatMap(value=>
+  [[8,context.view.y(value)],[839,context.view.y(value)]]);
+assert.deepEqual(segments,strokes);
+vm.runInContext("drawAxisPriceTags(ctx,view,'01:00',levelTags)",context);
+assert.equal(tags.length,9);
+assert.deepEqual(tags.filter(t=>plan.some(([label])=>label===t.subtitle))
+  .map(t=>[t.subtitle,t.text]).sort(),plan.map(([label,value])=>[label,value.toFixed(2)]).sort());
+assert.ok(tags.some(t=>t.text==='10.05'&&t.subtitle==='01:00'));
+assert.ok(tags.some(t=>t.text==='10.03'&&t.subtitle===''));
+assert.ok(tags.some(t=>t.text==='10.04'&&t.color==='#2962ff'));
+for (let i=1;i<tags.length;i++) {
+  assert.ok(tags[i].y-tags[i-1].y>=22+(tags[i-1].subtitle?14:0));
+}
+context.replayActive=true;
+context.levelTags=[];
+vm.runInContext('drawStrategyEvidence(ctx,view,levelTags);drawHoldingLevels(ctx,view,levelTags)',context);
+assert.deepEqual(context.levelTags.map(level=>level.label),['MM']);
+// Candle callouts retain the separate twelve-attempt placement limit.
+vm.runInContext(extract('prototype.js','callout'),context);
+let attempts=0;
+context.canvas={_view:context.view};
+context.strategyLabelBoxes={some:()=>{attempts++;return true;}};
+Object.assign(context.ctx,{measureText:()=>({width:20}),fillRect(){},fillText(){}});
+vm.runInContext("callout(ctx,'Gap',400,250,430,400)",context);
+assert.equal(attempts,12);
 console.log(JSON.stringify({ok:true, historicalAndLatestReadouts:true, axisLabelsSeparated:true, etfOhlc:true, countdown:true}));

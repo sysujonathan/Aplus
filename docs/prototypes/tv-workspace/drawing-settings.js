@@ -102,7 +102,7 @@ function layoutAxisPriceTags(tags, top, bottom) {
   }
   return result;
 }
-function drawAxisPriceTags(ctx,view, countdown = '') {
+function drawAxisPriceTags(ctx, view, countdown = '', levelTags = []) {
   const tags = [];
   const tag=(value,color,subtitle='')=>{
     if(!Number.isFinite(value)||value<view.low||value>view.high)return;
@@ -122,6 +122,7 @@ function drawAxisPriceTags(ctx,view, countdown = '') {
       tag(object.a.value,object.color);tag(object.b.value,object.targetColor||'#089981');tag(object.stop,object.stopColor||'#f23645');
     }
   });
+  for (const level of levelTags) tag(level.value, level.color, level.label);
   layoutAxisPriceTags(tags,view.top,view.height-view.bottom).forEach(item => {
     if (Math.abs(item.labelY-item.py)>1) {
       ctx.save();ctx.strokeStyle=item.color;ctx.lineWidth=1;ctx.setLineDash([]);
