@@ -6,7 +6,10 @@ import json
 import os
 from pathlib import Path
 from datetime import date
+from functools import lru_cache
 from gui.tv import tv_link
+from gui.research_views import ANNUAL_COLUMNS, generic_report_statistics, signal_retention
+from workbench.h2_replay import SUPPORTED_MODELS
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -191,6 +194,52 @@ def plans_page():
         st.dataframe(store.rows('SELECT time,payload FROM plan_history WHERE plan_id=? ORDER BY seq DESC',(p['id'],)),hide_index=True)
 
 
+@lru_cache(maxsize=4)
+def _generic_report_details(content, signals, closed_trades):
+    # Use the saved bytes as the key so replacing an artifact invalidates the cache.
+    columns = {'signal_date', 'status', 'r_multiple', 'net_return', 'holding_bars'}
+    try:
+        trades = pd.read_csv(io.BytesIO(content), usecols=columns.__contains__)
+        if 'status' not in trades:
+            # Count rows even in legacy files without any of the summary columns.
+            trades = pd.read_csv(io.BytesIO(content))
+    except pd.errors.EmptyDataError:
+        trades = pd.DataFrame()
+    return bool(len(trades)), generic_report_statistics(trades, dict(signals=signals, closed_trades=closed_trades))
+
+
+@lru_cache(maxsize=4)
+def _generic_trade_table(content):
+    return pd.read_csv(io.BytesIO(content))
+
+
+def _show_generic_statistics(stats):
+    rows, annual_note, holding, holding_note = stats
+    st.markdown('**分年统计（按信号年）**')
+    if annual_note:
+        st.caption(annual_note)
+    if rows:
+        st.dataframe(pd.DataFrame(rows, columns=ANNUAL_COLUMNS), hide_index=True, width='stretch')
+
+    st.markdown('**持仓统计（已结束，按回测周期计根）**')
+    if holding_note:
+        st.caption(holding_note)
+    if not holding or not holding['total']:
+        return
+    def bars(key):
+        value = holding[key]
+        if value is not None:
+            return f'{value:.2f} 根'
+        return '无有效盈亏分组样本' if holding['classified'] < holding['total'] else '该组无样本'
+
+    st.write(f'平均 {bars("mean")} · 中位 {bars("median")} · '
+             f'盈利中位 {bars("win_median")} · 亏损中位 {bars("loss_median")}')
+    if holding['classified'] < holding['total']:
+        st.caption(f'{holding["total"] - holding["classified"]} 笔缺有效 R，无法按盈亏归组。')
+    st.dataframe([{'持仓根数': row['label'], '笔数': row['count'], '占比': f'{row["share"]:.1%}'}
+                  for row in holding['buckets']], hide_index=True, width='stretch')
+
+
 def research_page():
     st.title('回测研究')
     st.write('先验证一个明确问题，再决定是否调整策略。研究条件不会修改原策略文件或正式计划。')
@@ -221,6 +270,8 @@ def research_page():
     current_job()
     st.subheader('研究报告与对比')
     jobs = store.rows("SELECT * FROM jobs WHERE kind='backtest' AND status IN ('completed','partial') ORDER BY created DESC,rowid DESC")
+    reports = {job['id']: json.loads(job['result']) for job in jobs}
+    jobs = [job for job in jobs if reports[job['id']].get('execution_model') not in SUPPORTED_MODELS]
     if not jobs:
         st.caption('完整或部分完成的报告会保留在这里；失败和停止的任务在运行回执中。')
         return
@@ -230,28 +281,58 @@ def research_page():
     comparison = []
     for jid in chosen:
         job = mapping[jid]
-        report = json.loads(job['result'])
-        comparison.append({'报告':jid,'状态':STATUS[job['status']],'已结束样本':report['closed_trades'],
-                           '胜率':report['win_rate'],'平均净收益率':report['mean_return'],'平均R':report['mean_r'],
-                           '仍持有':report['open_trades'],'版本':report['strategy_version'][:12]})
+        report = reports[jid]
+        comparison.append({'报告':jid,'状态':STATUS[job['status']],'信号数':report.get('signals'),'已结束样本':report.get('closed_trades'),
+                           '胜率':report.get('win_rate'),'平均净收益率':report.get('mean_return'),'平均R':report.get('mean_r'),
+                           '仍持有':report.get('open_trades'),'版本':(report.get('strategy_version') or '未记录')[:12]})
         with st.expander('报告详情 · '+jid,expanded=len(chosen)==1):
-            if not report['real_data']:
+            if report.get('real_data') is False:
                 st.warning('此报告含合成演示数据，不可用于判断交易效果或启用策略。')
-            if report['errors']:
+            if report.get('errors'):
                 st.error('部分样本失败；该报告不作为新策略启用依据。')
                 st.json(report['errors'])
-            st.write(report['note'])
-            st.json({'研究条件':json.loads(job['spec']),'限制':report['limitations']})
-            content = store.read_artifact(report['trades_path'])
-            st.download_button('下载逐笔研究 CSV',content,jid+'-trades.csv',key=jid+'_csv')
-            st.download_button('下载完整回执 JSON',store.read_artifact(report['report_path']),jid+'-report.json',key=jid+'_report')
+            if report.get('note'):
+                st.write(report['note'])
+            st.json({'研究条件':json.loads(job['spec']),'限制':report.get('limitations', [])})
             try:
-                trades = pd.read_csv(io.BytesIO(content))
-                st.dataframe(trades,hide_index=True,width='stretch')
-            except pd.errors.EmptyDataError:
-                st.info('该条件下没有可统计的交易样本。')
+                receipt = store.read_artifact(report['report_path'])
+            except (KeyError, OSError, ValueError, TypeError):
+                st.caption('完整回执 JSON 缺失或无法读取。')
+            else:
+                st.download_button('下载完整回执 JSON', receipt, jid+'-report.json', key=jid+'_report')
+            try:
+                content = store.read_artifact(report['trades_path'])
+            except (KeyError, OSError, ValueError, TypeError):
+                st.info('逐笔明细 CSV 缺失或无法读取，无法计算分年与持仓统计。')
+                continue
+            st.download_button('下载逐笔研究 CSV', content, jid+'-trades.csv', key=jid+'_csv')
+            try:
+                has_trades, stats = _generic_report_details(content, report.get('signals'), report.get('closed_trades'))
+            except (pd.errors.ParserError, UnicodeError):
+                st.info('逐笔明细 CSV 无法解析，无法计算分年与持仓统计。')
+                continue
+            _show_generic_statistics(stats)
+            if has_trades and st.toggle('显示逐笔明细', key=jid+'_show_trades'):
+                try:
+                    trades = _generic_trade_table(content)
+                except (pd.errors.ParserError, UnicodeError):
+                    st.info('逐笔明细 CSV 无法完整解析。')
+                else:
+                    st.dataframe(trades, hide_index=True, width='stretch')
     if comparison:
         st.dataframe(comparison,hide_index=True,width='stretch')
+    if len(chosen) >= 2:
+        baseline = chosen[0]
+        signals = reports[baseline].get('signals')
+        st.caption(f'基线 A · {baseline}。按报告选择顺序，其余报告为变体 B。')
+        rows = {'机会数差（A − B）': {}, '信号保持率（B ÷ A）': {}}
+        for jid in chosen[1:]:
+            variant = reports[jid].get('signals')
+            rows['机会数差（A − B）'][jid] = (
+                f'{signals - variant:+d}' if isinstance(signals, int) and isinstance(variant, int) else '缺信号数')
+            rows['信号保持率（B ÷ A）'][jid] = signal_retention(signals, variant)
+        st.dataframe([{'项目': label, **values} for label, values in rows.items()],
+                     hide_index=True, width='stretch')
 
 
 def registry_page():
