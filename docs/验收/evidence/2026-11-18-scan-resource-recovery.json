@@ -1,0 +1,85 @@
+{
+  "baseline": "1c0ddaf",
+  "stocks": 92,
+  "asof": "2026-11-16",
+  "strategies": [
+    "MTR_MASTER",
+    "STRATEGY_3K",
+    "STRATEGY_STRUCTURAL_GAP",
+    "STRATEGY_GAP_PINBAR",
+    "STRATEGY_GAP_H2",
+    "STRATEGY_AWIL"
+  ],
+  "scenario": "injected initial resource denial; subsequent probes use real current resources",
+  "cache": "empty judgment cache; equally prepared quality; OS file cache not cleared",
+  "before": {
+    "seconds": 25.166263099992648,
+    "digest": "99d148762152267151ac5c922076e05f18f9166516c0d48f350a8de0ff305121",
+    "calculated": 552,
+    "reused": 0,
+    "signals": 2,
+    "ready": 92,
+    "execution": null,
+    "decisions": [],
+    "power_events": [],
+    "scan_jobs": 1
+  },
+  "after": {
+    "seconds": 19.66128879999451,
+    "digest": "99d148762152267151ac5c922076e05f18f9166516c0d48f350a8de0ff305121",
+    "calculated": 552,
+    "reused": 0,
+    "signals": 2,
+    "ready": 92,
+    "execution": {
+      "mode": "processes",
+      "workers": 2
+    },
+    "decisions": [
+      {
+        "requested": "2",
+        "cpu_count": 8,
+        "workers": 1,
+        "retryable": true,
+        "available_bytes": 268435456,
+        "commit_available_bytes": 6399700992,
+        "reason": "memory_limit",
+        "stock_index": 0,
+        "pending_stocks": 92
+      },
+      {
+        "requested": "2",
+        "cpu_count": 8,
+        "workers": 2,
+        "retryable": false,
+        "available_bytes": 543592448,
+        "commit_available_bytes": 6401040384,
+        "reason": "available",
+        "stock_index": 16,
+        "pending_stocks": 76
+      }
+    ],
+    "power_events": [
+      {
+        "action": "任务防空闲休眠",
+        "detail": {
+          "requested": true
+        }
+      },
+      {
+        "action": "释放任务防休眠",
+        "detail": {}
+      }
+    ],
+    "scan_jobs": 1
+  },
+  "same_results": true,
+  "speedup": 1.279990511100151,
+  "reduction_pct": 21.874420839221642,
+  "history_rows": {
+    "min": 702,
+    "max": 1908
+  },
+  "source_job": "a7f588382111431a",
+  "qualification_note": "Eight copied snapshots need halt evidence not included in this price-only copy; use the 92 independently qualified stocks for both versions."
+}
