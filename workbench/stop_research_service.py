@@ -5,7 +5,7 @@ import json
 from .backtest import Assumptions
 from .h2_replay import LEGACY_MODEL
 from .h2_replay_service import load_receipt
-from .market import load_dataset
+from .research_market import load_replay_dataset
 from .stop_research import AnchorSettings, MODEL, RULE, compare_trade, summarize
 from .store import ROOT, digest, dumps
 from .strategies import prepare, verify_frozen
@@ -34,7 +34,7 @@ def execute_experiment(service, job, spec):
             did = original['dataset_id']
             if did not in frames:
                 frames.clear()
-                frame, snapshot = load_dataset(service.store, did, job)
+                frame, snapshot = load_replay_dataset(service.store, did, job)
                 if snapshot['source'] == 'demo':
                     raise ValueError('合成数据不能作为真实研究样本')
                 frame = prepare(frame, 'daily', source_report['end'])

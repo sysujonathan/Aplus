@@ -1,5 +1,5 @@
 """Historical event charts. No future bars or events unless explicitly requested."""
-from workbench.market import load_dataset
+from workbench.research_market import load_replay_dataset
 from .chart_renderer import render_chart
 
 
@@ -45,7 +45,7 @@ def replay_view(frame, record, event_index, posthoc=False):
 
 
 def render_replay(store, record, event_index, posthoc=False, *, size=None, viewport=(None, 0, 1.0)):
-    frame, _ = load_dataset(store, record['dataset_id'])
+    frame, _ = load_replay_dataset(store, record['dataset_id'])
     # A replay can never expose snapshot bars after the requested study end.
     if record.get('study_end'):
         frame = frame[frame.date <= record['study_end']]

@@ -80,6 +80,8 @@ def receipt_time(created, full_date=False):
 
 
 def scope_caption(report):
+    if report.get('scope') == 'research':
+        return 'TickFlow 长历史研究快照'
     if report.get('scope') == 'watch':
         return '关注名单'
     if 'boards' in report:

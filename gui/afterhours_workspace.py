@@ -70,6 +70,7 @@ def build_workspace(page):
         menu.add_checkbutton(label=board, variable=p.board_vars[board], command=p._board_changed)
     menu.add_separator()
     menu.add_radiobutton(label='关注名单', variable=p.scope, value='watch', command=p._scope_changed)
+    menu.add_radiobutton(label='长历史研究快照', variable=p.scope, value='research', command=p._scope_changed)
     p.scope_button.configure(menu=menu)
     p._scope_changed()
     for caption, var in [('从', p.start), ('至', p.end)]:

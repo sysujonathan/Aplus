@@ -14,6 +14,7 @@ from .market import BOARDS, board_of, completed_date, load_dataset
 from .store import digest, dumps
 from .strategies import catalog, prepare
 from .sources import market_source, SOURCES
+from .research_market import SOURCE as RESEARCH_SOURCE, coverage_records, load_research_dataset
 
 
 ITERATION_BASELINE_PURPOSE = 'strategy-iteration-v1-baseline'
@@ -102,14 +103,19 @@ def _execute_replay(service, job, spec, execution_model):
     records, errors, snapshots, warnings = [], [], [], []
     seen_codes = set()
     end = min(spec['end'], completed_date())
-    from .readiness import expected_day
-    try:
-        first_source=service.store.rows('SELECT source FROM datasets WHERE id=?',(ids[0],))
-        coverage_end = expected_day(service.store, end,first_source[0]['source'] if first_source and first_source[0]['source'] in SOURCES else 'baostock')
-    except ValueError:
-        # CSV can be researched without a certified exchange calendar, but its
-        # last trading day must not be mistaken for a verified complete range.
+    research = None
+    if spec.get('scope') == 'research':
+        research = coverage_records(service.store, ids, spec['start'], spec['end'])
         coverage_end = end
+    else:
+        from .readiness import expected_day
+        try:
+            first_source=service.store.rows('SELECT source FROM datasets WHERE id=?',(ids[0],))
+            coverage_end = expected_day(service.store, end,first_source[0]['source'] if first_source and first_source[0]['source'] in SOURCES else 'baostock')
+        except ValueError:
+            # CSV can be researched without a certified exchange calendar, but its
+            # last trading day must not be mistaken for a verified complete range.
+            coverage_end = end
     stopped = False
     last_progress = 0.0
     def show_progress(done, message):
@@ -122,7 +128,10 @@ def _execute_replay(service, job, spec, execution_model):
     for n, did in enumerate(ids):
         try:
             service.check_stop(job)
-            frame, snapshot = load_dataset(service.store, did, job)
+            if research is None:
+                frame, snapshot = load_dataset(service.store, did, job)
+            else:
+                frame, snapshot = load_research_dataset(service.store, did, job, research[did])
             if boards is not None and board_of(snapshot['code']) not in boards:
                 raise ValueError('行情快照不属于本次所选市场板块')
             if snapshot['code'] in seen_codes:
@@ -197,7 +206,8 @@ def _execute_replay(service, job, spec, execution_model):
                   stop_reason='已停止；只保存完整回放完毕的标的，本次是部分结果' if stopped else '',
                   requested_datasets=len(ids), processed_datasets=len(snapshots),
                   datasets=snapshots, real_data=bool(snapshots) and all(
-                      r['source'] in ('baostock', 'tickflow', 'tencent', 'legacy-engine-a') for r in snapshots),
+                      r['source'] in ('baostock', 'tickflow', 'tencent', 'legacy-engine-a', RESEARCH_SOURCE)
+                      for r in snapshots),
                   strategy_version=strategy.version,
                   h2_settings=asdict(settings), assumptions={k: v for k, v in asdict(costs).items()
                       if k in ('holding_bars', 'commission_bps', 'sell_tax_bps', 'slippage_bps')}, timeframe='daily',
@@ -222,6 +232,11 @@ def _execute_replay(service, job, spec, execution_model):
                       baseline_source_job=spec['baseline_source_job'])
     if boards is not None:
         report['boards'] = [b for b in BOARDS if b in boards]
+    if research is not None:
+        report['research_coverage'] = dict(
+            start=max(r['start'] for r in research.values()),
+            end=min(r['end'] for r in research.values()),
+            snapshot_date=next(iter(research.values()))['snapshot_date'])
     service.store.write_artifact(report['records_path'], dumps(records).encode('utf-8'), job)
     flat = [{k: v for k, v in r.items() if k not in ('events', 'structure', 'latest_plan', 'trigger_plan')}
             for r in records]
