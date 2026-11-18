@@ -10,7 +10,7 @@ from tests.test_incremental_sync import Provider
 from tests.test_tickflow_scan_readiness import bars, scope
 from workbench.history_quality import describe_history, save_quality, quality_for
 from workbench.market import load_dataset, save_dataset
-from workbench.provider_guard import ProviderError
+from workbench.provider_guard import ProviderError, ProviderGuard
 from workbench.readiness import save_calendar
 from workbench.service import Service
 from workbench.sources import coverage_state, save_coverage
@@ -137,6 +137,74 @@ def test_unpublished_tail_does_not_retry_or_start_prefix(store):
     assert coverage_state(store, CODE)[0]['dataset_id'] == old
 
 
+def test_bad_stock_data_does_not_stop_baostock_batch(store, monkeypatch):
+    data = bars()
+    first, last = data.date.iloc[0], data.date.iloc[-1]
+    codes = [CODE, 'sh.600001', 'sh.600002', 'sh.600003', 'sh.600004', 'sh.600005']
+    bad_frames = dict(zip(codes[:4], [data.iloc[:0], data.drop(columns='close')] * 2))
+    calls = []
+
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def fetch(self, code, a, b):
+            calls.append((code, a, b))
+            return bad_frames.get(code, data).copy()
+
+    monkeypatch.setattr('workbench.service.BaoStock', Connection)
+    service = Service(store)
+    try:
+        job = service.submit('sync', dict(source='baostock', codes=codes, start=first, end=last))
+        row = wait_for(store, job)
+        report = json.loads(row['result'])
+        assert row['status'] == 'partial'
+        assert row['progress'] == report['requested'] == len(codes)
+        assert report['remaining'] == 0 and report['success'] == report['downloaded'] == 2
+        assert [error['code'] for error in report['errors']] == codes[:4]
+        assert '无可用行情' in report['errors'][0]['error']
+        assert '缺少行情列' in report['errors'][1]['error']
+        assert 'stop_reason' not in report and 'cooldown' not in report
+        assert calls == [(code, first, last) for code in codes]
+        for code in codes[4:]:
+            assert coverage_state(store, code)[0]['dataset_id'] in report['datasets']
+    finally:
+        service.pool.shutdown()
+
+
+@pytest.mark.parametrize('failure_type', [ProviderError, TimeoutError])
+def test_transport_failures_still_stop_baostock_batch(store, monkeypatch, failure_type):
+    first = last = '2025-01-02'
+    codes = [CODE, 'sh.600001', 'sh.600002', 'sh.600003']
+    calls = []
+
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def fetch(self, code, a, b):
+            calls.append(code)
+            if failure_type is ProviderError:
+                raise ProviderError('baostock', 'history', '连接中断')
+            raise TimeoutError('读取行情超时')
+
+    monkeypatch.setattr('workbench.service.BaoStock', Connection)
+    service = Service(store)
+    try:
+        job = service.submit('sync', dict(source='baostock', codes=codes, start=first, end=last))
+        row = wait_for(store, job)
+        report = json.loads(row['result'])
+        assert row['status'] == 'partial'
+        assert report['remaining'] == 1 and report['success'] == 0
+        assert [error['code'] for error in report['errors']] == calls == codes[:3]
+        assert report['stop_reason'] == '数据源近期多次传输失败，已停止整批同步，请冷却后再试'
+        guard = ProviderGuard(store, 'baostock')
+        assert report['cooldown'] == guard.state()
+        assert len(report['cooldown']['failures']) == 3
+        with pytest.raises(ValueError, match='暂停请求'):
+            guard.check()
+    finally:
+        service.pool.shutdown()
+
+
 def test_blacklist_stops_market_after_prefix_and_reports_preserved_tail(store, monkeypatch):
     data = bars()
     old, first, last = seed(store, data, start=data.date.iloc[50], end=data.date.iloc[-2])
@@ -156,6 +224,7 @@ def test_blacklist_stops_market_after_prefix_and_reports_preserved_tail(store, m
                                                          start=first, end=last)))
         report = json.loads(row['result'])
         assert row['status'] == 'partial' and report['remaining'] == 1 and report['success'] == 0
+        assert report['stop_reason'] == '数据源限制访问，已停止整批同步，请稍后再试'
         assert report['errors'][0]['error_code'] == '10001011'
         assert report['errors'][0]['latest_saved']
         assert report['partial_saved'] == 1 and '最新尾部已保存' in report['errors'][0]['error']

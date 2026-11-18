@@ -353,7 +353,7 @@ class Service:
         for code in suspended:
             self.store.event(job,'当日停牌，暂不扫描',code=code,date=end)
         report['suspended'] = report['success'] = len(suspended)
-        failures, processed = 0, len(suspended)
+        processed = len(suspended)
         halt = threading.Event()
         current_request = ['BaoStock · 准备行情']
         def waiting(code, operation, seconds):
@@ -447,10 +447,7 @@ class Service:
                     report[outcome] += 1
                     report['datasets'].append(did)
                     report['success'] += 1
-                    if outcome!='skipped':
-                        failures = 0
                 else:
-                    failures += 1
                     detail=dict(code=code,**error_detail(exc,source))
                     if getattr(exc, 'latest_dataset_id', None):
                         detail['latest_dataset_id'] = exc.latest_dataset_id
@@ -466,8 +463,8 @@ class Service:
                     if restricted(exc):
                         report['stop_reason'] = '数据源限制访问，已停止整批同步，请稍后再试'
                         halt.set()
-                    elif failures >= 3 or recent>=3:
-                        report['stop_reason'] = '连续三只股票下载失败，已停止，避免反复请求'
+                    elif recent >= 3:
+                        report['stop_reason'] = '数据源近期多次传输失败，已停止整批同步，请冷却后再试'
                         halt.set()
                 self.progress(job,processed,len(codes),current_request[0])
                 # Snapshots/coverage remain durable per stock; only the growing
