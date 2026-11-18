@@ -83,14 +83,17 @@ class Service:
         with self.lock:
             if self._code_update_reserved:
                 raise ValueError(self._idle_reservation_message)
-            if self.store.rows("SELECT id FROM jobs WHERE status IN ('running','queued')"):
+            job = uuid.uuid4().hex[:16]
+            queued = self.store.execute(
+                "INSERT INTO jobs(id,kind,status,created,spec) "
+                "SELECT ?,?,'queued',?,? WHERE NOT EXISTS "
+                "(SELECT 1 FROM jobs WHERE status IN ('running','queued'))",
+                (job,kind,now(),dumps(spec)))
+            if not queued:
                 raise ValueError('已有任务正在运行。请等待结束或停止后再开始，避免争用行情连接')
             for key, pending in self.cancel_flags.items():
                 if key.startswith('chart:'):
                     pending.set()  # Explicit business work takes priority.
-            job = uuid.uuid4().hex[:16]
-            self.store.execute('INSERT INTO jobs(id,kind,status,created,spec) VALUES(?,?,?,?,?)',
-                               (job,kind,'queued',now(),dumps(spec)))
             self.cancel_flags[job] = threading.Event()
             self.pool.submit(self._execute, job,kind,spec)
         return job

@@ -1,5 +1,5 @@
 """Shared candle renderer with a research-only candidate stop overlay."""
-from workbench.market import load_dataset
+from workbench.research_market import load_replay_dataset
 from .h2_replay_chart import replay_view
 from .chart_renderer import render_chart
 
@@ -29,7 +29,7 @@ def path_events(events, source, frame, cutoff):
 def render_comparison(store, row, cutoff, posthoc=False, *, size=None, viewport=(None,0,1.0)):
     if cutoff < row['setup_date']:
         raise ValueError('不能在 H2 成立之前展示此研究计划')
-    frame, _ = load_dataset(store,row['dataset_id'])
+    frame, _ = load_replay_dataset(store,row['dataset_id'])
     if row.get('study_end'):
         frame=frame[frame.date<=row['study_end']].copy()
     original=row['baseline']

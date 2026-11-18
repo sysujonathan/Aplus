@@ -70,6 +70,7 @@ class AfterhoursPage(ttk.Frame):
         self._sort_column, self._sort_desc = 'date', True
         self._visible_ids = []
         self.scope = tk.StringVar(value='market')
+        self.research_ids = ''
         self.board_vars = {b: tk.BooleanVar(value=True) for b in BOARDS}
         self.start = tk.StringVar(value=(date.fromisoformat(completed_date()) - timedelta(days=365)).isoformat())
         self.end = tk.StringVar(value=completed_date())
@@ -229,7 +230,8 @@ class AfterhoursPage(ttk.Frame):
 
     def _scope_changed(self):
         boards = [b for b, v in self.board_vars.items() if v.get()]
-        caption = '关注名单' if self.scope.get() == 'watch' else format_board_scope(boards).replace('范围：', '')
+        captions = {'watch': '关注名单', 'research': '长历史研究快照'}
+        caption = captions.get(self.scope.get(), format_board_scope(boards).replace('范围：', ''))
         self.scope_button.configure(text='市场范围：' + caption)
 
     def _select_history(self, job):
@@ -606,20 +608,31 @@ class AfterhoursPage(ttk.Frame):
                 raise ValueError('请使用有效的已完成行情日期范围')
             scope = self.scope.get()
             boards = [b for b, var in self.board_vars.items() if var.get()] if scope == 'market' else None
-            snapshots, missing = available_snapshots(self.store, scope, boards)
-            if missing:
-                raise ValueError(f'关注名单中 {len(missing)} 个标的未存日线，请先更新行情')
-            if not snapshots:
-                raise ValueError('没有可回放的真实行情；请先更新行情')
+            if scope == 'research':
+                text = simpledialog.askstring('长历史研究快照', '粘贴注册命令输出的快照 ID（多个用空格隔开）',
+                                              initialvalue=self.research_ids, parent=self)
+                if text is None:
+                    return
+                self.research_ids = text
+                ids = text.split()
+                if not ids:
+                    raise ValueError('请填写已注册的研究快照 ID')
+            else:
+                snapshots, missing = available_snapshots(self.store, scope, boards)
+                if missing:
+                    raise ValueError(f'关注名单中 {len(missing)} 个标的未存日线，请先更新行情')
+                if not snapshots:
+                    raise ValueError('没有可回放的真实行情；请先更新行情')
+                ids = [r['id'] for r in snapshots]
             self.job = self.service.submit('backtest', dict(strategy='STRATEGY_GAP_H2', timeframe='daily',
-                execution_model=MODEL, datasets=[r['id'] for r in snapshots], start=start, end=end,
+                execution_model=MODEL, datasets=ids, start=start, end=end,
                 scope=scope, boards=boards, h2_settings=asdict(self.settings), assumptions=asdict(self.costs)))
             self._back()
             self.progress.grid()
             self.completeness.set('新回测进行中；这里保留上次选中的结果，完成后展示新回执。')
             self.run_button.configure(state=tk.DISABLED)
             self.stop_button.configure(state=tk.NORMAL)
-            self.status.set(f'准备回放 {len(snapshots)} 个已存标的；未保存的市场行情不在本次范围内')
+            self.status.set(f'准备回放 {len(ids)} 个已存标的；未保存的市场行情不在本次范围内')
         except Exception as exc:
             messagebox.showerror('不能开始回测', str(exc), parent=self)
 
@@ -670,7 +683,10 @@ class AfterhoursPage(ttk.Frame):
         status = {'completed': '完成', 'partial': '部分完成', 'cancelled': '已停止'}.get(row['status'], row['status'])
         name = self._history_name(self._history_rows[self._shown_job][0]) if self._shown_job in self._history_rows else '本次回测'
         self.result_title.set(f'{name} · {status}')
-        self.result_context.set(scope_caption(report) + f' · {report["start"]} → {report["end"]}')
+        context = scope_caption(report) + f' · {report["start"]} → {report["end"]}'
+        if coverage := report.get('research_coverage'):
+            context += f' · 实际共同覆盖 {coverage["start"]} → {coverage["end"]} · 前复权锚点 {coverage["snapshot_date"]}'
+        self.result_context.set(context)
         self.status.set(f'{status} · {report["start"]} 至 {report["end"]} · '
                         f'已回放 {report["processed_datasets"]}/{report["requested_datasets"]} 个标的 · '
                         f'覆盖提示 {len(report["coverage_warnings"])} · 失败 {len(report["errors"])}'
