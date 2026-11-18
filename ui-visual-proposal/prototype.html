@@ -1,0 +1,654 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>APLUS · 外壳视觉方案 v2</title>
+<style>
+:root{color-scheme:dark;--app:#0D1117;--panel:#161B22;--control:#1F2630;--border:#30363D;--text:#E6EDF3;--muted:#9BA7B4;--accent:#1F5EBC;--accent-hover:#286AC7;--sel:#253247;--hover:#202A36;--up:#F04F5F;--down:#20B26B;--repeat:#E3B341}
+*{box-sizing:border-box}body{margin:0;background:#090d12;color:var(--text);font:10pt "Microsoft YaHei UI","Noto Sans CJK SC",system-ui,sans-serif;font-variant-numeric:tabular-nums}.gallery{max-width:1660px;min-width:1420px;margin:auto;padding:20px 18px 36px;display:grid;gap:24px}
+.svg-defs{position:absolute;width:0;height:0;overflow:hidden}.screen{background:var(--app);border:1px solid var(--border);min-width:0}.window{height:36px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 12px;font-weight:700}.window svg{width:20px;height:20px}.window small{margin-left:auto;font-weight:400}.row{display:flex;align-items:center;gap:4px;min-width:0}.push{margin-left:auto}.muted,small{color:var(--muted)}small,.micro{font-size:9pt}.nav{padding:6px 8px;border-bottom:1px solid var(--border)}.nav label{margin-right:8px;color:var(--muted);display:flex;align-items:center;gap:4px}.nav button{min-width:84px}.nav button:not(.active){color:var(--muted)}
+button,input,select{font:inherit;color:inherit}button,select,input:not([type=checkbox]){border:1px solid var(--border);min-height:28px;padding:4px 8px;background:var(--control);border-radius:0;white-space:nowrap}button:hover{background:var(--hover)}button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--muted);outline-offset:-2px}.primary{background:var(--accent);border-color:var(--accent);font-weight:700}.primary:hover{background:var(--accent-hover)}button:disabled{color:var(--muted);background:var(--panel)}.active{background:var(--sel);box-shadow:inset 0 -2px var(--accent)}input:not([type=checkbox]){background:var(--panel);min-width:0}input[type=checkbox]{accent-color:var(--accent)}.compact button,.compact select{font-size:9pt;min-height:24px;padding:2px 6px}.icon{display:grid;place-items:center;min-width:36px;height:36px;background:transparent;padding:0;border:0}.icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.55;stroke-linecap:round;stroke-linejoin:round}.divider{height:20px;width:1px;flex:none;background:var(--border);margin:0 4px}
+.panel{background:var(--panel);border:1px solid var(--border);min-width:0}.panel-head{padding:6px 8px;border-bottom:1px solid var(--border);min-height:36px}.title{font-size:11pt;font-weight:700}.large{font-size:21pt;line-height:1.2;font-weight:700}.up{color:var(--up)}.down{color:var(--down)}.warn{color:var(--repeat)}
+table{border-collapse:collapse;width:100%;white-space:nowrap;text-align:left}th,td{padding:0 8px;border-bottom:1px solid var(--border);height:26px}th{background:var(--control);font-weight:700}td{background:var(--panel)}tbody tr:nth-child(even) td{background:var(--app)}tbody tr.picked td{background:var(--sel)}.table-scroll{overflow:auto;scrollbar-width:auto;min-width:0;scrollbar-color:var(--muted) var(--control)}*::-webkit-scrollbar{width:12px;height:12px}*::-webkit-scrollbar-track{background:var(--control)}*::-webkit-scrollbar-thumb{background:var(--muted)}
+.task{padding:7px 8px;border-bottom:1px solid var(--border);gap:4px}.task small{text-align:right;line-height:1.45}.prebody{display:grid;grid-template-columns:minmax(0,1fr) 360px 32px;gap:8px;padding:6px 8px 0}.lists{display:grid;grid-template-rows:minmax(0,1fr) minmax(0,2fr);gap:8px;min-height:0}.lists .panel{display:flex;flex-direction:column;overflow:hidden}.lists .table-scroll{min-height:0;flex:1}.lists input[type=text]{width:100%;margin:4px 0}.strategy{padding:4px 8px;justify-content:space-between}.strategy button{width:49px}.listname{flex:1;text-align:left}.listhead{padding:5px 8px}.lists table{font-size:9pt}.rail{padding-top:2px}.rail .icon{min-width:30px}.chartbox{border:1px solid var(--border);min-width:0}.chartbar{justify-content:space-between;gap:3px;padding:0 4px;border-bottom:1px solid var(--border);height:40px}.chartbar .row{gap:0}.chartbar button:not(.icon){padding:2px 4px;font-size:9pt;min-height:26px}.chartbar .icon{min-width:36px}.chartbar .divider{margin:0 3px}.chart-area{display:grid;grid-template-columns:39px minmax(0,1fr);height:520px}.draw{display:flex;flex-direction:column;border-right:1px solid var(--border)}.draw .icon{min-height:30px;height:30px}.draw>.icon:last-child{margin-top:auto}.visibility{position:relative;display:flex;align-items:center}.visibility .icon{min-width:25px}.visibility summary{list-style:none;padding:0 2px;color:var(--muted);cursor:pointer}.visibility-menu{position:absolute;left:37px;bottom:0;z-index:2;background:var(--panel);border:1px solid var(--border);padding:4px;display:grid;gap:4px}.visibility-menu button{text-align:left}.canvas{position:relative;overflow:hidden;background:#0B0B0B}.plot{width:100%;height:100%;display:block;background:#0B0B0B}.plot.static{background:#10161E}.plot text,.hist text{fill:#9BA7B4;font:11px Consolas,monospace}.chart-meta{position:absolute;left:10px;top:8px;color:var(--muted);pointer-events:none}.chart-meta b{color:var(--text)}.float{position:absolute;top:65px;left:12px;background:#181818;border:1px solid #303030}.float .icon{min-width:28px;height:28px}.chart-footer,.status{border-top:1px solid var(--border);padding:4px 8px;color:var(--muted)}.status{text-align:right;padding:7px 12px}
+.trade{padding:8px 12px 12px}.trade-grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:8px}.trade-head{justify-content:flex-end;margin-bottom:8px}.holding table{font-size:11pt}.holding th{font-size:9pt}.holding td{height:68px;padding:0 5px}.holding th{padding:0 5px}.holding td:not(:nth-child(-n+2)){text-align:right}.calc{padding:6px 8px;border-bottom:1px solid var(--border)}.calc fieldset{padding:5px 8px;border:1px solid var(--border);margin:0}.calc input{width:73px}.fund{padding:8px 12px}.fund-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:8px 0}.fund-grid strong{display:block;font-size:11pt}.closed td{height:34px}.calendar{padding:8px}.calendar table{text-align:center}.calendar td{height:46px}.calendar th{text-align:center}.calendar .row{justify-content:center;margin-bottom:6px}
+.research{padding:8px 12px 12px}.research>.row{gap:6px}.receipt{margin:8px 0}.research-grid{display:grid;grid-template-columns:258px minmax(0,1fr);gap:12px}.history{padding:0 8px 0 0;border-right:1px solid var(--border)}.history .title{margin-bottom:6px}.history>.wide{width:100%;margin-bottom:6px}.history>.row{margin-bottom:6px}.record{padding:8px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:6px}.record.picked{background:var(--sel)}.record small{display:block}.report>div+div{margin-top:8px}.metrics,.analysis,.aux{display:grid;gap:6px}.metrics{grid-template-columns:repeat(6,minmax(0,1fr))}.analysis{grid-template-columns:repeat(4,minmax(0,1fr))}.aux{grid-template-columns:1fr 1fr 2fr 2fr}.metric{padding:5px 8px}.analysis th,.analysis td{height:25px}.analysis .panel-head{min-height:32px;font-weight:700;font-size:9pt}.analysis .panel-head button{min-height:22px;padding:1px 3px}.hist{display:block;width:100%;height:100px}.review{display:grid;grid-template-columns:45% minmax(0,1fr);gap:8px}.review td{height:32px}.preview{min-width:0}.preview select{width:100%;margin-top:4px}.preview .plot{height:255px}.preview p{margin:4px 0}.note{margin-top:8px}
+</style></head><body><svg class="svg-defs" aria-hidden="true">
+    <symbol id="i-cross" viewBox="0 0 24 24">
+<path d="M12 2v7m0 6v7M2 12h7m6 0h7"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24">
+<circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+    <symbol id="i-pointer" viewBox="0 0 24 24">
+<path d="m5 3 3 18 4-6 7-2Z"/></symbol>
+    <symbol id="i-highlight" viewBox="0 0 24 24">
+<circle cx="12" cy="12" r="7" stroke-dasharray="2 3"/>
+<circle cx="12" cy="12" r="2"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24">
+<path d="m4 15 9-11 7 6-9 11H7Zm5-6 7 6"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24">
+<path d="M5 18 19 6"/>
+<circle cx="5" cy="18" r="2"/>
+<circle cx="19" cy="6" r="2"/></symbol>
+    <symbol id="i-fib" viewBox="0 0 24 24">
+<path d="M3 6h18M3 10h12M3 14h16M3 18h9"/>
+<circle cx="3" cy="6" r="1"/>
+<circle cx="3" cy="10" r="1"/>
+<circle cx="3" cy="14" r="1"/>
+<circle cx="3" cy="18" r="1"/></symbol>
+    <symbol id="i-path" viewBox="0 0 24 24">
+<path d="M4 18c4-9 7 0 11-8 1-2 3-3 5-4"/>
+<circle cx="4" cy="18" r="1.5"/>
+<circle cx="20" cy="6" r="1.5"/></symbol>
+    <symbol id="i-polyline" viewBox="0 0 28 28">
+<path d="M2 21 9 14l7 5 10-11"/>
+<circle cx="9" cy="14" r="2"/>
+<circle cx="16" cy="19" r="2"/>
+<path d="M21 8h5v5"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24">
+<path d="M5 5h14M12 5v14M9 19h6"/></symbol>
+    <symbol id="i-long" viewBox="0 0 28 28">
+<path d="M3 4h22M3 24h22M8 10v9h6"/>
+<circle cx="3" cy="4" r="1.5"/>
+<circle cx="3" cy="24" r="1.5"/></symbol>
+    <symbol id="i-short" viewBox="0 0 28 28">
+<path d="M3 4h22M3 24h22M18 10c-8-5-10 4-4 4s4 8-4 4"/>
+<circle cx="3" cy="4" r="1.5"/>
+<circle cx="3" cy="24" r="1.5"/></symbol>
+    <symbol id="i-ray" viewBox="0 0 28 28">
+<path d="M6 14h20"/>
+<circle cx="4" cy="14" r="2"/></symbol>
+    <symbol id="i-rectangle" viewBox="0 0 28 28">
+<path d="M5 5h18v18H5z"/>
+<circle cx="5" cy="5" r="1.5"/>
+<circle cx="23" cy="5" r="1.5"/>
+<circle cx="5" cy="23" r="1.5"/>
+<circle cx="23" cy="23" r="1.5"/></symbol>
+    <symbol id="i-up" viewBox="0 0 28 28">
+<path d="m14 3 10 12h-7v10h-6V15H4L14 3Z"/></symbol>
+    <symbol id="i-down" viewBox="0 0 28 28">
+<path d="m14 25 10-12h-7V3h-6v10H4l10 12Z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 28 28">
+<path d="m4 24 8-13 3 2 8-9-2 9-3-1-9 10-5 2Z"/></symbol>
+    <symbol id="i-channel" viewBox="0 0 28 28">
+<path d="M3 20 21 3M7 25 25 8"/>
+<circle cx="3" cy="20" r="1.5"/>
+<circle cx="21" cy="3" r="1.5"/>
+<circle cx="7" cy="25" r="1.5"/>
+<circle cx="25" cy="8" r="1.5"/></symbol>
+    <symbol id="i-smile" viewBox="0 0 24 24">
+<circle cx="12" cy="12" r="9"/>
+<path d="M8 10h.01M16 10h.01M8 14c2 3 6 3 8 0"/></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24">
+<path d="m5 19-2-2L17 3l4 4L7 21l-2-2Z"/>
+<path d="m13 7 2 2m-5 1 2 2m-5 1 2 2"/></symbol>
+    <symbol id="i-zoom" viewBox="0 0 24 24">
+<circle cx="10" cy="10" r="7"/>
+<path d="m15 15 6 6M10 7v6M7 10h6"/></symbol>
+    <symbol id="i-zoom-out" viewBox="0 0 24 24">
+<circle cx="10" cy="10" r="7"/>
+<path d="m15 15 6 6M7 10h6"/></symbol>
+    <symbol id="i-magnet" viewBox="0 0 24 24">
+<path d="M5 4v9a7 7 0 0 0 14 0V4h-5v9a2 2 0 0 1-4 0V4H5Z"/>
+<path d="M5 8h5m4 0h5"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24">
+<rect x="5" y="10" width="14" height="11" rx="2"/>
+<path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24">
+<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/>
+<circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14"/></symbol>
+    <symbol id="i-candle" viewBox="0 0 24 24">
+<path d="M7 3v4m0 8v6m-3-14h6v8H4V7Zm13-4v7m0 8v3m-3-11h6v8h-6v-8Z"/></symbol>
+    <symbol id="i-indicator" viewBox="0 0 24 24">
+<path d="M3 17h3v4H3v-4Zm6-7h3v11H9V10Zm6 3h3v8h-3v-8Zm-12 1 6-7 5 3 7-7"/></symbol>
+    <symbol id="i-layout" viewBox="0 0 24 24">
+<rect x="3" y="3" width="7" height="7" rx="1"/>
+<rect x="14" y="3" width="7" height="7" rx="1"/>
+<rect x="3" y="14" width="7" height="7" rx="1"/>
+<rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-alarm" viewBox="0 0 24 24">
+<circle cx="11" cy="13" r="7"/>
+<path d="M11 9v4l3 2M5 3 2 6m15-3 3 3M19 14v7m-3-3h6"/></symbol>
+    <symbol id="i-replay" viewBox="0 0 24 24">
+<path d="M5 5v14m14-14-9 7 9 7V5Z"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24">
+<path d="m9 7-5 5 5 5M5 12h8a6 6 0 0 1 6 6"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24">
+<path d="m15 7 5 5-5 5m4-5h-8a6 6 0 0 0-6 6"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24">
+<path d="M4 7h4l2-3h4l2 3h4v13H4V7Z"/>
+<circle cx="12" cy="13" r="4"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24">
+<path d="M4 4h16v16H4zM15 4v16"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24">
+<circle cx="5" cy="12" r="1"/>
+<circle cx="12" cy="12" r="1"/>
+<circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24">
+<path d="M12 3 14 5l3-.3.8 2.9L20 9v3l-2.2 1.4-.8 2.9-3-.3-2 2-2-2-3 .3-.8-2.9L4 12V9l2.2-1.4L7 4.7l3 .3 2-2Z"/>
+<circle cx="12" cy="10.5" r="3"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+<path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24">
+<path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></symbol>
+  </svg><main class="gallery">
+<section class="screen" id="premarket"><div class="window"><svg viewBox="-27 -18 504 504" xmlns="http://www.w3.org/2000/svg"><title>APLUS symbol-dark</title><g fill="#FFFFFF">
+      <path fill="#FFFFFF" d="M12 0H265C335 0 390 55 390 128C390 163 376 195 359 212L302 128C288 103 277 78 247 78H89Q79 78 79 89V305Q90 299 100 285L225 130Q235 116 245 130L447 444Q457 467 439 467H377Q365 467 357 454L234 266Q224 250 213 264L100 404Q93 412 86 414V455Q86 467 74 467H12Q0 467 0 455V12Q0 0 12 0Z" />
+      <path fill="#FFA578" d="M215 310Q215 295 225 301L327 453Q333 467 321 467H250C230 467 215 450 215 432Z" />
+    </g>
+    </svg><span>APLUS 操盘台</span><small>盘前任务 · 虚构证券、行情及账户／回测数据 · 静态预览</small></div><header class="nav row"><label><input type="checkbox"> 自动行情</label><button type="button" class="active">盘前任务</button><button type="button" class="">盘后回测</button><button type="button" class="">策略迭代</button><button type="button" class="">交易管理</button><button type="button" class="">成长空间</button></header>
+<div class="task row compact"><span class="muted">盘前周期</span><button type="button" class="active">日线</button><button type="button" class="">周线</button><button type="button" class="primary">一键</button><button type="button" class="primary">⌄</button>
+<i class="divider"></i><button type="button" class="">同步</button><b class="muted">① 行情</b><button type="button" class="">沪深A ⌄</button><select aria-label="行情源"><option>TickFlow</option></select><button type="button" class="">更新行情</button><button type="button" class="">缺口分类</button>
+<i class="divider"></i><b class="muted">② 扫描</b><button type="button" class="">全部策略 ⌄</button><button type="button" class="">策略扫描</button><button disabled>终止</button><i class="divider"></i>
+<span class="muted">交易日</span><select aria-label="年"><option>2026</option></select>–<select aria-label="月"><option>11</option></select>–<select aria-label="日"><option>12</option></select><button type="button" class="">‹</button><button type="button" class="">›</button>
+<small class="push">TickFlow · 2026-11-12<br>本地扫描</small></div>
+<div class="prebody"><div class="chartbox"><div class="chartbar row"><div class="row"><button type="button" class="">000001</button><button type="button" class="">＋</button><i class="divider"></i><button type="button" class="">5分</button><button type="button" class="">1小时</button><button type="button" class="active">天</button><button type="button" class="">周</button><button type="button" class="">月</button><button type="button" class="">⌄</button><i class="divider"></i><button type="button" class="icon active" title="蜡烛图" aria-label="蜡烛图"><svg><use href="#i-candle"/>
+</svg></button><button type="button" class="icon " title="折线图" aria-label="折线图"><svg><use href="#i-trend"/>
+</svg></button><button type="button" class="icon " title="指标" aria-label="指标"><svg><use href="#i-indicator"/>
+</svg></button><button type="button" class="icon " title="提醒" aria-label="提醒"><svg><use href="#i-alarm"/>
+</svg></button><button type="button" class="icon " title="回放" aria-label="回放"><svg><use href="#i-replay"/>
+</svg></button><button type="button" class="icon " title="撤销" aria-label="撤销"><svg><use href="#i-undo"/>
+</svg></button><button type="button" class="icon " title="重做" aria-label="重做"><svg><use href="#i-redo"/>
+</svg></button><button type="button" class="">⋯</button></div><div class="row"><button type="button" class="icon " title="图表布局" aria-label="图表布局"><svg><use href="#i-layout"/>
+</svg></button><button type="button" class="">默认布局 ⌄</button><button type="button" class="">联动 ⌄</button><button type="button" class="icon " title="快捷搜索（Ctrl+K）" aria-label="快捷搜索（Ctrl+K）"><svg><use href="#i-zoom"/>
+</svg></button><button type="button" class="icon " title="活动图设置" aria-label="活动图设置"><svg><use href="#i-settings"/>
+</svg></button><button type="button" class="icon" title="全屏／退出全屏（F11）" aria-label="全屏（F11）">⛶</button><button type="button" class="icon " title="活动图快照" aria-label="活动图快照"><svg><use href="#i-camera"/>
+</svg></button><button disabled>#</button><button type="button" class="">交易</button></div></div>
+<div class="chart-area"><aside class="draw"><button type="button" class="icon active" title="十字线" aria-label="十字线"><svg><use href="#i-cross"/>
+</svg></button><button type="button" class="icon " title="趋势线" aria-label="趋势线"><svg><use href="#i-trend"/>
+</svg></button><button type="button" class="icon " title="斐波那契" aria-label="斐波那契"><svg><use href="#i-fib"/>
+</svg></button><button type="button" class="icon " title="形态工具" aria-label="形态工具"><svg><use href="#i-path"/>
+</svg></button><button type="button" class="icon " title="预测与测量工具" aria-label="预测与测量工具"><svg><use href="#i-long"/>
+</svg></button><button type="button" class="icon " title="几何形状" aria-label="几何形状"><svg><use href="#i-rectangle"/>
+</svg></button><button type="button" class="icon " title="文字" aria-label="文字"><svg><use href="#i-text"/>
+</svg></button><button type="button" class="icon " title="图标" aria-label="图标"><svg><use href="#i-smile"/>
+</svg></button><button type="button" class="icon " title="测量" aria-label="测量"><svg><use href="#i-ruler"/>
+</svg></button><button type="button" class="icon " title="框选缩放" aria-label="框选缩放"><svg><use href="#i-zoom"/>
+</svg></button><button type="button" class="icon " title="磁铁" aria-label="磁铁"><svg><use href="#i-magnet"/>
+</svg></button><button type="button" class="icon " title="继续绘图，暂未实现" aria-label="继续绘图，暂未实现"><svg><use href="#i-pointer"/>
+</svg></button><button type="button" class="icon " title="锁定" aria-label="锁定"><svg><use href="#i-lock"/>
+</svg></button><div class="visibility"><button type="button" class="icon " title="显示／隐藏上次选择" aria-label="显示／隐藏上次选择"><svg><use href="#i-eye"/>
+</svg></button><details><summary aria-label="显隐工具">›</summary><div class="visibility-menu">
+<button type="button">显示／隐藏上次选择</button>
+<button type="button">显示／隐藏绘图</button>
+<button type="button">显示／隐藏指标</button>
+<button type="button">显示／隐藏策略证据</button>
+<button type="button">显示／隐藏全部</button>
+</div></details></div><button type="button" class="icon " title="移除对象" aria-label="移除对象"><svg><use href="#i-trash"/>
+</svg></button><button type="button" class="icon " title="显示／隐藏收藏工具栏" aria-label="显示／隐藏收藏工具栏"><svg><use href="#i-star"/>
+</svg></button></aside><div class="canvas"><svg class="plot " viewBox="0 0 900 520" preserveAspectRatio="none" role="img" aria-label="虚构 K 线、EMA 和计划价位">
+<path d="M0 38.0 H900" stroke="#1F1F1F"/><text x="835" y="42.0">26.00</text>
+<path d="M0 126.8 H900" stroke="#1F1F1F"/><text x="835" y="130.8">24.00</text>
+<path d="M0 215.6 H900" stroke="#1F1F1F"/><text x="835" y="219.6">22.00</text>
+<path d="M0 304.4 H900" stroke="#1F1F1F"/><text x="835" y="308.4">20.00</text>
+<path d="M0 393.2 H900" stroke="#1F1F1F"/><text x="835" y="397.2">18.00</text>
+<path d="M0 482.0 H900" stroke="#1F1F1F"/><text x="835" y="486.0">16.00</text>
+<path d="M60 0 V499" stroke="#1F1F1F"/><text x="43" y="514">09-01</text>
+<path d="M178 0 V499" stroke="#1F1F1F"/><text x="161" y="514">09-14</text>
+<path d="M296 0 V499" stroke="#1F1F1F"/><text x="279" y="514">09-28</text>
+<path d="M414 0 V499" stroke="#1F1F1F"/><text x="397" y="514">10-12</text>
+<path d="M532 0 V499" stroke="#1F1F1F"/><text x="515" y="514">10-26</text>
+<path d="M650 0 V499" stroke="#1F1F1F"/><text x="633" y="514">11-05</text>
+<path d="M768 0 V499" stroke="#1F1F1F"/><text x="751" y="514">11-12</text>
+<path d="M827 0 V520 M0 499 H900" stroke="#1F1F1F"/>
+<path d="M17.0 350.8 V361.3" stroke="#FFFFFF"/>
+<rect x="13.7" y="355.8" width="6.6" height="1.2" fill="#FFFFFF"/>
+<path d="M27.3 344.9 V379.3" stroke="#2962FF"/>
+<rect x="24.0" y="349.9" width="6.6" height="24.5" fill="#2962FF"/>
+<path d="M37.6 348.1 V384.2" stroke="#FFFFFF"/>
+<rect x="34.3" y="353.1" width="6.6" height="26.1" fill="#FFFFFF"/>
+<path d="M47.9 353.8 V365.4" stroke="#2962FF"/>
+<rect x="44.6" y="358.8" width="6.6" height="1.6" fill="#2962FF"/>
+<path d="M58.2 350.9 V369.2" stroke="#2962FF"/>
+<rect x="54.9" y="355.9" width="6.6" height="8.3" fill="#2962FF"/>
+<path d="M68.5 360.1 V372.0" stroke="#FFFFFF"/>
+<rect x="65.2" y="365.1" width="6.6" height="1.9" fill="#FFFFFF"/>
+<path d="M78.8 345.8 V376.0" stroke="#FFFFFF"/>
+<rect x="75.5" y="350.8" width="6.6" height="20.1" fill="#FFFFFF"/>
+<path d="M89.1 344.2 V360.7" stroke="#FFFFFF"/>
+<rect x="85.8" y="349.2" width="6.6" height="6.5" fill="#FFFFFF"/>
+<path d="M99.4 325.3 V358.8" stroke="#FFFFFF"/>
+<rect x="96.1" y="330.3" width="6.6" height="23.5" fill="#FFFFFF"/>
+<path d="M109.7 323.4 V345.8" stroke="#2962FF"/>
+<rect x="106.4" y="328.4" width="6.6" height="12.4" fill="#2962FF"/>
+<path d="M120.0 330.7 V348.4" stroke="#FFFFFF"/>
+<rect x="116.7" y="335.7" width="6.6" height="7.7" fill="#FFFFFF"/>
+<path d="M130.3 330.7 V353.4" stroke="#2962FF"/>
+<rect x="127.0" y="335.7" width="6.6" height="12.7" fill="#2962FF"/>
+<path d="M140.6 330.2 V358.6" stroke="#FFFFFF"/>
+<rect x="137.3" y="335.2" width="6.6" height="18.4" fill="#FFFFFF"/>
+<path d="M150.9 332.7 V344.0" stroke="#2962FF"/>
+<rect x="147.6" y="337.7" width="6.6" height="1.3" fill="#2962FF"/>
+<path d="M161.2 320.3 V348.1" stroke="#FFFFFF"/>
+<rect x="157.9" y="325.3" width="6.6" height="17.8" fill="#FFFFFF"/>
+<path d="M171.5 308.7 V334.6" stroke="#FFFFFF"/>
+<rect x="168.2" y="313.7" width="6.6" height="15.9" fill="#FFFFFF"/>
+<path d="M181.8 307.4 V337.8" stroke="#2962FF"/>
+<rect x="178.5" y="312.4" width="6.6" height="20.4" fill="#2962FF"/>
+<path d="M192.1 323.7 V340.3" stroke="#FFFFFF"/>
+<rect x="188.8" y="328.7" width="6.6" height="6.7" fill="#FFFFFF"/>
+<path d="M202.4 306.0 V328.8" stroke="#FFFFFF"/>
+<rect x="199.1" y="311.0" width="6.6" height="12.8" fill="#FFFFFF"/>
+<path d="M212.7 293.7 V312.5" stroke="#FFFFFF"/>
+<rect x="209.4" y="298.7" width="6.6" height="8.8" fill="#FFFFFF"/>
+<path d="M223.0 298.9 V314.2" stroke="#2962FF"/>
+<rect x="219.7" y="303.9" width="6.6" height="5.3" fill="#2962FF"/>
+<path d="M233.3 300.6 V313.1" stroke="#FFFFFF"/>
+<rect x="230.0" y="305.6" width="6.6" height="2.5" fill="#FFFFFF"/>
+<path d="M243.6 302.8 V318.3" stroke="#2962FF"/>
+<rect x="240.3" y="307.8" width="6.6" height="5.5" fill="#2962FF"/>
+<path d="M253.9 304.8 V319.3" stroke="#FFFFFF"/>
+<rect x="250.6" y="309.8" width="6.6" height="4.4" fill="#FFFFFF"/>
+<path d="M264.2 301.9 V314.1" stroke="#2962FF"/>
+<rect x="260.9" y="306.9" width="6.6" height="2.1" fill="#2962FF"/>
+<path d="M274.5 305.1 V318.5" stroke="#2962FF"/>
+<rect x="271.2" y="310.1" width="6.6" height="3.4" fill="#2962FF"/>
+<path d="M284.8 304.2 V323.5" stroke="#FFFFFF"/>
+<rect x="281.5" y="309.2" width="6.6" height="9.2" fill="#FFFFFF"/>
+<path d="M295.1 295.7 V312.2" stroke="#FFFFFF"/>
+<rect x="291.8" y="300.7" width="6.6" height="6.5" fill="#FFFFFF"/>
+<path d="M305.4 293.8 V308.3" stroke="#2962FF"/>
+<rect x="302.1" y="298.8" width="6.6" height="4.5" fill="#2962FF"/>
+<path d="M315.7 294.5 V339.5" stroke="#2962FF"/>
+<rect x="312.4" y="299.5" width="6.6" height="34.9" fill="#2962FF"/>
+<path d="M326.0 325.6 V338.3" stroke="#2962FF"/>
+<rect x="322.7" y="330.6" width="6.6" height="2.7" fill="#2962FF"/>
+<path d="M336.3 312.7 V342.2" stroke="#FFFFFF"/>
+<rect x="333.0" y="317.7" width="6.6" height="19.5" fill="#FFFFFF"/>
+<path d="M346.6 315.2 V344.4" stroke="#2962FF"/>
+<rect x="343.3" y="320.2" width="6.6" height="19.2" fill="#2962FF"/>
+<path d="M356.9 324.6 V350.0" stroke="#FFFFFF"/>
+<rect x="353.6" y="329.6" width="6.6" height="15.4" fill="#FFFFFF"/>
+<path d="M367.2 313.0 V336.6" stroke="#FFFFFF"/>
+<rect x="364.0" y="318.0" width="6.6" height="13.6" fill="#FFFFFF"/>
+<path d="M377.5 318.5 V349.9" stroke="#2962FF"/>
+<rect x="374.3" y="323.5" width="6.6" height="21.4" fill="#2962FF"/>
+<path d="M387.8 333.3 V346.6" stroke="#FFFFFF"/>
+<rect x="384.6" y="338.3" width="6.6" height="3.4" fill="#FFFFFF"/>
+<path d="M398.2 329.5 V356.9" stroke="#2962FF"/>
+<rect x="394.9" y="334.5" width="6.6" height="17.4" fill="#2962FF"/>
+<path d="M408.5 340.8 V353.5" stroke="#FFFFFF"/>
+<rect x="405.2" y="345.8" width="6.6" height="2.7" fill="#FFFFFF"/>
+<path d="M418.8 241.7 V349.4" stroke="#FFFFFF"/>
+<rect x="415.5" y="246.7" width="6.6" height="97.8" fill="#FFFFFF"/>
+<path d="M429.1 247.5 V259.7" stroke="#2962FF"/>
+<rect x="425.8" y="252.5" width="6.6" height="2.2" fill="#2962FF"/>
+<path d="M439.4 245.8 V256.4" stroke="#FFFFFF"/>
+<rect x="436.1" y="250.8" width="6.6" height="1.2" fill="#FFFFFF"/>
+<path d="M449.7 240.1 V255.3" stroke="#FFFFFF"/>
+<rect x="446.4" y="245.1" width="6.6" height="5.1" fill="#FFFFFF"/>
+<path d="M460.0 212.2 V244.9" stroke="#FFFFFF"/>
+<rect x="456.7" y="217.2" width="6.6" height="22.7" fill="#FFFFFF"/>
+<path d="M470.3 206.5 V219.3" stroke="#2962FF"/>
+<rect x="467.0" y="211.5" width="6.6" height="2.8" fill="#2962FF"/>
+<path d="M480.6 205.7 V219.9" stroke="#FFFFFF"/>
+<rect x="477.3" y="210.7" width="6.6" height="4.2" fill="#FFFFFF"/>
+<path d="M490.9 178.8 V217.0" stroke="#FFFFFF"/>
+<rect x="487.6" y="183.8" width="6.6" height="28.2" fill="#FFFFFF"/>
+<path d="M501.2 178.9 V201.9" stroke="#2962FF"/>
+<rect x="497.9" y="183.9" width="6.6" height="12.9" fill="#2962FF"/>
+<path d="M511.5 180.3 V206.8" stroke="#FFFFFF"/>
+<rect x="508.2" y="185.3" width="6.6" height="16.5" fill="#FFFFFF"/>
+<path d="M521.8 147.0 V194.6" stroke="#FFFFFF"/>
+<rect x="518.5" y="152.0" width="6.6" height="37.7" fill="#FFFFFF"/>
+<path d="M532.1 152.4 V165.4" stroke="#2962FF"/>
+<rect x="528.8" y="157.4" width="6.6" height="3.0" fill="#2962FF"/>
+<path d="M542.4 135.2 V166.4" stroke="#FFFFFF"/>
+<rect x="539.1" y="140.2" width="6.6" height="21.2" fill="#FFFFFF"/>
+<path d="M552.7 132.4 V145.5" stroke="#2962FF"/>
+<rect x="549.4" y="137.4" width="6.6" height="3.1" fill="#2962FF"/>
+<path d="M563.0 131.0 V165.4" stroke="#2962FF"/>
+<rect x="559.7" y="136.0" width="6.6" height="24.4" fill="#2962FF"/>
+<path d="M573.3 158.6 V183.6" stroke="#2962FF"/>
+<rect x="570.0" y="163.6" width="6.6" height="15.0" fill="#2962FF"/>
+<path d="M583.6 166.1 V179.5" stroke="#FFFFFF"/>
+<rect x="580.3" y="171.1" width="6.6" height="3.3" fill="#FFFFFF"/>
+<path d="M593.9 157.9 V170.2" stroke="#FFFFFF"/>
+<rect x="590.6" y="162.9" width="6.6" height="2.3" fill="#FFFFFF"/>
+<path d="M604.2 160.3 V186.7" stroke="#2962FF"/>
+<rect x="600.9" y="165.3" width="6.6" height="16.4" fill="#2962FF"/>
+<path d="M614.5 172.2 V202.2" stroke="#2962FF"/>
+<rect x="611.2" y="177.2" width="6.6" height="20.1" fill="#2962FF"/>
+<path d="M624.8 193.7 V214.2" stroke="#2962FF"/>
+<rect x="621.5" y="198.7" width="6.6" height="10.5" fill="#2962FF"/>
+<path d="M635.1 200.7 V212.6" stroke="#2962FF"/>
+<rect x="631.8" y="205.7" width="6.6" height="1.9" fill="#2962FF"/>
+<path d="M645.4 186.7 V211.7" stroke="#FFFFFF"/>
+<rect x="642.1" y="191.7" width="6.6" height="15.0" fill="#FFFFFF"/>
+<path d="M655.7 180.8 V233.3" stroke="#2962FF"/>
+<rect x="652.4" y="185.8" width="6.6" height="42.4" fill="#2962FF"/>
+<path d="M666.0 213.9 V231.8" stroke="#FFFFFF"/>
+<rect x="662.7" y="218.9" width="6.6" height="7.8" fill="#FFFFFF"/>
+<path d="M676.3 192.9 V221.9" stroke="#FFFFFF"/>
+<rect x="673.0" y="197.9" width="6.6" height="19.0" fill="#FFFFFF"/>
+<path d="M686.6 190.1 V200.4" stroke="#2962FF"/>
+<rect x="683.3" y="195.1" width="6.6" height="1.2" fill="#2962FF"/>
+<path d="M696.9 185.0 V196.0" stroke="#FFFFFF"/>
+<rect x="693.6" y="190.0" width="6.6" height="1.2" fill="#FFFFFF"/>
+<path d="M707.2 185.9 V210.0" stroke="#2962FF"/>
+<rect x="703.9" y="190.9" width="6.6" height="14.1" fill="#2962FF"/>
+<path d="M717.5 179.3 V212.3" stroke="#FFFFFF"/>
+<rect x="714.2" y="184.3" width="6.6" height="23.1" fill="#FFFFFF"/>
+<path d="M727.8 175.7 V206.7" stroke="#2962FF"/>
+<rect x="724.5" y="180.7" width="6.6" height="21.1" fill="#2962FF"/>
+<path d="M738.1 169.8 V201.3" stroke="#FFFFFF"/>
+<rect x="734.8" y="174.8" width="6.6" height="21.5" fill="#FFFFFF"/>
+<path d="M748.4 167.0 V189.8" stroke="#2962FF"/>
+<rect x="745.1" y="172.0" width="6.6" height="12.8" fill="#2962FF"/>
+<path d="M758.7 172.8 V192.2" stroke="#FFFFFF"/>
+<rect x="755.4" y="177.8" width="6.6" height="9.4" fill="#FFFFFF"/>
+<polyline points="17.0,355.8 27.3,357.7 37.6,357.2 47.9,357.6 58.2,358.2 68.5,358.9 78.8,358.1 89.1,357.2 99.4,354.5 109.7,353.1 120.0,351.4 130.3,351.1 140.6,349.5 150.9,348.5 161.2,346.1 171.5,342.9 181.8,341.9 192.1,340.6 202.4,337.6 212.7,333.7 223.0,331.3 233.3,328.7 243.6,327.2 253.9,325.4 264.2,323.8 274.5,322.8 284.8,321.4 295.1,319.3 305.4,317.7 315.7,319.4 326.0,320.8 336.3,320.5 346.6,322.4 356.9,323.1 367.2,322.6 377.5,324.8 387.8,326.2 398.2,328.7 408.5,330.4 418.8,322.1 429.1,315.3 439.4,308.9 449.7,302.5 460.0,294.0 470.3,286.0 480.6,278.5 490.9,269.0 501.2,261.8 511.5,254.1 521.8,243.9 532.1,235.6 542.4,226.0 552.7,217.5 563.0,211.8 573.3,208.5 583.6,204.7 593.9,200.5 604.2,198.7 614.5,198.5 624.8,199.6 635.1,200.4 645.4,199.5 655.7,202.4 666.0,204.0 676.3,203.4 686.6,202.6 696.9,201.4 707.2,201.7 717.5,200.0 727.8,200.2 738.1,197.6 748.4,196.3 758.7,194.5" fill="none" stroke="#FF9800" stroke-width="1.6"/>
+<path d="M537.6 180.1 H827" stroke="#089981" stroke-dasharray="2 4"/>
+<rect x="827" y="173.1" width="72" height="14" fill="#161B22"/><text x="831" y="184.1" style="fill:#E6EDF3;font-size:10px">Entry 22.80</text>
+<path d="M537.6 226.7 H827" stroke="#F23645" stroke-dasharray="6 4"/>
+<rect x="827" y="219.7" width="72" height="14" fill="#161B22"/><text x="831" y="230.7" style="fill:#E6EDF3;font-size:10px">SL 21.75</text>
+<path d="M537.6 86.8 H827" stroke="#D6B86A" stroke-dasharray="8 3 2 3"/>
+<rect x="827" y="79.8" width="72" height="14" fill="#161B22"/><text x="831" y="90.8" style="fill:#E6EDF3;font-size:10px">TP1 24.90</text>
+<circle cx="181.82191780821918" cy="344.8003572729647" r="3" fill="none" stroke="#CBD5E1"/><text x="175.82191780821918" y="360.8003572729647">H0</text>
+<circle cx="233.3287671232877" cy="317.59982815734077" r="3" fill="none" stroke="#CBD5E1"/><text x="227.3287671232877" y="333.59982815734077">L1</text>
+<circle cx="542.3698630136986" cy="152.22472055173398" r="3" fill="none" stroke="#CBD5E1"/><text x="536.3698630136986" y="168.22472055173398">H1</text>
+<circle cx="665.986301369863" cy="230.94675475444805" r="3" fill="none" stroke="#CBD5E1"/><text x="659.986301369863" y="246.94675475444805">TL</text>
+<path d="M707.1917808219179 213.03078609578031 l4 4 -4 4 -4 -4 Z" fill="none" stroke="#CBD5E1"/><text x="701.1917808219179" y="233.03078609578031">S</text>
+</svg><div class="chart-meta"><b>青岚示例 · 日线</b>　开 22.38　高 22.83　低 22.26　收 22.74<br><span style="color:#FF9800">EMA 20</span></div><div class="float row"><button type="button" class="icon " title="斐波那契" aria-label="斐波那契"><svg><use href="#i-fib"/>
+</svg></button><button type="button" class="icon " title="多头仓位" aria-label="多头仓位"><svg><use href="#i-long"/>
+</svg></button><button type="button" class="icon " title="水平射线" aria-label="水平射线"><svg><use href="#i-ray"/>
+</svg></button><button type="button" class="icon " title="趋势线" aria-label="趋势线"><svg><use href="#i-trend"/>
+</svg></button><button type="button" class="icon " title="空头仓位" aria-label="空头仓位"><svg><use href="#i-short"/>
+</svg></button><button type="button" class="icon " title="矩形" aria-label="矩形"><svg><use href="#i-rectangle"/>
+</svg></button><button type="button" class="icon " title="向上箭头" aria-label="向上箭头"><svg><use href="#i-up"/>
+</svg></button><button type="button" class="icon " title="向下箭头" aria-label="向下箭头"><svg><use href="#i-down"/>
+</svg></button><button type="button" class="icon " title="箭头" aria-label="箭头"><svg><use href="#i-arrow"/>
+</svg></button><button type="button" class="icon " title="多段折线" aria-label="多段折线"><svg><use href="#i-polyline"/>
+</svg></button><button type="button" class="icon " title="平行通道" aria-label="平行通道"><svg><use href="#i-channel"/>
+</svg></button></div></div></div>
+<div class="chart-footer row compact"><button type="button" class="">1天</button><button type="button" class="">5天</button><button type="button" class="">1个月</button><button type="button" class="">3个月</button><button type="button" class="">6个月</button><button type="button" class="">YTD</button><button type="button" class="">1年</button><button type="button" class="">5年</button><button type="button" class="">全部</button></div>
+<div class="chart-footer row">活动图：000001 青岚示例 <span class="push">日线 · TickFlow · 前复权</span></div></div>
+<div class="lists">
+<section class="panel"><div class="panel-head title">策略结果</div><div class="strategy row compact"><button type="button" class="active">MTR<br>4</button><button type="button" class="">3K<br>2</button><button type="button" class="">GH1<br>1</button><button type="button" class="">GPb<br>0</button><button type="button" class="">GH2<br>2</button><button type="button" class="">AIL<br>0</button></div><div class="table-scroll"><table><thead>
+<tr><th scope="col">序</th><th scope="col">代码</th><th scope="col">名称</th></tr>
+</thead><tbody>
+<tr class="picked"><td>1</td><td>000001</td><td>青岚示例</td></tr>
+<tr><td>2</td><td>000002</td><td>松岭示例</td></tr>
+<tr><td>3</td><td>000003</td><td>临川示例</td></tr>
+<tr><td>4</td><td>000004</td><td>云桥示例</td></tr>
+</tbody>
+</table></div>
+</section>
+<section class="panel"><div class="listhead"><div class="row"><button type="button" class="listname">关注列表 ⌄</button><button type="button" class="">⋯</button><button type="button" class="">+</button></div><input type="text" aria-label="筛选关注列表"></div><div class="table-scroll"><table><thead>
+<tr><th scope="col">标记</th><th scope="col">代码</th><th scope="col">名称</th><th scope="col">状态</th><th scope="col">备注</th></tr>
+</thead><tbody>
+<tr class="picked"><td><span class="warn">●</span></td><td>000001</td><td>青岚示例</td><td>关注</td><td></td></tr>
+<tr><td></td><td>000005</td><td>海汀示例</td><td></td><td></td></tr>
+<tr><td></td><td>000006</td><td>南浦示例</td><td></td><td></td></tr>
+<tr><td></td><td>000007</td><td>云港示例</td><td></td><td></td></tr>
+<tr><td></td><td>000008</td><td>临溪示例</td><td></td><td></td></tr>
+<tr><td></td><td>000009</td><td>北麓示例</td><td></td><td></td></tr>
+<tr><td></td><td>000010</td><td>桐江示例</td><td></td><td></td></tr>
+</tbody>
+</table></div>
+</section></div>
+<aside class="rail"><button type="button" class="icon " title="显示／隐藏匹配列表和关注列表" aria-label="显示／隐藏匹配列表和关注列表"><svg><use href="#i-panel"/>
+</svg></button></aside></div><footer class="status micro">扫描完成 · 交易日 2026-11-12</footer>
+</section>
+<section class="screen" id="trade"><div class="window"><svg viewBox="-27 -18 504 504" xmlns="http://www.w3.org/2000/svg"><title>APLUS symbol-dark</title><g fill="#FFFFFF">
+      <path fill="#FFFFFF" d="M12 0H265C335 0 390 55 390 128C390 163 376 195 359 212L302 128C288 103 277 78 247 78H89Q79 78 79 89V305Q90 299 100 285L225 130Q235 116 245 130L447 444Q457 467 439 467H377Q365 467 357 454L234 266Q224 250 213 264L100 404Q93 412 86 414V455Q86 467 74 467H12Q0 467 0 455V12Q0 0 12 0Z" />
+      <path fill="#FFA578" d="M215 310Q215 295 225 301L327 453Q333 467 321 467H250C230 467 215 450 215 432Z" />
+    </g>
+    </svg><span>APLUS 操盘台</span><small>交易管理 · 虚构证券、行情及账户／回测数据 · 静态预览</small></div><header class="nav row"><label><input type="checkbox"> 自动行情</label><button type="button" class="">盘前任务</button><button type="button" class="">盘后回测</button><button type="button" class="">策略迭代</button><button type="button" class="active">交易管理</button><button type="button" class="">成长空间</button></header>
+<div class="trade"><div class="trade-head row"><small>持仓行情 · 2026-11-12 15:00</small><button type="button" class="">👁 隐藏</button><button type="button" class="">刷新</button></div>
+<div class="trade-grid">
+<section class="panel holding"><div class="panel-head row"><span class="title">持仓管理</span><span class="push"></span><button type="button" class="">＋</button></div>
+<div class="calc"><fieldset><legend>拟建仓速算</legend><div class="row"><label for="buy">拟买价</label><input id="buy" type="text" value=""><label for="stop">拟止损</label><input id="stop" type="text" value=""><button type="button" class="primary">推算手数</button><button type="button" class="">示例填充</button><small>按账户剩余风险预算推算</small></div></fieldset></div><div class="table-scroll"><table><thead>
+<tr><th scope="col">代码</th><th scope="col">名称</th><th scope="col">市值</th><th scope="col">浮盈亏</th><th scope="col">现价</th><th scope="col">成本价</th><th scope="col">仓位</th><th scope="col">持仓</th><th scope="col">止损</th><th scope="col">距止损</th><th scope="col">单笔风险</th><th scope="col">风险</th><th scope="col">操作</th></tr>
+</thead><tbody>
+<tr><td>000001</td><td>青岚示例</td><td>22,740</td><td><span class="up">+940</span></td><td>22.74</td><td>21.8000</td><td>9.18%</td><td>1,000</td><td>21.20</td><td>6.77%</td><td>600</td><td>0.24%</td><td><button type="button" class="">卖出</button></td></tr>
+<tr><td>000005</td><td>海汀示例</td><td>17,480</td><td><span class="down">−520</span></td><td>21.85</td><td>22.5000</td><td>7.05%</td><td>800</td><td>20.90</td><td>4.35%</td><td>1,280</td><td>0.52%</td><td><button type="button" class="">卖出</button></td></tr>
+<tr><td>—</td><td><b>合计</b></td><td>40,220</td><td><span class="up">+420</span></td><td>—</td><td>—</td><td>16.23%</td><td>—</td><td>—</td><td>—</td><td>1,880</td><td>0.76%</td><td>—</td></tr>
+</tbody>
+</table></div>
+</section>
+<section class="panel"><div class="panel-head title">资金账户</div><div class="fund"><div class="row"><small>资金账号：</small><select aria-label="资金账号"><option>示例账户</option></select><span class="push"></span><button type="button" class="">•••</button></div><div class="row" style="margin-top:8px"><small>总资产</small><span>证券仓位：16.23%</span></div><div class="large">247,800</div><div class="fund-grid"><div><small>证券市值</small><strong class="">40,220</strong></div><div><small>持仓盈亏</small><strong class="up">+420</strong></div><div><small>当日盈亏（暂估）</small><strong class="down">−156</strong></div><div><small>可取</small><strong class="">190,500</strong></div><div><small>可用</small><strong class="">207,580</strong></div><div><small>资产盈亏</small><strong class="up">+2,800</strong></div></div><small>反推初始资金：245,000</small></div>
+</section>
+<section class="panel closed"><div class="panel-head row"><span class="title">已清仓</span><button type="button" class="">ⓘ</button><span class="push"></span><button type="button" class="">＋</button></div><div class="table-scroll"><table><thead>
+<tr><th scope="col">序号</th><th scope="col">代码</th><th scope="col">名称</th><th scope="col">清仓日期</th><th scope="col">持有天数（自然/交易）</th><th scope="col">盈亏</th><th scope="col">收益率</th></tr>
+</thead><tbody>
+<tr><td>1</td><td>000007</td><td>云港示例</td><td>2026-11-06</td><td>8/6</td><td><span class="up">+1,240</span></td><td><span class="up">+4.92%</span></td></tr>
+<tr><td>2</td><td>000009</td><td>北麓示例</td><td>2026-11-04</td><td>5/4</td><td><span class="down">−630</span></td><td><span class="down">−2.11%</span></td></tr>
+</tbody>
+</table></div>
+</section>
+<section class="panel"><div class="panel-head title">盈亏日历</div><div class="calendar"><div class="row compact"><select aria-label="日历粒度"><option>月</option></select><button type="button" class="">上月</button><b>2026 年 11 月</b><button type="button" class="">下月</button><span class="push"></span><span title="账户日盈亏规则">ⓘ</span><button type="button" class="">补录日历</button></div><div class="table-scroll"><table><thead>
+<tr><th scope="col">一</th><th scope="col">二</th><th scope="col">三</th><th scope="col">四</th><th scope="col">五</th><th scope="col">六</th><th scope="col">日</th></tr>
+</thead><tbody>
+<tr><td> </td><td> </td><td> </td><td> </td><td> </td><td> </td><td>1</td></tr>
+<tr><td>2</td><td>3</td><td>4<br><span class="down">−630</span></td><td>5</td><td>6<br><span class="up">+1,240</span></td><td>7</td><td>8</td></tr>
+<tr><td>9</td><td>10</td><td>11</td><td>12<br><span class="down">−156</span></td><td>13</td><td>14</td><td>15</td></tr>
+<tr><td>16</td><td>17</td><td>18</td><td>19</td><td>20</td><td>21</td><td>22</td></tr>
+<tr><td>23</td><td>24</td><td>25</td><td>26</td><td>27</td><td>28</td><td>29</td></tr>
+<tr><td>30</td><td> </td><td> </td><td> </td><td> </td><td> </td><td> </td></tr>
+</tbody>
+</table></div></div>
+</section></div></div>
+</section>
+<section class="screen" id="afterhours"><div class="window"><svg viewBox="-27 -18 504 504" xmlns="http://www.w3.org/2000/svg"><title>APLUS symbol-dark</title><g fill="#FFFFFF">
+      <path fill="#FFFFFF" d="M12 0H265C335 0 390 55 390 128C390 163 376 195 359 212L302 128C288 103 277 78 247 78H89Q79 78 79 89V305Q90 299 100 285L225 130Q235 116 245 130L447 444Q457 467 439 467H377Q365 467 357 454L234 266Q224 250 213 264L100 404Q93 412 86 414V455Q86 467 74 467H12Q0 467 0 455V12Q0 0 12 0Z" />
+      <path fill="#FFA578" d="M215 310Q215 295 225 301L327 453Q333 467 321 467H250C230 467 215 450 215 432Z" />
+    </g>
+    </svg><span>APLUS 操盘台</span><small>盘后回测 · 虚构证券、行情及账户／回测数据 · 静态预览</small></div><header class="nav row"><label><input type="checkbox"> 自动行情</label><button type="button" class="">盘前任务</button><button type="button" class="active">盘后回测</button><button type="button" class="">策略迭代</button><button type="button" class="">交易管理</button><button type="button" class="">成长空间</button></header>
+<div class="research"><div class="row"><b>GAP H2 · 日线</b><button type="button" class="">沪深A ⌄</button><label>从 <input aria-label="起始日期" size="10" value="2026-09-01"></label><label>至 <input aria-label="结束日期" size="10" value="2026-11-12"></label><button type="button" class="">研究条件</button><span class="push"></span><button type="button" class="">成交口径</button><button type="button" class="">数据回执</button><button disabled>停止</button><button type="button" class="primary">新建回测</button></div>
+<div class="receipt micro muted">回测完成 · GAP H2 · 日线 · 126 个机会</div>
+<div class="research-grid"><aside class="history"><div class="title">回测记录</div><button class="wide" disabled>勾选两次回测后对比</button><div class="row"><button type="button" class="">重命名</button><span class="push"></span><button type="button" class="">删除</button></div><button type="button" class="wide">已删除 / 恢复</button><small>点名称查看 · 勾选两次对比</small><div class="panel" style="margin-top:6px"><label class="record picked"><input type="checkbox"><span>GAP H2 · 沪深A<small>2026-09-01 至 2026-11-12</small></span></label><label class="record"><input type="checkbox"><span>GAP H2 · 关注名单<small>2026-08-01 至 2026-10-30</small></span></label></div></aside>
+<div class="report"><div class="row"><span class="title">GAP H2 · 沪深A</span><small class="push">研究结果与真实交易记录独立</small></div><div class="metrics"><div class="panel metric"><small>机会数</small><div class="large">126</div></div><div class="panel metric"><small>模拟成交</small><div class="large">78</div></div><div class="panel metric"><small>胜率 · 已结束</small><div class="large">48.6%</div></div><div class="panel metric"><small>平均净 R</small><div class="large">+0.31</div></div><div class="panel metric"><small>持仓K线中位数</small><div class="large">8</div></div><div class="panel metric"><small>初始风险中位数</small><div class="large">3.42%</div></div></div>
+<div class="analysis"><div class="panel"><div class="panel-head up">Top 盈利 · 净 R</div><div class="table-scroll"><table><thead>
+<tr><th scope="col">代码 / H2 日期</th><th scope="col">净 R</th></tr>
+</thead><tbody>
+<tr><td>000005 · 11-05</td><td>+2.02</td></tr>
+<tr><td>000006 · 10-28</td><td>+2.01</td></tr>
+<tr><td>000008 · 10-19</td><td>+1.98</td></tr>
+</tbody>
+</table></div></div><div class="panel"><div class="panel-head down">Top 亏损 · 净 R</div><div class="table-scroll"><table><thead>
+<tr><th scope="col">代码 / H2 日期</th><th scope="col">净 R</th></tr>
+</thead><tbody>
+<tr><td>000007 · 10-23</td><td>−1.25</td></tr>
+<tr><td>000009 · 10-15</td><td>−1.18</td></tr>
+<tr><td>000010 · 09-29</td><td>−1.08</td></tr>
+</tbody>
+</table></div></div><div class="panel"><div class="panel-head">净 R 分布 · 已结束</div><svg class="hist" viewBox="0 0 265 100" role="img" aria-label="虚构分布">
+<path d="M12 75 H253" stroke="#30363D"/>
+<rect x="21" y="61" width="29" height="14" fill="#1F5EBC"/><text x="35" y="91" text-anchor="middle">≤−1</text>
+<rect x="67" y="29" width="29" height="46" fill="#1F5EBC"/><text x="81" y="91" text-anchor="middle">−1~0</text>
+<rect x="113" y="40" width="29" height="35" fill="#1F5EBC"/><text x="127" y="91" text-anchor="middle">0~1</text>
+<rect x="159" y="15" width="29" height="60" fill="#1F5EBC"/><text x="173" y="91" text-anchor="middle">1~2</text>
+<rect x="205" y="45" width="29" height="30" fill="#1F5EBC"/><text x="219" y="91" text-anchor="middle">≥2</text>
+</svg></div><div class="panel"><div class="panel-head row">持仓K线分布 · 已结束<span class="push"></span><button type="button" class="active">全部</button><button type="button" class="">盈利</button><button type="button" class="">亏损</button></div><svg class="hist" viewBox="0 0 265 100" role="img" aria-label="虚构分布">
+<path d="M12 75 H253" stroke="#30363D"/>
+<rect x="21" y="52" width="29" height="23" fill="#1F5EBC"/><text x="35" y="91" text-anchor="middle">1–3</text>
+<rect x="67" y="11" width="29" height="64" fill="#1F5EBC"/><text x="81" y="91" text-anchor="middle">4–8</text>
+<rect x="113" y="33" width="29" height="42" fill="#1F5EBC"/><text x="127" y="91" text-anchor="middle">9–13</text>
+<rect x="159" y="54" width="29" height="21" fill="#1F5EBC"/><text x="173" y="91" text-anchor="middle">14–20</text>
+<rect x="205" y="65" width="29" height="10" fill="#1F5EBC"/><text x="219" y="91" text-anchor="middle">21+</text>
+</svg></div></div>
+<div class="aux"><div class="panel metric"><small>平均盈利R</small><div class="up">+1.86</div></div><div class="panel metric"><small>平均亏损R</small><div class="down">−1.02</div></div><div class="panel metric"><small>退出原因分布</small><div class="">止盈 34 · 止损 36</div></div><div class="panel metric"><small>超额亏损占比</small><div class="">4.2%</div></div></div><div class="row"><b>逐笔复盘</b><button type="button" class="active">全部</button><button type="button" class="">已结束</button><button type="button" class="">未成交</button><button type="button" class="">持仓未结束</button><select aria-label="结局筛选"><option>全部</option></select><span class="push"></span><button type="button" class="">展开清单</button></div>
+<div class="review"><div class="panel"><div class="table-scroll"><table><thead>
+<tr><th scope="col">H2 日期</th><th scope="col">代码</th><th scope="col">成交/待挂</th><th scope="col">风险</th><th scope="col">结局</th><th scope="col">净 R</th></tr>
+</thead><tbody>
+<tr class="picked"><td>2026-11-12</td><td>000001</td><td>22.80</td><td>4.61%</td><td>未成交</td><td>—</td></tr>
+<tr><td>2026-11-05</td><td>000005</td><td>21.85</td><td>3.02%</td><td>止盈</td><td>+2.02</td></tr>
+<tr><td>2026-10-28</td><td>000006</td><td>18.31</td><td>2.85%</td><td>止盈</td><td>+2.01</td></tr>
+<tr><td>2026-10-23</td><td>000007</td><td>25.86</td><td>3.80%</td><td>止损</td><td>−1.25</td></tr>
+<tr><td>2026-10-19</td><td>000008</td><td>19.90</td><td>4.16%</td><td>止盈</td><td>+1.98</td></tr>
+</tbody>
+</table></div></div><div class="preview"><div class="row"><b>000001 青岚示例 · 2026-11-12</b><span class="push"></span><button type="button" class="">完整复盘 ↗</button></div><p class="micro muted">移到 K 线上查看开、高、低、收</p><svg class="plot static" viewBox="0 0 740 285" preserveAspectRatio="none" role="img" aria-label="虚构 K 线、EMA 和计划价位">
+<path d="M0 38.0 H740" stroke="#26313D"/><text x="675" y="42.0">26.00</text>
+<path d="M0 79.8 H740" stroke="#26313D"/><text x="675" y="83.8">24.00</text>
+<path d="M0 121.6 H740" stroke="#26313D"/><text x="675" y="125.6">22.00</text>
+<path d="M0 163.4 H740" stroke="#26313D"/><text x="675" y="167.4">20.00</text>
+<path d="M0 205.2 H740" stroke="#26313D"/><text x="675" y="209.2">18.00</text>
+<path d="M0 247.0 H740" stroke="#26313D"/><text x="675" y="251.0">16.00</text>
+<path d="M60 0 V264" stroke="#26313D"/><text x="43" y="279">09-01</text>
+<path d="M155 0 V264" stroke="#26313D"/><text x="138" y="279">09-14</text>
+<path d="M250 0 V264" stroke="#26313D"/><text x="233" y="279">09-28</text>
+<path d="M345 0 V264" stroke="#26313D"/><text x="328" y="279">10-12</text>
+<path d="M440 0 V264" stroke="#26313D"/><text x="423" y="279">10-26</text>
+<path d="M535 0 V264" stroke="#26313D"/><text x="518" y="279">11-05</text>
+<path d="M630 0 V264" stroke="#26313D"/><text x="613" y="279">11-12</text>
+<path d="M667 0 V285 M0 264 H740" stroke="#26313D"/>
+<path d="M17.0 196.4 V217.7" stroke="#FFFFFF"/>
+<rect x="14.4" y="201.4" width="5.2" height="11.3" fill="#FFFFFF"/>
+<path d="M25.1 183.2 V207.2" stroke="#FFFFFF"/>
+<rect x="22.5" y="188.2" width="5.2" height="14.0" fill="#FFFFFF"/>
+<path d="M33.2 187.3 V204.1" stroke="#2962FF"/>
+<rect x="30.6" y="192.3" width="5.2" height="6.8" fill="#2962FF"/>
+<path d="M41.3 181.3 V203.0" stroke="#FFFFFF"/>
+<rect x="38.7" y="186.3" width="5.2" height="11.7" fill="#FFFFFF"/>
+<path d="M49.4 176.1 V193.4" stroke="#2962FF"/>
+<rect x="46.8" y="181.1" width="5.2" height="7.3" fill="#2962FF"/>
+<path d="M57.5 188.5 V198.6" stroke="#2962FF"/>
+<rect x="55.0" y="193.5" width="5.2" height="1.2" fill="#2962FF"/>
+<path d="M65.7 178.7 V203.6" stroke="#FFFFFF"/>
+<rect x="63.1" y="183.7" width="5.2" height="14.9" fill="#FFFFFF"/>
+<path d="M73.8 175.8 V189.6" stroke="#2962FF"/>
+<rect x="71.2" y="180.8" width="5.2" height="3.8" fill="#2962FF"/>
+<path d="M81.9 172.8 V188.1" stroke="#FFFFFF"/>
+<rect x="79.3" y="177.8" width="5.2" height="5.3" fill="#FFFFFF"/>
+<path d="M90.0 169.6 V193.7" stroke="#2962FF"/>
+<rect x="87.4" y="174.6" width="5.2" height="14.1" fill="#2962FF"/>
+<path d="M98.1 182.6 V196.3" stroke="#FFFFFF"/>
+<rect x="95.5" y="187.6" width="5.2" height="3.6" fill="#FFFFFF"/>
+<path d="M106.2 168.6 V188.7" stroke="#FFFFFF"/>
+<rect x="103.6" y="173.6" width="5.2" height="10.1" fill="#FFFFFF"/>
+<path d="M114.3 166.4 V182.3" stroke="#FFFFFF"/>
+<rect x="111.7" y="171.4" width="5.2" height="6.0" fill="#FFFFFF"/>
+<path d="M122.4 160.8 V180.3" stroke="#2962FF"/>
+<rect x="119.8" y="165.8" width="5.2" height="9.5" fill="#2962FF"/>
+<path d="M130.5 169.1 V179.6" stroke="#2962FF"/>
+<rect x="127.9" y="174.1" width="5.2" height="1.2" fill="#2962FF"/>
+<path d="M138.6 172.1 V182.9" stroke="#FFFFFF"/>
+<rect x="136.0" y="177.1" width="5.2" height="1.2" fill="#FFFFFF"/>
+<path d="M146.8 163.9 V181.9" stroke="#FFFFFF"/>
+<rect x="144.2" y="168.9" width="5.2" height="8.0" fill="#FFFFFF"/>
+<path d="M154.9 159.6 V176.3" stroke="#2962FF"/>
+<rect x="152.3" y="164.6" width="5.2" height="6.7" fill="#2962FF"/>
+<path d="M163.0 158.2 V170.6" stroke="#FFFFFF"/>
+<rect x="160.4" y="163.2" width="5.2" height="2.5" fill="#FFFFFF"/>
+<path d="M171.1 157.5 V170.3" stroke="#FFFFFF"/>
+<rect x="168.5" y="162.5" width="5.2" height="2.8" fill="#FFFFFF"/>
+<path d="M179.2 152.4 V164.0" stroke="#2962FF"/>
+<rect x="176.6" y="157.4" width="5.2" height="1.6" fill="#2962FF"/>
+<path d="M187.3 151.4 V169.7" stroke="#2962FF"/>
+<rect x="184.7" y="156.4" width="5.2" height="8.4" fill="#2962FF"/>
+<path d="M195.4 159.4 V171.0" stroke="#FFFFFF"/>
+<rect x="192.8" y="164.4" width="5.2" height="1.6" fill="#FFFFFF"/>
+<path d="M203.5 157.1 V171.3" stroke="#2962FF"/>
+<rect x="200.9" y="162.1" width="5.2" height="4.2" fill="#2962FF"/>
+<path d="M211.6 155.7 V177.2" stroke="#2962FF"/>
+<rect x="209.0" y="160.7" width="5.2" height="11.5" fill="#2962FF"/>
+<path d="M219.7 158.5 V180.8" stroke="#FFFFFF"/>
+<rect x="217.1" y="163.5" width="5.2" height="12.2" fill="#FFFFFF"/>
+<path d="M227.8 160.1 V171.2" stroke="#FFFFFF"/>
+<rect x="225.3" y="165.1" width="5.2" height="1.2" fill="#FFFFFF"/>
+<path d="M236.0 161.5 V173.1" stroke="#2962FF"/>
+<rect x="233.4" y="166.5" width="5.2" height="1.6" fill="#2962FF"/>
+<path d="M244.1 158.3 V181.6" stroke="#2962FF"/>
+<rect x="241.5" y="163.3" width="5.2" height="13.3" fill="#2962FF"/>
+<path d="M252.2 162.7 V181.4" stroke="#FFFFFF"/>
+<rect x="249.6" y="167.7" width="5.2" height="8.6" fill="#FFFFFF"/>
+<path d="M260.3 163.5 V178.3" stroke="#FFFFFF"/>
+<rect x="257.7" y="168.5" width="5.2" height="4.8" fill="#FFFFFF"/>
+<path d="M268.4 163.7 V176.7" stroke="#2962FF"/>
+<rect x="265.8" y="168.7" width="5.2" height="3.0" fill="#2962FF"/>
+<path d="M276.5 163.7 V181.8" stroke="#2962FF"/>
+<rect x="273.9" y="168.7" width="5.2" height="8.1" fill="#2962FF"/>
+<path d="M284.6 166.5 V187.0" stroke="#FFFFFF"/>
+<rect x="282.0" y="171.5" width="5.2" height="10.5" fill="#FFFFFF"/>
+<path d="M292.7 164.7 V175.9" stroke="#2962FF"/>
+<rect x="290.1" y="169.7" width="5.2" height="1.2" fill="#2962FF"/>
+<path d="M300.8 166.2 V185.6" stroke="#2962FF"/>
+<rect x="298.2" y="171.2" width="5.2" height="9.4" fill="#2962FF"/>
+<path d="M308.9 171.5 V184.2" stroke="#2962FF"/>
+<rect x="306.4" y="176.5" width="5.2" height="2.7" fill="#2962FF"/>
+<path d="M317.1 175.3 V188.5" stroke="#FFFFFF"/>
+<rect x="314.5" y="180.3" width="5.2" height="3.2" fill="#FFFFFF"/>
+<path d="M325.2 167.6 V187.5" stroke="#FFFFFF"/>
+<rect x="322.6" y="172.6" width="5.2" height="9.9" fill="#FFFFFF"/>
+<path d="M333.3 144.6 V159.6" stroke="#FFFFFF"/>
+<rect x="330.7" y="149.6" width="5.2" height="5.0" fill="#FFFFFF"/>
+<path d="M341.4 127.0 V154.5" stroke="#FFFFFF"/>
+<rect x="338.8" y="132.0" width="5.2" height="17.6" fill="#FFFFFF"/>
+<path d="M349.5 125.0 V136.6" stroke="#2962FF"/>
+<rect x="346.9" y="130.0" width="5.2" height="1.6" fill="#2962FF"/>
+<path d="M357.6 126.2 V140.6" stroke="#2962FF"/>
+<rect x="355.0" y="131.2" width="5.2" height="4.5" fill="#2962FF"/>
+<path d="M365.7 127.5 V140.7" stroke="#FFFFFF"/>
+<rect x="363.1" y="132.5" width="5.2" height="3.2" fill="#FFFFFF"/>
+<path d="M373.8 120.9 V131.7" stroke="#FFFFFF"/>
+<rect x="371.2" y="125.9" width="5.2" height="1.2" fill="#FFFFFF"/>
+<path d="M381.9 109.1 V133.5" stroke="#FFFFFF"/>
+<rect x="379.3" y="114.1" width="5.2" height="14.3" fill="#FFFFFF"/>
+<path d="M390.0 107.8 V122.2" stroke="#FFFFFF"/>
+<rect x="387.4" y="112.8" width="5.2" height="4.4" fill="#FFFFFF"/>
+<path d="M398.2 102.1 V118.5" stroke="#2962FF"/>
+<rect x="395.6" y="107.1" width="5.2" height="6.4" fill="#2962FF"/>
+<path d="M406.3 95.6 V114.1" stroke="#FFFFFF"/>
+<rect x="403.7" y="100.6" width="5.2" height="8.6" fill="#FFFFFF"/>
+<path d="M414.4 92.0 V108.1" stroke="#FFFFFF"/>
+<rect x="411.8" y="97.0" width="5.2" height="6.1" fill="#FFFFFF"/>
+<path d="M422.5 90.2 V102.5" stroke="#2962FF"/>
+<rect x="419.9" y="95.2" width="5.2" height="2.3" fill="#2962FF"/>
+<path d="M430.6 80.7 V98.2" stroke="#FFFFFF"/>
+<rect x="428.0" y="85.7" width="5.2" height="7.5" fill="#FFFFFF"/>
+<path d="M438.7 83.1 V95.7" stroke="#2962FF"/>
+<rect x="436.1" y="88.1" width="5.2" height="2.6" fill="#2962FF"/>
+<path d="M446.8 86.9 V101.5" stroke="#FFFFFF"/>
+<rect x="444.2" y="91.9" width="5.2" height="4.6" fill="#FFFFFF"/>
+<path d="M454.9 85.1 V106.9" stroke="#2962FF"/>
+<rect x="452.3" y="90.1" width="5.2" height="11.8" fill="#2962FF"/>
+<path d="M463.0 95.1 V108.0" stroke="#FFFFFF"/>
+<rect x="460.4" y="100.1" width="5.2" height="2.9" fill="#FFFFFF"/>
+<path d="M471.1 91.6 V105.7" stroke="#FFFFFF"/>
+<rect x="468.5" y="96.6" width="5.2" height="4.2" fill="#FFFFFF"/>
+<path d="M479.2 92.2 V103.2" stroke="#2962FF"/>
+<rect x="476.7" y="97.2" width="5.2" height="1.2" fill="#2962FF"/>
+<path d="M487.4 94.4 V115.8" stroke="#2962FF"/>
+<rect x="484.8" y="99.4" width="5.2" height="11.5" fill="#2962FF"/>
+<path d="M495.5 100.6 V120.8" stroke="#FFFFFF"/>
+<rect x="492.9" y="105.6" width="5.2" height="10.2" fill="#FFFFFF"/>
+<path d="M503.6 105.0 V122.1" stroke="#2962FF"/>
+<rect x="501.0" y="110.0" width="5.2" height="7.1" fill="#2962FF"/>
+<path d="M511.7 108.1 V126.8" stroke="#FFFFFF"/>
+<rect x="509.1" y="113.1" width="5.2" height="8.6" fill="#FFFFFF"/>
+<path d="M519.8 110.4 V125.8" stroke="#2962FF"/>
+<rect x="517.2" y="115.4" width="5.2" height="5.4" fill="#2962FF"/>
+<path d="M527.9 114.2 V129.0" stroke="#FFFFFF"/>
+<rect x="525.3" y="119.2" width="5.2" height="4.8" fill="#FFFFFF"/>
+<path d="M536.0 117.1 V127.2" stroke="#FFFFFF"/>
+<rect x="533.4" y="122.1" width="5.2" height="1.2" fill="#FFFFFF"/>
+<path d="M544.1 107.2 V130.0" stroke="#FFFFFF"/>
+<rect x="541.5" y="112.2" width="5.2" height="12.9" fill="#FFFFFF"/>
+<path d="M552.2 109.4 V119.5" stroke="#2962FF"/>
+<rect x="549.6" y="114.4" width="5.2" height="1.2" fill="#2962FF"/>
+<path d="M560.3 111.5 V122.7" stroke="#FFFFFF"/>
+<rect x="557.7" y="116.5" width="5.2" height="1.2" fill="#FFFFFF"/>
+<path d="M568.5 103.5 V116.2" stroke="#FFFFFF"/>
+<rect x="565.9" y="108.5" width="5.2" height="2.7" fill="#FFFFFF"/>
+<path d="M576.6 99.5 V122.9" stroke="#2962FF"/>
+<rect x="574.0" y="104.5" width="5.2" height="13.4" fill="#2962FF"/>
+<path d="M584.7 111.0 V124.7" stroke="#FFFFFF"/>
+<rect x="582.1" y="116.0" width="5.2" height="3.7" fill="#FFFFFF"/>
+<path d="M592.8 108.8 V120.1" stroke="#FFFFFF"/>
+<rect x="590.2" y="113.8" width="5.2" height="1.3" fill="#FFFFFF"/>
+<path d="M600.9 105.5 V116.3" stroke="#2962FF"/>
+<rect x="598.3" y="110.5" width="5.2" height="1.2" fill="#2962FF"/>
+<polyline points="17.0,201.4 25.1,200.1 33.2,200.0 41.3,198.6 49.4,197.6 57.5,197.2 65.7,195.8 73.8,194.7 81.9,193.0 90.0,192.6 98.1,192.1 106.2,190.2 114.3,188.4 122.4,187.0 130.5,185.8 138.6,184.9 146.8,183.3 154.9,182.1 163.0,180.2 171.1,178.5 179.2,176.5 187.3,175.3 195.4,174.2 203.5,173.4 211.6,173.3 219.7,172.3 227.8,171.6 236.0,171.3 244.1,171.8 252.2,171.4 260.3,171.1 268.4,171.2 276.5,171.7 284.6,171.7 292.7,171.6 300.8,172.5 308.9,173.2 317.1,173.9 325.2,173.8 333.3,171.3 341.4,167.4 349.5,163.8 357.6,161.0 365.7,158.2 373.8,154.9 381.9,150.9 390.0,147.0 398.2,143.7 406.3,139.4 414.4,135.1 422.5,131.4 430.6,126.8 438.7,123.2 446.8,120.1 454.9,118.3 463.0,116.5 471.1,114.5 479.2,112.8 487.4,112.6 495.5,111.9 503.6,112.5 511.7,112.5 519.8,113.4 527.9,113.9 536.0,114.8 544.1,114.5 552.2,114.5 560.3,114.7 568.5,114.1 576.6,114.5 584.7,114.6 592.8,114.5 600.9,114.2" fill="none" stroke="#F0A202" stroke-width="1.6"/>
+<path d="M433.6 61.0 H667" stroke="#D6B86A" stroke-dasharray="8 3 2 3"/>
+<rect x="667" y="54.0" width="72" height="14" fill="#161B22"/><text x="671" y="65.0" style="fill:#E6EDF3;font-size:10px">2R 24.90</text>
+<path d="M433.6 77.7 H667" stroke="#9BA7B4" stroke-dasharray="1 5"/>
+<rect x="667" y="70.7" width="72" height="14" fill="#161B22"/><text x="671" y="81.7" style="fill:#E6EDF3;font-size:10px">MM参考 24.10</text>
+<path d="M433.6 104.9 H667" stroke="#089981" stroke-dasharray="2 4"/>
+<rect x="667" y="97.9" width="72" height="14" fill="#161B22"/><text x="671" y="108.9" style="fill:#E6EDF3;font-size:10px">Entry 22.80</text>
+<path d="M433.6 126.8 H667" stroke="#F23645" stroke-dasharray="6 4"/>
+<rect x="667" y="119.8" width="72" height="14" fill="#161B22"/><text x="671" y="130.8" style="fill:#E6EDF3;font-size:10px">SL 21.75</text>
+<path d="M433.6 144.6 H667" stroke="#9BA7B4" stroke-dasharray="1 5"/>
+<rect x="667" y="137.6" width="72" height="14" fill="#161B22"/><text x="671" y="148.6" style="fill:#E6EDF3;font-size:10px">SL1参考 20.90</text>
+<rect x="329.2" y="159.6" width="121.6" height="6.0" fill="none" stroke="#CBD5E1" stroke-width="1.2" stroke-dasharray="5 3" opacity=".6"/><text x="347.2" y="172.6">Gap</text>
+</svg><select aria-label="复盘事件"><option>H2 准备 · 2026-11-12</option></select><p class="micro muted">滚轮缩放 · 拖动价格轴 · 双击复位</p></div></div>
+<div class="note micro muted">数据回执 · 研究样本已结束统计 70 笔</div></div></div></div>
+</section></main></body></html>
