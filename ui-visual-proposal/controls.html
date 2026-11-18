@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aplus 控件样张</title>
+  <style>
+    /* 来源：草案「颜色」「字阶与密度」「控件与状态」。 */
+    :root {
+      color-scheme: dark;
+      --app: #0D1117;
+      --panel: #161B22;
+      --control: #1F2630;
+      --border: #30363D;
+      --text: #E6EDF3;
+      --muted: #9BA7B4;
+      --accent: #1F5EBC;
+      --accent-hover: #286AC7;
+      --selection: #253247;
+      --hover: #202A36;
+      --up: #F04F5F;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 12px;
+      color: var(--text);
+      background: var(--app);
+      font: 10pt "Microsoft YaHei UI", sans-serif;
+    }
+    h1, h2, h3, p, figure, ul { margin: 0; }
+    h1, h2 { font-size: 11pt; }
+    h3 { font-size: 10pt; }
+    ul { padding-inline-start: 12px; }
+    .stack { display: grid; gap: 8px; }
+    .sheet { display: grid; gap: 12px; }
+    .grid, .pair {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .grid {
+      align-items: start;
+      gap: 12px;
+    }
+    @media (orientation: portrait) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 12px;
+    }
+    .source, figcaption { font-size: 9pt; color: var(--muted); }
+    .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .pair > * { min-inline-size: 0; }
+    .samples { display: grid; gap: 6px; justify-items: start; }
+    .sample { display: grid; gap: 4px; justify-items: start; }
+    .digits, output { font-variant-numeric: tabular-nums; }
+    .button, .field {
+      color: var(--text);
+      font: inherit;
+      border: 1px solid var(--border);
+      border-radius: 0;
+      min-height: 28px;
+      padding: 4px 8px;
+    }
+    .button { background: var(--control); }
+    .button:not(:disabled):hover { background: var(--hover); }
+    .button.primary { background: var(--accent); }
+    .button.primary:hover { background: var(--accent-hover); }
+    .button.danger { color: var(--up); }
+    .button.dense {
+      font-size: 9pt;
+      min-height: 24px;
+      padding: 2px 6px;
+    }
+    :is(.button, .field):disabled { color: var(--muted); opacity: unset; }
+    .tab {
+      display: grid;
+      justify-items: center;
+      background: var(--control);
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+    }
+    .tab.selected {
+      background: var(--selection);
+      color: var(--text);
+      border-bottom-color: var(--accent);
+    }
+    .strategy { font-size: 9pt; }
+    .field { background: var(--panel); max-inline-size: 100%; }
+    .field.focus, .field:focus { border-color: var(--muted); }
+    .field:focus-visible { outline: 1px solid var(--muted); outline-offset: -1px; }
+    .field[readonly], .field.readonly { background: var(--control); }
+    .choice { display: flex; align-items: center; gap: 4px; }
+    .choice:has(input:disabled) { color: var(--muted); }
+    table { border-collapse: collapse; }
+    .compact { font-size: 9pt; }
+    .compact tr { height: 25px; }
+    .regular tr { height: 32px; }
+    th, td { padding-inline: 8px; text-align: start; }
+    th { background: var(--control); border: 1px solid var(--border); }
+    td:last-child, th:last-child { text-align: end; }
+    .alternate-row { background: var(--app); }
+    .selected-row { background: var(--selection); }
+    .rail {
+      display: grid;
+      grid-template-rows: repeat(2, minmax(24px, auto));
+      inline-size: 12px;
+      background: var(--control);
+    }
+    .thumb { background: var(--muted); }
+    .thumb.hover, .thumb:hover { background: var(--text); }
+  </style>
+</head>
+<body class="sheet">
+  <header class="stack">
+    <h1>Aplus 控件样张</h1>
+    <p class="source">外壳视觉草案待批 · 尺寸按 96 DPI 逻辑像素标示 · 表格使用示例值</p>
+  </header>
+
+  <main class="grid">
+    <section class="panel stack" aria-labelledby="buttons">
+      <h2 id="buttons">按钮</h2>
+      <p class="source">草案·控件与状态·按钮／复选／单选；草案·字阶与密度·控件</p>
+      <p class="source">1px 平边、0px 圆角；主操作 ACCENT、普通 CONTROL_BG、危险 UP 前景、禁用 MUTED 前景</p>
+      <div class="pair">
+        <div class="stack">
+          <h3>常规</h3>
+          <p class="source">最小高 28px · 水平 8px／垂直 4px · 10pt</p>
+          <div class="samples">
+            <figure class="sample"><button type="button" class="button primary">开始扫描</button><figcaption>主操作 · <output></output></figcaption></figure>
+            <figure class="sample"><button type="button" class="button">刷新列表</button><figcaption>普通 · <output></output></figcaption></figure>
+            <figure class="sample"><button type="button" class="button danger">终止任务</button><figcaption>危险 · <output></output></figcaption></figure>
+            <figure class="sample"><button type="button" class="button" disabled>开始扫描</button><figcaption>禁用 · <output></output></figcaption></figure>
+          </div>
+        </div>
+        <div class="stack">
+          <h3>密集</h3>
+          <p class="source">最小高 24px · 水平 6px／垂直 2px · 9pt</p>
+          <div class="samples">
+            <figure class="sample"><button type="button" class="button dense primary">开始扫描</button><figcaption>主操作 · <output></output></figcaption></figure>
+            <figure class="sample"><button type="button" class="button dense">刷新列表</button><figcaption>普通 · <output></output></figcaption></figure>
+            <figure class="sample"><button type="button" class="button dense danger">终止任务</button><figcaption>危险 · <output></output></figcaption></figure>
+            <figure class="sample"><button type="button" class="button dense" disabled>开始扫描</button><figcaption>禁用 · <output></output></figcaption></figure>
+          </div>
+        </div>
+      </div>
+      <p class="source">实测标注为当前浏览器的宽 × 高（CSS px）。<noscript>开启脚本可显示实测值。</noscript></p>
+    </section>
+
+    <section class="panel stack" aria-labelledby="tabs">
+      <h2 id="tabs">页签</h2>
+      <p class="source">草案·控件与状态·页签 · 导航 10pt、策略项 9pt</p>
+      <p class="source">选中 SELECTION／TEXT，内侧 2px ACCENT 底边；非选 CONTROL_BG／MUTED</p>
+      <div class="row">
+        <figure class="sample"><div class="tab selected">盘前任务</div><figcaption>选中</figcaption></figure>
+        <figure class="sample"><div class="tab">盘后回测</div><figcaption>非选</figcaption></figure>
+      </div>
+      <div class="row">
+        <figure class="sample"><div class="tab strategy selected"><span>缺口策略</span><span class="digits">12</span></div><figcaption>选中 · 两行计数</figcaption></figure>
+        <figure class="sample"><div class="tab strategy"><span>形态策略</span><span class="digits">3</span></div><figcaption>非选 · 两行计数</figcaption></figure>
+      </div>
+    </section>
+
+    <section class="panel stack" aria-labelledby="fields">
+      <h2 id="fields">输入框与下拉</h2>
+      <p class="source">草案·控件与状态·输入／下拉 · 10pt、最小高 28px、水平 8px／垂直 4px、0px 圆角</p>
+      <p class="source">PANEL_BG 底、1px BORDER；焦点 MUTED 描边、只读 CONTROL_BG、禁用 MUTED 前景</p>
+      <div class="pair">
+        <div class="stack">
+          <h3>输入框</h3>
+          <label class="sample">默认<input class="field" value="600000"></label>
+          <label class="sample">焦点<input class="field focus" value="600000"></label>
+          <label class="sample">只读<input class="field" value="600000" readonly></label>
+          <label class="sample">禁用<input class="field" value="600000" disabled></label>
+        </div>
+        <div class="stack">
+          <h3>下拉</h3>
+          <label class="sample">默认<select class="field"><option>沪深 A 股</option></select></label>
+          <label class="sample">焦点<select class="field focus"><option>沪深 A 股</option></select></label>
+          <div class="sample">只读<div inert><select class="field readonly" aria-label="只读下拉"><option>沪深 A 股</option></select></div></div>
+          <label class="sample">禁用<select class="field" disabled><option>沪深 A 股</option></select></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel stack" aria-labelledby="choices">
+      <h2 id="choices">复选框与单选框</h2>
+      <p class="source">草案·控件与状态·按钮／复选／单选；草案·字阶与密度·控件</p>
+      <p class="source">常规文字 10pt，禁用文字 MUTED。勾号与圆点用原生指示符示意。</p>
+      <div class="pair">
+        <div class="samples">
+          <h3>复选框</h3>
+          <label class="choice"><input type="checkbox" checked>已勾选</label>
+          <label class="choice"><input type="checkbox">未勾选</label>
+          <label class="choice"><input type="checkbox" checked disabled>禁用（已勾选）</label>
+        </div>
+        <div class="samples">
+          <h3>单选框</h3>
+          <label class="choice"><input type="radio" name="mode" checked>已选</label>
+          <label class="choice"><input type="radio" name="mode">未选</label>
+          <label class="choice"><input type="radio" name="disabled-mode" checked disabled>禁用（已选）</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel stack" aria-labelledby="tables">
+      <h2 id="tables">表格片段</h2>
+      <p class="source">草案·控件与状态·列表／表格；草案·字阶与密度·表体与表头、行高</p>
+      <p class="source">表头同阶粗体，CONTROL_BG、1px BORDER 分隔、横向 8px；选中 SELECTION</p>
+      <p class="source">普通行／交替行以关注列表现有 PANEL_BG／APP_BG 示意。</p>
+      <div class="pair">
+        <figure class="stack">
+          <figcaption>紧凑 9pt · 回测分析表 25px 行高</figcaption>
+          <table class="compact digits" aria-label="紧凑表格">
+            <thead><tr><th scope="col">行状态</th><th scope="col">收益率</th></tr></thead>
+            <tbody>
+              <tr><td>普通行</td><td>+1.20%</td></tr>
+              <tr class="alternate-row"><td>交替行</td><td>−0.80%</td></tr>
+              <tr class="selected-row"><td>选中行</td><td>+0.30%</td></tr>
+            </tbody>
+          </table>
+        </figure>
+        <figure class="stack">
+          <figcaption>普通 10pt · 回测主表 32px 行高</figcaption>
+          <table class="regular digits" aria-label="普通表格">
+            <thead><tr><th scope="col">行状态</th><th scope="col">收益率</th></tr></thead>
+            <tbody>
+              <tr><td>普通行</td><td>+1.20%</td></tr>
+              <tr class="alternate-row"><td>交替行</td><td>−0.80%</td></tr>
+              <tr class="selected-row"><td>选中行</td><td>+0.30%</td></tr>
+            </tbody>
+          </table>
+        </figure>
+      </div>
+    </section>
+
+    <section class="panel stack" aria-labelledby="dialogs">
+      <h2 id="dialogs">弹窗</h2>
+      <p class="source">草案·控件与状态·弹窗 · PANEL_BG、1px BORDER、0px 圆角</p>
+      <p class="source">标题 11pt 粗体、正文 10pt、容器留白 12px、字段间距 8px</p>
+      <div class="panel stack" role="group" aria-labelledby="dialog-title">
+        <h2 id="dialog-title">终止扫描</h2>
+        <p>要终止当前扫描任务吗？</p>
+        <div class="row">
+          <button type="button" class="button">取消</button>
+          <button type="button" class="button danger">终止任务</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel stack" aria-labelledby="scrollbars">
+      <h2 id="scrollbars">滚动条</h2>
+      <p class="source">草案·控件与状态·滚动条 · 轨宽 12px、可配置时滑块最小 24px</p>
+      <p class="source">轨 CONTROL_BG、滑块 MUTED、悬停 TEXT</p>
+      <div class="row">
+        <figure class="sample"><div class="rail" aria-hidden="true"><div class="thumb"></div></div><figcaption>默认</figcaption></figure>
+        <figure class="sample"><div class="rail" aria-hidden="true"><div class="thumb hover"></div></div><figcaption>悬停</figcaption></figure>
+      </div>
+    </section>
+  </main>
+
+  <footer class="panel stack">
+    <h2>草案未定项（8 条）</h2>
+    <ul class="stack source">
+      <li>按钮宽度和固定高度。宽度随文案，样张量出实际尺寸。</li>
+      <li>页签总宽高、内边距和两行计数的行距。样张按内容排版。</li>
+      <li>输入框和下拉的宽度、下拉箭头样式。样张使用浏览器默认宽度策略及箭头。</li>
+      <li>禁用控件专用底色、边框色和透明度。文字用 MUTED，示例沿用常态底色和边框。</li>
+      <li>复选和单选指示符的尺寸与状态配色。样张使用浏览器原生指示符。</li>
+      <li>草案要求保留各表现有交替行配色，未指定跨表统一色对。样张沿用关注列表的 PANEL_BG／APP_BG。</li>
+      <li>弹窗宽高和按钮区对齐。草案要求沿用现有窗口策略，样张随内容排版。</li>
+      <li>滚动条轨长和滑块圆角。样张轨长仅供展示。</li>
+    </ul>
+  </footer>
+
+  <script>
+    const measurements = document.querySelectorAll('#buttons ~ .pair output');
+    const observer = new ResizeObserver(entries => {
+      for (const { target } of entries) {
+        const { width, height } = target.getBoundingClientRect();
+        target.closest('figure').querySelector('output').textContent =
+          `${Number(width.toFixed(2))} × ${Number(height.toFixed(2))} px`;
+      }
+    });
+
+    for (const output of measurements) {
+      observer.observe(output.closest('figure').querySelector('button'));
+    }
+  </script>
+</body>
+</html>
