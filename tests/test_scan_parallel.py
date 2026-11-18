@@ -40,7 +40,8 @@ def run_scan(store, ids, keys=KEYS, **kwargs):
 
 def enable(monkeypatch):
     monkeypatch.setattr('workbench.scan_parallel.MIN_STOCKS', 1)
-    monkeypatch.setattr('workbench.scan_parallel.worker_count', lambda: 2)
+    monkeypatch.setattr('workbench.scan_parallel.worker_selection',
+                        lambda: dict(workers=2, reason='available', retryable=False))
     for prefix in ('MTR', 'THREE_K', 'GAP_PINBAR', 'AWIL', 'STRUCTURAL_GAP'):
         monkeypatch.setenv('APLUS_' + prefix + '_FAST_REJECT_MODE', 'OFF')
 
@@ -281,11 +282,75 @@ def test_worker_limit_and_invalid_setting_use_serial(monkeypatch, value):
     assert worker_count() == 1
 
 
+@pytest.mark.parametrize('available,workers,retry', [(4*1024**3, 4, False),
+                                                   (1100*1024**2, 4, False),
+                                                   (350*1024**2, 1, True)])
+def test_auto_selection_preserves_cpu_memory_budget(monkeypatch, available, workers, retry):
+    from workbench import scan_parallel as module
+    monkeypatch.setenv(module.WORKERS_ENV, 'auto')
+    monkeypatch.setattr(module.os, 'cpu_count', lambda: 8)
+    monkeypatch.setattr(module, 'memory_snapshot', lambda: dict(available_bytes=available))
+    decision = module.worker_selection()
+    assert (decision['workers'], decision['retryable']) == (workers, retry)
+    assert decision['available_bytes'] == available and decision['cpu_count'] == 8
+
+
+def test_failed_resource_probe_is_safe_and_recorded(monkeypatch):
+    from workbench import scan_parallel as module
+    monkeypatch.setenv(module.WORKERS_ENV, 'auto')
+    monkeypatch.setattr(module.os, 'cpu_count', lambda: 8)
+    def unavailable():
+        raise OSError('fixture')
+    monkeypatch.setattr(module, 'memory_snapshot', unavailable)
+    assert module.worker_selection()['reason'] == 'memory_probe_failed'
+    assert worker_count() == 1
+
+
+def test_commit_budget_and_running_pressure_keep_safe_serial_fallback(store, frame, monkeypatch):
+    from workbench import scan_parallel as module
+    monkeypatch.setenv(module.WORKERS_ENV, 'auto')
+    monkeypatch.setattr(module.os, 'cpu_count', lambda: 8)
+    monkeypatch.setattr(module, 'memory_snapshot', lambda: dict(
+        available_bytes=2*1024**3, commit_available_bytes=1024**3))
+    assert worker_count() == 1  # Physical RAM alone cannot authorize workers.
+    did = save_dataset(store, 'sh.600000', frame, 'tickflow', '前复权')
+    pool = OrderedComputations([(0, payload(store,did))], 2, threading.Event())
+    monkeypatch.setattr(module, 'memory_snapshot', lambda: dict(available_bytes=100*1024**2))
+    assert pool.take(0) is None and pool.closed and pool.failure
+    assert all(w.process.poll() is not None for w in pool.processes)
+
+
+def test_transient_memory_gate_retries_without_recomputing_committed_stocks(store, frame, monkeypatch):
+    from workbench import scan_parallel as module
+    enable(monkeypatch)
+    probes = []
+    def selection():
+        probes.append(True)
+        return dict(workers=1 if len(probes)==1 else 2,
+                    reason='memory_limit' if len(probes)==1 else 'available',
+                    retryable=len(probes)==1)
+    monkeypatch.setattr(module, 'worker_selection', selection)
+    ids = [save_dataset(store, f'sh.{600000+n}', frame, 'tickflow', '前复权') for n in range(20)]
+    _, row, report = run_scan(store, ids)
+    assert row['status'] == 'completed', report
+    assert report['execution']['workers'] == 2
+    assert [d['stock_index'] for d in report['parallel_decisions']] == [0, 16]
+    calls = store.rows("SELECT detail FROM events WHERE job_id=? AND action='调用策略'", (row['id'],))
+    identities = [(json.loads(r['detail'])['dataset'], json.loads(r['detail'])['strategy']) for r in calls]
+    assert len(identities) == len(set(identities)) == len(ids)*len(KEYS)
+    assert report['calculated'] == len(ids)*len(KEYS) and report['reused'] == 0
+    assert len(store.rows('SELECT key FROM scan_cache')) == len(identities)
+
+
 def test_serial_sources_plugins_and_fast_reject_keep_existing_route(store, frame, monkeypatch):
     enable(monkeypatch)
+    monkeypatch.setattr('workbench.scan_parallel.worker_selection',
+                        lambda: pytest.fail('固定串行资格不应探测动态资源'))
     did = save_dataset(store, 'sh.600000', frame, 'baostock', '前复权')
     _, row, report = run_scan(store, [did])
     assert row['status'] == 'completed' and 'execution' not in report
+    assert report['parallel_decisions'] == [dict(stock_index=0, workers=1, retryable=False,
+                                                reason='unsupported_source_or_metadata')]
     assert open_computations(store, {}, [], {}, [], {}, threading.Event(), True) is None
 
 
@@ -318,7 +383,7 @@ from workbench.service import Service
 from workbench.store import Store,dumps,now
 root,did,point=sys.argv[1:]
 scan_parallel.MIN_STOCKS=1
-scan_parallel.worker_count=lambda:2
+scan_parallel.worker_selection=lambda:dict(workers=2,reason='available',retryable=False)
 store=Store(root)
 svc=Service(store)
 spec=dict(datasets=[did],strategies=['STRATEGY_3K'],timeframe='daily',asof='2024-12-31')

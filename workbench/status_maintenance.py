@@ -235,6 +235,11 @@ def maintain_daily_status(service, job, spec, result):
     periods = result.get('scan_periods') or {'daily':audit}
     if not periods.get('daily', {}).get('scope_valid'):
         return result
+    if spec.get('_defer_daily_status') and spec.get('premarket_parent'):
+        # The one-click owner will run this unchanged closure after the first
+        # qualified scan. No evidence or price repair is silently discarded.
+        result['status_maintenance_pending'] = True
+        return result
     if not _RUN_LOCK.acquire(blocking=False):
         return result
     try:

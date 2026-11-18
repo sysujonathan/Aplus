@@ -146,8 +146,10 @@ class Service:
         self.store.execute("UPDATE jobs SET status='running' WHERE id=?", (job,))
         self.store.event(job, '开始任务', kind=kind, settings=spec)
         try:
-            self._wait_for_chart_reads(job)
-            report = getattr(self,'_'+kind)(job,spec)
+            from .task_power import active_task
+            with active_task(self.store, job, kind):
+                self._wait_for_chart_reads(job)
+                report = getattr(self,'_'+kind)(job,spec)
             state = 'partial' if report.get('errors') or report.get('complete') is False else 'completed'
             if self.cancel_flags[job].is_set():
                 state = 'cancelled'
@@ -719,7 +721,8 @@ class Service:
         del lookup_keys  # Keep only rows that actually exist, not every candidate key.
         metadata_batch_failed = False
         computations = None
-        parallel_checked = False
+        parallel_decision = None
+        parallel_attempts = 0
         for stock_index, (did, (keys, legacy, bridged)) in enumerate(zip(spec['datasets'], lookups)):
             self.check_stop(job)
             event_rows, cache_rows, observation_rows = [], [], []
@@ -774,12 +777,24 @@ class Service:
                 cached_signals = {}
             prepared = None
             prepare_error = None
-            if eligible and not all_cached and not parallel_checked:
+            # One early retry also helps medium batches. Later probes are at
+            # least 64 committed stocks apart, only while enough work remains.
+            # An initial busy desktop must not pin a long scan to serial.
+            from .scan_parallel import MIN_STOCKS
+            retry_parallel = (parallel_decision is not None and parallel_decision.get('retryable')
+                              and len(spec['datasets']) - stock_index >= MIN_STOCKS
+                              and stock_index - parallel_decision['stock_index'] >=
+                                  (16 if parallel_attempts == 1 else 64))
+            if eligible and not all_cached and (parallel_decision is None or retry_parallel):
                 from .scan_parallel import open_computations
-                parallel_checked = True
+                parallel_decision = {}
+                parallel_attempts += 1
                 computations = open_computations(self.store, dict(spec, asof=asof), strategies,
                     prefetched_records, lookups, prefetched_signals, self.cancel_flags[job],
-                    accelerated=bool(mtr_fast or three_k_fast or gap_family_fast))
+                    accelerated=bool(mtr_fast or three_k_fast or gap_family_fast),
+                    start_index=stock_index, decision=parallel_decision)
+                report.setdefault('parallel_decisions', []).append(dict(parallel_decision))
+                self.store.event(job, '扫描并行选择', **parallel_decision)
                 if computations is not None:
                     self._scan_compute_pools.append(computations)
                     report['execution'] = dict(mode='processes', workers=computations.workers)
