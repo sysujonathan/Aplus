@@ -1,10 +1,10 @@
 """Stage a self-contained desktop source and an approval request; never upload."""
 import argparse
 import csv
+from datetime import date
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -12,8 +12,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from workbench.market import completed_date
-from workbench.snapshot import load_snapshot, snapshot_digest
+from workbench.snapshot import ReadOnlyStore, load_snapshot, snapshot_digest
 from workbench.store import digest, dumps
+from workbench.sync_packages import write_latest, write_package
+from workbench.sync_source import write_sync_source
 
 TARGET_FOLDER_ID = '1CpQsi8WdmouMv6T5EaK-JMG4OiZofuJo'
 TARGET_PARENT_ID = '1Dl3Qjmb24H8VqBdrV9YeHSkAIuN2lSbp'
@@ -44,12 +46,14 @@ def delivery_files(source):
         dict(path='manifest.json', bytes=path.stat().st_size, sha256=digest(path.read_bytes()))]
 
 
-def prepare(runtime, asof, out):
+def prepare(runtime, asof, out, *, versioned=False, parent_source=None, previous=None, recovery=False):
     runtime, out = Path(runtime).resolve(), Path(out).resolve()
     if out.is_relative_to(runtime) or runtime.is_relative_to(out):
         raise ValueError('待上传目录必须与正式 runtime 隔离')
     if out.exists():
         raise ValueError('待上传目录已存在；请使用新的目录，保留上一批审批材料')
+    if date.fromisoformat(asof).isoformat() != asof:
+        raise ValueError('待发布交易日格式错误')
     snapshot = load_snapshot(runtime / 'snapshots' / asof / 'snapshot.json')
     if snapshot['asof'] != asof:
         raise ValueError('快照日期与本次晚间交付日期不一致；拒绝回落到旧数据')
@@ -57,9 +61,7 @@ def prepare(runtime, asof, out):
     temporary = Path(tempfile.mkdtemp(prefix='.sync-delivery-', dir=out.parent))
     try:
         source = temporary / 'source'
-        tool = Path(__file__).with_name('export_sync_source.py')
-        subprocess.run([sys.executable, str(tool), '--runtime', str(runtime),
-                        '--asof', asof, '--out', str(source)], check=True, capture_output=True, text=True)
+        write_sync_source(ReadOnlyStore(runtime), asof, source)
         manifest, files = delivery_files(source)
         # Export may hardlink immutable market files. Detach every staged inode so
         # review, packaging or future staging edits cannot modify runtime bytes.
@@ -77,6 +79,13 @@ def prepare(runtime, asof, out):
         with ZipFile(archive, 'w', ZIP_DEFLATED) as bundle:
             for record in files:
                 bundle.write(source / record['path'], record['path'])
+        if versioned:
+            if (parent_source is None) != (previous is None):
+                raise ValueError('增量备包必须同时提供已发布 latest 与父版本完整源')
+            package = write_package(source, temporary, parent_source)
+            fallback = write_package(source, temporary) if recovery and parent_source else None
+            pointer_sha = write_latest(temporary, package, Path(previous).read_bytes() if previous else None,
+                                       fallback)
         request = dict(status='awaiting-human-upload-approval', asof=asof,
                        target_folder_id=TARGET_FOLDER_ID, expected_parent_id=TARGET_PARENT_ID,
                        source=str(out / 'source'), manifest_digest=manifest['sha256'],
@@ -86,6 +95,10 @@ def prepare(runtime, asof, out):
                        coverage=manifest['coverage'],
                        instructions='监督方先发起真实上传审批卡；批准后按 upload-files.csv 上传 source 内容到目标根目录，'
                                     '逐文件校验后最后替换 manifest.json；ZIP 仅供运输，须解包。此文件不是审批凭据。')
+        if versioned:
+            request.update(pointer_sha256=pointer_sha, package=package, fallback=fallback,
+                           instructions='监督方发起真实上传审批并绑定 latest SHA；按版本包发布流程上传、'
+                                        '远端核验后最后切换 latest.json。此文件不是审批凭据。')
         (temporary / 'upload-request.json').write_text(dumps(request), encoding='utf-8')
         temporary.rename(out)
         return request
@@ -99,9 +112,14 @@ def main(argv=None):
     parser.add_argument('--runtime', required=True)
     parser.add_argument('--asof', default=None)
     parser.add_argument('--out', required=True, help='新的待审批目录；不得位于 runtime 内')
+    parser.add_argument('--versioned', action='store_true')
+    parser.add_argument('--parent-source')
+    parser.add_argument('--previous')
+    parser.add_argument('--recovery', action='store_true')
     args = parser.parse_args(argv)
     asof = args.asof or completed_date()
-    print(dumps(prepare(args.runtime, asof, args.out)))
+    print(dumps(prepare(args.runtime, asof, args.out, versioned=args.versioned or bool(args.parent_source),
+                        parent_source=args.parent_source, previous=args.previous, recovery=args.recovery)))
     return 0
 
 

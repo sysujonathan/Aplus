@@ -62,6 +62,7 @@ def sample(tmp_path, monkeypatch):
     for index, code in enumerate(['sh.600000', 'sz.000001']):
         frame = pd.DataFrame([dict(date=ASOF, open=10, high=12, low=9, close=11, volume=100)])
         did = save_dataset(source, code, frame, 'tickflow', 'qfq')
+        source.execute('UPDATE datasets SET created=? WHERE id=?', (ASOF+'T08:00:00+00:00', did))
         source.execute('INSERT INTO observations VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                        (f'obs-{index}', 'scan', code, 'STRATEGY_GAP_H2', 'v1', 'daily', ASOF, ASOF, did,
                         dumps(dict(entry=11, stop=9, target=15, plan=dict(entry=11, stop=9, target=15))), ASOF))
