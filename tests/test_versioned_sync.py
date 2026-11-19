@@ -66,12 +66,12 @@ def test_approved_upload_verifies_and_activates_last(delivery):
 
     with pytest.raises(ValueError, match='桌面入口'):
         publish(entry[0], DelayedVisibility(remote), receipts, lambda _: True)
-    events = [json.loads(line) for line in (receipts / 'publish.jsonl').read_text().splitlines()]
+    events = [json.loads(line) for line in (receipts / 'publish.jsonl').read_text(encoding='utf-8').splitlines()]
     assert events[-1]['state'] == 'failed'
     assert events[-1]['last_completed'] == 'latest-activated'
     assert all(entry['state'] != 'client-visible' for entry in events)
     assert send(entry) == entry[1]['version']
-    events = [json.loads(line) for line in (receipts / 'publish.jsonl').read_text().splitlines()]
+    events = [json.loads(line) for line in (receipts / 'publish.jsonl').read_text(encoding='utf-8').splitlines()]
     assert events[-1]['state'] == 'client-visible'
     assert events[-1]['pointer_sha256'] == entry[2]
 
