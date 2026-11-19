@@ -5,7 +5,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from tests.test_desktop_sync import sample, ASOF
+from tests.test_desktop_sync import ASOF, PREVIOUS, sample
 from tools import prepare_sync_delivery as delivery
 from workbench.store import digest
 
@@ -40,7 +40,7 @@ def test_reject_runtime_destination_and_old_snapshot(sample, tmp_path, monkeypat
     server, _, _ = sample
     with pytest.raises(ValueError, match='隔离'):
         delivery.prepare(server.root, ASOF, server.root / 'pending')
-    monkeypatch.setattr(delivery, 'load_snapshot', lambda _: {'asof': '2026-11-10'})
+    monkeypatch.setattr(delivery, 'load_snapshot', lambda _: {'asof': PREVIOUS})
     with pytest.raises(ValueError, match='拒绝回落'):
         delivery.prepare(server.root, ASOF, tmp_path / 'pending')
     assert not (tmp_path / 'pending').exists()

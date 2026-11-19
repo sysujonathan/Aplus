@@ -6,7 +6,7 @@ from zipfile import ZipFile
 import pytest
 
 from gui.data import load_candidates, load_observation_candles
-from tests.test_desktop_sync import ASOF, edit, sample
+from tests.test_desktop_sync import ASOF, NEXT, edit, sample
 from tools.publish_sync_delivery import LocalRehearsal, publish
 from workbench.sources import calendar_file, directory_date, directory_file
 from workbench.store import Store, digest, dumps
@@ -147,15 +147,14 @@ def test_failed_activation_keeps_prior_candidates_and_charts(delivery, tmp_path,
 
 def _stage_next_day(delivery, tmp_path, baseline, source):
     _, _, _, _, _, stage, send = delivery
-    day = '2026-11-12'
-    revision = _copy_revision(source, tmp_path, 1, day=day)
+    revision = _copy_revision(source, tmp_path, 1, day=NEXT)
     directory = 'sources/tickflow/universe.csv'
     calendar = 'sources/tickflow/trading_calendar.json'
     (revision / directory).write_bytes((source / directory).read_bytes() + b'sz.000001,new\n')
     (revision / calendar).write_text(
-        dumps(dict(start=ASOF, end=day, trading_days=[ASOF, day])), encoding='utf-8')
+        dumps(dict(start=ASOF, end=NEXT, trading_days=[ASOF, NEXT])), encoding='utf-8')
     edit(revision, lambda manifest: manifest.update(
-        asof=day, universe_date=day, observations=[],
+        asof=NEXT, universe_date=NEXT, observations=[],
         directories=[dict(path=directory, sha256=digest((revision / directory).read_bytes()))],
         calendar=dict(path=calendar, sha256=digest((revision / calendar).read_bytes()))))
     delta = stage(revision, source, baseline[0] / 'latest.json')
@@ -191,12 +190,12 @@ def test_retry_activates_verified_inventory_after_older_local_write(delivery, tm
 
     for status in ('applied', 'up-to-date'):
         result = apply_sync_source(desktop, remote)
-        assert (result['status'], result['asof']) == (status, '2026-11-12')
+        assert (result['status'], result['asof']) == (status, NEXT)
         calendar = json.loads(calendar_file(desktop, 'tickflow').read_bytes())
         assert (
             directory_date(desktop, 'tickflow'), max(calendar['trading_days']),
             digest(directory_file(desktop, 'tickflow').read_bytes()),
-        ) == ('2026-11-12', '2026-11-12', manifest['directories'][0]['sha256'])
+        ) == (NEXT, NEXT, manifest['directories'][0]['sha256'])
 
 
 def test_activation_rejects_if_effective_calendar_routes_to_old_inventory(delivery, tmp_path, monkeypatch):
