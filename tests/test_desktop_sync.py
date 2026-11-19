@@ -15,10 +15,11 @@ from workbench.store import Store, dumps
 from workbench.sync_client import apply_sync_source, find_sync_source
 from workbench.sync_source import write_sync_source
 
-ASOF = (date.today() - timedelta(days=1)).isoformat()
-# Tests that need "the day after ASOF" derive it from ASOF, so the fixture
-# never goes stale: load_snapshot rejects snapshots older than 7 days.
-NEXT = (date.fromisoformat(ASOF) + timedelta(days=1)).isoformat()
+# Keep snapshots recent and derive both adjacent fixture dates from one day.
+_ASOF_DAY = date.today() - timedelta(days=1)
+ASOF = _ASOF_DAY.isoformat()
+PREVIOUS = (_ASOF_DAY - timedelta(days=1)).isoformat()
+NEXT = (_ASOF_DAY + timedelta(days=1)).isoformat()
 
 
 def test_find_sync_source_direct(tmp_path):
@@ -175,7 +176,7 @@ def test_reject_without_database_changes(sample, kind):
         edit(out, lambda m: m.update(schema=2))
     elif kind == 'stale':
         assert apply_sync_source(desktop, out)['status'] == 'applied'
-        edit(out, lambda m: m.update(asof='2026-11-10'))
+        edit(out, lambda m: m.update(asof=PREVIOUS))
     elif kind == 'engine':
         edit(out, lambda m: m.update(engine='fake'))
     elif kind == 'directory':
@@ -468,7 +469,7 @@ def test_root_calendar_replaces_effective_tickflow_calendar(sample):
     source.write_artifact('trading_calendar.json', content)
     out = write_sync_source(ReadOnlyStore(source.root), ASOF, source.root / 'root-export')
     assert json.loads((out / 'manifest.json').read_text())['calendar']['path'] == 'trading_calendar.json'
-    older = dumps(dict(start='2026-11-10', end='2026-11-10', trading_days=['2026-11-10'])).encode()
+    older = dumps(dict(start=PREVIOUS, end=PREVIOUS, trading_days=[PREVIOUS])).encode()
     for path in [relative, 'trading_calendar.json', 'sources/tencent/trading_calendar.json']:
         desktop.write_artifact(path, older)
     assert apply_sync_source(desktop, out)['status'] == 'applied'
