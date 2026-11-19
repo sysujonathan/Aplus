@@ -61,3 +61,57 @@ def test_seven_day_boundary_and_expired_repeat(sample, monkeypatch):
     monkeypatch.setattr(sync_client, 'sync_age_days', lambda _: 8)
     assert '已过期 8 天' in sync_client.apply_sync_source(desktop, out)['message']
     assert state(desktop) == before
+
+
+@pytest.mark.parametrize('blocked_step', ['查找同步源', '读取并校验旧格式行情'])
+def test_desktop_sync_reports_timeout_while_drive_io_is_blocked(monkeypatch, sample, blocked_step):
+    import threading
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from gui import toolbar
+
+    _, store, source = sample
+    entered = threading.Event()
+    unblock = threading.Event()
+    released = threading.Event()
+    callbacks = []
+    moment = [0]
+
+    def wait_for_io():
+        entered.set()
+        assert unblock.wait(5)
+
+    def locate(_store):
+        if blocked_step == '查找同步源':
+            wait_for_io()
+        return source
+
+    read = Path.read_bytes
+
+    def read_bytes(path):
+        if path.parent == source / 'market':
+            wait_for_io()
+        return read(path)
+
+    monkeypatch.setattr(sync_client, 'locate_sync_source', locate)
+    monkeypatch.setattr(Path, 'read_bytes', read_bytes)
+    monkeypatch.setattr(toolbar, 'time', SimpleNamespace(monotonic=lambda: moment[0]))
+    view = SimpleNamespace(
+        _job_id=None, _desktop_sync_running=False, btn_desktop_sync=Mock(),
+        _header_data_var=Mock(), after=lambda _delay, callback: callbacks.append(callback),
+        store=store, service=SimpleNamespace(reserve_idle=Mock(), release_idle=released.set),
+    )
+    toolbar.ToolBar._on_desktop_sync(view)
+    try:
+        assert entered.wait(2)
+        moment[0] = 301
+        callbacks.pop(0)()
+        message = view._header_data_var.set.call_args.args[0]
+        assert blocked_step in message and '超时' in message
+        assert not released.is_set()
+    finally:
+        unblock.set()
+        assert released.wait(2)
+    assert not store.rows("SELECT value FROM meta WHERE key='sync_asof'")

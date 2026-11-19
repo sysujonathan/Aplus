@@ -1091,10 +1091,10 @@ class AplusMainWindow(ttk.Window):
     def _on_job_finished(self, kind, status, result=None):
         if self.store is None:
             return
+        synced = kind == '同步' and status == 'completed' and (result or {}).get('asof')
         try:
             # 行情更新只扩充可选日期，不打断交易员正在复核的旧信号；
             # 扫描产出属于用户刚发起的当前任务，应立即显示该次实际扫描日。
-            synced = kind == '同步' and status == 'completed' and (result or {}).get('asof')
             if synced:
                 from workbench.sources import SOURCES
                 self._tf_var.set('daily')
@@ -1124,7 +1124,8 @@ class AplusMainWindow(ttk.Window):
             self.watch.reload()
             self.toolbar._load_market_status()
         except Exception:
-            pass
+            if synced:
+                raise
         # ToolBar 已保留任务结果，并在行情更新后明确提示“行情最新/信号最新/待扫描”。
         # 此处只刷新视图，不再用泛化文案覆盖那条关键结果。
 

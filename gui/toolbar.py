@@ -8,6 +8,7 @@ import os
 import queue
 import threading
 import time
+import sys
 import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.widgets import ToolTip
@@ -1182,7 +1183,11 @@ class ToolBar(ttk.Frame):
         self._desktop_sync_running = True
         self._desktop_sync_notice = None
         self.btn_desktop_sync.state(['disabled'])
-        self._header_data_var.set('正在查找同步源并校验数据，请稍候…')
+        stage = '查找同步源'
+        self._header_data_var.set(stage)
+        started = time.monotonic()
+        timed_out = False
+        log = logging.getLogger('aplus.desktop_sync')
 
         replies = queue.Queue()
         cancelled = threading.Event()
@@ -1195,40 +1200,77 @@ class ToolBar(ttk.Frame):
             if result.get('version') and result.get('asof'):
                 self._desktop_sync_notice = (result['asof'], result['message'])
             self.btn_desktop_sync.state(['!disabled'])
-            if result['status'] != 'missing':
-                invalidate(self.store)
-                if self._on_job_finished:
-                    self._on_job_finished('同步', 'completed' if result['status'] != 'rejected' else 'failed', result)
-            self._header_data_var.set(result['message'])
+            if timed_out and result['status'] in ('missing', 'rejected'):
+                return
+            if result['status'] == 'rejected':
+                result = {**result, 'message': f"{stage} · {result['message']}"}
+            try:
+                if result['status'] in ('applied', 'up-to-date'):
+                    log.info('刷新桌面 · %.1f 秒', time.monotonic() - started)
+                    invalidate(self.store)
+                if result['status'] != 'missing' and self._on_job_finished:
+                    self._on_job_finished('同步', 'failed' if result['status'] == 'rejected' else 'completed', result)
+            except Exception:
+                log.exception('刷新桌面失败')
+                self._header_data_var.set('刷新桌面失败：请重开工作台并查看桌面日志')
+                return
+            message = result['message']
+            log.info('同步结束 %s · %.1f 秒 · %s', result['status'], time.monotonic() - started, message)
+            self._header_data_var.set(message)
 
         def poll():
+            nonlocal stage, timed_out
             try:
                 while True:
                     result = replies.get_nowait()
                     if isinstance(result, str):
-                        self._header_data_var.set(result)
+                        if not timed_out:
+                            stage = result
+                            self._header_data_var.set(result)
                     else:
                         finished(result)
                         return
             except queue.Empty:
-                self.after(50, poll)
+                if not timed_out and time.monotonic() - started >= 300:
+                    timed_out = True
+                    cancelled.set()
+                    message = f'{stage} · 同步超时（300 秒），等待当前读写退出；可重开工作台后检查同步结果'
+                    log.warning('%s', message)
+                    self._header_data_var.set(message)
+                self.after(50 if not timed_out else 500, poll)
+
+        def progress(message):
+            log.info('%s', message)
+            replies.put_nowait(message)
 
         def run():
             from workbench.sync_client import locate_sync_source, apply_sync_source, rejection_message, missing_sync_message
+            from workbench.release_identity import read_identity
+
             reserved = False
+            result = {'status': 'rejected', 'message': '同步执行中断，请查看桌面日志'}
             try:
+                try:
+                    identity = read_identity()
+                except (OSError, ValueError, TypeError, AttributeError):
+                    log.info('同步启动 · 安装构建身份不可读 · frozen=%s', getattr(sys, 'frozen', False))
+                else:
+                    log.info('同步启动 · version=%s commit=%s preview=%s',
+                             identity['version'], identity['commit'], identity['preview'])
+                log.info('查找同步源 · %.1f 秒', time.monotonic() - started)
                 self.service.reserve_idle('正在同步桌面成果，请等待同步结束后再开始任务')
                 reserved = True
                 source = locate_sync_source(self.store)
+                if cancelled.is_set():
+                    return
                 if source is None:
                     logging.getLogger(__name__).warning(
                         'No desktop synchronization source: %s', os.environ.get('APLUS_SYNC_DIR'))
                     result = {'status': 'missing', 'message': missing_sync_message(self.store)}
-                elif (source / 'latest.json').is_file():
-                    result = apply_sync_source(self.store, source, progress=replies.put_nowait,
-                                               cancelled=cancelled.is_set)
                 else:
-                    result = apply_sync_source(self.store, source)
+                    progress(f'读取本地版本 · {time.monotonic() - started:.1f} 秒')
+                    result = apply_sync_source(self.store, source, progress=progress,
+                                               cancelled=cancelled.is_set)
             except Exception:
                 logging.getLogger(__name__).exception('Desktop synchronization failed')
                 try:
@@ -1239,9 +1281,13 @@ class ToolBar(ttk.Frame):
                 result = {'status': 'rejected', 'message': message}
             finally:
                 # Release after all writes, including when the window has closed.
-                if reserved:
-                    self.service.release_idle()
-            replies.put_nowait(result)
+                try:
+                    if reserved:
+                        self.service.release_idle()
+                except Exception:
+                    log.exception('同步互斥释放失败')
+                finally:
+                    replies.put_nowait(result)
 
         self.after(50, poll)
         try:

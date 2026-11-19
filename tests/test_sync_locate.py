@@ -209,7 +209,7 @@ def test_toolbar_locator_io_keeps_tk_responsive(toolbar, tmp_path, monkeypatch, 
     monkeypatch.setattr(sync_client, '_sync_search_roots', roots)
     applied = []
 
-    def apply(store, path):
+    def apply(store, path, *, progress, cancelled):
         worker_threads.append(threading.get_ident())
         applied.append(path)
         return {'status': 'applied', 'message': '同步完成'}
@@ -280,7 +280,8 @@ def test_toolbar_sync_failures_restore_button(toolbar, monkeypatch, stage):
     ToolBar._on_desktop_sync(bar)
     drain(toolbar)
     message = bar._header_data_var.set.call_args.args[0]
-    assert message.startswith('同步失败，仍为 原有 数据。')
+    assert '同步失败，仍为 原有 数据。' in message
+    assert message.startswith('读取本地版本' if stage == 'apply' else '查找同步源')
     assert '重试' in message and '日志' in message
     bar._on_job_finished.assert_called_once_with('同步', 'failed', {'status': 'rejected', 'message': message})
 
@@ -296,7 +297,7 @@ def test_sync_reserves_shared_service_until_worker_exits(toolbar, monkeypatch, o
     entered, release = threading.Event(), threading.Event()
     monkeypatch.setattr(sync_client, 'locate_sync_source', lambda _: bar.store.root)
 
-    def apply(*args):
+    def apply(*args, **kwargs):
         entered.set()
         assert release.wait(3)
         if outcome == 'exception':

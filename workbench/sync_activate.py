@@ -53,12 +53,14 @@ def _check_rows(manifest):
             or coverage['excluded_count'] != 0 or manifest.get('excluded')):
         raise ValueError('同步源完整扫描标记与覆盖回执不一致')
     rows = {}
+    dataset_columns = set(DATASET_COLUMNS)
+    observation_columns = set(OBSERVATION_COLUMNS)
     symbols = set()
     for row in manifest['datasets']:
         identity = (row['code'], row['timeframe'], row['source'], row['adjustment'])
         expected_id = digest(('|'.join((*identity, row['sha256']))).encode())
         symbol = identity[:2]
-        if (set(row) != set(DATASET_COLUMNS) or row['id'] != expected_id or symbol in symbols
+        if (row.keys() != dataset_columns or row['id'] != expected_id or symbol in symbols
                 or row['timeframe'] != 'daily' or row['source'] != 'tickflow'
                 or row['adjustment'] not in ('前复权', 'qfq') or row['end'] > manifest['asof']):
             raise ValueError('同步源行情身份、日期或前复权口径不一致')
@@ -66,7 +68,7 @@ def _check_rows(manifest):
         rows[row['id']] = row
     seen = set()
     for row in manifest['observations']:
-        if set(row) != set(OBSERVATION_COLUMNS) or row['id'] in seen:
+        if row.keys() != observation_columns or row['id'] in seen:
             raise ValueError('同步源候选身份无效')
         dataset = rows.get(row['dataset_id'])
         if (dataset is None or any(dataset[k] != row[k] for k in ('code', 'timeframe'))
@@ -166,18 +168,21 @@ def _reconstruct(store, archive_path, item, parent, verified, validate, report):
 
 
 def prepare_activation(store, remote, saved, validate, validate_day, report):
+    # manifest_files checks identity and digest before the caller checks compatibility.
     plan = load_latest((remote / 'latest.json').read_bytes())
     chain = plan['chain']
     target = chain[-1]
     validate_day(target['asof'])
     active = saved.get('sync_version')
+    report(f"已发布 {target['asof']} {target['version'][:12]} · 本地版本 {active[:12] if active else '首次'}",
+           force=True)
     parent = None
     verified = {}
     active_path = _local_path(store, _version_manifest(active)) if is_sha(active) else None
     active_manifest = None
     if active_path and active_path.is_file():
         active_manifest = json.loads(active_path.read_bytes())
-        manifest_files(active_manifest)
+        active_files = manifest_files(active_manifest)
         if active_manifest['sha256'] != active or active_manifest['asof'] != saved.get('sync_asof'):
             raise ValueError('同步源本地已应用版本记录不一致')
     if active == target['version'] and active_manifest:
@@ -185,8 +190,8 @@ def prepare_activation(store, remote, saved, validate, validate_day, report):
             raise ValueError('同步源本地版本与版本链日期不一致')
         validate(active_manifest)
         report('校验已应用版本', force=True)
-        for name, row in manifest_files(active_manifest).items():
-            report('校验已应用版本')
+        for number, (name, row) in enumerate(active_files.items(), 1):
+            report(f'校验已应用版本 {number}/{len(active_files)}')
             relative = name if 'id' in row else _inventory_path(active, name)
             if not _existing(store, relative, row['sha256'], verified):
                 break
