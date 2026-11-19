@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -51,7 +52,7 @@ class LocalRehearsal:
             return None
 
 
-def publish(staged, transport, receipts, approved):
+def publish(staged, transport, receipts, approved, *, request=None, mode=None):
     """The caller supplies the trusted approval verifier and authorized transport."""
     from workbench.sync_packages import load_latest, package_name
 
@@ -62,20 +63,36 @@ def publish(staged, transport, receipts, approved):
     receipts.mkdir(parents=True, exist_ok=True)
 
     target_version = None
+    started = time.monotonic()
+    previous_tick = started
+    stage_seconds = {}
 
     def record(state, **details):
-        event = dict(at=datetime.now(timezone.utc).isoformat(), state=state,
+        nonlocal previous_tick
+        tick = time.monotonic()
+        stage_seconds[state] = stage_seconds.get(state, 0) + tick - previous_tick
+        previous_tick = tick
+        event = dict(elapsed_seconds=round(tick - started, 3), at=datetime.now(timezone.utc).isoformat(), state=state,
                      target=target_version, pointer_sha256=pointer_sha, **details)
         with (receipts / 'publish.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps(event, ensure_ascii=False) + '\n')
-            stream.flush()
-            os.fsync(stream.fileno())
+            # Persist the approval and activation boundaries. Intermediate
+            # progress is flushed with its next boundary on the same journal.
+            if state in ('approved', 'remote-verified', 'latest-activated', 'client-visible', 'failed'):
+                stream.flush()
+                os.fsync(stream.fileno())
 
     state = 'validating'
     try:
         plan = load_latest(body)
         target_version = plan['chain'][-1]['version']
         state = 'generated'
+        record(state)
+        if not approved(pointer_sha):
+            state = 'blocked-approval'
+            record(state)
+            raise PermissionError('阻塞在审批：缺少与本次发布清单及目标目录绑定的有效上传审批')
+        state = 'approved'
         record(state)
         initial = transport.read_latest()
         if initial is not None and initial != body:
@@ -84,10 +101,6 @@ def publish(staged, transport, receipts, approved):
             if target['asof'] < previous['asof'] or (
                     target['asof'] == previous['asof'] and target['parent'] != previous['version']):
                 raise ValueError('发布版本早于当前 latest 或同日修订未锚定当前版本')
-        if not approved(pointer_sha):
-            raise PermissionError('缺少与本次发布清单绑定的有效上传审批')
-        state = 'approved'
-        record(state)
         packages = {item['sha256'] for item in plan['chain']}
         if plan.get('fallback'):
             packages.add(plan['fallback']['sha256'])
@@ -117,13 +130,25 @@ def publish(staged, transport, receipts, approved):
                 transport.put('latest.json', approved_pointer)
         state = 'latest-activated'
         record(state)
-        if transport.read_latest() != body:
+        readback = transport.read_latest()
+        if readback != body:
             raise ValueError('远端 latest 回读与批准版本不一致')
         record('latest-readback-verified')
         if transport.read_visible_latest() != body:
             raise ValueError('桌面入口读取的 latest 与批准版本不一致')
         record('client-visible')
-        return plan['chain'][-1]['version']
+        if request is not None:
+            receipt = dict(mode=mode, status='client-visible', asof=plan['chain'][-1]['asof'],
+                           package_sha256=plan['chain'][-1]['sha256'], file_count=request['files'],
+                           package_count=len(packages), pointer_sha256=pointer_sha,
+                           remote_latest=load_latest(readback)['chain'][-1],
+                           elapsed_seconds=round(time.monotonic() - started, 3),
+                           stage_seconds={k: round(v, 3) for k, v in stage_seconds.items()})
+            with tempfile.TemporaryDirectory(dir=receipts) as staging:
+                path = Path(staging) / 'receipt.json'
+                path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+                path.replace(receipts / f'{pointer_sha}.json')
+        return target_version
     except Exception as exc:
         record('failed', last_completed=state, error=str(exc))
         raise

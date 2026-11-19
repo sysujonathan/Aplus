@@ -1,4 +1,5 @@
 """The sync publication and activation boundaries use separate isolated roots."""
+from errno import ENOSPC
 import json
 import os
 from zipfile import ZipFile
@@ -77,8 +78,8 @@ def test_approved_upload_verifies_and_activates_last(delivery):
     assert events[-1]['pointer_sha256'] == entry[2]
 
 
-@pytest.mark.parametrize('damage', ['truncated', 'wrong-parent', 'missing', 'cancelled', 'failed-commit'])
-def test_failed_activation_keeps_prior_candidates_and_charts(delivery, tmp_path, damage):
+@pytest.mark.parametrize('damage', ['truncated', 'wrong-parent', 'missing', 'cancelled', 'failed-commit', 'disk-full'])
+def test_failed_activation_keeps_prior_candidates_and_charts(delivery, tmp_path, damage, monkeypatch):
     _, desktop, source, remote, _, stage, send = delivery
     baseline = stage(source)
     send(baseline)
@@ -116,10 +117,18 @@ def test_failed_activation_keeps_prior_candidates_and_charts(delivery, tmp_path,
         desktop.execute("CREATE TRIGGER fail_version BEFORE UPDATE ON meta "
                         "WHEN NEW.key='sync_version' BEGIN SELECT RAISE(ABORT, 'injected'); END")
 
+    def disk_full(*_):
+        raise OSError(ENOSPC, 'injected')
+
     phases = []
-    result = apply_sync_source(desktop, remote, progress=phases.append,
-                               cancelled=lambda: damage == 'cancelled' and
-                               any('重建并校验' in phase for phase in phases))
+    with monkeypatch.context() as fault:
+        if damage == 'disk-full':
+            fault.setattr(desktop, 'write_immutable_sync_file', disk_full)
+        result = apply_sync_source(desktop, remote, progress=phases.append,
+                                   cancelled=lambda: damage == 'cancelled' and
+                                   any('重建并校验' in phase for phase in phases))
+    if damage == 'disk-full':
+        assert '本地磁盘空间不足' in result['message']
     assert result['status'] == 'rejected'
     assert desktop.rows("SELECT key,value FROM meta ORDER BY key") == prior
     assert {table: desktop.rows(f'SELECT * FROM {table}') for table in private_tables} == private_state
@@ -244,3 +253,49 @@ def test_catch_up_from_active_version_and_optional_baseline(delivery, tmp_path):
 def test_splice_preserves_exact_csv_bytes(before, after):
     start, end, patch = _splice(before, after)
     assert before[:start] + patch + before[end:] == after
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Linux runner approval executor')
+def test_runner_handoff_blocks_drive_and_writes_dry_run_receipt(delivery, tmp_path, monkeypatch):
+    from tools.prepare_sync_delivery import TARGET_FOLDER_ID, TARGET_PARENT_ID, delivery_files
+    from tools.runner import publish_approved_sync as runner
+
+    _, _, source, _, _, stage, _ = delivery
+    staged, item, sha = stage(source)
+    _, files = delivery_files(source)
+    request = dict(status='awaiting-human-upload-approval', asof=item['asof'], package=item,
+                   target_folder_id=TARGET_FOLDER_ID, expected_parent_id=TARGET_PARENT_ID,
+                   manifest_digest=item['version'], pointer_sha256=sha, files=len(files))
+    request_path = staged / 'upload-request.json'
+    request_path.write_text(dumps(request), encoding='utf-8')
+    reports = tmp_path / 'drive-reports'
+    calls = []
+
+    def check_approval(*args):
+        calls.append(args)
+        return False
+
+    def unexpected_drive_call(*args, **kwargs):
+        pytest.fail('审批完成前调用了 Drive')
+
+    monkeypatch.setattr(runner.DriveTransport, '_call', unexpected_drive_call)
+    with pytest.raises(PermissionError, match='阻塞在审批'):
+        runner.publish_approved(staged, reports, tmp_path / 'absent', check_approval)
+    assert calls == [(sha, TARGET_FOLDER_ID, TARGET_PARENT_ID)]
+    assert not list(reports.glob('*.json'))
+
+    rehearsal = tmp_path / 'dry'
+    args = [str(staged), '--dry-run', '--rehearsal-root', str(rehearsal)]
+    runner.main(args)
+    receipt = json.loads((rehearsal / f'{sha}.json').read_bytes())
+    assert receipt['mode'] == 'dry-run'
+    assert receipt['status'] == 'client-visible'
+    assert receipt['file_count'] == len(files)
+    assert receipt['remote_latest'] == item
+    assert receipt['package_sha256'] == item['sha256']
+    assert 'remote-verified' in receipt['stage_seconds']
+    request['pointer_sha256'] = '0' * 64
+    request_path.write_text(dumps(request), encoding='utf-8')
+    with pytest.raises(ValueError, match='待审批请求与版本包清单不符'):
+        runner.main(args)
+    assert (rehearsal / 'remote' / 'latest.json').read_bytes() == (staged / 'latest.json').read_bytes()

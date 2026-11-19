@@ -32,7 +32,8 @@ def main(argv=None):
     if args.asof:
         command += ['--asof', args.asof]
     subprocess.run(command, check=True)
-    print(f'待审批上传：{out / "upload-request.json"}；请监督方发起上传审批卡，尚未上传。', flush=True)
+    print(f'阻塞在审批：{out / "upload-request.json"}；请监督方发起上传审批卡。'
+          f'获批执行入口：tools.runner.publish_approved_sync.publish_approved，待发布目录 {out}。', flush=True)
 
 
 if __name__ == '__main__':
