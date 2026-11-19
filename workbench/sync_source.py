@@ -5,10 +5,9 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from .market import latest_datasets
 from .snapshot import load_snapshot, snapshot_digest
 from .sources import calendar_file, directory_date
-from .store import digest, dumps, now
+from .store import digest, dumps
 from .strategies import scan_engine_version
 
 DATASET_COLUMNS = 'id code timeframe source adjustment start end rows path sha256 created'.split()
@@ -30,16 +29,25 @@ def write_sync_source(store, asof=None, out_dir=None):
     if date.fromisoformat(asof).isoformat() != asof:
         raise ValueError('无效快照日期')
     snapshot = load_snapshot(snapshots / asof / 'snapshot.json')
-    if snapshot['asof'] != asof:
-        raise ValueError('快照日期不一致')
-    datasets = [{k: r[k] for k in DATASET_COLUMNS} for r in latest_datasets(store, 'tickflow')]
+    if snapshot['asof'] != asof or snapshot['source'] != 'tickflow' or snapshot['timeframe'] != 'daily':
+        raise ValueError('快照日期、行情源或周期不一致')
+    datasets = [{k: r[k] for k in DATASET_COLUMNS} for r in store.rows(
+        "SELECT * FROM (SELECT *, ROW_NUMBER() OVER(PARTITION BY code,timeframe "
+        "ORDER BY end DESC,created DESC,rowid DESC) AS rank FROM datasets "
+        "WHERE source='tickflow' AND timeframe='daily' AND end<=? AND julianday(created)<=julianday(?)) WHERE rank=1",
+        (asof, snapshot['generated_at']))]
     ids = {r['id'] for r in datasets}
     observations = []
-    for oid in dict.fromkeys(h['observation_id'] for h in snapshot['hits']):
+    for hit in snapshot['hits']:
+        oid = hit['observation_id']
         rows = store.rows('SELECT * FROM observations WHERE id=?', (oid,))
         if not rows or rows[0]['dataset_id'] not in ids:
             raise ValueError(f'快照命中缺少观测或最新行情：{oid}')
-        observations.append({k: rows[0][k] for k in OBSERVATION_COLUMNS})
+        row = rows[0]
+        if (any(row[k] != hit[k] for k in ('code', 'strategy', 'version', 'timeframe', 'setup_date'))
+                or row['asof'][:10] != asof or hit.get('dataset_id', row['dataset_id']) != row['dataset_id']):
+            raise ValueError(f'快照命中与已保存策略证据不一致：{oid}')
+        observations.append({k: row[k] for k in OBSERVATION_COLUMNS})
     calendar = calendar_file(store, 'tickflow')
     universe_date = directory_date(store, 'tickflow')
     if not calendar.is_file() or not universe_date:
@@ -74,9 +82,11 @@ def write_sync_source(store, asof=None, out_dir=None):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(calendar_content)
         manifest = dict(kind='aplus-sync-source', schema=1, asof=asof, source='tickflow',
-                        timeframe='daily', generated_at=now(), engine=scan_engine_version(),
+                        timeframe='daily', generated_at=snapshot['generated_at'], engine=scan_engine_version(),
                         frozen_sha256=frozen_sha256(), datasets=datasets, observations=observations,
-                        coverage=snapshot['coverage'], directories=directories,
+                        coverage=snapshot['coverage'], complete=snapshot.get('complete', False),
+                        excluded=snapshot.get('excluded', []), notes=snapshot.get('notes', []),
+                        snapshot_sha256=snapshot['sha256'], directories=directories,
                         calendar={'path': calendar_path, 'sha256': digest(calendar_content)},
                         universe_date=universe_date)
         manifest['sha256'] = snapshot_digest(manifest)

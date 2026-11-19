@@ -15,11 +15,20 @@ def main(argv=None):
     parser.add_argument('--runtime', type=Path, default=Path.home() / '.local/share/Aplus/runtime')
     parser.add_argument('--asof', default=None)
     parser.add_argument('--out', type=Path, default=None)
+    parser.add_argument('--parent-source', type=Path)
+    parser.add_argument('--previous', type=Path)
+    parser.add_argument('--recovery', action='store_true')
     args = parser.parse_args(argv)
     out = args.out or (Path.home() / 'workspace/sync-source-upload' /
                        datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
     command = [str(args.repo / '.venv/bin/python'), str(args.repo / 'tools/prepare_sync_delivery.py'),
-               '--runtime', str(args.runtime), '--out', str(out)]
+               '--runtime', str(args.runtime), '--out', str(out), '--versioned']
+    if args.parent_source:
+        command += ['--parent-source', str(args.parent_source)]
+    if args.previous:
+        command += ['--previous', str(args.previous)]
+    if args.recovery:
+        command += ['--recovery']
     if args.asof:
         command += ['--asof', args.asof]
     subprocess.run(command, check=True)
