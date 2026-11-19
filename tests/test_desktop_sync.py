@@ -1,5 +1,6 @@
 import json
 from contextlib import contextmanager
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -14,7 +15,10 @@ from workbench.store import Store, dumps
 from workbench.sync_client import apply_sync_source, find_sync_source
 from workbench.sync_source import write_sync_source
 
-ASOF = '2026-11-11'
+ASOF = (date.today() - timedelta(days=1)).isoformat()
+# Tests that need "the day after ASOF" derive it from ASOF, so the fixture
+# never goes stale: load_snapshot rejects snapshots older than 7 days.
+NEXT = (date.fromisoformat(ASOF) + timedelta(days=1)).isoformat()
 
 
 def test_find_sync_source_direct(tmp_path):
@@ -122,7 +126,7 @@ def test_export_and_end_to_end(sample):
 
 def test_newer_local_market(sample):
     _, desktop, out = sample
-    newer = save_dataset(desktop, 'sh.600000', pd.DataFrame([dict(date='2026-11-12', open=10, high=12, low=9, close=11, volume=100)]), 'tickflow', 'qfq')
+    newer = save_dataset(desktop, 'sh.600000', pd.DataFrame([dict(date=NEXT, open=10, high=12, low=9, close=11, volume=100)]), 'tickflow', 'qfq')
     assert apply_sync_source(desktop, out)['status'] == 'applied'
     assert next(r for r in latest_datasets(desktop, 'tickflow') if r['code'] == 'sh.600000')['id'] == newer
 
@@ -384,8 +388,8 @@ def test_cross_day_sync_preserves_history(sample):
     _, desktop, out = sample
     assert apply_sync_source(desktop, out)['status'] == 'applied'
     def next_day(manifest):
-        manifest['asof'] = '2026-11-12'
-        manifest['observations'] = [dict(manifest['observations'][1], id='next-day', asof='2026-11-12')]
+        manifest['asof'] = NEXT
+        manifest['observations'] = [dict(manifest['observations'][1], id='next-day', asof=NEXT)]
     edit(out, next_day)
     assert apply_sync_source(desktop, out)['observations_removed'] == 0
     assert {r['id'] for r in desktop.rows('SELECT id FROM observations WHERE asof=?', (ASOF,))} == {'obs-0', 'obs-1'}
@@ -449,7 +453,7 @@ def test_withdrawal_preserves_user_links_and_chart(sample, preexisting):
     # Further same-day and next-day revisions must not revive the withdrawal.
     edit(corrected, lambda m: m.update(coverage={'ready': 1}))
     apply_sync_source(desktop, corrected)
-    edit(corrected, lambda m: m.update(asof='2026-11-12', observations=[]))
+    edit(corrected, lambda m: m.update(asof=NEXT, observations=[]))
     apply_sync_source(desktop, corrected)
     assert {r['observation_id'] for rows in load_candidates(desktop, 'daily').values() for r in rows} == {'obs-1'}
     assert len(load_observation_candles(desktop, 'obs-0')[0]) == 1
