@@ -1,5 +1,6 @@
 """The sync publication and activation boundaries use separate isolated roots."""
 import json
+import os
 from zipfile import ZipFile
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 from gui.data import load_candidates, load_observation_candles
 from tests.test_desktop_sync import ASOF, edit, sample
 from tools.publish_sync_delivery import LocalRehearsal, publish
-from workbench.sources import calendar_file
+from workbench.sources import calendar_file, directory_date, directory_file
 from workbench.store import Store, digest, dumps
 from workbench.sync_client import apply_sync_source
 from workbench.sync_packages import _splice, package_name, write_latest, write_package
@@ -142,6 +143,77 @@ def test_failed_activation_keeps_prior_candidates_and_charts(delivery, tmp_path,
     # A desktop replay of the older same-day pointer may not undo the correction.
     (remote / 'latest.json').write_bytes((baseline[0] / 'latest.json').read_bytes())
     assert apply_sync_source(desktop, remote)['status'] == 'rejected'
+
+
+def _stage_next_day(delivery, tmp_path, baseline, source):
+    _, _, _, _, _, stage, send = delivery
+    day = '2026-11-12'
+    revision = _copy_revision(source, tmp_path, 1, day=day)
+    directory = 'sources/tickflow/universe.csv'
+    calendar = 'sources/tickflow/trading_calendar.json'
+    (revision / directory).write_bytes((source / directory).read_bytes() + b'sz.000001,new\n')
+    (revision / calendar).write_text(
+        dumps(dict(start=ASOF, end=day, trading_days=[ASOF, day])), encoding='utf-8')
+    edit(revision, lambda manifest: manifest.update(
+        asof=day, universe_date=day, observations=[],
+        directories=[dict(path=directory, sha256=digest((revision / directory).read_bytes()))],
+        calendar=dict(path=calendar, sha256=digest((revision / calendar).read_bytes()))))
+    delta = stage(revision, source, baseline[0] / 'latest.json')
+    send(delta)
+    return json.loads((revision / 'manifest.json').read_bytes())
+
+
+def test_retry_activates_verified_inventory_after_older_local_write(delivery, tmp_path):
+    _, desktop, source, remote, _, stage, send = delivery
+    baseline = stage(source)
+    send(baseline)
+    assert apply_sync_source(desktop, remote)['status'] == 'applied'
+    manifest = _stage_next_day(delivery, tmp_path, baseline, source)
+
+    def interrupt_before_commit(phase):
+        if '激活完整版本' in phase:
+            raise InterruptedError('injected interruption before commit')
+
+    assert apply_sync_source(desktop, remote, progress=interrupt_before_commit)['status'] == 'rejected'
+    applied = desktop.rows("SELECT value FROM meta WHERE key='sync_asof'")
+    assert applied == [{'value': ASOF}]
+
+    for row in [*manifest['directories'], manifest['calendar']]:
+        relative = row['path']
+        immutable = desktop.root / 'desktop-sync' / 'versions' / manifest['sha256'] / (source / relative).name
+        assert digest(immutable.read_bytes()) == row['sha256']
+        old = desktop.write_artifact(relative, (source / relative).read_bytes())
+        # Make the order deterministic even on coarse-timestamp filesystems.
+        later = immutable.stat().st_mtime_ns + 2_000_000_000
+        os.utime(old, ns=(later, later))
+    desktop.execute("INSERT INTO meta VALUES('universe_date:tickflow', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (ASOF,))
+
+    for status in ('applied', 'up-to-date'):
+        result = apply_sync_source(desktop, remote)
+        assert (result['status'], result['asof']) == (status, '2026-11-12')
+        calendar = json.loads(calendar_file(desktop, 'tickflow').read_bytes())
+        assert (
+            directory_date(desktop, 'tickflow'), max(calendar['trading_days']),
+            digest(directory_file(desktop, 'tickflow').read_bytes()),
+        ) == ('2026-11-12', '2026-11-12', manifest['directories'][0]['sha256'])
+
+
+def test_activation_rejects_if_effective_calendar_routes_to_old_inventory(delivery, tmp_path, monkeypatch):
+    _, desktop, source, remote, _, stage, send = delivery
+    baseline = stage(source)
+    send(baseline)
+    assert apply_sync_source(desktop, remote)['status'] == 'applied'
+    old_calendar = calendar_file(desktop, 'tickflow')
+    manifest = _stage_next_day(delivery, tmp_path, baseline, source)
+
+    with monkeypatch.context() as patch:
+        patch.setattr('workbench.sync_client.calendar_file', lambda *_: old_calendar)
+        assert apply_sync_source(desktop, remote)['status'] == 'rejected'
+        assert desktop.rows("SELECT value FROM meta WHERE key='sync_version'") == [
+            {'value': manifest['sha256']}]
+        assert apply_sync_source(desktop, remote)['status'] == 'rejected'
+    assert apply_sync_source(desktop, remote)['status'] == 'up-to-date'
 
 
 def test_catch_up_from_active_version_and_optional_baseline(delivery, tmp_path):

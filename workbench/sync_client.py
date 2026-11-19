@@ -11,6 +11,7 @@ import time
 from zipfile import BadZipFile
 
 from .snapshot import snapshot_digest
+from .sources import calendar_file, directory_date, directory_file
 from .store import digest, dumps, now
 from .strategies import scan_engine_version
 from .sync_source import DATASET_COLUMNS, OBSERVATION_COLUMNS, DIRECTORY, frozen_sha256
@@ -294,7 +295,7 @@ def _commit(store, manifest, saved, inventory=None):
         if inventory is not None:
             metadata.update(sync_version=manifest['sha256'], sync_inventory=dumps(inventory),
                             sync_universe_date=manifest['universe_date'])
-        elif 'universe_date' in manifest:
+        if 'universe_date' in manifest:
             metadata['universe_date:tickflow'] = manifest['universe_date']
         for key, value in metadata.items():
             db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
@@ -307,7 +308,7 @@ def apply_sync_source(store, source_dir, *, progress=None, cancelled=None):
     if not (source_dir / 'latest.json').is_file():
         return _apply_legacy(store, source_dir, saved)
 
-    from .sync_activate import prepare_activation
+    from .sync_activate import _inventory_path, prepare_activation
     started = time.monotonic()
     last_update = started - 1
 
@@ -326,11 +327,31 @@ def apply_sync_source(store, source_dir, *, progress=None, cancelled=None):
             store, source_dir, saved, _validate_manifest,
             lambda asof: _validate_day(asof, saved), report)
         asof = manifest['asof']
+        version = manifest['sha256']
+        directory = store.root / _inventory_path(version, DIRECTORY)
+        calendar = store.root / _inventory_path(version, manifest['calendar']['path'])
+        if not manifest['directories'] or manifest['universe_date'] != asof:
+            raise ValueError('同步源目录缺失或目录日期与版本不一致')
+        calendar_bytes = calendar.read_bytes()
+        if digest(calendar_bytes) != manifest['calendar']['sha256']:
+            raise ValueError('同步源交易日历 SHA 不一致')
+        payload = json.loads(calendar_bytes)
+        last_day = max(payload['trading_days'], default=None)
+        if last_day != asof or not payload['start'] <= asof <= payload['end']:
+            raise ValueError('同步源交易日历末日与版本不一致')
         counts, removed = [0, 0], 0
         if inventory is not None:
-            store.flush_sync_directories(manifest['sha256'])
+            store.flush_sync_directories(version)
             report('登记行情与候选，激活完整版本', force=True)
             counts, removed = _commit(store, manifest, saved, inventory)
+        # The paths bind the effective inventory to the bytes verified above.
+        # Checking the committed routing needs no directory or calendar scan.
+        effective_calendar = calendar_file(store, 'tickflow')
+        effective_last_day = last_day if effective_calendar == calendar and calendar.is_file() else None
+        if (directory_date(store, 'tickflow') != asof
+                or directory_file(store, 'tickflow') != directory
+                or effective_last_day != asof or not directory.is_file()):
+            raise ValueError('同步源激活后目录或交易日历与已应用版本不一致')
         message = f'已同步到 {asof} 数据' if inventory is not None else f'已是最新（{asof}）'
         coverage = manifest['coverage']
         if manifest.get('complete') is not True:
@@ -344,7 +365,7 @@ def apply_sync_source(store, source_dir, *, progress=None, cancelled=None):
                 message += f'（{detail}）'
         message += f' · {time.monotonic() - started:.1f} 秒'
         return dict(status='applied' if inventory is not None else 'up-to-date', message=message, asof=asof,
-                    version=manifest['sha256'], datasets_added=counts[0], observations_added=counts[1], observations_removed=removed)
+                    version=version, datasets_added=counts[0], observations_added=counts[1], observations_removed=removed)
     except FileNotFoundError as exc:
         logger.warning('Versioned synchronization package unavailable: %s', exc)
         return dict(status='rejected', message=rejection_message(

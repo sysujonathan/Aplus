@@ -31,15 +31,16 @@ def source_file(store, name, source='baostock'):
 def _synced_inventory(store, path, source):
     if source != 'tickflow':
         return None
-    rows = store.rows("SELECT value FROM meta WHERE key='sync_inventory'")
-    relative = json.loads(rows[0]['value']).get(path.name) if rows else None
-    if relative:
-        synced = (store.root / relative).resolve()
-        if synced.is_relative_to(store.root / 'desktop-sync' / 'versions'):
-            # A subsequent explicit local provider update owns its new inventory.
-            if not path.exists() or path.stat().st_mtime_ns <= synced.stat().st_mtime_ns:
-                return synced
-    return None
+    rows = store.rows("SELECT value FROM meta WHERE key='sync_version'")
+    if not rows:
+        return None
+    version = rows[0]['value']
+    if len(version) != 64 or any(char not in '0123456789abcdef' for char in version):
+        raise ValueError('同步源本地已应用版本记录无效')
+    synced = store.root / 'desktop-sync' / 'versions' / version / path.name
+    if synced.resolve() != synced:
+        raise ValueError('同步源库存路径与已应用版本不一致')
+    return synced
 
 
 def directory_file(store, source):
