@@ -271,6 +271,23 @@ def _snapshot_candidates(store, timeframe, source, asof_filter):
     return grouped
 
 
+def _active_sync_candidates(store, source, timeframe):
+    if source != 'tickflow' or timeframe != 'daily':
+        return None
+    state = {r['key']: r['value'] for r in store.rows(
+        "SELECT key,value FROM meta WHERE key IN ('sync_version','sync_applied_at','sync_observation_ids')")}
+    if 'sync_version' not in state:
+        return None
+    receipt = json.loads(state['sync_observation_ids'])
+    # A later explicit local scan retains its existing revision behavior.
+    scans = store.rows(
+        "SELECT 1 FROM jobs WHERE kind='scan' AND status IN ('completed','partial') "
+        "AND finished>? AND json_extract(spec,'$.source')='tickflow' "
+        "AND json_extract(result,'$.asof')=? AND json_extract(result,'$.timeframe')='daily' LIMIT 1",
+        (state['sync_applied_at'], receipt['asof']))
+    return None if scans else (receipt['asof'], set(receipt['ids']))
+
+
 def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     """按一个明确行情来源读取扫描观察，返回 {strategy_key: [row, ...]}。
 
@@ -279,7 +296,6 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     asof_filter: (year, month, day) 三元组，元素为 None 表示该位不约束。
     用 LIKE 前缀匹配 asof（形如 2026-09-20 或带时间），避免依赖具体存储格式。
     """
-    # Explicit legacy browsing stays local; snapshot failures never hide.
     if source != LEGACY_MARKET_SOURCE and (os.environ.get("APLUS_SNAPSHOT_DIR") or os.environ.get("APLUS_SNAPSHOT_URL")):
         try:
             return _snapshot_candidates(store, timeframe, source, asof_filter)
@@ -288,7 +304,11 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
             logging.getLogger(__name__).warning("快照拒绝，回退本地扫描：%s", exc)
     else:
         _candidate_sources[str(store.root)] = "本地扫描"
-    source=source or market_source(store)
+    source = source or market_source(store)
+    active_sync = _active_sync_candidates(store, source, timeframe)
+    pattern = _build_asof_pattern(asof_filter)
+    if active_sync and pattern == active_sync[0] + '%':
+        _candidate_sources[str(store.root)] = f'服务端同步 · {active_sync[0]}'
     sql = (
         "SELECT o.code, o.strategy, o.version, o.payload, o.timeframe, o.asof, o.id, o.dataset_id, "
         "d.source AS source "
@@ -296,7 +316,6 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
         "WHERE d.source=? AND o.timeframe=?"
     )
     params = [source, timeframe]
-    pattern = _build_asof_pattern(asof_filter)
     if pattern is not None:
         sql += " AND o.asof LIKE ?"
         params.append(pattern)
@@ -309,7 +328,13 @@ def load_candidates(store, timeframe="daily", source=None, asof_filter=None):
     withdrawn = store.rows("SELECT value FROM meta WHERE key='sync_withdrawn_observation_ids'")
     withdrawn = set(json.loads(withdrawn[0]['value'])) if withdrawn else set()
     rows = [row for row in rows if row['id'] not in withdrawn]
-    rows = filter_candidate_revisions(store, rows, source, timeframe)
+    if active_sync:
+        day, ids = active_sync
+        synchronized = [row for row in rows if row['id'] in ids]
+        other = [row for row in rows if row['asof'][:10] != day]
+        rows = synchronized + filter_candidate_revisions(store, other, source, timeframe)
+    else:
+        rows = filter_candidate_revisions(store, rows, source, timeframe)
     seen = set()
     names = code_names(store)
     grouped = {}
@@ -385,6 +410,8 @@ def candidate_dates(store, timeframe="daily", source=None):
             (*allowed, timeframe, market_source(store), timeframe),
         )
     days = {row['day'] for row in rows if row.get('day')}
+    if timeframe == 'daily' and (source or market_source(store)) == 'tickflow':
+        days.update(r['value'] for r in store.rows("SELECT value FROM meta WHERE key='sync_asof'"))
     if source is None:
         if timeframe == 'weekly':
             # Weekly scans consume daily snapshots; they do not save another
@@ -402,7 +429,10 @@ def latest_candidate_date(store, timeframe="daily"):
     """返回启动默认页：本地最近一次已有策略结果，而非最新行情日。"""
     days = [latest_scan_date(store, timeframe=timeframe)]
     if timeframe == 'daily':
-        days += [r['asof'] for r in store.shape_runs(market_source(store)) if r['status'] in ('completed','partial')]
+        current_source = market_source(store)
+        days += [r['asof'] for r in store.shape_runs(current_source) if r['status'] in ('completed','partial')]
+        if current_source == 'tickflow':
+            days += [r['value'] for r in store.rows("SELECT value FROM meta WHERE key='sync_asof'")]
     return max((day for day in days if day),default=None)
 
 

@@ -482,6 +482,8 @@ class ToolBar(ttk.Frame):
     def _cancel_responsive(self, event):
         if event.widget is not self:
             return
+        if getattr(self, '_desktop_sync_cancelled', None):
+            self._desktop_sync_cancelled.set()
         if self._dates_reader is not None:self._dates_reader.close()
         if self._dates_poll is not None:self.after_cancel(self._dates_poll)
         if getattr(self, '_initial_status', None):
@@ -909,9 +911,14 @@ class ToolBar(ttk.Frame):
             else:
                 self.btn_integrity.pack_forget()
         self._mkt_var.set(text)
-        self._header_data_var.set(
-            SOURCES[self._display_source()]+' · '+format_header_data_status(market, signal, boards, audit)
-        )
+        current_source = self._display_source()
+        notice = getattr(self, '_desktop_sync_notice', None)
+        if not getattr(self, '_desktop_sync_running', False):
+            if notice and current_source == 'tickflow' and self._integrity_asof() == notice[0]:
+                header = notice[1]
+            else:
+                header = SOURCES[current_source]+' · '+format_header_data_status(market, signal, boards, audit)
+            self._header_data_var.set(header)
         return text
 
     def _display_source(self):
@@ -1173,14 +1180,20 @@ class ToolBar(ttk.Frame):
             self._header_data_var.set('正在忙，稍后再试')
             return
         self._desktop_sync_running = True
+        self._desktop_sync_notice = None
         self.btn_desktop_sync.state(['disabled'])
         self._header_data_var.set('正在查找同步源并校验数据，请稍候…')
 
-        replies = queue.Queue(maxsize=1)
+        replies = queue.Queue()
+        cancelled = threading.Event()
+        self._desktop_sync_cancelled = cancelled
 
         def finished(result):
+            self._desktop_sync_cancelled = None
             from .data import invalidate
             self._desktop_sync_running = False
+            if result.get('version') and result.get('asof'):
+                self._desktop_sync_notice = (result['asof'], result['message'])
             self.btn_desktop_sync.state(['!disabled'])
             if result['status'] != 'missing':
                 invalidate(self.store)
@@ -1190,11 +1203,15 @@ class ToolBar(ttk.Frame):
 
         def poll():
             try:
-                result = replies.get_nowait()
+                while True:
+                    result = replies.get_nowait()
+                    if isinstance(result, str):
+                        self._header_data_var.set(result)
+                    else:
+                        finished(result)
+                        return
             except queue.Empty:
                 self.after(50, poll)
-                return
-            finished(result)
 
         def run():
             from workbench.sync_client import locate_sync_source, apply_sync_source, rejection_message, missing_sync_message
@@ -1207,6 +1224,9 @@ class ToolBar(ttk.Frame):
                     logging.getLogger(__name__).warning(
                         'No desktop synchronization source: %s', os.environ.get('APLUS_SYNC_DIR'))
                     result = {'status': 'missing', 'message': missing_sync_message(self.store)}
+                elif (source / 'latest.json').is_file():
+                    result = apply_sync_source(self.store, source, progress=replies.put_nowait,
+                                               cancelled=cancelled.is_set)
                 else:
                     result = apply_sync_source(self.store, source)
             except Exception:
@@ -1322,6 +1342,8 @@ class ToolBar(ttk.Frame):
             self.set_status(f"{label}提交失败：{exc}")
             return
         self._job_id, self._job_kind = job, label
+        if kind in ('sync', 'scan', 'premarket'):
+            self._desktop_sync_notice = None
         self._job_snapshot = None
         self._job_read_pending = self._job_read_error = False
         self._job_started_at = time.monotonic()

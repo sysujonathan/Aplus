@@ -530,6 +530,42 @@ class Store:
         self.event(job, "写入文件", path, bytes=len(content), sha256=digest(content))
         return path
 
+    def write_immutable_sync_file(self, relative, content):
+        """Persist verified bytes without exposing dataset rows or per-file events."""
+        path = (self.root / relative).resolve()
+        if not path.is_relative_to(self.root):
+            raise ValueError('同步文件必须位于运行目录内')
+        with self._files_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(".a-" + uuid.uuid4().hex + ".tmp")
+            try:
+                with temporary.open("xb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                try:
+                    path.hardlink_to(temporary)
+                except FileExistsError:
+                    if path.read_bytes() != content:
+                        raise ValueError('已有同步文件校验失败，拒绝覆盖')
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    def flush_sync_directories(self, version):
+        """Publish directory entries before the SQLite activation commit."""
+        if os.name == 'nt':
+            return
+        for relative in ('market', f'desktop-sync/versions/{version}',
+                         'desktop-sync/versions', 'desktop-sync', '.'):
+            path = self.root / relative
+            if not path.is_dir():
+                continue
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+
     def read_artifact(self, relative, job=None):
         path = (self.root / relative).resolve()
         if not path.is_relative_to(self.root):

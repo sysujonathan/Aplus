@@ -28,8 +28,25 @@ def source_file(store, name, source='baostock'):
     return store.root / ((f'sources/{source}/' + name) if source in FALLBACK_SOURCES else name)
 
 
+def _synced_inventory(store, path, source):
+    if source != 'tickflow':
+        return None
+    rows = store.rows("SELECT value FROM meta WHERE key='sync_inventory'")
+    relative = json.loads(rows[0]['value']).get(path.name) if rows else None
+    if relative:
+        synced = (store.root / relative).resolve()
+        if synced.is_relative_to(store.root / 'desktop-sync' / 'versions'):
+            # A subsequent explicit local provider update owns its new inventory.
+            if not path.exists() or path.stat().st_mtime_ns <= synced.stat().st_mtime_ns:
+                return synced
+    return None
+
+
 def directory_file(store, source):
     path = source_file(store, 'universe.csv', source)
+    synced = _synced_inventory(store, path, source)
+    if synced:
+        return synced
     if source == 'tickflow' and not path.exists():
         # Read-only compatibility with PR 27. BaoStock's 0/1 trade status must
         # never be silently treated as TickFlow's current directory.
@@ -44,14 +61,21 @@ def directory_file(store, source):
 
 def directory_date(store, source):
     key = 'universe_date:'+source if source in FALLBACK_SOURCES else 'universe_date'
-    if source == 'tickflow' and directory_file(store, source) == store.root/'universe.csv':
-        key = 'universe_date'  # legacy TickFlow directory only
+    if source == 'tickflow':
+        path = directory_file(store, source)
+        if path == store.root/'universe.csv':
+            key = 'universe_date'  # legacy TickFlow directory only
+        elif path != source_file(store, 'universe.csv', source):
+            key = 'sync_universe_date'
     rows = store.rows('SELECT value FROM meta WHERE key=?', (key,))
     return rows[0]['value'] if rows else None
 
 
 def calendar_file(store, source='baostock'):
     path = source_file(store, 'trading_calendar.json', source)
+    synced = _synced_inventory(store, path, source)
+    if synced:
+        return synced
     # The exchange calendar is public, source-neutral evidence. Copy-on-write
     # migration may read the old calendar, but TickFlow never modifies it.
     if source in FALLBACK_SOURCES and not path.exists():
