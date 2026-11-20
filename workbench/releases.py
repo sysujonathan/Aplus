@@ -10,12 +10,23 @@ VERSION = re.compile(r"^\d{4}\.\d{2}\.\d{2}\.\d+$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
 
+def _valid_notes(notes):
+    return isinstance(notes, list) and all(isinstance(note, str) for note in notes)
+
+
 def parse_catalog(text):
     if len(text) > 256_000:
         raise ValueError("Release catalog too large")
     data = json.loads(text)
     if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("history"), list):
         raise ValueError("Invalid release catalog")
+    unreleased = data.get("unreleased", [])
+    if not isinstance(unreleased, list):
+        raise ValueError("Invalid unreleased sections")
+    for section in unreleased:
+        if (not isinstance(section, dict) or not isinstance(section.get("title"), str)
+                or not section["title"].strip() or not _valid_notes(section.get("notes"))):
+            raise ValueError("Invalid unreleased section")
     build = data.get("build", {})
     if not isinstance(build, dict) or not VERSION.fullmatch(str(build.get("version", ""))):
         raise ValueError("Invalid build version")
@@ -35,7 +46,7 @@ def parse_catalog(text):
         date.fromisoformat(row.get("date", ""))
         if row.get("version") and row["version"] != row["date"].replace("-", ".") + "." + str(pr):
             raise ValueError("Version does not match date and PR")
-        if not isinstance(row.get("notes"), list) or not all(isinstance(n, str) for n in row["notes"]):
+        if not _valid_notes(row.get("notes")):
             raise ValueError("Invalid release notes")
         if row.get("commit") and not COMMIT.fullmatch(row["commit"]):
             raise ValueError("Invalid release commit")
@@ -160,6 +171,10 @@ def changelog_text(catalog):
     lines = ["# Aplus 更新日志", "", "发布编号按日期＋PR号回溯整理，并非当时已发布过的Git标签。",
              "1.1.4等旧编号保留为功能阶段名称；新编号用于准确识别每轮代码。",
              "未合并修复列为预览，纳入其他PR的改动单列但不重复算独立发布。", ""]
+    for section in catalog.get("unreleased", []):
+        lines += [f"## {section['title']}", ""]
+        lines += ["- " + note for note in section["notes"]]
+        lines.append("")
     labels = {"released": "已进入主线（历史回溯）", "included": "随其他PR纳入主线",
               "preview": "预览修复，待合入主线", "not_released": "未发布"}
     for row in reversed(catalog["history"]):
