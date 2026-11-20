@@ -12,7 +12,7 @@ from workbench.stop_research_service import load_experiment
 from .afterhours_workspace import build_latest_research, label, button, tree
 from .replay_navigation import ReplayNavigation
 from .stop_research_chart import render_comparison
-from .theme import CHART_BG, MUTED, PANEL_BG, TEXT
+from .theme import CHART_BG, MUTED, PANEL_BG, TEXT, UI_FONT
 
 
 def outcome_text(record):
@@ -80,7 +80,7 @@ class StrategyIterationPage(ttk.Frame):
         selection=ttk.Frame(source);selection.pack(fill=tk.X)
         actions=ttk.Frame(source);actions.pack(fill=tk.X,pady=4)
         label(selection,'样本回测').pack(side=tk.LEFT,padx=(0,8))
-        self.source_box=ttk.Combobox(selection,textvariable=self.source,state='readonly',font=('Microsoft YaHei UI',12),width=36)
+        self.source_box=ttk.Combobox(selection,textvariable=self.source,state='readonly',font=(UI_FONT,10),width=36)
         self.source_box.pack(side=tk.LEFT,fill=tk.X,expand=True)
         self.source_box.bind('<<ComboboxSelected>>',lambda e:self._source_context())
         button(selection,'刷新',self.refresh).pack(side=tk.LEFT,padx=8)
@@ -96,7 +96,7 @@ class StrategyIterationPage(ttk.Frame):
         label(rule,'下次实验 · SL1 对照 C',bold=True).pack(side=tk.LEFT,padx=(0,14))
         for text,var in [('回溯上限 / 根',self.max_bars),('浅回调容忍 / tick',self.pause)]:
             label(rule,text,size=15).pack(side=tk.LEFT,padx=6)
-            ttk.Entry(rule,textvariable=var,width=4,font=('Microsoft YaHei UI',12)).pack(side=tk.LEFT)
+            ttk.Entry(rule,textvariable=var,width=4,font=(UI_FONT,10)).pack(side=tk.LEFT)
         button(rule,'规则与口径',self._rules).pack(side=tk.RIGHT)
         label(main,'C 仅为低点抬升段的候选底部；未加入强度判定，不代表正式 PA 规则。',size=14,color=MUTED).grid(row=3,column=0,sticky=tk.W,pady=8)
         metrics=ttk.Frame(main);metrics.grid(row=4,column=0,sticky=tk.EW)
@@ -108,7 +108,7 @@ class StrategyIterationPage(ttk.Frame):
             var=tk.StringVar(value='—');self.metrics.append(var);label(card,variable=var,size=26,bold=True).pack(anchor=tk.W)
         filters=ttk.Frame(main);filters.grid(row=5,column=0,sticky=tk.EW,pady=8)
         label(filters,'差异样本',bold=True).pack(side=tk.LEFT,padx=(0,8))
-        box=ttk.Combobox(filters,textvariable=self.group,values=GROUPS,state='readonly',width=19,font=('Microsoft YaHei UI',12));box.pack(side=tk.LEFT)
+        box=ttk.Combobox(filters,textvariable=self.group,values=GROUPS,state='readonly',width=19,font=(UI_FONT,10));box.pack(side=tk.LEFT)
         box.bind('<<ComboboxSelected>>',lambda e:self._fill_rows())
         label(filters,'点表头排序 · 选一笔看图',size=14,color=MUTED).pack(side=tk.LEFT,padx=12)
         self.body=ttk.Panedwindow(main,orient=tk.HORIZONTAL);self.body.grid(row=6,column=0,sticky=tk.NSEW)
@@ -126,9 +126,9 @@ class StrategyIterationPage(ttk.Frame):
         detail=label(charts,variable=self.detail,size=15);detail.grid(row=0,column=0,sticky=tk.EW)
         detail.bind('<Configure>',lambda e:detail.configure(wraplength=max(1,e.width)))
         chartnav=ttk.Frame(charts);chartnav.grid(row=1,column=0,sticky=tk.EW,pady=6)
-        self.event_box=ttk.Combobox(chartnav,textvariable=self.cutoff,state='readonly',width=12,font=('Microsoft YaHei UI',11));self.event_box.pack(side=tk.LEFT)
+        self.event_box=ttk.Combobox(chartnav,textvariable=self.cutoff,state='readonly',width=12,font=(UI_FONT,10));self.event_box.pack(side=tk.LEFT)
         self.event_box.bind('<<ComboboxSelected>>',lambda e:self._schedule_draw())
-        ttk.Style().configure('Iteration.TCheckbutton',font=('Microsoft YaHei UI',11))
+        ttk.Style().configure('Iteration.TCheckbutton',font=(UI_FONT,10))
         ttk.Checkbutton(chartnav,text='完整走势（事后）',variable=self.posthoc,command=self._schedule_draw,style='Iteration.TCheckbutton').pack(side=tk.LEFT,padx=8)
         button(chartnav,'复位',lambda:self.navigation.reset()).pack(side=tk.RIGHT)
         label(charts,variable=self.readout,size=13,color=MUTED).grid(row=2,column=0,sticky=tk.EW)
@@ -344,7 +344,7 @@ class StrategyIterationPage(ttk.Frame):
     def _restore(self):
         rows=[r for r in self.store.backtest_history(MODEL,include_deleted=True) if r['display']['deleted']]
         win=ttk.Toplevel(self);win.title('已删除实验');win.geometry('480x360')
-        listing=tk.Listbox(win,font=('Microsoft YaHei UI',12),bg=PANEL_BG,fg=TEXT)
+        listing=tk.Listbox(win,font=(UI_FONT,9),bg=PANEL_BG,fg=TEXT)
         listing.pack(fill=tk.BOTH,expand=True,padx=12,pady=12)
         for r in rows:listing.insert(tk.END,display_name(r))
         def restore():
