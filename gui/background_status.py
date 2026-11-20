@@ -129,7 +129,8 @@ def load_job(root, job, check):
     """Bounded read-only progress lookup. No Tk, Store init or write events."""
     check()
     rows = ReadView(root, None).rows(
-        'SELECT status,progress,total,message,result FROM jobs WHERE id=?', (job,))
+        'SELECT status,progress,total,message,result, '
+        'unixepoch(finished)-unixepoch(created) AS elapsed_seconds FROM jobs WHERE id=?', (job,))
     check()
     return rows[0] if rows else None
 
