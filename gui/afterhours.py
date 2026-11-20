@@ -20,7 +20,7 @@ from .h2_replay_chart import render_replay
 from .research_views import (ANNUAL_COLUMNS, comparison_rows, holding_distribution, outcome, receipt_time,
                              scope_caption, trade_statistics)
 from .toolbar import format_board_scope
-from .theme import CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP
+from .theme import CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP, UI_FONT, MONO_FONT
 
 
 def number(value, suffix='', percent=False):
@@ -107,7 +107,7 @@ class AfterhoursPage(ttk.Frame):
             if isinstance(widget, ttk.Button):
                 widget.configure(style='ResearchAction.TButton')
             elif 'font' in widget.keys():
-                widget.configure(font=('Microsoft YaHei UI', -17))
+                widget.configure(font=(UI_FONT, 10))
         replay = ttk.Frame(self.detail)
         replay.grid(row=1, column=0, sticky=tk.NSEW)
         replay.rowconfigure(0, weight=1)
@@ -120,7 +120,7 @@ class AfterhoursPage(ttk.Frame):
         chart_host.rowconfigure(1, weight=1)
         self.chart_readout = tk.StringVar(value='移到 K 线上查看开、高、低、收')
         readout = ttk.Label(chart_host, textvariable=self.chart_readout, foreground=MUTED,
-                            font=('Microsoft YaHei UI', -14))
+                            font=(UI_FONT, 10))
         readout.grid(row=0, column=0, sticky=tk.EW, pady=(0, 4))
         readout.bind('<Configure>', lambda e: readout.configure(wraplength=max(1, e.width)))
         self.chart = tk.Label(chart_host, bg=CHART_BG, fg=TEXT, text='选择一笔机会查看 K 线')
@@ -137,7 +137,7 @@ class AfterhoursPage(ttk.Frame):
         timeline_host.rowconfigure(1, weight=1)
         timeline_host.columnconfigure(0, weight=1)
         timeline_heading = ttk.Label(timeline_host, text='逐日事件 · ← → 切换\n滚轮缩放 · 拖动价格轴 · 双击复位',
-                                     font=('Microsoft YaHei UI', -14))
+                                     font=(UI_FONT, 10))
         timeline_heading.grid(row=0, column=0, sticky=tk.EW)
         timeline_heading.bind('<Configure>', lambda e: timeline_heading.configure(wraplength=max(1, e.width)))
         self.timeline = ttk.Treeview(timeline_host, columns=('date', 'kind'), show='headings', selectmode='browse', style='ResearchList.Treeview')
@@ -209,17 +209,9 @@ class AfterhoursPage(ttk.Frame):
         if scale == self._ui_scale:
             return
         self._ui_scale = scale
-        for widget, font in self._font_widgets:
-            if widget.winfo_exists():
-                widget.configure(font=(font[0], max(9, round(abs(int(font[1])) * .75)), *font[2:]))
         style = ttk.Style()
-        style.configure('ResearchList.Treeview', rowheight=round(32*scale), font=('Microsoft YaHei UI', 11))
-        style.configure('ResearchList.Treeview.Heading', font=('Microsoft YaHei UI', 11, 'bold'))
-        style.configure('ResearchBoundary.Treeview', rowheight=round(25*scale), font=('Microsoft YaHei UI', 10))
-        style.configure('ResearchBoundary.Treeview.Heading', font=('Microsoft YaHei UI', 10, 'bold'))
-        style.configure('Holding.Toolbutton', font=('Microsoft YaHei UI', -round(13*scale)), padding=(3, 2))
-        for name in ('ResearchAction.TButton', 'ResearchRun.TButton', 'ResearchScope.TMenubutton'):
-            style.configure(name, font=('Microsoft YaHei UI', 11))
+        style.configure('ResearchList.Treeview', rowheight=round(32*scale))
+        style.configure('ResearchBoundary.Treeview', rowheight=round(25*scale))
         self._reflow_toolbar(None)
         self.history_host.configure(width=round(270*scale))
         self.timeline_host.configure(width=round(300*scale))
@@ -263,7 +255,7 @@ class AfterhoursPage(ttk.Frame):
             widget = tk.Button(card, text=text, command=lambda j=job: self._select_history(j),
                                bg=bg, fg=TEXT, activebackground=SELECTION, activeforeground=TEXT,
                                relief=tk.FLAT, anchor=tk.W, justify=tk.LEFT, wraplength=round(210*self._ui_scale),
-                               font=('Microsoft YaHei UI', -round(16*self._ui_scale)))
+                               font=(UI_FONT, 10))
             widget.configure(bg=bg, fg=TEXT, activebackground=SELECTION, activeforeground=TEXT)
             widget.pack(side=tk.LEFT, fill=tk.X, expand=True)
             widget.bind('<Configure>', lambda e, w=widget: w.configure(wraplength=max(1, e.width-10)))
@@ -433,7 +425,7 @@ class AfterhoursPage(ttk.Frame):
         warning = ('含部分结果，不能直接判断策略优劣。' if any(r['status'] != 'completed' for r in (arow, brow))
                    else '先核对条件和数据差异，再解读结果差异。')
         ttk.Label(dialog, text=warning + ' 同一市场名称也可能使用不同快照。',
-                  font=('Microsoft YaHei UI', -17), padding=12).pack(anchor=tk.W)
+                  font=(UI_FONT, 10), padding=12).pack(anchor=tk.W)
         from .afterhours_workspace import tree
         table_host = ttk.Frame(dialog)
         table_host.pack(fill=tk.BOTH, expand=True, padx=12)
@@ -451,7 +443,7 @@ class AfterhoursPage(ttk.Frame):
                        *comparison_rows(a, b)]:
             widget.insert('', tk.END, values=values)
         # Long parameter cells can be inspected in full without widening the window.
-        text = tk.Text(dialog, height=7, wrap='word', font=('Microsoft YaHei UI', -16))
+        text = tk.Text(dialog, height=7, wrap='word', font=(UI_FONT, 10))
         text.pack(fill=tk.X, padx=12, pady=10)
         text.insert('1.0', '选择一行查看完整内容。')
         text.configure(state=tk.DISABLED)
@@ -786,14 +778,14 @@ class AfterhoursPage(ttk.Frame):
             font_size = round(min(14*self._ui_scale, step*.75))
             y = step/2 + i * step
             self.histogram.create_text(0, y, text=['< −2R', '−2～−1', '−1～0', '0～1', '1～2', '≥ 2R'][i],
-                                       fill=MUTED, anchor=tk.W, font=('Microsoft YaHei UI', -font_size))
+                                       fill=MUTED, anchor=tk.W, font=(UI_FONT, -font_size))
             left, right = 68, width - 72
             self.histogram.create_rectangle(left, y-4, right, y+4, fill=CONTROL_BG, outline='')
             self.histogram.create_rectangle(left, y-4, left+(right-left)*value/maximum, y+4,
                                             fill=DOWN if i < 3 else UP, outline='')
-            self.histogram.create_text(width-48, y, text=str(value), fill=TEXT, anchor=tk.E, font=('Consolas', -font_size))
+            self.histogram.create_text(width-48, y, text=str(value), fill=TEXT, anchor=tk.E, font=(MONO_FONT, -font_size))
             self.histogram.create_text(width-2, y, text=f'{value/sum(values):.0%}', fill=MUTED, anchor=tk.E,
-                                       font=('Consolas', -font_size))
+                                       font=(MONO_FONT, -font_size))
 
     def _show_annual_statistics(self):
         from .afterhours_workspace import tree
@@ -842,7 +834,7 @@ class AfterhoursPage(ttk.Frame):
         data = getattr(self, '_holding_data', {})
         if not data.get('total'):
             canvas.create_text(8, 40, text='数据不足（无有效持仓K线）', fill=MUTED,
-                               anchor=tk.W, font=('Microsoft YaHei UI', -12))
+                               anchor=tk.W, font=(UI_FONT, -12))
             return
         rows = data['buckets']
         width, height = canvas.winfo_width(), canvas.winfo_height()
@@ -850,7 +842,7 @@ class AfterhoursPage(ttk.Frame):
         maximum = max(row['count'] for row in rows)
         for i, row in enumerate(rows):
             y = step*(i+.5)
-            font = ('Microsoft YaHei UI', -max(1, round(min(12*self._ui_scale, step*.75))))
+            font = (UI_FONT, -max(1, round(min(12*self._ui_scale, step*.75))))
             canvas.create_text(0, y, text=row['label'], fill=MUTED, anchor=tk.W, font=font)
             left, right = 66*self._ui_scale, max(66*self._ui_scale, width-96*self._ui_scale)
             canvas.create_rectangle(left, y-3, right, y+3, fill=CONTROL_BG, outline='')
@@ -1075,7 +1067,7 @@ class AfterhoursPage(ttk.Frame):
                 + f'卖出税费 {costs["sell_tax_bps"]} 基点；单边滑点 {costs["slippage_bps"]} 基点\n'
                 + '1 基点 = 0.01%；假设值可按自己的交易成本调整。\n\n'
                 + '\n'.join(receipt.get('limitations', ['仅使用已保存真实日线；保守成交，A 股 T+1。'])))
-        widget = tk.Text(box, width=90, height=25, wrap='word', font=('Microsoft YaHei UI', -17))
+        widget = tk.Text(box, width=90, height=25, wrap='word', font=(UI_FONT, 10))
         widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll = ttk.Scrollbar(box, command=widget.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1103,7 +1095,7 @@ class AfterhoursPage(ttk.Frame):
         dialog.transient(self.winfo_toplevel())
         box = ttk.Frame(dialog, padding=18)
         box.pack(fill=tk.BOTH, expand=True)
-        widget = tk.Text(box, width=90, height=28, wrap='word', font=('Microsoft YaHei UI', -17))
+        widget = tk.Text(box, width=90, height=28, wrap='word', font=(UI_FONT, 10))
         widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll = ttk.Scrollbar(box, command=widget.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
