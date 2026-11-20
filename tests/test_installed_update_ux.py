@@ -15,7 +15,8 @@ from tests.test_installed_distribution import manifest
 def controller(tmp_path,monkeypatch):
     c=object.__new__(gui.InstalledVersionController)
     c.window=SimpleNamespace(service=Mock(),store=SimpleNamespace(root=tmp_path/'runtime'),
-        after=Mock(),deiconify=Mock(),_closing=False,_update_pending=False)
+        after=Mock(),deiconify=Mock(),_closing=False,_update_pending=False,
+        _begin_update_flush=lambda completion:completion(True),_resume_embedded_charts=Mock())
     c.button=Mock();c.download_bar=Mock();c.results=queue.Queue();c.latest=dict(state='available',target=manifest())
     c.busy=False;c.queued=False;c.reserved=False;c.waiting=None;c.downloaded=None;c.last_check=time.monotonic();c._operation=0
     c.idle=lambda:True
@@ -38,7 +39,7 @@ def controller(tmp_path,monkeypatch):
 def test_paused_update_reuses_download_after_another_official_check(controller,monkeypatch,blocked):
     c,network=controller;pause=[True]
     monkeypatch.setattr(gui,'open_forms',lambda w:pause[0] if blocked=='form' else False)
-    c.window._flush_embedded_charts=lambda:not pause[0]
+    c.window._begin_update_flush=lambda completion:completion(not pause[0])
     official=Mock(return_value=manifest());monkeypatch.setattr(gui.update,'load_manifest',official)
     c.begin();c.poll()
     assert c.downloaded and not c.busy and c.latest['state']=='available'

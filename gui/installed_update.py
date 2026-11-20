@@ -142,8 +142,16 @@ class InstalledVersionController:
             self.downloaded=(folder,target)
             if open_forms(self.window):
                 raise ValueError('更新包已下载。请先保存并关闭编辑窗口，再点击更新。')
-            flush=getattr(self.window,'_flush_embedded_charts',lambda:True)
-            if not flush():raise ValueError('图表仍在保存，请稍后再更新。')
+            self.window._begin_update_flush(
+                lambda saved: self._after_chart_flush(folder, target, saved))
+
+    def _after_chart_flush(self, folder, target, saved):
+        if not saved:
+            self.fail('图表仍在保存，请稍后再更新。', keep_available=True)
+            return
+        try:
+            if open_forms(self.window):
+                raise ValueError('更新包已下载。请先保存并关闭编辑窗口，再点击更新。')
             request=dict(target=target,parent_pid=os.getpid(),runtime=str(self.window.store.root),
                 install_root=os.environ['APLUS_INSTALL_ROOT'])
             atomic_json(folder/'request.json',request)
@@ -152,6 +160,9 @@ class InstalledVersionController:
             self.window._update_pending=True
             self.waiting=(folder,time.monotonic()+15)
             self.button.configure(text='准备重启…')
+        except Exception as exc:
+            self.window._resume_embedded_charts()
+            self.fail(str(exc), keep_available=True)
 
     def poll(self):
         if getattr(self.window,'_closing',False):return

@@ -579,10 +579,33 @@ class AplusMainWindow(ttk.Window):
         session, and the 15s timeout warns and restores instead of
         freezing the window as "not responding".
         """
-        if self._closing or getattr(self, "_update_pending", False):
+        if (self._closing or getattr(self, "_update_pending", False)
+                or getattr(self, '_update_flush_completion', None) is not None):
             return
         self._closing = True
         self._begin_exit_flush()
+
+    def _begin_update_flush(self, completion):
+        """Wait for chart saves while leaving the main window interactive."""
+        if (self._closing or getattr(self, '_update_pending', False)
+                or getattr(self, '_update_flush_completion', None) is not None):
+            completion(False)
+            return
+        self._update_flush_completion = completion
+        try:
+            self._begin_exit_flush()
+        except Exception:
+            self._update_flush_completion = None
+            self._exit_hosts = None
+            raise
+
+    def _end_update_flush(self, saved):
+        completion = self._update_flush_completion
+        self._update_flush_completion = None
+        self._exit_hosts = None
+        if not saved:
+            self._resume_embedded_charts()
+        completion(saved)
 
     def _begin_exit_flush(self):
         import time
@@ -595,7 +618,12 @@ class AplusMainWindow(ttk.Window):
         self._exit_hosts = hosts
         live = [host for host in hosts if not host.closed()]
         if not live:
-            self._finish_exit()
+            if getattr(self, '_update_flush_completion', None) is not None:
+                for host in hosts:
+                    host.cleanup()
+                self._end_update_flush(True)
+            else:
+                self._finish_exit()
             return
         for host in live:
             host.request_close()
@@ -606,26 +634,37 @@ class AplusMainWindow(ttk.Window):
     def _poll_exit_flush(self):
         import time
         self._exit_poll_id = None
-        if not self._closing or not self.winfo_exists():
+        updating = getattr(self, '_update_flush_completion', None) is not None
+        if not (self._closing or updating) or not self.winfo_exists():
             return
+        finish = self._end_update_flush if updating else None
         hosts = self._exit_hosts or []
         live = [host for host in hosts if not host.closed()]
         if not live:
             for host in hosts:
                 host.cleanup()
-            self._finish_exit()
+            if updating:
+                finish(True)
+            else:
+                self._finish_exit()
             return
         now = time.monotonic()
         refused = any(not host.closing for host in live)
         if refused and now - self._exit_started > .3:
             # A chart declined to close (unsaved work or fault): restore
             # the session exactly like the synchronous guard did.
-            self._abort_exit()
+            if updating:
+                finish(False)
+            else:
+                self._abort_exit()
             return
         if now >= self._exit_deadline:
             messagebox.showwarning('图表暂未关闭',
                 '图表关闭确认未完成，可能是通信中断或分析尚未保存。主窗口已保留，请查看图表提示后重试。', parent=self)
-            self._abort_exit()
+            if updating:
+                finish(False)
+            else:
+                self._abort_exit()
             return
         self._exit_poll_id = self.after(50, self._poll_exit_flush)
 
@@ -683,6 +722,7 @@ class AplusMainWindow(ttk.Window):
         self.destroy()
 
     def _flush_embedded_charts(self):
+        """Deprecated synchronous helper retained for legacy test probes only."""
         # Native children must acknowledge their final save before Tk destroys
         # their HWND parents. Never terminate a chart to hide a save failure.
         if getattr(self, '_chart_exit_wait', False):
@@ -749,7 +789,7 @@ class AplusMainWindow(ttk.Window):
 
     def _close_for_version_update(self, on_failure=None):
         """Keep the update reservation until the shared chart ACK gate finishes."""
-        if self._closing:
+        if self._closing or getattr(self, '_update_flush_completion', None) is not None:
             return
         self._closing = True
         self._exit_completion = self._finish_version_update
