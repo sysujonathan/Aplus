@@ -20,6 +20,7 @@ from .h2_replay_chart import render_replay
 from .research_views import (ANNUAL_COLUMNS, comparison_rows, holding_distribution, outcome, receipt_time,
                              scope_caption, trade_statistics)
 from .toolbar import format_board_scope
+from .workspace_icons import control_icon
 from .theme import CHART_BG, CONTROL_BG, DOWN, MUTED, SELECTION, TEXT, UP, UI_FONT, MONO_FONT
 
 
@@ -97,7 +98,8 @@ class AfterhoursPage(ttk.Frame):
         self.detail.columnconfigure(0, weight=1)
         nav = ttk.Frame(self.detail)
         nav.grid(row=0, column=0, sticky=tk.EW, pady=(0, 8))
-        ttk.Button(nav, text='← 返回结果', command=self._back, bootstyle='secondary').pack(side=tk.LEFT)
+        ttk.Button(nav, text='返回结果', compound=tk.LEFT,
+                   image=control_icon(nav, 'chevron-left', 12, MUTED), command=self._back, bootstyle='secondary').pack(side=tk.LEFT)
         ttk.Button(nav, text='上一笔 ↑', command=lambda: self._step_trade(-1), bootstyle='secondary').pack(side=tk.LEFT, padx=6)
         ttk.Button(nav, text='下一笔 ↓', command=lambda: self._step_trade(1), bootstyle='secondary').pack(side=tk.LEFT)
         self.detail_title = tk.StringVar()

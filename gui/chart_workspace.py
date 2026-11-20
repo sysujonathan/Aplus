@@ -26,11 +26,10 @@ from workbench.chart_workspace import (
 )
 from .chart_renderer import render_chart
 from .replay_navigation import candle_readout
+from .workspace_icons import control_icon
 from .theme import ACCENT, APP_BG, BORDER, CHART_BG, CONTROL_BG, MUTED, PANEL_BG, TEXT
 
 
-TOOL_GLYPHS = dict(fib='≋', long='L↑', ray='↦', trend='╱', short='S↓', rectangle='□',
-                   up='↑', down='↓', arrow='➚', path='⌁', channel='∥')
 DRAWING_LABELS = {**dict(TOOLS), 'text': '文字', 'ruler': '价格范围'}
 MINUTE_UNITS = {'1m': 'm1', '5m': 'm5', '15m': 'm15', '30m': 'm30', '1h': 'm60'}
 TF_LABELS = [('1m', '1分'), ('5m', '5分'), ('15m', '15分'), ('30m', '30分'), ('1h', '1小时'),
@@ -186,15 +185,17 @@ class ChartWorkspaceDialog:
                                activeforeground='white', relief=tk.FLAT, padx=8)
             button.pack(side=tk.LEFT, fill=tk.Y)
             self.tf_buttons[key] = button
-        self.replay_button = self._top_button(topbar, '⏪ 回放', self.toggle_replay)
-        snap = tk.Menubutton(topbar, text='📷 快照', bg=CONTROL_BG, fg=TEXT,
+        self.replay_button = self._top_button(topbar, '回放', self.toggle_replay, glyph='replay', size=22)
+        snap = tk.Menubutton(topbar, text='快照', compound=tk.LEFT,
+                             image=control_icon(topbar, 'camera', 22), bg=CONTROL_BG, fg=TEXT,
                              activebackground=ACCENT, relief=tk.FLAT, padx=10)
         snap.pack(side=tk.RIGHT, fill=tk.Y)
         snap.menu = tk.Menu(snap, tearoff=False)
         snap['menu'] = snap.menu
         snap.menu.add_command(label='保存干净图表 PNG…', command=self.save_snapshot)
         snap.menu.add_command(label='复制图像到剪贴板', command=self.copy_snapshot)
-        alarm = tk.Menubutton(topbar, text='闹钟＋', bg=CONTROL_BG, fg=TEXT,
+        alarm = tk.Menubutton(topbar, text='闹钟', compound=tk.RIGHT,
+                              image=control_icon(topbar, 'alert', 22), bg=CONTROL_BG, fg=TEXT,
                               activebackground=ACCENT, relief=tk.FLAT, padx=10)
         alarm.pack(side=tk.RIGHT, fill=tk.Y)
         alarm.menu = tk.Menu(alarm, tearoff=False); alarm['menu'] = alarm.menu
@@ -202,15 +203,15 @@ class ChartWorkspaceDialog:
         alarm.menu.add_command(label='立即检查已载入 K 线', command=self.check_alerts)
         self._top_button(topbar, '指标', self.indicator_dialog, side=tk.RIGHT)
         self._top_button(topbar, '5分数据', self.import_intraday, side=tk.RIGHT)
-        self._top_button(topbar, '↶', self.undo, side=tk.RIGHT)
-        self._top_button(topbar, '↷', self.redo, side=tk.RIGHT)
+        self._top_button(topbar, '', self.undo, side=tk.RIGHT, glyph='undo', size=22)
+        self._top_button(topbar, '', self.redo, side=tk.RIGHT, glyph='redo', size=22)
 
         self.replaybar = tk.Frame(self.top, bg=PANEL_BG, height=0)
         self.replay_text = tk.StringVar(value='')
         self._top_button(self.replaybar, '退出回放', self.exit_replay)
-        self._top_button(self.replaybar, '◀', lambda: self.replay_step(-1))
-        self.play_button = self._top_button(self.replaybar, '▶', self.replay_play)
-        self._top_button(self.replaybar, '▶|', lambda: self.replay_step(1))
+        self._top_button(self.replaybar, '', lambda: self.replay_step(-1), glyph='step-back')
+        self.play_button = self._top_button(self.replaybar, '', self.replay_play, glyph='play')
+        self._top_button(self.replaybar, '', lambda: self.replay_step(1), glyph='step-forward')
         self.speed_var = tk.StringVar(value='1x')
         ttk.Combobox(self.replaybar, textvariable=self.speed_var, state='readonly', width=5,
                      values=('.2x', '.5x', '1x', '2x', '5x')).pack(side=tk.LEFT, padx=6)
@@ -221,23 +222,23 @@ class ChartWorkspaceDialog:
         left = tk.Frame(body, bg=CONTROL_BG, width=48)
         left.pack(side=tk.LEFT, fill=tk.Y)
         left.pack_propagate(False)
-        tk.Button(left, text='✚', command=lambda: self.select_tool(None), bg=CONTROL_BG,
+        tk.Button(left, image=control_icon(left, 'cross', 24, '#C4C6CB'), command=lambda: self.select_tool(None), bg=CONTROL_BG,
                   fg=TEXT, relief=tk.FLAT).pack(fill=tk.X, pady=(5, 2))
         for key, label in TOOLS:
-            b = tk.Button(left, text=TOOL_GLYPHS[key], command=lambda v=key: self.select_tool(v),
+            b = tk.Button(left, image=control_icon(left, key, 24, '#C4C6CB'), command=lambda v=key: self.select_tool(v),
                           bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT,
-                          activeforeground='white', relief=tk.FLAT, height=1)
+                          activeforeground='white', relief=tk.FLAT)
             b.pack(fill=tk.X, pady=1)
             self._tooltip(b, label)
         tk.Frame(left, bg=BORDER, height=1).pack(fill=tk.X, pady=4)
-        eye = tk.Menubutton(left, text='◉', bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
+        eye = tk.Menubutton(left, image=control_icon(left, 'eye', 24, '#C4C6CB'), bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
         eye.pack(fill=tk.X, pady=2)
         eye.menu = tk.Menu(eye, tearoff=False); eye['menu'] = eye.menu
         eye.menu.add_command(label='隐藏／显示所有图形', command=lambda: self.toggle_hide('drawings'))
         eye.menu.add_command(label='隐藏／显示所有指标', command=lambda: self.toggle_hide('indicators'))
         eye.menu.add_command(label='隐藏／显示策略证据', command=self.toggle_strategy)
         eye.menu.add_command(label='隐藏／显示全部', command=lambda: self.toggle_hide('all'))
-        trash = tk.Menubutton(left, text='♲', bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
+        trash = tk.Menubutton(left, image=control_icon(left, 'trash', 24, '#C4C6CB'), bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
         trash.pack(side=tk.BOTTOM, fill=tk.X, pady=6)
         trash.menu = tk.Menu(trash, tearoff=False); trash['menu'] = trash.menu
         trash.menu.add_command(label='移除所有图形', command=lambda: self.remove_scope('drawings'))
@@ -248,10 +249,11 @@ class ChartWorkspaceDialog:
         center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         fav = tk.Frame(center, bg=CONTROL_BG)
         fav.place(relx=.5, y=8, anchor=tk.N, height=38)
-        tk.Label(fav, text='⠿', bg=CONTROL_BG, fg=MUTED, padx=7).pack(side=tk.LEFT)
+        tk.Label(fav, image=control_icon(fav, 'drag-handle', 18, '#686B71'),
+                 bg=CONTROL_BG, padx=7).pack(side=tk.LEFT)
         for key, label in TOOLS:
-            b = tk.Button(fav, text=TOOL_GLYPHS[key], command=lambda v=key: self.select_tool(v),
-                          bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT, relief=tk.FLAT, width=3)
+            b = tk.Button(fav, image=control_icon(fav, key, 24, '#C4C6CB'), command=lambda v=key: self.select_tool(v),
+                          bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT, relief=tk.FLAT)
             b.pack(side=tk.LEFT); self._tooltip(b, label)
         self.canvas = tk.Canvas(center, bg=CHART_BG, highlightthickness=0, cursor='crosshair')
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -288,17 +290,19 @@ class ChartWorkspaceDialog:
                  anchor=tk.W, padx=9).pack(fill=tk.X)
         self.refresh_tree()
 
-    def _top_button(self, parent, text, command, *, side=tk.LEFT):
+    def _top_button(self, parent, text, command, *, side=tk.LEFT, glyph=None, size=20):
         button = tk.Button(parent, text=text, command=command, bg=CONTROL_BG, fg=TEXT,
                            activebackground=ACCENT, activeforeground='white', relief=tk.FLAT, padx=9)
+        if glyph:
+            button.configure(image=control_icon(parent, glyph, size), compound=tk.LEFT)
         button.pack(side=side, fill=tk.Y)
         return button
 
     @staticmethod
     def _tooltip(widget, text):
-        widget.bind('<Enter>', lambda _e: widget.configure(text=text[:4]))
-        glyph = widget.cget('text')
-        widget.bind('<Leave>', lambda _e: widget.configure(text=glyph))
+        image = widget.cget('image')
+        widget.bind('<Enter>', lambda _e: widget.configure(text=text[:4], image=''))
+        widget.bind('<Leave>', lambda _e: widget.configure(text='', image=image))
 
     def schedule_render(self, _event=None):
         if self._closed:
@@ -785,13 +789,14 @@ class ChartWorkspaceDialog:
     def replay_play(self):
         if self.replay_index is None: return
         self.replay_playing = not self.replay_playing
-        self.play_button.configure(text='Ⅱ' if self.replay_playing else '▶')
+        self.play_button.configure(
+            image=control_icon(self.play_button, 'pause' if self.replay_playing else 'play', 20))
         if self.replay_playing: self._replay_tick()
 
     def _replay_tick(self):
         if not self.replay_playing or self.replay_index is None: return
         if self.replay_index >= len(self.frame)-1:
-            self.replay_playing = False; self.play_button.configure(text='▶'); return
+            self.replay_playing = False; self.play_button.configure(image=control_icon(self.play_button, 'play', 20)); return
         self.replay_step(1)
         try: speed = float(self.speed_var.get().rstrip('x'))
         except ValueError: speed = 1

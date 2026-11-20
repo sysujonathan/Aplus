@@ -12,6 +12,8 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
     import tkinter as tk
     import ttkbootstrap as ttk
     from gui.chart_panel import ChartGrid
+    from gui.theme import TEXT
+    from gui.workspace_icons import control_icon
     from gui.workspace_toolbar import FAVORITES, WorkspaceQuickSearch
     from workbench.store import Store
     from workbench.workspace_layouts import new_layout
@@ -48,14 +50,17 @@ def test_native_shared_icons_menus_favorites_and_token_state(tmp_path):
         controls._layout_popup.choices[8].invoke()
         assert grid._shape==(2,4) and controls._layout_popup is None
         strip = controls.period_more.master
-        assert [b.cget('text') for b in strip.pack_slaves()]==['5分','1小时','天','周','月','⌄']
+        assert [b.cget('text') for b in strip.pack_slaves() if b is not controls.period_more]==['5分','1小时','天','周','月']
+        assert strip.pack_slaves()[-1] is controls.period_more
+        assert controls.period_more.cget('image') == str(control_icon(strip, 'chevron-down', 12, TEXT))
         controls.period_more.invoke()
         picker = controls._period_popup
         assert list(picker.choices) == ['m1','m5','m15','m30','m60','daily','weekly','monthly']
         picker.stars['m30'].invoke()
         picker.stars['m1'].invoke()
-        assert picker.stars['m1'].cget('text') == '★'
-        assert [b.cget('text') for b in strip.pack_slaves()]==['1分','5分','30分','1小时','天','周','月','⌄']
+        assert picker.stars['m1'].cget('image') == str(control_icon(picker, 'star', 24, '#C4C6CB', filled=True))
+        assert [b.cget('text') for b in strip.pack_slaves() if b is not controls.period_more]==['1分','5分','30分','1小时','天','周','月']
+        assert strip.pack_slaves()[-1] is controls.period_more
         assert store.load_ui_preferences('chart_periods')['data']['favorites'] == [
             'm1','m5','m30','m60','daily','weekly','monthly']
         picker.stars['m1'].invoke()

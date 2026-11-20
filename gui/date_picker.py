@@ -11,6 +11,7 @@ from datetime import date
 
 import ttkbootstrap as ttk
 
+from .workspace_icons import control_icon
 from .theme import MUTED, UI_FONT
 
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
@@ -81,7 +82,7 @@ class DatePicker(ttk.Toplevel):
         self.month_box = ttk.Combobox(header, textvariable=self.month_var, width=4,
                                       state="readonly", values=self._months())
         self.month_box.pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(header, text="✕", width=3, bootstyle="secondary-outline",
+        ttk.Button(header, image=control_icon(self, "close", 12, MUTED), width=3, bootstyle="secondary-outline",
                    command=self.destroy).pack(side=tk.RIGHT)
         for column, name in enumerate(WEEKDAYS):
             ttk.Label(self.body, text=name, font=(UI_FONT, 9), anchor=tk.CENTER, width=3).grid(

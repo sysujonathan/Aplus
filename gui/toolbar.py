@@ -13,6 +13,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.widgets import ToolTip
 
+from .workspace_icons import control_icon
 from .theme import ACCENT, ACCENT_HOVER, BORDER, CONTROL_BG, HOVER, MUTED, TEXT, UP, UI_FONT, MONO_FONT
 from workbench.sources import (market_source, set_market_source, SOURCES, UPDATE_SOURCES,
                                RETIRED_MESSAGE, update_selection)
@@ -424,7 +425,7 @@ class ToolBar(ttk.Frame):
         )
         self.btn_chart_prev = ttk.Button(
             filters,
-            text="‹",
+            image=control_icon(self, "chevron-left", 12, MUTED),
             width=2,
             command=lambda: self._fire_chart_page(-1),
             bootstyle="primary",
@@ -434,7 +435,7 @@ class ToolBar(ttk.Frame):
         self.btn_chart_prev.pack(side=tk.LEFT, padx=(0, 2), pady=3)
         self.btn_chart_next = ttk.Button(
             filters,
-            text="›",
+            image=control_icon(self, "chevron-right", 12, MUTED),
             width=2,
             command=lambda: self._fire_chart_page(1),
             bootstyle="primary",

@@ -34,6 +34,7 @@ from workbench.account_reconciliation import capture_reference, reconcile_refere
 
 from .data import StockNameLookup, code_names
 from .date_picker import pick_date
+from .workspace_icons import control_icon
 from .theme import APP_BG, DOWN, MUTED, PANEL_BG, REPEAT, SELECTION, TEXT, UP, UI_FONT
 from .tree_scroll import numeric_stock_code
 
@@ -208,7 +209,7 @@ class TradeManagementFrame(ttk.Frame):
             ToolTip(self.duration_help_button, text='持有天数：自然日／交易日，例如 8/6。点击查看完整规则。',
                     wraplength=260)
         if add_command:
-            ttk.Button(head, text="＋", width=3, bootstyle="primary-outline",
+            ttk.Button(head, image=control_icon(head, "plus", 12, TEXT), width=3, bootstyle="primary-outline",
                        command=add_command).pack(side=tk.RIGHT)
         body = ttk.Frame(outer, padding=(8, 2, 8, 8))
         body.grid(row=1, column=0, sticky=tk.NSEW)
@@ -1963,7 +1964,7 @@ class _BatchEditor:
         ttk.Label(parent, text="手数（100股/手）").grid(row=row, column=2, pady=(8, 2))
         if include_fees:
             ttk.Label(parent, text="税费合计").grid(row=row, column=3, pady=(8, 2))
-        ttk.Button(parent, text="＋", width=3, bootstyle="primary-outline",
+        ttk.Button(parent, image=control_icon(parent, "plus", 12, TEXT), width=3, bootstyle="primary-outline",
                    command=self.add).grid(row=row, column=4 if include_fees else 3, padx=4)
         for batch in batches or [{}]:
             self.add(batch)
@@ -1995,7 +1996,7 @@ class _BatchEditor:
             widgets.append(ttk.Entry(self.parent, textvariable=fees_var, width=12))
         for column, widget in enumerate(widgets[1:], start=1):
             widget.grid(row=row_number, column=column, padx=3, pady=3)
-        remove = ttk.Button(self.parent, text="−", width=3, bootstyle="secondary-outline",
+        remove = ttk.Button(self.parent, image=control_icon(self.parent, "minus", 12, TEXT), width=3, bootstyle="secondary-outline",
                             command=lambda record=None: self.remove_record(record))
         record = {"date": date_var, "price": price_var, "hands": hands_var, "fees": fees_var,
                   "widgets": [*widgets, remove], "cell": cell}
@@ -2362,7 +2363,7 @@ class _ClosedBatchDialog(_BaseDialog):
             widget.grid(row=grid_row, column=column, sticky=tk.EW, padx=2, pady=2)
             widgets.append(widget)
         record = {"vars": variables, "widgets": widgets}
-        remove = ttk.Button(self.form, text="−", width=3, bootstyle="secondary-outline",
+        remove = ttk.Button(self.form, image=control_icon(self.form, "minus", 12, TEXT), width=3, bootstyle="secondary-outline",
                             command=lambda r=record: self._remove_row(r))
         remove.grid(row=grid_row, column=6, padx=2, pady=2)
         record["widgets"].append(remove)

@@ -50,8 +50,21 @@ LINES = {
     'lock': [[(8,10),(8,7),(9,4),(12,3),(15,4),(16,7),(16,10)]],
     'eye': [[(2,12),(5,7),(9,5),(15,5),(19,7),(22,12),(19,17),(15,19),(9,19),(5,17),(2,12)]],
     'trash': [[(4,6),(20,6)],[(9,6),(9,3),(15,3),(15,6)],[(7,6),(8,22),(16,22),(17,6)]],
+    # Existing TradingView SVG paths, on the same 24-unit grid.
+    'chevron-left': [[(15,5),(8,12),(15,19)]],
+    'chevron-right': [[(9,5),(16,12),(9,19)]],
+    'chevron-down': [[(5,9),(12,16),(19,9)]],
+    'close': [[(6,6),(18,18)],[(18,6),(6,18)]],
+    'plus': [[(12,5),(12,19)],[(5,12),(19,12)]],
+    'minus': [[(5,12),(19,12)]],
+    'play': [[(7,4),(19,12),(7,20),(7,4)]],
+    'pause': [[(8,4),(8,20)],[(16,4),(16,20)]],
+    'step-forward': [[(5,4),(16,12),(5,20),(5,4)],[(19,4),(19,20)]],
+    'step-back': [[(19,4),(8,12),(19,20),(19,4)],[(5,4),(5,20)]],
     'star': [[(12,2),(15,8),(22,9),(17,14),(18,22),(12,18),(6,22),(7,14),(2,9),(9,8),(12,2)]],
 }
+DRAG_HANDLE_DOTS = [(x, y) for x in (3, 8) for y in (4, 9, 14)]
+
 CIRCLES = {
     'cursor-dot': [(12,12,2)], 'cursor-highlight': [(12,12,8),(12,12,2)],
     'search': [(10,10,7)], 'settings': [(12,12,3)],
@@ -64,11 +77,12 @@ CIRCLES = {
     'rectangle': [(5,5,1.3),(19,5,1.3),(5,19,1.3),(19,19,1.3)],
     'channel': [(3,18,1.5),(18,3,1.5),(7,22,1.5),(22,7,1.5)],
     'zoom': [(10,10,7)], 'zoomOut': [(10,10,7)],
+    'more': [(5,12,1),(12,12,1),(19,12,1)],
     'eye': [(12,12,3)], 'smile': [(12,12,9),(8,9,.6),(16,9,.6)],
 }
 
 
-def icon(master, name, size, color='#B8BBC2'):
+def icon(master, name, size, color='#B8BBC2', *, filled=False):
     factor = size * 4 / 24
     image = Image.new('RGBA', (size*4, size*4))
     draw = ImageDraw.Draw(image)
@@ -76,12 +90,19 @@ def icon(master, name, size, color='#B8BBC2'):
     if name in ('activeBadge','badge'):
         box = tuple(round(v*factor) for v in (1,1,23,23))
         draw.ellipse(box,fill='#ECECEC' if name=='activeBadge' else None,outline='#83858A',width=stroke)
+    if name == 'star' and filled:
+        draw.polygon([(round(x*factor),round(y*factor)) for x,y in LINES['star'][0]],
+                     fill=color)
     for points in LINES.get(name, []):
         draw.line([(round(x*factor),round(y*factor)) for x,y in points],
                   fill=color, width=stroke, joint='curve')
     for x,y,r in CIRCLES.get(name, []):
         box = tuple(round(v*factor) for v in (x-r,y-r,x+r,y+r))
         draw.ellipse(box, fill=None, outline=color, width=stroke)
+    if name == 'drag-handle':
+        for x, y in DRAG_HANDLE_DOTS:
+            box = tuple(round(v * factor) for v in (x + 5.5 - 1, y + 3 - 1, x + 5.5 + 1, y + 3 + 1))
+            draw.ellipse(box, fill=color)
     if name == 'lock':
         draw.rounded_rectangle(tuple(round(v*factor) for v in (5,10,19,22)),
                                radius=round(2*factor), outline=color, width=stroke)
@@ -98,3 +119,17 @@ def icon(master, name, size, color='#B8BBC2'):
             y=round((4+16*row/rows)*factor)
             draw.line((round(3*factor),y,round(21*factor),y),fill=color,width=stroke)
     return ImageTk.PhotoImage(image.resize((size,size),Image.Resampling.LANCZOS), master=master)
+
+
+
+def control_icon(widget, name, size, color='#B8BBC2', *, filled=False):
+    """Cache DPI-scaled control images for the lifetime of their window."""
+    window = widget.winfo_toplevel()
+    pixels = max(1, round(size * widget.winfo_fpixels('1i') / 96))
+    cache = getattr(window, '_workspace_control_icons', None)
+    if cache is None:
+        cache = window._workspace_control_icons = {}
+    key = (name, pixels, color, filled)
+    if key not in cache:
+        cache[key] = icon(window, name, pixels, color, filled=filled)
+    return cache[key]
