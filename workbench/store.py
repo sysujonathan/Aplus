@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import errno
 import hashlib
 import json
 import os
@@ -56,7 +55,6 @@ def digest(data: bytes):
 class Store:
     def __init__(self, root=None):
         self._files_lock = threading.RLock()
-        self._sync_replace_directories = set()
         self._atomic_local = threading.local()
         self.root = resolve_runtime_root(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -538,6 +536,10 @@ class Store:
         if not path.is_relative_to(self.root):
             raise ValueError('同步文件必须位于运行目录内')
         with self._files_lock:
+            try:
+                replace_directories = self._sync_replace_directories
+            except AttributeError:
+                replace_directories = self._sync_replace_directories = set()
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name(".a-" + uuid.uuid4().hex + ".tmp")
             try:
@@ -545,7 +547,7 @@ class Store:
                     stream.write(content)
                     stream.flush()
                     os.fsync(stream.fileno())
-                if path.parent not in self._sync_replace_directories:
+                if path.parent not in replace_directories:
                     try:
                         path.hardlink_to(temporary)
                         return
@@ -556,11 +558,13 @@ class Store:
                     except NotImplementedError:
                         pass
                     except OSError as exc:
-                        if (exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS)
-                                and getattr(exc, 'winerror', None) not in (1, 50)):
+                        import errno
+
+                        unsupported_windows = hasattr(exc, 'winerror') and exc.winerror in (1, 50)
+                        if exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS) and not unsupported_windows:
                             raise
                     # Avoid probing hard-link support again for every CSV.
-                    self._sync_replace_directories.add(path.parent)
+                    replace_directories.add(path.parent)
                 try:
                     existing = path.read_bytes()
                 except FileNotFoundError:
