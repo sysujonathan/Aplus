@@ -6,7 +6,7 @@ from tkinter import font as tkfont
 import ttkbootstrap as ttk
 
 from .candidate_tabs import CandidateTabs, short_strategy_label
-from .theme import ACCENT, CONTROL_BG, MUTED, TEXT
+from .theme import ACCENT, CONTROL_BG, MUTED, TEXT, UI_FONT
 from .tree_scroll import numeric_stock_code
 
 SOURCES = ('全部','量化策略','形态捕手')
@@ -46,7 +46,7 @@ class MatchList(CandidateTabs):
         self.tree.bind('<Configure>',self._fit_columns)
         self.detail = tk.StringVar(value='相似度为图形相似程度，不是交易胜率')
         self.summary = tk.StringVar(value='相似度不是交易胜率')
-        self.summary_label=ttk.Label(self,textvariable=self.summary,foreground=MUTED,font=('Microsoft YaHei UI',8))
+        self.summary_label=ttk.Label(self,textvariable=self.summary,foreground=MUTED,font=(UI_FONT,9))
         self.summary_label.grid(row=3,column=0,sticky=tk.EW,pady=(4,0))
         self.summary_label.bind('<Button-1>',self._retry_list)
         self._read_error=False;self._retry_request=None
@@ -61,7 +61,7 @@ class MatchList(CandidateTabs):
         self._loading = False
         self.bind('<Destroy>',self._stop_reader,add='+')
         self.task_status = tk.StringVar()
-        ttk.Label(self,textvariable=self.task_status,foreground=MUTED,font=('Microsoft YaHei UI',8)).grid(
+        ttk.Label(self,textvariable=self.task_status,foreground=MUTED,font=(UI_FONT,9)).grid(
             row=0,column=0,sticky=tk.E,padx=2)
 
     def set_task_status(self, value):

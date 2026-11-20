@@ -27,3 +27,6 @@ DROP_TARGET = "#9A6700"
 # Chart candle colours are independent of A-share profit/loss text colours.
 CANDLE_UP = '#FFFFFF'
 CANDLE_DOWN = '#2962FF'
+
+UI_FONT = "Microsoft YaHei UI"
+MONO_FONT = "Consolas"

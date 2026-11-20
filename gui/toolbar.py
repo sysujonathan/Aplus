@@ -13,7 +13,7 @@ import tkinter as tk
 import ttkbootstrap as ttk
 from ttkbootstrap.widgets import ToolTip
 
-from .theme import MUTED
+from .theme import ACCENT, ACCENT_HOVER, BORDER, CONTROL_BG, HOVER, MUTED, TEXT, UP, UI_FONT, MONO_FONT
 from workbench.sources import (market_source, set_market_source, SOURCES, UPDATE_SOURCES,
                                RETIRED_MESSAGE, update_selection)
 
@@ -265,12 +265,24 @@ class ToolBar(ttk.Frame):
         ).pack(side=tk.LEFT)
 
         # 高频默认路径是一键盘前；两个分步任务继续保留，便于核验和迭代。
+        style = ttk.Style()
+        for name, background, foreground, hover in (
+            ("PremarketRun.TButton", ACCENT, TEXT, ACCENT_HOVER),
+            ("PremarketRun.TMenubutton", ACCENT, TEXT, ACCENT_HOVER),
+            ("PremarketAction.TButton", CONTROL_BG, TEXT, HOVER),
+            ("PremarketStop.TButton", CONTROL_BG, UP, HOVER),
+        ):
+            style.configure(name, font=(UI_FONT, 10), background=background,
+                            foreground=foreground, bordercolor=BORDER)
+            style.map(name, background=[("disabled", CONTROL_BG), ("active", hover)],
+                      foreground=[("disabled", MUTED), ("!disabled", foreground)],
+                      bordercolor=[("focus", MUTED)])
         auto_host = ttk.Frame(actions)
         self.btn_auto = ttk.Button(
             auto_host,
             text="一键盘前",
             command=self._on_auto,
-            bootstyle="success",
+            style="PremarketRun.TButton",
             cursor="hand2",
         )
         # Reserve exactly the former button's requested width, including at DPI
@@ -284,7 +296,7 @@ class ToolBar(ttk.Frame):
         self.btn_auto.configure(text='一键', padding=(2, 0))
         # Menubutton already draws its native arrow; adding a glyph repeats it
         # and steals space from the action label at larger display scaling.
-        self.btn_auto_menu = ttk.Menubutton(auto_host, text='', padding=(2, 0), bootstyle='success')
+        self.btn_auto_menu = ttk.Menubutton(auto_host, text='', padding=(2, 0), style="PremarketRun.TMenubutton")
         self.btn_auto_menu.pack(side=tk.RIGHT, fill=tk.Y)
         self.btn_auto.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._auto_tips = [
@@ -308,7 +320,7 @@ class ToolBar(ttk.Frame):
                                            cursor="hand2", command=self._on_desktop_sync)
         self.btn_desktop_sync.pack(side=tk.LEFT, padx=(0, 6))
         ttk.Label(
-            actions, text="① 行情", font=("Microsoft YaHei", 9, "bold"), foreground=_LABEL_FG
+            actions, text="① 行情", font=(UI_FONT, 9, "bold"), foreground=_LABEL_FG
         ).pack(side=tk.LEFT, padx=(0, 4))
         self.scope_button = ttk.Menubutton(
             actions,
@@ -330,7 +342,7 @@ class ToolBar(ttk.Frame):
         self.source_combo.pack(side=tk.LEFT,padx=(0,5))
         self.source_combo.bind('<<ComboboxSelected>>',self._source_changed)
         self.btn_sync = ttk.Button(
-            actions, text="更新行情", command=self._on_sync, bootstyle="primary", cursor="hand2"
+            actions, text="更新行情", command=self._on_sync, style="PremarketAction.TButton", cursor="hand2"
         )
         self.btn_sync.pack(side=tk.LEFT, padx=5)
         self.btn_integrity = ttk.Button(actions, text='完整性 / 补拉', width=12, command=self._show_tickflow_integrity,
@@ -340,7 +352,7 @@ class ToolBar(ttk.Frame):
             side=tk.LEFT, fill=tk.Y, padx=(8, 8), pady=3
         )
         ttk.Label(
-            actions, text="② 扫描", font=("Microsoft YaHei", 9, "bold"), foreground=_LABEL_FG
+            actions, text="② 扫描", font=(UI_FONT, 9, "bold"), foreground=_LABEL_FG
         ).pack(side=tk.LEFT, padx=(0, 4))
         self.strategy_scope_button = ttk.Menubutton(
             actions,
@@ -367,10 +379,10 @@ class ToolBar(ttk.Frame):
         self.strategy_scope_button.configure(menu=strategy_menu)
         self.strategy_scope_button.pack(side=tk.LEFT, padx=(0, 5))
         self.btn_scan = ttk.Button(
-            actions, text="策略扫描", command=self._on_scan, bootstyle="primary", cursor="hand2"
+            actions, text="策略扫描", command=self._on_scan, style="PremarketAction.TButton", cursor="hand2"
         )
         self.btn_scan.pack(side=tk.LEFT, padx=5)
-        self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, bootstyle="danger")
+        self.btn_stop = ttk.Button(actions, text="终止", command=self._on_stop, style="PremarketStop.TButton")
         self.btn_stop.pack(side=tk.LEFT, padx=5)
         self.btn_stop.configure(state=tk.DISABLED)
         sync_menu = tk.Menu(self, tearoff=0)
@@ -382,12 +394,12 @@ class ToolBar(ttk.Frame):
         # No live AI review exists yet; do not present it as an executable action.
 
         # 日期栏同时包含行情日和扫描日；启动仍定位最近一次有效扫描结果。
-        self.date_label = ttk.Label(filters, text="交易日", font=("Microsoft YaHei", 10), foreground=_LABEL_FG)
+        self.date_label = ttk.Label(filters, text="交易日", font=(UI_FONT, 10), foreground=_LABEL_FG)
         self.date_label.pack(side=tk.LEFT, padx=(12, 4))
         self.year_var = tk.StringVar(value=_ALL)
         self.month_var = tk.StringVar(value=_ALL)
         self.day_var = tk.StringVar(value=_ALL)
-        combo_kw = {"state": "readonly", "font": ("Consolas", 11)}
+        combo_kw = {"state": "readonly", "font": (UI_FONT, 10)}
         self.year_combo = ttk.Combobox(
             filters, textvariable=self.year_var, width=5, **combo_kw
         )
@@ -444,7 +456,7 @@ class ToolBar(ttk.Frame):
         self.status_label = ttk.Label(
             self.status_panel,
             width=1,
-            font=("Microsoft YaHei UI", 9),
+            font=(UI_FONT, 9),
             foreground=_LABEL_FG,
             anchor=tk.E,
         )
@@ -453,7 +465,7 @@ class ToolBar(ttk.Frame):
         self.timing_label = ttk.Label(
             self.status_panel,
             width=1,
-            font=("Consolas", 9),
+            font=(MONO_FONT, 9),
             foreground=_LABEL_FG,
             anchor=tk.E,
         )

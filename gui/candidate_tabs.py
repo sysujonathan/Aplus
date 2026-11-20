@@ -6,7 +6,7 @@ import tkinter as tk
 
 import ttkbootstrap as ttk
 
-from .theme import ACCENT, APP_BG, CONTROL_BG, HOVER, PANEL_BG, REPEAT, TEXT
+from .theme import APP_BG, CONTROL_BG, HOVER, MUTED, PANEL_BG, REPEAT, SELECTION, TEXT, UI_FONT
 from .tree_scroll import (
     attach_vertical_scrollbar,
     bind_identity_column_autofit,
@@ -91,7 +91,7 @@ class CandidateTabs(ttk.Frame):
         ttk.Label(
             self,
             text="策略结果",
-            font=("Microsoft YaHei", 10, "bold"),
+            font=(UI_FONT, 11, "bold"),
             foreground=TEXT,
         ).grid(row=0, column=0, sticky=tk.W, padx=2, pady=(0, 5))
 
@@ -149,7 +149,7 @@ class CandidateTabs(ttk.Frame):
             button = tk.Button(
                 self.sidebar,
                 text=f"{short_strategy_label(label)}\n0",
-                font=("Microsoft YaHei UI", 8, "bold"),
+                font=(UI_FONT, 9, "bold"),
                 width=1,
                 foreground=TEXT,
                 background=CONTROL_BG,
@@ -223,8 +223,8 @@ class CandidateTabs(ttk.Frame):
         for k, button in self._buttons.items():
             selected = k == key
             button.configure(
-                background=ACCENT if selected else CONTROL_BG,
-                highlightbackground=ACCENT if selected else CONTROL_BG,
+                background=SELECTION if selected else CONTROL_BG,
+                foreground=TEXT if selected else MUTED,
             )
         self.tree.delete(*self.tree.get_children())
         self.tree._obs = {}
