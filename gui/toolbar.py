@@ -1201,6 +1201,7 @@ class ToolBar(ttk.Frame):
                 self._desktop_sync_notice = (result['asof'], result['message'])
             self.btn_desktop_sync.state(['!disabled'])
             if timed_out and result['status'] in ('missing', 'rejected'):
+                self._header_data_var.set(f'{stage} · 超时后的同步读写已结束，请检查同步结果或重试')
                 return
             if result['status'] == 'rejected':
                 result = {**result, 'message': f"{stage} · {result['message']}"}
@@ -1234,7 +1235,7 @@ class ToolBar(ttk.Frame):
                 if not timed_out and time.monotonic() - started >= 300:
                     timed_out = True
                     cancelled.set()
-                    message = f'{stage} · 同步超时（300 秒），等待当前读写退出；可重开工作台后检查同步结果'
+                    message = f'{stage} · 同步超时（300 秒），等待当前读写结束并完成回滚，请稍候'
                     log.warning('%s', message)
                     self._header_data_var.set(message)
                 self.after(50 if not timed_out else 500, poll)
@@ -1280,7 +1281,7 @@ class ToolBar(ttk.Frame):
                     message = '同步失败，仍为 原有 数据。请检查 Google Drive 连接及本地磁盘空间后重试；仍失败时请提供桌面日志'
                 result = {'status': 'rejected', 'message': message}
             finally:
-                # Release after all writes, including when the window has closed.
+                # Keep the reservation until all writes and rollback have ended.
                 try:
                     if reserved:
                         self.service.release_idle()
@@ -1291,7 +1292,8 @@ class ToolBar(ttk.Frame):
 
         self.after(50, poll)
         try:
-            threading.Thread(target=run, name='desktop-sync', daemon=True).start()
+            self._desktop_sync_worker = threading.Thread(target=run, name='desktop-sync', daemon=True)
+            self._desktop_sync_worker.start()
         except Exception:
             logging.getLogger(__name__).exception('Desktop synchronization could not start')
             replies.put_nowait({'status': 'rejected', 'message': '同步失败，仍为 原有 数据。请检查 Google Drive 连接及本地磁盘空间后重试；仍失败时请提供桌面日志'})

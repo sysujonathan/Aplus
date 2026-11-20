@@ -643,6 +643,22 @@ class AplusMainWindow(ttk.Window):
             failure()
 
     def _finish_exit(self):
+        waiting = getattr(self, '_exit_poll_id', None) is not None
+        self._exit_poll_id = None
+        worker = getattr(self.toolbar, '_desktop_sync_worker', None)
+        if worker is not None and worker.is_alive():
+            cancelled = self.toolbar._desktop_sync_cancelled
+            if cancelled is not None:
+                cancelled.set()
+            if not waiting:
+                self.title('正在退出 · 等待桌面同步完成或回滚，请稍候')
+                self.deiconify()
+                self.lift()
+            self._exit_poll_id = self.after(50, self._finish_exit)
+            return
+        if waiting:
+            from workbench.branding import APPLICATION_TITLE
+            self.title(APPLICATION_TITLE)
         self._exit_hosts = None
         completion = getattr(self, "_exit_completion", None)
         self._exit_completion = None

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -55,6 +56,7 @@ def digest(data: bytes):
 class Store:
     def __init__(self, root=None):
         self._files_lock = threading.RLock()
+        self._sync_replace_directories = set()
         self._atomic_local = threading.local()
         self.root = resolve_runtime_root(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -543,13 +545,33 @@ class Store:
                     stream.write(content)
                     stream.flush()
                     os.fsync(stream.fileno())
+                if path.parent not in self._sync_replace_directories:
+                    try:
+                        path.hardlink_to(temporary)
+                        return
+                    except FileExistsError:
+                        if path.read_bytes() != content:
+                            raise ValueError('已有同步文件校验失败，拒绝覆盖')
+                        return
+                    except NotImplementedError:
+                        pass
+                    except OSError as exc:
+                        if (exc.errno not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS)
+                                and getattr(exc, 'winerror', None) not in (1, 50)):
+                            raise
+                    # Avoid probing hard-link support again for every CSV.
+                    self._sync_replace_directories.add(path.parent)
                 try:
-                    path.hardlink_to(temporary)
-                except FileExistsError:
-                    if path.read_bytes() != content:
+                    existing = path.read_bytes()
+                except FileNotFoundError:
+                    os.replace(temporary, path)
+                    temporary = None
+                else:
+                    if existing != content:
                         raise ValueError('已有同步文件校验失败，拒绝覆盖')
             finally:
-                temporary.unlink(missing_ok=True)
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
     def flush_sync_directories(self, version):
         """Publish directory entries before the SQLite activation commit."""
