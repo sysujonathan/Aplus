@@ -34,7 +34,7 @@ from workbench.account_reconciliation import capture_reference, reconcile_refere
 
 from .data import StockNameLookup, code_names
 from .date_picker import pick_date
-from .theme import APP_BG, DOWN, MUTED, PANEL_BG, REPEAT, TEXT, UP
+from .theme import APP_BG, DOWN, MUTED, PANEL_BG, REPEAT, SELECTION, TEXT, UP, UI_FONT
 from .tree_scroll import numeric_stock_code
 
 
@@ -198,7 +198,7 @@ class TradeManagementFrame(ttk.Frame):
         outer.rowconfigure(1, weight=1)
         head = ttk.Frame(outer, padding=(10, 7))
         head.grid(row=0, column=0, sticky=tk.EW)
-        ttk.Label(head, text=title, font=("Microsoft YaHei", 11, "bold"),
+        ttk.Label(head, text=title, font=(UI_FONT, 11, "bold"),
                   foreground=TEXT).pack(side=tk.LEFT)
         if help_command:
             self.duration_help_button = ttk.Button(head, text='ⓘ', width=2,
@@ -221,24 +221,24 @@ class TradeManagementFrame(ttk.Frame):
         host.grid(row=grid_row, column=0, sticky=tk.NSEW)
         host.columnconfigure(0, weight=1)
         host.rowconfigure(0, weight=1)
-        style_name = "Position.Treeview" if key == "positions" else "Trade.Treeview"
+        style_name = "TradePosition.Treeview" if key == "positions" else "TradeLedger.Treeview"
         ttk.Style().configure(
             style_name, rowheight=68 if key == "positions" else 34,
-            font=("Microsoft YaHei UI", 11 if key == "positions" else 10),
+            font=(UI_FONT, 11 if key == "positions" else 10),
         )
         if key == "positions":
             # 继承 primary-outline 配色，仅校正雅黑中文字形的视觉基线。
             ttk.Style().configure(
                 "PositionSell.primary.Outline.TButton",
                 anchor=tk.CENTER,
-                font=("Microsoft YaHei UI", 9),
+                font=(UI_FONT, 9),
                 padding=(4, 0, 4, 2),
             )
         tree = ttk.Treeview(host, columns=tuple(item[0] for item in columns),
                             show="headings", style=style_name, height=1 if key == 'positions' else 8)
         tree._column_specs = columns
         tree._measure_font = tkfont.Font(
-            root=tree, family="Microsoft YaHei UI",
+            root=tree, family=UI_FONT,
             size=11 if key == "positions" else 10,
         )
         minimums = {}
@@ -267,7 +267,7 @@ class TradeManagementFrame(ttk.Frame):
         tree.tag_configure("profit", foreground=UP)
         tree.tag_configure("loss", foreground=DOWN)
         tree.tag_configure("warn", foreground=REPEAT)
-        tree.tag_configure("summary", font=("Microsoft YaHei UI", 11, "bold"))
+        tree.tag_configure("summary", font=(UI_FONT, 11, "bold"))
         return tree
 
     def _tree_scrolled(self, tree, scrollbar, first, last):
@@ -382,7 +382,7 @@ class TradeManagementFrame(ttk.Frame):
         ttk.Label(total_box, textvariable=self.fund_position, foreground=TEXT,
                   bootstyle="secondary-inverse", padding=(8, 2)).pack(side=tk.LEFT, padx=10)
         ttk.Label(overview, textvariable=self.fund_total,
-                  font=("Microsoft YaHei UI", 21, "bold"), foreground=TEXT).grid(
+                  font=(UI_FONT, 21, "bold"), foreground=TEXT).grid(
                       row=1, column=0, sticky=tk.W, pady=(0, 5))
 
         metrics = ttk.Frame(funds)
@@ -402,12 +402,12 @@ class TradeManagementFrame(ttk.Frame):
             ttk.Label(cell, text=label, foreground=MUTED).pack(anchor=tk.W)
             variable = tk.StringVar(value="—")
             value_label = ttk.Label(cell, textvariable=variable,
-                                    font=("Microsoft YaHei UI", 11, "bold"), foreground=TEXT)
+                                    font=(UI_FONT, 11, "bold"), foreground=TEXT)
             value_label.pack(anchor=tk.W)
             self.fund_metrics[key] = (variable, value_label)
         self.funds_reconciliation = tk.StringVar(value="")
         reconciliation_label = ttk.Label(funds, textvariable=self.funds_reconciliation, foreground=MUTED,
-                  font=("Microsoft YaHei UI", 9), anchor=tk.W)
+                  font=(UI_FONT, 9), anchor=tk.W)
         reconciliation_label.grid(
                       row=3, column=0, sticky=tk.EW, pady=(4, 0)
                   )
@@ -483,10 +483,10 @@ class TradeManagementFrame(ttk.Frame):
             self.quick_result.set(
                 f"现有持仓风险 {summary['risk_pct']:.2f}%，已无可用风险预算，不可新开仓"
             )
-            self.quick_result_label.configure(foreground=DOWN)
+            self.quick_result_label.configure(foreground=UP)
         else:
             self.quick_result.set(f"建议最多 {shares // 100} 手（{shares} 股）")
-            self.quick_result_label.configure(foreground=UP)
+            self.quick_result_label.configure(foreground=TEXT)
 
     def reload(self):
         if self.store is None:
@@ -495,7 +495,7 @@ class TradeManagementFrame(ttk.Frame):
             accounts = self.store.list_accounts()
         except Exception as exc:
             self.quick_result.set(f"交易管理加载失败：{exc}")
-            self.quick_result_label.configure(foreground=DOWN)
+            self.quick_result_label.configure(foreground=UP)
             return
         current_id = self.current_account_id()
         self._accounts = accounts
@@ -610,7 +610,7 @@ class TradeManagementFrame(ttk.Frame):
             self._fill_closed()
         except Exception as exc:
             self.quick_result.set(f"读取交易账本失败：{exc}")
-            self.quick_result_label.configure(foreground=DOWN)
+            self.quick_result_label.configure(foreground=UP)
 
     def _quote_calendar(self):
         try:
@@ -1201,7 +1201,7 @@ class _ReturnCalendar:
         ttk.Button(controls, textvariable=self.previous_text, width=5, bootstyle="secondary-outline",
                    command=lambda: self.shift(-1)).pack(side=tk.LEFT, padx=(8, 2))
         self.title = tk.StringVar()
-        ttk.Label(controls, textvariable=self.title, font=("Microsoft YaHei UI", 10, "bold"))\
+        ttk.Label(controls, textvariable=self.title, font=(UI_FONT, 10, "bold"))\
             .pack(side=tk.LEFT, padx=6)
         ttk.Button(controls, textvariable=self.next_text, width=5, bootstyle="secondary-outline",
                    command=lambda: self.shift(1)).pack(side=tk.LEFT, padx=2)
@@ -1304,7 +1304,7 @@ class _ReturnCalendar:
 
     def _cell(self, cell, label, item, future=False, unknown_calendar=False):
         ttk.Label(cell, text=label, anchor=tk.CENTER, foreground=TEXT,
-                  font=("Microsoft YaHei UI", 10, "bold")).grid(row=0, column=0, sticky=tk.EW)
+                  font=(UI_FONT, 10, "bold")).grid(row=0, column=0, sticky=tk.EW)
         color, detail = MUTED, ""
         if not item:
             value = "—" if future else ("日历待更新" if unknown_calendar else "待补数据")
@@ -1323,7 +1323,7 @@ class _ReturnCalendar:
             row=1, column=0, sticky=tk.NSEW)
         if detail:
             ttk.Label(cell, text=detail, anchor=tk.CENTER, foreground=MUTED,
-                      font=("Microsoft YaHei UI", 8)).grid(row=2, column=0, sticky=tk.EW)
+                      font=(UI_FONT, 9)).grid(row=2, column=0, sticky=tk.EW)
 
     def _render_year(self):
         year = self.anchor.year
@@ -1693,7 +1693,7 @@ class _AccountDialog(_BaseDialog):
             self.reverse_initial.set("—")
             self._implied_initial = None
             self.reconciliation.set("请填写有效的开户初始资金")
-            self.reconciliation_label.configure(foreground=DOWN)
+            self.reconciliation_label.configure(foreground=UP)
             self.use_reverse_button.state(["disabled"])
             return
         system = history_reconciliation(
@@ -1706,7 +1706,7 @@ class _AccountDialog(_BaseDialog):
             self.reverse_initial.set("—")
             self._implied_initial = None
             self.reconciliation.set("券商资产快照需填写有效数字")
-            self.reconciliation_label.configure(foreground=DOWN)
+            self.reconciliation_label.configure(foreground=UP)
             self.use_reverse_button.state(["disabled"])
             return
         self.check_reference = None
@@ -1721,7 +1721,7 @@ class _AccountDialog(_BaseDialog):
                 self.reverse_initial.set('—')
                 self._implied_initial = None
                 self.reconciliation.set(str(exc))
-                self.reconciliation_label.configure(foreground=MUTED)
+                self.reconciliation_label.configure(foreground=UP)
                 self.use_reverse_button.state(['disabled'])
                 return
         else:
@@ -1742,12 +1742,12 @@ class _AccountDialog(_BaseDialog):
             self.reconciliation.set(
                 f"✓ 对账一致 · 差额 {difference:+,.2f} 元（券商－系统）"
             )
-            self.reconciliation_label.configure(foreground=UP)
+            self.reconciliation_label.configure(foreground=TEXT)
         else:
             self.reconciliation.set(
                 f"⚠ 对账差额 {difference:+,.2f} 元（券商－系统），请核对估值时点、漏记或资金变动"
             )
-            self.reconciliation_label.configure(foreground=DOWN)
+            self.reconciliation_label.configure(foreground=REPEAT)
         self.use_reverse_button.state(["!disabled"])
 
     def _use_implied_initial(self):
@@ -2205,7 +2205,7 @@ class _SellDialog(_BaseDialog):
     def __init__(self, parent, store, position):
         super().__init__(parent, f"卖出 · {numeric_stock_code(position['code'])} {position['name']}")
         ttk.Label(self.form, text=f"当前持仓 {position['quantity']} 股 · 摊薄成本 {_price(position['diluted_cost'])}",
-                  font=("Microsoft YaHei", 10, "bold")).grid(row=0, column=0, columnspan=4, sticky=tk.W)
+                  font=(UI_FONT, 10, "bold")).grid(row=0, column=0, columnspan=4, sticky=tk.W)
         dates = trading_dates(store, position["code"]) or trading_dates(store)
         first_sell = _next_sell_date(position["first_buy_date"], dates)
         ordered_dates = [first_sell] + [day for day in dates if day != first_sell]
@@ -2315,10 +2315,10 @@ class _ClosedBatchDialog(_BaseDialog):
         ).grid(row=0, column=5, columnspan=2, sticky=tk.E, padx=2, pady=(0, 8))
         for column, (label, _width) in enumerate(self.COLUMNS):
             ttk.Label(self.form, text=label, anchor=tk.CENTER,
-                      font=("Microsoft YaHei UI", 9, "bold")).grid(
+                      font=(UI_FONT, 9, "bold")).grid(
                           row=1, column=column, sticky=tk.EW, padx=2, pady=2)
         ttk.Label(self.form, text="操作", anchor=tk.CENTER,
-                  font=("Microsoft YaHei UI", 9, "bold")).grid(row=1, column=6, padx=2)
+                  font=(UI_FONT, 9, "bold")).grid(row=1, column=6, padx=2)
         records = list(initial_records or [])
         if records:
             for record in records:
@@ -2460,7 +2460,7 @@ class _ScreenshotPasteDialog(_BaseDialog):
                                                         sticky=tk.W, pady=(0, 8))
         self.listbox = tk.Listbox(
             self.form, height=8, width=72, bg=PANEL_BG, fg=TEXT,
-            selectbackground="#245a92", relief=tk.FLAT,
+            selectbackground=SELECTION, relief=tk.FLAT,
         )
         self.listbox.grid(row=1, column=0, columnspan=3, sticky=tk.NSEW)
         self.form.rowconfigure(1, weight=1)
@@ -2746,7 +2746,7 @@ class _DailyReturnImportDialog(_BaseDialog):
             state = item["state"]
             label = {"queued": "等待识别", "running": "正在识别…", "done": f"已识别 {len(item['rows'])} 天",
                      "error": "识别失败，请重试或移除"}[state]
-            ttk.Label(card, text=label, foreground=DOWN if state == "error" else MUTED,
+            ttk.Label(card, text=label, foreground={"error": UP, "done": TEXT}.get(state, MUTED),
                       anchor=tk.CENTER).pack(fill=tk.X, pady=3)
             if state == "error":
                 from ttkbootstrap.widgets import ToolTip
@@ -2817,7 +2817,7 @@ class _DailyReturnReviewDialog(_BaseDialog):
                   "例如：2026-09-30 -24.00。确认后仅补充日历，不改变资产或清仓记录。",
                   foreground=MUTED, wraplength=680).grid(row=0, column=0, columnspan=2, sticky=tk.W)
         self.editor = tk.Text(self.form, width=68, height=20, bg=PANEL_BG, fg=TEXT,
-                              insertbackground=TEXT, font=("Consolas", 11), undo=True)
+                              insertbackground=TEXT, font=(UI_FONT, 10), undo=True)
         self.editor.grid(row=1, column=0, columnspan=2, sticky=tk.NSEW, pady=8)
         self.form.rowconfigure(1, weight=1)
         self.form.columnconfigure(0, weight=1)
