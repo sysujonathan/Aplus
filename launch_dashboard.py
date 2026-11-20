@@ -85,6 +85,7 @@ def main():
             filename=LOG_PATH, encoding="utf-8", level=logging.WARNING,
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
+        logging.getLogger('aplus.desktop_sync').setLevel(logging.INFO)
         from gui.startup_loading import initialize
         from workbench.startup_metrics import span, record
         prepared=initialize(prepare_workbench)

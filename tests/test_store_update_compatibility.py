@@ -35,6 +35,20 @@ def test_additive_methods_and_comments_are_compatible_without_executing_code():
     assert v.compatible_store_extension(BASE, '# formatting only\n' + BASE)
 
 
+def test_sync_hardlink_fallback_keeps_source_update_migration_disabled():
+    root = Path(__file__).resolve().parents[1]
+    baseline = '47fd1095c517652624ea2e41624b1c141fb49f16'
+    store_path = 'workbench/store.py'
+    before = v.run_git(root, 'show', f'{baseline}:{store_path}')
+    after = (root / store_path).read_text(encoding='utf-8')
+    changed = set(v.run_git(root, 'diff', '--name-only', '-z', baseline).split('\0')) - {''}
+    compatible = v.compatible_store_extension(before, after)
+    plan = v.installation_plan(root, baseline, 'HEAD', changed, compatible)
+
+    assert plan['database_changed'] is False, f'{compatible=}, {plan=}'
+    assert compatible
+
+
 @pytest.mark.parametrize('change', [
     lambda s: s.replace('self.version = 8', 'self.version = 9'),
     lambda s: s.replace('self.version = 8', "self.execute('ALTER TABLE accounts ADD COLUMN x TEXT')"),

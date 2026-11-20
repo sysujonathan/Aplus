@@ -643,6 +643,22 @@ class AplusMainWindow(ttk.Window):
             failure()
 
     def _finish_exit(self):
+        waiting = getattr(self, '_exit_poll_id', None) is not None
+        self._exit_poll_id = None
+        worker = getattr(self.toolbar, '_desktop_sync_worker', None)
+        if worker is not None and worker.is_alive():
+            cancelled = self.toolbar._desktop_sync_cancelled
+            if cancelled is not None:
+                cancelled.set()
+            if not waiting:
+                self.title('正在退出 · 等待桌面同步完成或回滚，请稍候')
+                self.deiconify()
+                self.lift()
+            self._exit_poll_id = self.after(50, self._finish_exit)
+            return
+        if waiting:
+            from workbench.branding import APPLICATION_TITLE
+            self.title(APPLICATION_TITLE)
         self._exit_hosts = None
         completion = getattr(self, "_exit_completion", None)
         self._exit_completion = None
@@ -1091,10 +1107,10 @@ class AplusMainWindow(ttk.Window):
     def _on_job_finished(self, kind, status, result=None):
         if self.store is None:
             return
+        synced = kind == '同步' and status == 'completed' and (result or {}).get('asof')
         try:
             # 行情更新只扩充可选日期，不打断交易员正在复核的旧信号；
             # 扫描产出属于用户刚发起的当前任务，应立即显示该次实际扫描日。
-            synced = kind == '同步' and status == 'completed' and (result or {}).get('asof')
             if synced:
                 from workbench.sources import SOURCES
                 self._tf_var.set('daily')
@@ -1124,7 +1140,8 @@ class AplusMainWindow(ttk.Window):
             self.watch.reload()
             self.toolbar._load_market_status()
         except Exception:
-            pass
+            if synced:
+                raise
         # ToolBar 已保留任务结果，并在行情更新后明确提示“行情最新/信号最新/待扫描”。
         # 此处只刷新视图，不再用泛化文案覆盖那条关键结果。
 

@@ -1,5 +1,6 @@
 """Apply shared server results, keeping desktop trading state untouched."""
 from datetime import date
+from errno import ENOSPC
 import json
 import logging
 import os
@@ -128,6 +129,8 @@ def sync_age_days(asof):
 
 
 def _rejection_reason(exc):
+    if isinstance(exc, OSError) and exc.errno == ENOSPC:
+        return '本地磁盘空间不足；释放空间后重试'
     if isinstance(exc, FileNotFoundError):
         return '同步源文件未下载齐；请将同步源设为“可离线使用”，等待 Drive 下载完成后重试'
     if isinstance(exc, PermissionError):
@@ -147,6 +150,10 @@ def _rejection_reason(exc):
 def _validate_manifest(manifest):
     if manifest['kind'] != 'aplus-sync-source' or type(manifest['schema']) is not int or manifest['schema'] != 1 or manifest['sha256'] != snapshot_digest(manifest):
         raise ValueError('manifest identity/digest mismatch')
+    _validate_manifest_compatibility(manifest)
+
+
+def _validate_manifest_compatibility(manifest):
     if manifest['engine'] != scan_engine_version() or manifest['frozen_sha256'] != frozen_sha256():
         raise ValueError(f"version mismatch: source={manifest['engine']}/{manifest['frozen_sha256']}, local={scan_engine_version()}/{frozen_sha256()}")
     if manifest['source'] != 'tickflow' or manifest['timeframe'] != 'daily':
@@ -163,8 +170,9 @@ def _validate_day(asof, saved):
         raise ValueError(f'同步源已过期 {age} 天；请联系服务端发布最新同步源')
 
 
-def _apply_legacy(store, source_dir, saved):
+def _apply_legacy(store, source_dir, saved, report):
     try:
+        report('读取旧格式清单（无 latest 或父版本）', force=True)
         manifest = json.loads((source_dir / 'manifest.json').read_text(encoding='utf-8'))
         _validate_manifest(manifest)
         asof = manifest['asof']
@@ -176,8 +184,12 @@ def _apply_legacy(store, source_dir, saved):
         existing = {r['id']: r for r in store.rows('SELECT * FROM datasets')}
         ids = set()
         writes = []
-        for row in datasets:
-            if set(row) != set(DATASET_COLUMNS) or not re.fullmatch('[0-9a-f]{64}', row['id']) or row['path'] != f"market/{row['id']}.csv" or row['source'] != 'tickflow':
+        dataset_columns = set(DATASET_COLUMNS)
+        valid_id = re.compile('[0-9a-f]{64}').fullmatch
+        report(f'读取并校验旧格式行情 0/{len(datasets)}', force=True)
+        for index, row in enumerate(datasets):
+            report(f'读取并校验旧格式行情 {index}/{len(datasets)}')
+            if row.keys() != dataset_columns or not valid_id(row['id']) or row['path'] != f"market/{row['id']}.csv" or row['source'] != 'tickflow':
                 raise ValueError('invalid dataset row')
             if row['id'] in ids:
                 raise ValueError('duplicate dataset')
@@ -198,10 +210,12 @@ def _apply_legacy(store, source_dir, saved):
             if digest(content) != row['sha256']:
                 raise ValueError('market digest mismatch')
             target = store.root / row['path']
-            if target.exists() and digest(target.read_bytes()) != row['sha256']:
-                raise ValueError('existing market file modified externally')
-            if not target.exists():
+            if target.exists():
+                if digest(target.read_bytes()) != row['sha256']:
+                    raise ValueError('existing market file modified externally')
+            else:
                 writes.append((row['path'], content))
+        report(f'校验旧格式候选与目录 · 行情 {len(datasets)}/{len(datasets)}', force=True)
         for row in observations:
             if set(row) != set(OBSERVATION_COLUMNS) or row['dataset_id'] not in ids:
                 raise ValueError('invalid observation row')
@@ -240,25 +254,39 @@ def _apply_legacy(store, source_dir, saved):
             target = store.root / relative
             previous[relative] = target.read_bytes() if target.exists() else None
     try:
-        for relative, content in writes:
-            store.write_artifact(relative, content)
-        counts, removed = _commit(store, manifest, saved)
-    except Exception:
+        report(f'写入本地文件 0/{len(writes)}', force=True)
+        market_written = False
+        for index, (relative, content) in enumerate(writes):
+            report(f'写入本地文件 {index}/{len(writes)}')
+            if relative.startswith('market/'):
+                store.write_immutable_sync_file(relative, content)
+                market_written = True
+            else:
+                store.write_artifact(relative, content)
+        if market_written:
+            store.flush_sync_directories(manifest['sha256'])
+        report('登记旧格式行情与候选，激活本地版本', force=True)
+        counts, removed = _commit(store, manifest, saved, check_cancel=lambda: report(None))
+    except Exception as exc:
         for relative, content in previous.items():
             if content is None:
                 (store.root / relative).unlink(missing_ok=True)
             else:
                 store.write_artifact(relative, content)
         logger.exception('Synchronization failed; DB rolled back, unreferenced market artifacts may remain')
+        if isinstance(exc, OSError) and exc.errno == ENOSPC:
+            return dict(status='rejected', message=rejection_message(store, _rejection_reason(exc)))
         raise
     return dict(status='applied', message=f'已同步到 {asof} 数据', asof=asof, datasets_added=counts[0], observations_added=counts[1], observations_removed=removed)
 
 
-def _commit(store, manifest, saved, inventory=None):
+def _commit(store, manifest, saved, inventory=None, *, check_cancel=None):
     asof = manifest['asof']
     datasets, observations = manifest['datasets'], manifest['observations']
     with store.connect() as db:
         db.execute('BEGIN IMMEDIATE')
+        if check_cancel:
+            check_cancel()
         current = db.execute("SELECT value FROM meta WHERE key='sync_digest'").fetchone()
         if (current['value'] if current else None) != saved.get('sync_digest'):
             raise ValueError('同步源激活前已应用版本变化，请重试')
@@ -276,13 +304,13 @@ def _commit(store, manifest, saved, inventory=None):
         for table, columns, rows in [('datasets', DATASET_COLUMNS, datasets), ('observations', OBSERVATION_COLUMNS, observations)]:
             if inventory is not None:
                 # An existing immutable ID must describe the same chart/observation.
+                fields = set(columns) - {'created', 'job_id'}
                 for offset in range(0, len(rows), 500):
                     batch = rows[offset:offset + 500]
                     incoming = {row['id']: row for row in batch}
                     placeholders = ','.join('?' for _ in incoming)
                     for old in db.execute(f'SELECT * FROM {table} WHERE id IN ({placeholders})', tuple(incoming)):
                         new = incoming[old['id']]
-                        fields = set(columns) - {'created', 'job_id'}
                         if any(old[key] != new[key] for key in fields):
                             raise ValueError('同步源与本地既有行情或候选记录冲突')
             counts.append(db.executemany(
@@ -299,16 +327,14 @@ def _commit(store, manifest, saved, inventory=None):
             metadata['universe_date:tickflow'] = manifest['universe_date']
         for key, value in metadata.items():
             db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
+        if check_cancel:
+            check_cancel()
     return counts, removed
 
 
 def apply_sync_source(store, source_dir, *, progress=None, cancelled=None):
     source_dir = Path(source_dir)
     saved = {r['key']: r['value'] for r in store.rows("SELECT * FROM meta WHERE key LIKE 'sync_%'")}
-    if not (source_dir / 'latest.json').is_file():
-        return _apply_legacy(store, source_dir, saved)
-
-    from .sync_activate import _inventory_path, prepare_activation
     started = time.monotonic()
     last_update = started - 1
 
@@ -317,14 +343,19 @@ def apply_sync_source(store, source_dir, *, progress=None, cancelled=None):
         if cancelled and cancelled():
             raise InterruptedError('桌面同步已取消')
         tick = time.monotonic()
-        if progress and (force or tick - last_update >= 0.5):
+        if message and progress and (force or tick - last_update >= 0.5):
             progress(f'{message} · {tick - started:.1f} 秒')
             last_update = tick
 
+    report('检查同步源发布指针 latest.json', force=True)
+    if not (source_dir / 'latest.json').is_file():
+        return _apply_legacy(store, source_dir, saved, report)
+
     try:
-        report('定位已发布版本', force=True)
+        from .sync_activate import _inventory_path, prepare_activation
+        report('读取 latest 并校验父版本链', force=True)
         manifest, inventory = prepare_activation(
-            store, source_dir, saved, _validate_manifest,
+            store, source_dir, saved, _validate_manifest_compatibility,
             lambda asof: _validate_day(asof, saved), report)
         asof = manifest['asof']
         version = manifest['sha256']
@@ -343,7 +374,7 @@ def apply_sync_source(store, source_dir, *, progress=None, cancelled=None):
         if inventory is not None:
             store.flush_sync_directories(version)
             report('登记行情与候选，激活完整版本', force=True)
-            counts, removed = _commit(store, manifest, saved, inventory)
+            counts, removed = _commit(store, manifest, saved, inventory, check_cancel=lambda: report(None))
         # The paths bind the effective inventory to the bytes verified above.
         # Checking the committed routing needs no directory or calendar scan.
         effective_calendar = calendar_file(store, 'tickflow')
