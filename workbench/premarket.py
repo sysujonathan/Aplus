@@ -99,6 +99,9 @@ def run_premarket(service, job, spec):
             with notice_lock:
                 receipt[kind+'_job'] = child
                 receipt.setdefault(kind+'_jobs', []).append(child)
+            if kind == 'verify_status':
+                # Silent maintenance does not call progress; publish the phase boundary.
+                notice(source, phase, 0, 0, force=True)
             started = time.monotonic()
             metrics_before = proxy.store.metrics()
             try:

@@ -123,16 +123,38 @@ def test_job_view_reads_only_existing_database_and_preserves_bytes(store):
     assert not (store.root/'missing').exists()
 
 
-def test_premarket_progress_names_source_stage_and_stock_count_not_zero_percent():
+def test_premarket_terminal_snapshot_passes_full_task_duration(store):
+    store.execute(
+        "INSERT INTO jobs(id,kind,status,created,finished,spec) VALUES(?,?,?,?,?,?)",
+        ('job', 'premarket', 'partial', '2026-11-20T15:55:03+00:00',
+         '2026-11-20T16:07:06+00:00', '{}'),
+    )
+    bar = toolbar()
+    store_row = load_job(store.root, 'job', lambda: None)
+    reply(bar, store_row)
+    assert bar._finish_job.call_args.kwargs == {'job_elapsed': 723}
+
+
+def test_premarket_progress_uses_stock_and_judgment_units_per_stage():
     bar = toolbar()
     item = dict(phase='更新',progress=690,total=3199)
     reply(bar,running(progress=0,total=1,result=json.dumps({'sources':{'tickflow':item}})))
     text = bar.set_status.call_args[0][0]
     assert 'TickFlow正在更新行情：已处理690只，共3199只；随后自动扫描' in text
     assert '0/1' not in text and '0%' not in text
-    item.update(phase='扫描',progress=20)
+    item.update(phase='扫描',progress=20,message='扫描前核验 daily')
     reply(bar,running(result=json.dumps({'sources':{'tickflow':item}})))
-    assert '正在策略扫描：已处理20只，共3199只' in bar.set_status.call_args[0][0]
+    assert '正在核对扫描范围：已处理20只，共3199只' in bar.set_status.call_args[0][0]
+    item.update(phase='扫描',progress=12528,total=12564,message='daily · sh.600000 · 6 个策略')
+    reply(bar,running(result=json.dumps({'sources':{'tickflow':item}})))
+    assert '正在策略扫描：已处理12528次，共12564次' in bar.set_status.call_args[0][0]
+    item.update(phase='核验缺日',progress=0,total=0,message='')
+    reply(bar,running(result=json.dumps({'sources':{'tickflow':item}})))
+    text = bar.set_status.call_args[0][0]
+    assert 'TickFlow核验缺日中' in text and '12528' not in text
+    item.update(phase='补扫',progress=20,total=30)
+    reply(bar,running(result=json.dumps({'sources':{'tickflow':item}})))
+    assert '正在策略补扫：已处理20次，共30次' in bar.set_status.call_args[0][0]
 
 
 def test_multiple_source_progress_does_not_claim_failed_source_completed():
