@@ -271,6 +271,8 @@ class VersionController:
         self.show_notice(result)
 
     def begin_update(self, result):
+        if self.reserved:
+            return
         service = self.window.service
         if service is None or self.window.store is None:
             messagebox.showinfo("暂不能更新", "后端未连接，请人工检查安装。", parent=self.window)
@@ -280,10 +282,19 @@ class VersionController:
             return
         try:
             require_web_closed()
-            flush_charts = getattr(self.window, '_flush_embedded_charts', None)
-            if flush_charts is not None and not flush_charts():
-                return
-            service.reserve_code_update()
+            self.window._begin_update_flush(lambda saved: self._after_chart_flush(result, saved))
+        except Exception as exc:
+            self._update_preparation_failed(exc)
+
+    def _after_chart_flush(self, result, saved):
+        if not saved:
+            if saved is False:
+                messagebox.showinfo("暂不能更新", "当前版本继续使用，请稍后重试。", parent=self.window)
+            return
+        try:
+            if open_forms(self.window):
+                raise ValueError("请保存并关闭持仓编辑、导入预览等窗口后再更新。")
+            self.window.service.reserve_code_update()
             self.reserved = True
             # Hide interaction before starting the helper, but don't exit until
             # it has a real handle on this process. Failed preparation restores UI.
@@ -292,15 +303,16 @@ class VersionController:
             folder = prepare_worker(self.root, result, self.window.store.root)
             self.waiting = (folder, time.monotonic() + 8)
         except Exception as exc:
-            self.window._update_pending = False
-            self.window.deiconify()
-            resume_charts = getattr(self.window, '_resume_embedded_charts', None)
-            if resume_charts is not None:
-                resume_charts()
-            if self.reserved:
-                service.release_code_update()
-                self.reserved = False
-            messagebox.showinfo("暂不能更新", str(exc), parent=self.window)
+            self._update_preparation_failed(exc)
+
+    def _update_preparation_failed(self, exc):
+        self.window._update_pending = False
+        self.window.deiconify()
+        self.window._resume_embedded_charts()
+        if self.reserved:
+            self.window.service.release_code_update()
+            self.reserved = False
+        messagebox.showinfo("暂不能更新", str(exc), parent=self.window)
 
     def destroyed(self, event):
         if event.widget is self.window:

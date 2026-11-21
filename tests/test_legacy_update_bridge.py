@@ -586,7 +586,7 @@ launch.main()
     controller = object.__new__(ui.VersionController)
     controller.root = root; controller.reserved = False
     controller.window = SimpleNamespace(service=Mock(),store=store,withdraw=Mock(),
-                                        _flush_embedded_charts=lambda: True)
+                                        _begin_update_flush=lambda completion: completion(True))
     second_facts = v._database_state(store.path)['facts']
     controller.begin_update(followup)
     assert controller.reserved and controller.window._update_pending

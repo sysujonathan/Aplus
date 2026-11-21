@@ -994,6 +994,7 @@ def test_ui_preparation_failure_releases_reservation_and_restores_window(tmp_pat
     from gui import version_update as ui
     c = object.__new__(ui.VersionController)
     c.window = Mock()
+    c.window._begin_update_flush.side_effect = lambda completion: completion(True)
     c.root = tmp_path
     c.reserved = False
     monkeypatch.setattr(ui, 'open_forms', lambda w: False)
