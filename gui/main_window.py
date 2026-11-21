@@ -33,6 +33,17 @@ def right_list_width(window_width, scale=1):
     return max(round(330*scale), min(round(390*scale), round(width * 0.225)))
 
 
+def _cleanup_chart_hosts(hosts):
+    cleaned = True
+    for host in hosts:
+        try:
+            host.cleanup()
+        except OSError:
+            cleaned = False
+            logging.getLogger(__name__).warning('图表 IPC 文件清理失败', exc_info=True)
+    return cleaned
+
+
 class _StartupWatchPanel(WatchPanel):
     """Build with saved view settings, but defer the expensive initial rows."""
     def __init__(self, *args, **kwargs):
@@ -619,9 +630,7 @@ class AplusMainWindow(ttk.Window):
         live = [host for host in hosts if not host.closed()]
         if not live:
             if getattr(self, '_update_flush_completion', None) is not None:
-                for host in hosts:
-                    host.cleanup()
-                self._end_update_flush(True)
+                self._end_update_flush(_cleanup_chart_hosts(hosts))
             else:
                 self._finish_exit()
             return
@@ -641,12 +650,13 @@ class AplusMainWindow(ttk.Window):
         hosts = self._exit_hosts or []
         live = [host for host in hosts if not host.closed()]
         if not live:
-            for host in hosts:
-                host.cleanup()
+            cleaned = _cleanup_chart_hosts(hosts)
             if updating:
-                finish(True)
-            else:
+                finish(cleaned)
+            elif cleaned:
                 self._finish_exit()
+            else:
+                self._abort_exit()
             return
         now = time.monotonic()
         refused = any(not host.closing for host in live)

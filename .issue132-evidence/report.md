@@ -38,3 +38,24 @@ H2（线程池非守护线程/进程滞留）、H3（切股残余阻塞点）、
 - 新测试用合成 Host 与加速时钟覆盖 ACK 延迟/超时/拒绝三态；
   真实 Windows 桌面上的 15 秒超时与图表交互仍待人工复核（同 #132 主线待决项）。
 - 性能：无计时对比；改动只把同步忙等换成 after 轮询，未引入可测回退的路径。
+
+## PR #192 P1 · ACK 后 IPC 清理失败回退
+
+- 更新确认收到 ACK 后，如果 IPC 文件仍被占用，清理会继续尝试其余文件和其余图表 host。每个 host 汇总失败路径后抛出 `OSError`，主窗口写入现有日志。
+- 更新从轮询结束或从已关闭的图表直接进入收尾时，清理失败都会执行 `_end_update_flush(False)`，清门禁、恢复图表并把失败交回更新控制器。退出轮询中遇到相同错误则调用 `_abort_exit()` 恢复会话。安装版沿用现有失败回调释放更新预留。
+- 性能方面，本改动只碰更新/退出收尾路径，不加任何同步等待。
+- 冻结校验前后一致，`verify_frozen()` 返回 `185541a4c226af123a36d113ca741c1b207a5413cd6fb6b4fd980381f0ff312c`。变更限于 `gui/chart_embed.py`、`gui/main_window.py`、`tests/test_update_flush_nonblocking.py` 和本报告。
+
+### 本地代码测试
+
+下列命令使用 `/home/hatch/workspace/Aplus/.venv/bin/python`。
+
+- 修复前运行 `python -m pytest -q tests/test_update_flush_nonblocking.py -k cleanup_failure`，3 项均复现异常外抛。
+- 修复后运行 `python -m pytest -q tests/test_update_flush_nonblocking.py -k cleanup`，4 项通过。覆盖两个被占用路径的聚合、其余文件与 host 继续清理、异步 ACK 和已关闭图表两种更新入口的失败回退及重试、退出回退。
+- 运行 `python -m pytest -q tests/test_update_flush_nonblocking.py tests/test_version_update.py tests/test_installed_update_ux.py tests/test_legacy_update_bridge.py tests/test_exit_state_machine.py`，134 项通过、12 项跳过、2 项失败。失败用例为 `test_listening_web_port_prevents_code_update` 和 `test_real_closed_loopback_port_is_not_mistaken_for_uncertain_service`，当前沙箱在创建 IPv4 socket 时返回 `PermissionError: [Errno 1]`，用例未执行到业务断言。
+- 同一命令追加 `-k 'not listening_web_port_prevents_code_update and not real_closed_loopback_port_is_not_mistaken_for_uncertain_service'` 复跑，134 项通过、12 项跳过、2 项排除。
+
+### 遗留
+
+- 两条 loopback 用例需在允许 IPv4 socket 的环境复验。新增回归在 Linux 模拟文件占用，本轮未在真实 Windows 安装版复验，也未运行 GitHub CI 或长期实际使用验收。
+- 本地分支仍为 `codex/issue-132-h1`，基线为 `441788c`。实际 Git 元数据位于主工作树的 `.git`，当前只读，暂存时无法创建 `index.lock`。改动已保留在工作树，未提交、未推送。拟用提交标题为「Aplus：修复-更新流程-图表清理失败后可重试」。

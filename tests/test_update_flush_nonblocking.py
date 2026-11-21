@@ -3,14 +3,84 @@ import _tkinter
 import queue
 import time
 import tkinter as tk
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 from gui import installed_update, version_update
+from gui.chart_embed import EmbeddedChartHost
 from gui.main_window import AplusMainWindow
-from tests.test_exit_state_machine import Host
+from tests.test_exit_state_machine import Host, window
+
+
+def test_cleanup_collects_locked_ipc_paths_and_deletes_other_files(tmp_path, monkeypatch):
+    host = EmbeddedChartHost(None, SimpleNamespace(root=tmp_path))
+    host.session.parent.mkdir()
+    locked = (host.control, host.status)
+    workspace = host.session.with_suffix('.workspace.json')
+    for path in (*locked, workspace):
+        path.touch()
+    unlink = Path.unlink
+
+    def unlink_with_sharing_conflict(path, *, missing_ok=False):
+        if path in locked:
+            raise PermissionError('IPC file in use')
+        unlink(path, missing_ok=missing_ok)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, 'unlink', unlink_with_sharing_conflict)
+        with pytest.raises(OSError) as error:
+            host.cleanup()
+    assert all(str(path) in str(error.value) and path.exists() for path in locked)
+    assert not workspace.exists()
+
+    host.cleanup()
+    assert not any(path.exists() for path in locked)
+
+
+@pytest.mark.parametrize('already_closed', [False, True])
+def test_update_cleanup_failure_releases_gate_for_retry(window, already_closed):
+    for name in ('_begin_update_flush', '_end_update_flush'):
+        setattr(window, name, getattr(AplusMainWindow, name).__get__(window))
+    first, last = Host(), Host()
+    first._closed = last._closed = already_closed
+    first.cleanup = Mock(side_effect=[PermissionError('IPC file in use'), None])
+    window.chart = SimpleNamespace(embedded_hosts=lambda: [first, last])
+    completion = Mock()
+
+    window._begin_update_flush(completion)
+    if not already_closed:
+        completion.assert_not_called()
+        first._closed = last._closed = True
+        window.scheduled.pop(0)()
+
+    completion.assert_called_once_with(False)
+    assert window._update_flush_completion is None
+    assert window._exit_hosts is None
+    assert last.cleaned == 1
+    window._resume_embedded_charts.assert_called_once()
+
+    retry = Mock()
+    window._begin_update_flush(retry)
+    retry.assert_called_once_with(True)
+    assert first.cleanup.call_count == last.cleaned == 2
+
+
+def test_exit_cleanup_failure_restores_session(window):
+    host = Host()
+    host.cleanup = Mock(side_effect=PermissionError('IPC file in use'))
+    window.chart = SimpleNamespace(embedded_hosts=lambda: [host])
+
+    window._exit_from_tray()
+    host._closed = True
+    window.scheduled.pop(0)()
+
+    assert not window._closing
+    assert window._exit_hosts is None
+    window._resume_embedded_charts.assert_called_once()
+    window.destroy.assert_not_called()
 
 
 @pytest.mark.parametrize('entry', ['source', 'installed'])

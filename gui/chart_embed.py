@@ -517,10 +517,17 @@ class EmbeddedChartHost:
             self.parent.after_cancel(self._timer)
             self._timer = None
         if self.closed():
+            failures = []
             for path in (self.control, self.status, self.actions, self.navigation,
                          self.live, self.history, self.history_status, self.focus, self.session,
                          self.session.with_suffix('.commands.json'), self.session.with_suffix('.workspace.json')):
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    failures.append((path, exc))
+            if failures:
+                details = '; '.join(f'{path}: {exc}' for path, exc in failures)
+                raise OSError(f'图表 IPC 文件清理失败：{details}') from failures[0][1]
 
 
 def run_embedded_transport(window, bridge, session, parent_hwnd, native=None):
