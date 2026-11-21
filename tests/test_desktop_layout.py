@@ -420,6 +420,7 @@ def test_task_timings_keep_sync_and_scan_separate_after_completion():
     assert format_task_timings(65, None, "扫描策略", 7) == (
         "行情用时 1分05秒 · 扫描用时 进行中 7秒"
     )
+    assert format_task_timings(405, 62, "一键盘前", 700) == "总用时 进行中 11分40秒"
 
 
 def test_toolbar_status_panel_is_not_hidden_by_responsive_layout():
@@ -462,6 +463,27 @@ def test_finished_job_writes_elapsed_time_to_bottom_status():
     assert "用时 1分05秒" in toolbar.set_status.call_args.args[0]
     assert toolbar._scan_elapsed == 65.0
     toolbar._refresh_timing_status.assert_called_once_with()
+
+
+def test_finished_premarket_displays_one_wall_clock_total_without_poll_delay():
+    toolbar = Mock()
+    toolbar._job_kind = "一键盘前"
+    toolbar._job_started_at = 100.0
+    toolbar._auto_started_at = None
+    toolbar._auto_scan_after_sync = False
+    toolbar._on_job_finished = None
+    toolbar._refresh_timing_status = lambda: ToolBar._refresh_timing_status(toolbar)
+    with patch("gui.toolbar.time.monotonic", return_value=851.0), \
+            patch("gui.toolbar.market_source", return_value="tickflow"):
+        ToolBar._finish_job(
+            toolbar, "partial",
+            result_json='{"sources":{"tickflow":{"sync_seconds":405,"scan_seconds":62,'
+                        '"verify_status_seconds":255,"phase":"部分完成"}}}',
+            job_elapsed=723,
+        )
+
+    toolbar._timing_var.set.assert_called_once_with("总用时 12分03秒")
+    assert "用时 12分03秒" in toolbar.set_status.call_args.args[0]
 
 
 def test_current_market_update_does_not_bootstrap_early_history_from_coverage():

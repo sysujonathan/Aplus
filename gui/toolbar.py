@@ -78,8 +78,14 @@ def format_elapsed(seconds):
     return f"{seconds}秒"
 
 
-def format_task_timings(sync_elapsed=None, scan_elapsed=None, running_kind="", running_elapsed=None):
-    """分别保留最近一次行情与扫描用时，运行时只更新对应一项。"""
+def format_task_timings(sync_elapsed=None, scan_elapsed=None, running_kind="", running_elapsed=None,
+                        *, premarket_elapsed=None):
+    """一键任务显示总用时，单独更新和扫描显示分项用时。"""
+    if running_kind == "一键盘前":
+        return f"总用时 进行中 {format_elapsed(running_elapsed)}"
+    if isinstance(premarket_elapsed, (int, float)):
+        return f"总用时 {format_elapsed(premarket_elapsed)}"
+
     def item(label, value, running):
         if running:
             return f"{label}用时 进行中 {format_elapsed(running_elapsed)}"
@@ -192,6 +198,7 @@ class ToolBar(ttk.Frame):
         self._auto_sync_elapsed = None
         self._sync_elapsed = None
         self._scan_elapsed = None
+        self._premarket_elapsed = None
         # The first screen must not wait for thousands of status receipts.
         # Display summaries never replace the Service's scan-time audit.
         self._async_status_mode = True
@@ -982,6 +989,7 @@ class ToolBar(ttk.Frame):
             scan_elapsed if isinstance(scan_elapsed, (int, float)) else None,
             getattr(self, "_job_kind", ""),
             running_elapsed,
+            premarket_elapsed=getattr(self, "_premarket_elapsed", None),
         ))
 
     def data_chain_summary(self):
@@ -1116,7 +1124,7 @@ class ToolBar(ttk.Frame):
         try:
             if not getattr(self, '_auto_sources_saved', None) and hasattr(self, 'auto_source_vars'):
                 for key, variable in self.auto_source_vars.items(): variable.set(key in update_selection(None, source))
-            self._sync_elapsed = self._scan_elapsed = None
+            self._sync_elapsed = self._scan_elapsed = self._premarket_elapsed = None
             self._refresh_timing_status()
             # Date choices are source-owned too; changing only the selected
             # variables leaves the Combobox inventories on the previous source.
@@ -1392,6 +1400,7 @@ class ToolBar(ttk.Frame):
         self._job_id, self._job_kind = job, label
         if kind in ('sync', 'scan', 'premarket'):
             self._desktop_sync_notice = None
+            self._premarket_elapsed = None
         self._job_snapshot = None
         self._job_read_pending = self._job_read_error = False
         self._job_started_at = time.monotonic()
@@ -1521,9 +1530,13 @@ class ToolBar(ttk.Frame):
                 fallback = '排队中…' if status == 'queued' else '运行中，准备核验…'
                 self.set_status(f"⏳ {self._job_kind}：{msg or fallback}{elapsed}")
             return
-        self._finish_job(status, j["message"] or "", j["result"] or "")
+        job_elapsed = j.get("elapsed_seconds") if self._job_kind == "一键盘前" else None
+        if job_elapsed is not None:
+            self._finish_job(status, j["message"] or "", j["result"] or "", job_elapsed=job_elapsed)
+        else:
+            self._finish_job(status, j["message"] or "", j["result"] or "")
 
-    def _finish_job(self, status, message="", result_json=""):
+    def _finish_job(self, status, message="", result_json="", *, job_elapsed=None):
         """终态：解析回执出简报、恢复按钮、通知主窗口刷新。"""
         import json
 
@@ -1541,6 +1554,10 @@ class ToolBar(ttk.Frame):
                 totals[context]=self._sync_elapsed or 0
         elif kind == "扫描策略":
             self._scan_elapsed = elapsed
+        elif kind == "一键盘前":
+            if isinstance(job_elapsed, (int, float)) and job_elapsed >= 0:
+                elapsed = job_elapsed
+            self._premarket_elapsed = elapsed
         chain_scan = False
         self._job_id = None
         self._job_kind = ""

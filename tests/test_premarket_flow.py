@@ -66,6 +66,39 @@ def test_sources_download_independently_and_fast_source_scans_before_slow_finish
         service.pool.shutdown()
 
 
+def test_premarket_announces_silent_status_verification_after_scan(store, monkeypatch):
+    from gui.background_status import load_job
+    from workbench import status_maintenance
+
+    readiness = dict(eligible_ids=['dataset'], complete=False)
+    monkeypatch.setattr(Service, '_sync', lambda *_: dict(
+        status_maintenance_pending=True, scan_readiness=readiness))
+
+    def scan(self, job, spec):
+        self.progress(job, 12528, 12564, '扫描策略')
+        return dict(datasets=['dataset'], coverage=readiness, complete=False)
+
+    observed = []
+
+    def silent_verify(service, job, spec, result):
+        parent = load_job(store.root, spec['premarket_parent'], lambda: None)
+        observed.append(json.loads(parent['result'])['sources']['tickflow'])
+        return result
+
+    monkeypatch.setattr(Service, '_scan', scan)
+    monkeypatch.setattr(status_maintenance, 'maintain_daily_status', silent_verify)
+    service = Service(store)
+    try:
+        row = wait_for(store, service.submit('premarket', dict(multi_spec(), sources=['tickflow'])))
+        assert row['status'] == 'partial'
+        assert len(observed) == 1
+        phase = observed[0]
+        assert (phase['phase'], phase['progress'], phase['total']) == ('核验缺日', 0, 0)
+        assert len(json.loads(row['result'])['sources']['tickflow']['scan_jobs']) == 1
+    finally:
+        service.pool.shutdown()
+
+
 def test_display_source_switch_still_blocks_unrelated_active_jobs(store):
     from workbench.sources import set_market_source
     from workbench.store import dumps
