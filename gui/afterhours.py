@@ -79,7 +79,7 @@ class AfterhoursPage(ttk.Frame):
         self.history = tk.StringVar()
         self.posthoc = tk.BooleanVar(value=False)
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(4, weight=1)
         from .research_surface import attach_research_surface
         attach_research_surface(self, sticky_rows=4)
         self._build()

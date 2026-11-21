@@ -9,9 +9,8 @@ import math
 import sqlite3
 import sys
 import threading
-import unicodedata
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -490,6 +489,9 @@ class Store:
         self._update_backtest_display(job, deleted=deleted)
 
     def set_backtest_research_note(self, job, note):
+        import unicodedata
+        from datetime import date
+
         fields = {'hypothesis': ('假设', 500), 'conclusion': ('结论', 500),
                   'next_step': ('下一步', 500), 'author': ('作者', 40), 'date': ('日期', 10)}
         if note is None:
