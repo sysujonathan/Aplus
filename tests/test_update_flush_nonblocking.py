@@ -83,6 +83,52 @@ def test_exit_cleanup_failure_restores_session(window):
     window.destroy.assert_not_called()
 
 
+@pytest.mark.parametrize('outcome', ['cleanup_after_ack', 'cleanup_already_closed', 'timeout'])
+def test_source_update_cancellation_notice(window, outcome, tmp_path, monkeypatch):
+    for name in ('_begin_update_flush', '_end_update_flush'):
+        setattr(window, name, getattr(AplusMainWindow, name).__get__(window))
+    window.service = Mock()
+    window.store = SimpleNamespace(root=tmp_path)
+    window.withdraw = Mock()
+    host = Host()
+    host._closed = outcome == 'cleanup_already_closed'
+    host.cleanup = Mock(side_effect=PermissionError('IPC file in use'))
+    window.chart = SimpleNamespace(embedded_hosts=lambda: [host])
+    controller = object.__new__(version_update.VersionController)
+    controller.window = window
+    controller.root = tmp_path
+    controller.reserved = False
+    controller.waiting = None
+    prepare = Mock()
+    monkeypatch.setattr(version_update, 'prepare_worker', prepare)
+    monkeypatch.setattr(version_update, 'open_forms', lambda _: False)
+    monkeypatch.setattr(version_update, 'require_web_closed', Mock())
+    notices, warnings = Mock(), Mock()
+    monkeypatch.setattr(version_update.messagebox, 'showinfo', notices)
+    monkeypatch.setattr(version_update.messagebox, 'showwarning', warnings)
+
+    controller.begin_update({'can_update': True})
+    if outcome == 'cleanup_after_ack':
+        host._closed = True
+        window.scheduled.pop(0)()
+    elif outcome == 'timeout':
+        window.clock.now += 16
+        window.scheduled.pop(0)()
+
+    window.service.reserve_code_update.assert_not_called()
+    window.withdraw.assert_not_called()
+    prepare.assert_not_called()
+    assert controller.waiting is None
+    if outcome == 'timeout':
+        warnings.assert_called_once()
+        assert warnings.call_args.args[0] == '图表暂未关闭'
+        notices.assert_not_called()
+    else:
+        warnings.assert_not_called()
+        notices.assert_called_once_with(
+            '暂不能更新', '当前版本继续使用，请稍后重试。', parent=window)
+
+
 @pytest.mark.parametrize('entry', ['source', 'installed'])
 @pytest.mark.parametrize('outcome', ['ack', 'timeout', 'refused'])
 def test_update_waits_for_chart_ack_without_blocking_tk(entry, outcome, tmp_path, monkeypatch):

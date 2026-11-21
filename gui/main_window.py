@@ -597,10 +597,10 @@ class AplusMainWindow(ttk.Window):
         self._begin_exit_flush()
 
     def _begin_update_flush(self, completion):
-        """Wait for chart saves while leaving the main window interactive."""
+        """Report True on success, False on cleanup failure, or None on cancellation."""
         if (self._closing or getattr(self, '_update_pending', False)
                 or getattr(self, '_update_flush_completion', None) is not None):
-            completion(False)
+            completion(None)
             return
         self._update_flush_completion = completion
         try:
@@ -664,7 +664,7 @@ class AplusMainWindow(ttk.Window):
             # A chart declined to close (unsaved work or fault): restore
             # the session exactly like the synchronous guard did.
             if updating:
-                finish(False)
+                finish(None)
             else:
                 self._abort_exit()
             return
@@ -672,7 +672,7 @@ class AplusMainWindow(ttk.Window):
             messagebox.showwarning('图表暂未关闭',
                 '图表关闭确认未完成，可能是通信中断或分析尚未保存。主窗口已保留，请查看图表提示后重试。', parent=self)
             if updating:
-                finish(False)
+                finish(None)
             else:
                 self._abort_exit()
             return

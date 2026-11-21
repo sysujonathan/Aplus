@@ -288,6 +288,8 @@ class VersionController:
 
     def _after_chart_flush(self, result, saved):
         if not saved:
+            if saved is False:
+                messagebox.showinfo("暂不能更新", "当前版本继续使用，请稍后重试。", parent=self.window)
             return
         try:
             if open_forms(self.window):
