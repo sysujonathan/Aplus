@@ -81,7 +81,7 @@ class AfterhoursPage(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)
         from .research_surface import attach_research_surface
-        attach_research_surface(self, sticky_rows=3)
+        attach_research_surface(self, sticky_rows=4)
         self._build()
         self._poll_id = self.after(350, self._poll)
         self.bind('<Destroy>', self._destroyed, add='+')
@@ -286,9 +286,30 @@ class AfterhoursPage(ttk.Frame):
 
     @staticmethod
     def _history_name(row):
-        display = row['display']
-        return (f'{display["number"]:02d} · {display["name"]}' if display['name']
-                else f'回测 {display["number"]:02d}')
+        from .afterhours_workspace import backtest_display_name
+
+        return backtest_display_name(row)
+
+    def open_research_report(self, row):
+        if row['id'] in self._history_rows:
+            self._select_history(row['id'])
+        else:
+            self.history.set('')
+            self._load_history_report(row)
+
+    def _edit_research_note(self):
+        from .afterhours_workspace import ResearchNoteDialog
+
+        job = self._shown_job
+        if job not in self._history_rows:
+            messagebox.showinfo('研究记录', '请先选择一份回测。', parent=self)
+            return
+        row, _ = self._history_rows[job]
+        dialog = ResearchNoteDialog(self, row['display'].get('research_note', {}),
+                                    lambda note: self.store.set_backtest_research_note(job, note))
+        if dialog.result:
+            self._refresh_history()
+            self._select_history(job)
 
     def _rename_history(self):
         if self._shown_job not in self._history_rows:
@@ -324,6 +345,7 @@ class AfterhoursPage(ttk.Frame):
     def _clear_history_result(self):
         self._back()
         self.history.set('')
+        self._render_research_note({})
         self.report, self.records = {}, []
         self._trade = self._preview_trade = None
         self._chart_cache.clear()
@@ -585,14 +607,19 @@ class AfterhoursPage(ttk.Frame):
             self._history_rows[row['id']] = (row, report)
         self.history.set(next((label for label, job in self.receipts.items() if job == self._shown_job), ''))
         self.history_box.configure(values=list(self.receipts))
+        self._refresh_latest_research(rows)
         self._render_history()
 
     def _history_selected(self, _event=None):
         if self.history.get() not in self.receipts:
             return
+        self._load_history_report(self._history_rows[self.receipts[self.history.get()]][0])
+
+    def _load_history_report(self, history_row):
         try:
-            row, report, records = load_receipt(self.store, self.receipts[self.history.get()])
+            row, report, records = load_receipt(self.store, history_row['id'])
             self._shown_job = row['id']
+            row['display'] = history_row['display']
             self._show_report(row, report, records)
             self._render_history()
         except Exception as exc:
@@ -665,6 +692,20 @@ class AfterhoursPage(ttk.Frame):
                         self.completeness.set('本次未生成可用回执；旧结果保留。' + row['message'])
         self._poll_id = self.after(350, self._poll)
 
+    def _render_research_note(self, display):
+        note = display.get('research_note')
+        if not note:
+            self.research_note_header.pack_forget()
+            return
+        self.research_conclusion.configure(text=note['conclusion'])
+        details = [f'{caption} · {note[field]}' for field, caption in
+                   (('hypothesis', '假设'), ('next_step', '下一步')) if note[field]]
+        byline = ' · '.join(note[field] for field in ('author', 'date') if note[field])
+        if byline:
+            details.append(byline)
+        self.research_details.configure(text='\n'.join(details))
+        self.research_note_header.pack(fill=tk.X)
+
     def _show_report(self, row, report, records):
         self.report, self.records = report, records
         self.tree.heading('stop', text='SL1' if report.get('execution_model') == LEGACY_MODEL else 'SL')
@@ -682,12 +723,13 @@ class AfterhoursPage(ttk.Frame):
         self.home.tkraise()
         self._detail_visible = False
         status = {'completed': '完成', 'partial': '部分完成', 'cancelled': '已停止'}.get(row['status'], row['status'])
-        name = self._history_name(self._history_rows[self._shown_job][0]) if self._shown_job in self._history_rows else '本次回测'
+        name = self._history_name(row) if 'display' in row else '本次回测'
         self.result_title.set(f'{name} · {status}')
         context = scope_caption(report) + f' · {report["start"]} → {report["end"]}'
         if coverage := report.get('research_coverage'):
             context += f' · 实际共同覆盖 {coverage["start"]} → {coverage["end"]} · 前复权锚点 {coverage["snapshot_date"]}'
         self.result_context.set(context)
+        self._render_research_note(row.get('display', {}))
         self.status.set(f'{status} · {report["start"]} 至 {report["end"]} · '
                         f'已回放 {report["processed_datasets"]}/{report["requested_datasets"]} 个标的 · '
                         f'覆盖提示 {len(report["coverage_warnings"])} · 失败 {len(report["errors"])}'

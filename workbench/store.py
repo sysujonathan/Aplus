@@ -9,8 +9,9 @@ import math
 import sqlite3
 import sys
 import threading
+import unicodedata
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -488,6 +489,30 @@ class Store:
             raise ValueError('删除状态必须为布尔值')
         self._update_backtest_display(job, deleted=deleted)
 
+    def set_backtest_research_note(self, job, note):
+        fields = {'hypothesis': ('假设', 500), 'conclusion': ('结论', 500),
+                  'next_step': ('下一步', 500), 'author': ('作者', 40), 'date': ('日期', 10)}
+        if note is None:
+            note = {}
+        if not isinstance(note, dict) or note.keys() - fields.keys():
+            raise ValueError('研究记录字段无效')
+        values = {}
+        for field, (caption, limit) in fields.items():
+            value = note.get(field, '')
+            multiline = field in ('hypothesis', 'conclusion', 'next_step')
+            if (not isinstance(value, str) or len(value) > limit
+                    or any(unicodedata.category(char) == 'Cc' and (char != '\n' or not multiline)
+                           for char in value)):
+                raise ValueError(f'{caption}最多 {limit} 个字，且不能包含控制字符')
+            values[field] = value if value.strip() else ''
+        if values['date']:
+            try:
+                if date.fromisoformat(values['date']).isoformat() != values['date']:
+                    raise ValueError
+            except ValueError:
+                raise ValueError('日期请使用有效的 YYYY-MM-DD') from None
+        self._update_backtest_display(job, research_note=values if any(values.values()) else None)
+
     def _update_backtest_display(self, job, **changes):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -500,6 +525,8 @@ class Store:
                 raise ValueError('请先加载回测记录')
             display = json.loads(saved['value'])
             display.update(changes)
+            if 'research_note' in changes and changes['research_note'] is None:
+                display.pop('research_note')
             db.execute('UPDATE meta SET value=? WHERE key=?', (dumps(display), key))
             db.execute('INSERT INTO events(time,job_id,action,path,detail) VALUES(?,?,?,?,?)',
                        (now(),job,'更新回测显示记录',str(self.path),dumps(changes)))

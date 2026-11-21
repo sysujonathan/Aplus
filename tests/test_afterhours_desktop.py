@@ -318,3 +318,77 @@ def test_real_desktop_layout_filter_replay_navigation_and_return(tmp_path, h2_ba
             service.pool.shutdown()
     finally:
         window.destroy()
+
+
+@pytest.mark.native_process
+def test_latest_research_on_both_desktops(tmp_path):
+    from workbench.store import dumps
+
+    store = Store(tmp_path)
+    window = AplusMainWindow(store=store)
+    try:
+        window.state('normal')
+        window.geometry('1150x650')
+        for section in ('afterhours', 'strategy'):
+            window._switch_section(section)
+            window.update()
+            assert not window._pages[section].latest_research.winfo_ismapped()
+
+        note = dict(hypothesis='回放假设', conclusion='第一行\n完整第二行', next_step='下一轮', author='研究员',
+                    date='2026-11-21')
+        for job, model in [('recorded', LEGACY_MODEL), ('old', MODEL)]:
+            report = summarize_replay([])
+            report.update(execution_model=model, start='2026-10-01', end='2026-10-31', processed_datasets=1, requested_datasets=1,
+                          coverage_warnings=[], errors=[], real_data=False, records_path='test-records.json',
+                          assumptions={'holding_bars': 30})
+            store.write_artifact(report['records_path'], b'[]')
+            store.execute('INSERT INTO jobs(id,kind,status,created,spec,result) VALUES(?,?,?,?,?,?)',
+                          (job, 'backtest', 'completed', '2026-11-01T01:00:00+00:00', '{}', dumps(report)))
+
+        window._switch_section('afterhours')
+        page = window.afterhours
+        geometry = lambda widget: (widget.winfo_x(), widget.winfo_y(), widget.winfo_width(), widget.winfo_height())
+        window.update()
+        original = [geometry(widget) for widget in (page.run_button, page.status_label)]
+        page._select_history('old')
+        assert page._shown_job == 'old'
+        assert not page.research_note_header.winfo_manager()
+        page._select_history('recorded')
+
+        def save_note(parent, initial, save):
+            assert parent is page and initial == {}
+            save(note)
+            return Mock(result=True)
+
+        with patch('gui.afterhours_workspace.ResearchNoteDialog', side_effect=save_note) as dialog:
+            page.research_note_button.invoke()
+            dialog.assert_called_once()
+        store.rename_backtest('recorded', '旧版研究')
+        window._switch_section('afterhours')
+        window.update()
+        assert [geometry(widget) for widget in (page.run_button, page.status_label)] == original
+        for section in ('afterhours', 'strategy'):
+            page._select_history('old')
+            window._switch_section(section)
+            window.update()
+            active = window._pages[section]
+            summary = active.latest_research
+            assert summary.winfo_ismapped()
+            assert summary.cget('text') == '最新研究 · 01 · 旧版研究 · 2026-11-21 · 第一行'
+            assert summary.winfo_y() + summary.winfo_height() <= active._research_canvas.winfo_y()
+            summary.invoke()
+            window.update()
+            assert page.winfo_ismapped() and not window.strategy_iteration.winfo_ismapped()
+            assert page._shown_job == 'recorded' and '旧版研究' in page.result_title.get()
+            assert page.research_note_header.winfo_ismapped()
+            assert page.research_conclusion.cget('text') == note['conclusion']
+            for field in ('hypothesis', 'next_step', 'author', 'date'):
+                assert note[field] in page.research_details.cget('text')
+
+        store.set_backtest_deleted('recorded')
+        for section in ('afterhours', 'strategy'):
+            window._switch_section(section)
+            window.update()
+            assert not window._pages[section].latest_research.winfo_ismapped()
+    finally:
+        window.destroy()

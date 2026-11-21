@@ -68,3 +68,62 @@ def test_cannot_manage_active_missing_or_non_backtest_jobs(tmp_path):
             store.set_backtest_deleted(identity)
     with pytest.raises(ValueError):
         store.set_backtest_deleted('missing', 'yes')
+
+
+def test_research_note_persists_and_clears_without_rewriting_receipts(tmp_path):
+    store = Store(tmp_path)
+    add_job(store, 'old', model=LEGACY_MODEL)
+    add_job(store, 'new')
+    before = store.backtest_history(SUPPORTED_MODELS)
+    jobs = store.rows('SELECT * FROM jobs ORDER BY id')
+    note = dict(hypothesis='假设', conclusion=' 原始结论\n第二行 ', next_step='复核未成交', author='研究员',
+                date='2026-11-21')
+    store.set_backtest_research_note('new', note)
+    after = Store(tmp_path).backtest_history(SUPPORTED_MODELS)
+    assert after[0]['display'] == dict(before[0]['display'], research_note=note)
+    assert after[1] == before[1]
+    store.rename_backtest('new', '新名称')
+    assert store.backtest_history(SUPPORTED_MODELS)[0]['display']['research_note'] == note
+    store.rename_backtest('new', '回测')
+    before[0]['display']['name'] = '回测'
+    store.set_backtest_research_note('new', dict.fromkeys(note, ''))
+    assert store.backtest_history(SUPPORTED_MODELS) == before
+    assert store.rows('SELECT * FROM jobs ORDER BY id') == jobs
+
+
+@pytest.mark.parametrize('note', [
+    [], {'unknown': ''}, {'conclusion': None}, {'conclusion': 'x' * 501},
+    {'hypothesis': 'x' * 501}, {'next_step': 'x' * 501}, {'author': 'x' * 41},
+    {'author': 'a\nb'}, {'conclusion': 'a\x7fb'}, {'hypothesis': 'a\tb'},
+    {'date': '2026-02-30'}, {'date': '20261121'},
+])
+def test_invalid_research_note_does_not_change_display(tmp_path, note):
+    store = Store(tmp_path)
+    add_job(store, 'job')
+    before = store.backtest_history(MODEL)
+    with pytest.raises(ValueError):
+        store.set_backtest_research_note('job', note)
+    assert store.backtest_history(MODEL) == before
+
+
+def test_latest_research_uses_history_order_across_models_and_ignores_deleted(tmp_path):
+    from gui.afterhours_workspace import latest_research_row
+
+    store = Store(tmp_path)
+    add_job(store, 'current')
+    add_job(store, 'legacy', model=LEGACY_MODEL)
+    add_job(store, 'unrecorded')
+    store.backtest_history(SUPPORTED_MODELS)
+    store.set_backtest_research_note('current', {'conclusion': '现版', 'date': '2026-11-22'})
+    store.set_backtest_research_note('legacy', {'conclusion': '旧版', 'date': '2026-11-21'})
+
+    def latest():
+        return latest_research_row(store.backtest_history(SUPPORTED_MODELS, include_deleted=True))
+
+    assert latest()['id'] == 'legacy'
+    store.set_backtest_deleted('legacy')
+    assert latest()['id'] == 'current'
+    store.set_backtest_research_note('current', None)
+    assert latest() is None
+    store.set_backtest_deleted('legacy', False)
+    assert latest()['id'] == 'legacy'
