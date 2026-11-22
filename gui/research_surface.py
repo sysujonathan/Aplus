@@ -20,12 +20,34 @@ def attach_research_surface(page, minimum=(1150, 650), sticky_rows=2):
     page.columnconfigure(0, weight=1)
     page.columnconfigure(1, weight=0)
     page.rowconfigure(sticky_rows, weight=1)
-    def fit(event):
+    def fit(event=None):
+        # Size the window to the viewport, but never below the body's
+        # requested height: a long research note must stay reachable by
+        # scrolling instead of being clipped by the scroll range.
+        # Layout settles level by level through idle callbacks, so settle it
+        # first; otherwise the requested height reads stale.
+        if not body.winfo_exists():
+            return
+        body.update_idletasks()
         scale = page.winfo_fpixels('1i') / 96
-        width, height = max(event.width, round(minimum[0]*scale)), max(event.height, round(minimum[1]*scale))
+        width = max(canvas.winfo_width(), round(minimum[0]*scale))
+        height = max(canvas.winfo_height(), round(minimum[1]*scale), body.winfo_reqheight())
+        canvas.itemconfigure(content, width=width, height=height)
+        canvas.configure(scrollregion=(0, 0, width, height))
+        page.after_idle(extend)
+    def extend():
+        # Re-check after labels rewrapped on Configure; the extra pass
+        # covers geometry work queued after fit ran.
+        if not body.winfo_exists():
+            return
+        body.update_idletasks()
+        scale = page.winfo_fpixels('1i') / 96
+        width = max(canvas.winfo_width(), round(minimum[0]*scale))
+        height = max(canvas.winfo_height(), round(minimum[1]*scale), body.winfo_reqheight())
         canvas.itemconfigure(content, width=width, height=height)
         canvas.configure(scrollregion=(0, 0, width, height))
     canvas.bind('<Configure>', fit)
     page._research_canvas = canvas
     page._research_body = body
     page._research_minimum = minimum
+    page._research_surface_sync = fit

@@ -296,6 +296,8 @@ class AfterhoursPage(ttk.Frame):
         else:
             self.history.set('')
             self._load_history_report(row)
+        if self._shown_job == row['id']:
+            self._research_canvas.yview_moveto(0)
 
     def _edit_research_note(self):
         from .afterhours_workspace import ResearchNoteDialog
@@ -768,6 +770,7 @@ class AfterhoursPage(ttk.Frame):
         self.distribution.set('\n'.join(f'{label:12}  {count} 笔' for label, count in zip(labels, report['distribution'])))
         self._histogram()
         self._layout_list()
+        self._research_surface_sync()
 
     def _histogram(self):
         self.histogram.delete('all')

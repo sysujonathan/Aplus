@@ -349,11 +349,12 @@ def test_latest_research_on_both_desktops(tmp_path):
         page = window.afterhours
         geometry = lambda widget: (widget.winfo_x(), widget.winfo_y(), widget.winfo_width(), widget.winfo_height())
         window.update()
-        original = [geometry(widget) for widget in (page.run_button, page.status_label)]
         page._select_history('old')
         assert page._shown_job == 'old'
         assert not page.research_note_header.winfo_manager()
         page._select_history('recorded')
+        window.update()
+        original = [geometry(widget) for widget in (page.run_button, page.status_label)]
 
         def save_note(parent, initial, save):
             assert parent is page and initial == {}
@@ -390,5 +391,58 @@ def test_latest_research_on_both_desktops(tmp_path):
             window._switch_section(section)
             window.update()
             assert not window._pages[section].latest_research.winfo_ismapped()
+    finally:
+        window.destroy()
+
+
+@pytest.mark.native_process
+def test_latest_research_scrolls_to_head_and_long_note_reachable(tmp_path):
+    from workbench.store import dumps
+
+    store = Store(tmp_path)
+    window = AplusMainWindow(store=store)
+    try:
+        window.state('normal')
+        window.geometry('1150x650')
+        long_conclusion = '\n'.join(f'结论第{i:02d}行内容' for i in range(1, 56))
+        assert len(long_conclusion) <= 500
+        note = dict(hypothesis='回放假设', conclusion=long_conclusion, next_step='下一轮', author='研究员',
+                    date='2026-11-21')
+        report = summarize_replay([])
+        report.update(execution_model=MODEL, start='2026-10-01', end='2026-10-31', processed_datasets=1, requested_datasets=1,
+                      coverage_warnings=[], errors=[], real_data=False, records_path='test-records.json',
+                      assumptions={'holding_bars': 30})
+        store.write_artifact(report['records_path'], b'[]')
+        store.execute('INSERT INTO jobs(id,kind,status,created,spec,result) VALUES(?,?,?,?,?,?)',
+                      ('recorded', 'backtest', 'completed', '2026-11-01T01:00:00+00:00', '{}', dumps(report)))
+        window._switch_section('afterhours')
+        page = window.afterhours
+        window.update()
+        page._select_history('recorded')
+        window.update()
+        store.set_backtest_research_note('recorded', note)
+        page._refresh_history()
+        page._select_history('recorded')
+        window.update()
+        assert page.research_note_header.winfo_ismapped()
+        canvas = page._research_canvas
+        scroll_height = int(float(canvas.cget('scrollregion').split()[3]))
+        assert scroll_height >= page._research_body.winfo_reqheight()
+        conclusion = page.research_conclusion
+        conclusion_bottom = (conclusion.winfo_rooty() - canvas.winfo_rooty()
+                             + canvas.canvasy(0) + conclusion.winfo_height())
+        assert conclusion_bottom <= scroll_height
+        canvas.yview_moveto(1.0)
+        window.update()
+        assert canvas.yview()[0] > 0
+        window._switch_section('strategy')
+        window.update()
+        summary = window._pages['strategy'].latest_research
+        assert summary.winfo_ismapped()
+        summary.invoke()
+        window.update()
+        assert page.winfo_ismapped() and not window.strategy_iteration.winfo_ismapped()
+        assert page._shown_job == 'recorded'
+        assert canvas.yview()[0] == 0.0
     finally:
         window.destroy()
