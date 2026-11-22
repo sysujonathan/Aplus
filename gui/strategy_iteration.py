@@ -5,11 +5,11 @@ from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 from PIL import ImageTk
 
-from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, MODEL as CURRENT_MODEL
+from workbench.h2_replay import LEGACY_MODEL as BASE_MODEL, MODEL as CURRENT_MODEL, SUPPORTED_MODELS
 from workbench.h2_replay_service import ITERATION_BASELINE_PURPOSE
 from workbench.stop_research import AnchorSettings, GROUPS, MODEL
 from workbench.stop_research_service import load_experiment
-from .afterhours_workspace import label, button, tree
+from .afterhours_workspace import build_latest_research, label, button, tree
 from .replay_navigation import ReplayNavigation
 from .stop_research_chart import render_comparison
 from .theme import CHART_BG, MUTED, PANEL_BG, TEXT
@@ -43,10 +43,12 @@ class StrategyIterationPage(ttk.Frame):
         self.detail=tk.StringVar(value='选择差异样本查看两种止损与后续走势')
         self.cutoff=tk.StringVar();self.posthoc=tk.BooleanVar(value=False)
         from .research_surface import attach_research_surface
-        attach_research_surface(self, sticky_rows=3)
+        attach_research_surface(self, sticky_rows=4)
         self._research_body.columnconfigure(0,weight=0)
         self._research_body.columnconfigure(1,weight=1)
         self._build()
+        self.latest_research, self._refresh_latest_research = build_latest_research(
+            self, self._open_research_report, columnspan=2)
         self.poll_id=self.after(400,self._poll)
         self.bind('<Destroy>',self._destroyed,add='+')
 
@@ -137,9 +139,15 @@ class StrategyIterationPage(ttk.Frame):
         self.status_label=label(main,variable=self.status,size=14,color=MUTED);self.status_label.grid(row=7,column=0,sticky=tk.EW,pady=8)
         self.status_label.bind('<Configure>',lambda e:self.status_label.configure(wraplength=max(1,e.width)))
 
+    def _open_research_report(self, row):
+        window = self.winfo_toplevel()
+        window._switch_section('afterhours')
+        window.afterhours.open_research_report(row)
+
     def refresh(self):
         if self.store is None:return
-        sources=self.store.backtest_history((BASE_MODEL,CURRENT_MODEL))
+        sources=self.store.backtest_history(SUPPORTED_MODELS)
+        self._refresh_latest_research(sources)
         self.sources={display_name(r,'R' if self._source_model(r)==BASE_MODEL else 'V')+
                       (' · v1 基线' if self._source_model(r)==BASE_MODEL else ' · v2 来源'):r
                       for r in sources}

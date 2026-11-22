@@ -1,5 +1,7 @@
 """Desktop research workspace: report history, compact analysis, paired replay."""
+from datetime import date
 import tkinter as tk
+from tkinter import messagebox, simpledialog
 import ttkbootstrap as ttk
 
 from workbench.market import BOARDS
@@ -35,6 +37,75 @@ def panel(parent, caption, color=TEXT, *, size=17, padding=10):
     outer = ttk.Frame(parent, padding=padding, style='ResearchPanel.TFrame')
     label(outer, caption, bold=True, color=color, size=size).pack(anchor=tk.W, pady=(0, 6))
     return outer
+
+
+def backtest_display_name(row):
+    display = row['display']
+    return (f'{display["number"]:02d} · {display["name"]}' if display['name']
+            else f'回测 {display["number"]:02d}')
+
+
+def latest_research_row(history):
+    return next((row for row in history
+                 if not row['display']['deleted'] and row['display'].get('research_note')), None)
+
+
+def build_latest_research(parent, open_report, *, columnspan=1):
+    summary = button(parent, '', None)
+    summary.configure(width=1)
+    summary.grid(row=3, column=0, columnspan=columnspan, sticky=tk.EW, pady=(0, 6))
+    summary.grid_remove()
+
+    def refresh(history):
+        row = latest_research_row(history)
+        if row is None:
+            summary.grid_remove()
+            return
+        note = row['display']['research_note']
+        first_line = note['conclusion'].split('\n', 1)[0]
+        preview = first_line[:32] + ('…' if len(first_line) > 32 else '')
+        details = ' · '.join(part for part in (backtest_display_name(row), note['date'], preview) if part)
+        summary.configure(text=f'最新研究 · {details}', command=lambda: open_report(row))
+        summary.grid()
+
+    return summary, refresh
+
+
+class ResearchNoteDialog(simpledialog.Dialog):
+    def __init__(self, parent, note, save):
+        self.note, self.save = note, save
+        self.inputs = {}
+        super().__init__(parent, '研究记录')
+
+    def body(self, master):
+        master.columnconfigure(1, weight=1)
+        for index, (field, caption) in enumerate([
+                ('hypothesis', '假设'), ('conclusion', '结论'), ('next_step', '下一步'),
+                ('author', '作者'), ('date', '日期 YYYY-MM-DD')]):
+            label(master, caption, size=15).grid(row=index, column=0, sticky=tk.NW, padx=8, pady=4)
+            if index < 3:
+                entry = tk.Text(master, width=48, height=4, wrap=tk.WORD,
+                                bg=CONTROL_BG, fg=TEXT, insertbackground=TEXT)
+                entry.insert('1.0', self.note.get(field, ''))
+            else:
+                entry = ttk.Entry(master)
+                entry.insert(0, self.note.get(field, date.today().isoformat() if field == 'date' else ''))
+            entry.grid(row=index, column=1, sticky=tk.EW, padx=8, pady=4)
+            self.inputs[field] = entry
+        label(master, '三项正文各最多 500 字，作者最多 40 字。清空全部字段后保存可移除记录。',
+              size=14, color=MUTED).grid(row=5, column=0, columnspan=2, sticky=tk.W, padx=8)
+        return self.inputs['hypothesis']
+
+    def validate(self):
+        note = {field: entry.get('1.0', 'end-1c') if isinstance(entry, tk.Text) else entry.get()
+                for field, entry in self.inputs.items()}
+        try:
+            self.save(note)
+        except ValueError as exc:
+            messagebox.showerror('不能保存研究记录', str(exc), parent=self)
+            return False
+        self.result = True
+        return True
 
 
 def build_workspace(page):
@@ -105,6 +176,7 @@ def build_workspace(page):
     p.progress = ttk.Progressbar(p, maximum=100, mode='determinate')
     p.progress.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
     p.progress.grid_remove()
+    p.latest_research, p._refresh_latest_research = build_latest_research(p, p.open_research_report)
     p.host = ttk.Frame(p._research_body)
     p.host.grid(row=0, column=0, sticky=tk.NSEW)
     p.host.columnconfigure(1, weight=1)
@@ -120,6 +192,8 @@ def build_workspace(page):
     actions.pack(fill=tk.X, pady=(0,8))
     p.rename_button = button(actions, '重命名', p._rename_history)
     p.rename_button.pack(side=tk.LEFT)
+    p.research_note_button = button(actions, '研究记录', p._edit_research_note)
+    p.research_note_button.pack(side=tk.LEFT, padx=4)
     p.delete_button = button(actions, '删除', p._delete_history)
     p.delete_button.pack(side=tk.RIGHT)
     p.restore_button = button(history, '已删除 / 恢复', p._restore_history_dialog)
@@ -145,8 +219,10 @@ def build_workspace(page):
     p.home.grid(row=0, column=1, sticky=tk.NSEW)
     p.home.columnconfigure(0, weight=1)
     p.home.rowconfigure(4, weight=1)
-    title = ttk.Frame(p.home)
-    title.grid(row=0, column=0, sticky=tk.EW, pady=(0, 8))
+    header = ttk.Frame(p.home)
+    header.grid(row=0, column=0, sticky=tk.EW, pady=(0, 8))
+    title = ttk.Frame(header)
+    title.pack(fill=tk.X)
     p.result_title = tk.StringVar(value='选择范围与区间，新建回测')
     label(title, variable=p.result_title, bold=True, size=20).pack(side=tk.LEFT)
     p.result_context = tk.StringVar(value='研究结果与真实交易记录独立')
@@ -155,6 +231,13 @@ def build_workspace(page):
     p.annual_button.configure(state=tk.DISABLED)
     p.annual_button.pack(side=tk.RIGHT, padx=(8, 0))
     p.context_label.pack(side=tk.RIGHT)
+    p.research_note_header = ttk.Frame(header)
+    p.research_conclusion = label(p.research_note_header, size=15)
+    p.research_details = label(p.research_note_header, size=14, color=MUTED)
+    for widget in (p.research_conclusion, p.research_details):
+        widget.pack(fill=tk.X)
+        widget.configure(justify=tk.LEFT)
+        widget.bind('<Configure>', lambda e: e.widget.configure(wraplength=max(1, e.width)))
     metrics = ttk.Frame(p.home)
     metrics.grid(row=1, column=0, sticky=tk.EW, pady=(0, 8))
     p.stats = []
