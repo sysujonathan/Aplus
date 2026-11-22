@@ -432,9 +432,13 @@ def test_latest_research_scrolls_to_head_and_long_note_reachable(tmp_path):
         conclusion_bottom = (conclusion.winfo_rooty() - canvas.winfo_rooty()
                              + canvas.canvasy(0) + conclusion.winfo_height())
         assert conclusion_bottom <= scroll_height
+        window.geometry('1000x650')
+        window.update()
         canvas.yview_moveto(1.0)
+        canvas.xview_moveto(1.0)
         window.update()
         assert canvas.yview()[0] > 0
+        assert canvas.xview()[0] > 0
         window._switch_section('strategy')
         window.update()
         summary = window._pages['strategy'].latest_research
@@ -444,5 +448,8 @@ def test_latest_research_scrolls_to_head_and_long_note_reachable(tmp_path):
         assert page.winfo_ismapped() and not window.strategy_iteration.winfo_ismapped()
         assert page._shown_job == 'recorded'
         assert canvas.yview()[0] == 0.0
+        assert canvas.xview()[0] == 0.0
+        conclusion_left = conclusion.winfo_rootx() - canvas.winfo_rootx()
+        assert 0 <= conclusion_left < canvas.winfo_width()
     finally:
         window.destroy()

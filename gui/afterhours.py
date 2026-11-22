@@ -298,6 +298,7 @@ class AfterhoursPage(ttk.Frame):
             self._load_history_report(row)
         if self._shown_job == row['id']:
             self._research_canvas.yview_moveto(0)
+            self._research_canvas.xview_moveto(0)
 
     def _edit_research_note(self):
         from .afterhours_workspace import ResearchNoteDialog
