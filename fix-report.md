@@ -99,3 +99,48 @@ python -m pytest -q tests/test_store_restart_recovery.py tests/test_pa_growth_st
   tests/test_premarket_validation_speed.py tests/test_startup_reads.py \
   -k 'not test_default_runtime_is_stable_per_user_without_configuration and not test_default_runtime_preserves_existing_checkout_data'
 ```
+
+## P2 修复（评审后）
+
+原修复在版本检查前无条件以可写方式读取 schema，SQLite 可在关闭连接时将已提交的 WAL checkpoint 到主库，导致未来版本虽被拒绝，文件却已改变。
+
+现在先用 `mode=ro` 检查版本。只有 SQLite 抛出包含 `attempt to write a readonly database` 的 `OperationalError`，才关闭失败的只读连接，用 `mode=rw` 执行 `PRAGMA schema_version` 触发恢复，关闭后重新只读检查一次。其他操作错误和重检错误直接抛出，版本拒绝与备份逻辑沿用原实现。
+
+### 未来版本 WAL 红绿验证
+
+子进程将版本 999 提交进 WAL 后用 `os._exit(17)` 退出。父进程先保存主库与非空 WAL 的字节，再检查 Store 的拒绝原文和两个文件的原字节。红绿均运行 `python -m pytest -q tests/test_store_restart_recovery.py -k committed_wal`。
+
+红，`804c668`，拒绝提示断言已通过，随后主库字节断言失败：
+
+```text
+>       assert path.read_bytes() == original_db
+E       AssertionError: assert b'SQLite form...0\x00\x00\x00' == b'SQLite form...0\x00\x00\x00'
+E         At index 4102 diff: b'\xea' != b'\xec'
+FAILED tests/test_store_restart_recovery.py::test_restart_preserves_future_version_with_committed_wal
+1 failed, 3 deselected in 0.60s
+```
+
+绿，P2 修后，拒绝提示、主库和 WAL 字节断言全部通过：
+
+```text
+.                                                                        [100%]
+1 passed, 3 deselected in 1.06s
+```
+
+### 回归与启动耗时
+
+- 定向命令沿用上文，21 项通过（原 20 项加 1 项 WAL 回归）。原有 3 项重启测试、17 项 PA Store 测试均通过。
+- 扩展命令沿用上文，266 项通过、20 项跳过、26 项失败，用时 140.27 秒。失败类型和原报告一致，分别为 2 项 Windows 路径预期、18 项无显示会话的 Tk 测试、6 项 Linux 缺少 `ctypes.windll` 的安装交接测试。
+- 上文 Linux 可运行集复跑通过 183 项、跳过 3 项、排除 2 项，用时 108.22 秒。
+- 临时连接探针确认普通 `OperationalError` 保留原异常，只发起一次只读连接。触发恢复后若重检失败，按只读、可写、只读各打开一次，并直接抛出重检异常。
+
+耗时沿用上文口径。Linux、Python 3.12.3、SQLite 3.45.1，使用 hot journal 测试恢复成功后生成的同一份 262,144 字节 v9 合成库。每次计时前将该文件复制到同一路径并清除上次测量留下的 SQLite 旁文件。用 `perf_counter_ns()` 只计 `Store(root)`，两版交替先跑，各 11 次。扩展测试同时运行时的预跑中位数为 1.647 ms 和 1.873 ms，正式对比在扩展测试结束后单独执行。
+
+| 版本 | 样本（毫秒） | 中位数（毫秒） |
+| --- | --- | ---: |
+| `804c668` | 2.122, 1.725, 1.691, 1.832, 1.737, 1.878, 1.714, 1.851, 1.751, 1.860, 1.797 | 1.797 |
+| P2 修后 | 1.976, 1.690, 1.964, 2.057, 1.741, 1.585, 1.581, 1.655, 1.713, 1.831, 1.781 | 1.741 |
+
+单独实测中位数减少 0.056 ms。连接探针显示，正常库由一次可写恢复探测、一次只读检查及一次常规初始化连接，减为一次只读检查及一次常规初始化连接。
+
+扩展套件自动追加了启动日志，已移除测试追加内容并核对运行前的 Git blob 哈希。以上验证使用合成数据，Windows 桌面、真实盘前和 GitHub CI 验收待执行。

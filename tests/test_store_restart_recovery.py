@@ -69,3 +69,33 @@ def test_restart_preserves_version_policy(tmp_path, version):
     with closing(sqlite3.connect(backups[0])) as db:
         assert db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() == ("8",)
     assert reopened.rows("SELECT value FROM meta WHERE key='schema_version'")[0]["value"] == "9"
+
+
+def test_restart_preserves_future_version_with_committed_wal(tmp_path):
+    path = Store(tmp_path).path
+    writer = subprocess.run(
+        [sys.executable, "-c", """
+import os
+import sqlite3
+import sys
+
+db = sqlite3.connect(sys.argv[1])
+assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+db.execute("UPDATE meta SET value='999' WHERE key='schema_version'")
+db.commit()
+os._exit(17)
+""", str(path)],
+        check=False,
+        timeout=15,
+    )
+    assert writer.returncode == 17
+    wal = path.with_name(path.name + "-wal")
+    original_db = path.read_bytes()
+    original_wal = wal.read_bytes()
+    assert original_wal
+
+    with pytest.raises(ValueError) as error:
+        Store(tmp_path)
+    assert str(error.value) == "数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据"
+    assert path.read_bytes() == original_db
+    assert wal.read_bytes() == original_wal
