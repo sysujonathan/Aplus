@@ -303,11 +303,11 @@ class ChartWorkspaceDialog:
         self.tree.pack(fill=tk.BOTH, expand=True, padx=6)
         self.tree.bind('<<TreeviewSelect>>', self._tree_select)
         self.tree.bind('<Double-1>', lambda _e: self.edit_selected())
-        actions = tk.Frame(right, bg=PANEL_BG)
-        actions.pack(fill=tk.X, padx=6, pady=6)
+        panel_actions = tk.Frame(right, bg=PANEL_BG)
+        panel_actions.pack(fill=tk.X, padx=6, pady=6)
         for label, command in [('编辑', self.edit_selected), ('显隐', self.toggle_selected),
                                ('删除', self.delete_selected)]:
-            tk.Button(actions, text=label, command=command, bg=CONTROL_BG, fg=TEXT,
+            tk.Button(panel_actions, text=label, command=command, bg=CONTROL_BG, fg=TEXT,
                       relief=tk.FLAT).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         self.status = tk.StringVar(value='图形是分析草稿；不会写入交易计划或持仓')
         tk.Label(self.top, textvariable=self.status, bg=CONTROL_BG, fg=MUTED,
