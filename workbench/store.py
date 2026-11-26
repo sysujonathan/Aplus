@@ -204,6 +204,10 @@ class Store:
         """
         if not self.path.exists():
             return
+        # Opening is lazy: read the schema with write access so SQLite can
+        # roll back a hot journal before the read-only backup check.
+        with contextlib.closing(sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True)) as recovery:
+            recovery.execute('PRAGMA schema_version').fetchone()
         with contextlib.closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as source:
             has_meta = source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
             row = source.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() if has_meta else None
