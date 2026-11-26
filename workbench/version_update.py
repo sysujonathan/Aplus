@@ -358,6 +358,14 @@ def compatible_store_extension(before, after):
                 normalize = writer if name == '_write_artifact' else dump
                 if normalize(method) != normalize(new[name]):
                     return False
+            elif name == '_pa_migration_backup' and dump(method) != dump(new[name]):
+                # Pin the pre-recovery and PR #194 method ASTs. Any other
+                # edit to this startup recovery path needs a fresh review.
+                before_hash = hashlib.sha256(dump(method).encode('utf-8')).hexdigest()
+                after_hash = hashlib.sha256(dump(new[name]).encode('utf-8')).hexdigest()
+                if (before_hash != '5654ae1e481187334c0f81349d50cd7b3974e6d7c9f34f52e7cc1eda200ea919'
+                        or after_hash != '4e508373bd1e43d12bd0198e9b870ddb8bbd829697cc01308d1c1f86bf57ffdc'):
+                    return False
             elif dump(method) != dump(new[name]) and not business_method_safe(new[name], method):
                 return False
         for name in new.keys() - old.keys():

@@ -49,6 +49,27 @@ def test_sync_hardlink_fallback_keeps_source_update_migration_disabled():
     assert compatible
 
 
+@pytest.mark.parametrize(('original', 'replacement'), [
+    ("'?mode=ro'", "'?mode=rw'"),
+    ("'?mode=rw'", "'?mode=rwc'"),
+    ("'SELECT 1 FROM sqlite_master'", "'ALTER TABLE meta ADD COLUMN unsafe TEXT'"),
+    ("source.backup(recovery)", "exec('unverified operation')"),
+])
+def test_pa_recovery_exception_rejects_unreviewed_backup_changes(original, replacement):
+    root = Path(__file__).resolve().parents[1]
+    path = 'workbench/store.py'
+    before = v.run_git(root, 'show', f'47fd109:{path}')
+    source = (root / path).read_text(encoding='utf-8')
+    start = source.index('    def _pa_migration_backup(')
+    end = source.index('\n    def ', start + 1)
+    backup = source[start:end]
+    assert original in backup
+    changed = source[:start] + backup.replace(original, replacement, 1) + source[end:]
+
+    assert not v.compatible_store_extension(before, changed)
+    assert not v.compatible_store_extension(source, changed)
+
+
 @pytest.mark.parametrize('change', [
     lambda s: s.replace('self.version = 8', 'self.version = 9'),
     lambda s: s.replace('self.version = 8', "self.execute('ALTER TABLE accounts ADD COLUMN x TEXT')"),
