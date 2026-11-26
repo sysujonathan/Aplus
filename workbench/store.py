@@ -196,14 +196,6 @@ class Store:
             db.execute("CREATE INDEX IF NOT EXISTS pa_cases_owner_updated ON pa_cases(owner,updated)")
             db.execute("UPDATE meta SET value='9' WHERE key='schema_version'")
 
-    @contextlib.contextmanager
-    def _read_pa_schema_version(self):
-        with contextlib.closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as source:
-            has_meta = source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
-            row = source.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone() if has_meta else None
-            version = str(row[0]) if row else '1'
-            yield source, version
-
     def _pa_migration_backup(self):
         """Take a consistent recovery copy before any pre-v9 database writes.
 
@@ -212,16 +204,24 @@ class Store:
         """
         if not self.path.exists():
             return
+
+        @contextlib.contextmanager
+        def read_version():
+            with contextlib.closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True)) as source:
+                has_meta = source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone()
+                row = source.execute('SELECT value FROM meta WHERE key=?', ('schema_version',)).fetchone() if has_meta else None
+                yield source, str(row[0]) if row else '1'
+
         with contextlib.ExitStack() as stack:
             try:
-                source, version = stack.enter_context(self._read_pa_schema_version())
+                source, version = stack.enter_context(read_version())
             except sqlite3.OperationalError as error:
                 if 'attempt to write a readonly database' not in str(error):
                     raise
                 # Reading the schema triggers SQLite's hot journal rollback.
                 with contextlib.closing(sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True)) as recovery:
-                    recovery.execute('PRAGMA schema_version').fetchone()
-                source, version = stack.enter_context(self._read_pa_schema_version())
+                    recovery.execute('SELECT 1 FROM sqlite_master').fetchone()
+                source, version = stack.enter_context(read_version())
             if version not in SUPPORTED_SCHEMA_VERSIONS:
                 raise ValueError('数据库版本与程序不匹配，请先完成升级迁移；不会自动清理数据')
             if version == '9':

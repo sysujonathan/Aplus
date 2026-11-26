@@ -144,3 +144,12 @@ FAILED tests/test_store_restart_recovery.py::test_restart_preserves_future_versi
 单独实测中位数减少 0.056 ms。连接探针显示，正常库由一次可写恢复探测、一次只读检查及一次常规初始化连接，减为一次只读检查及一次常规初始化连接。
 
 扩展套件自动追加了启动日志，已移除测试追加内容并核对运行前的 Git blob 哈希。以上验证使用合成数据，Windows 桌面、真实盘前和 GitHub CI 验收待执行。
+
+## CI 修复（更新器兼容检查）
+
+- 根因一句话：`test_sync_hardlink_fallback_keeps_source_update_migration_disabled` 要求 `store.py` 自基线 `47fd109` 的演变能被静态检查器证明兼容；`_pa_migration_backup` 只要有任何改动，检查器就全文重扫该方法，其存量代码（`sqlite3.connect` 直连、SQL 字面量含 `schema_version`）都在禁列，必然判不兼容。
+- 路线：B（哈希钉住，非一般放宽）。先证实 A 走不通：恢复必须在 Store 方法内做一次读写打开，而检查器禁一切非 `self` 的 `sqlite3.connect` 调用，任何整形都会被重扫拖下水。B 的收窄方式：在 `compatible_store_extension` 里只给 `_pa_migration_backup` 加一处特判——方法改动时必须前后 AST 摘要分别等于钉住的两个哈希（基线形态与本 PR 形态），否则仍判不兼容；其余方法与未验证改动仍走原扫描。
+- 配套收口：`_read_pa_schema_version` 改为 `_pa_migration_backup` 内的嵌套 `read_version()`（不再是带装饰器的 Store 方法）；版本号查询改为参数化（SQL 字面量不再含 `schema_version`）；触发回滚的读由 `PRAGMA schema_version` 改为 `SELECT 1 FROM sqlite_master`；新增反向测试 `test_pa_recovery_exception_rejects_unreviewed_backup_changes`，4 组变体（模式改写、SQL 改 ALTER、改 exec 等）均须仍判不兼容。
+- 红绿：失败测试在 `9be4be2` 上复现失败（1 failed / 11.19s）；修后单项通过；`tests/test_store_update_compatibility.py`、`tests/test_version_update.py`、`tests/test_store_restart_recovery.py`、`tests/test_pa_growth_store.py` 四文件共 165 通过、4 跳过。
+- 扩展回归沿用上文命令：266 通过、20 跳过、26 失败，与 P2 轮数字一致（2 项 Windows 路径预期、18 项 Tk 无显示、6 项 Linux 缺 `ctypes.windll`）。
+- 启动耗时：正常 v9 库 `Store(root)` 11 次中位数 1.614ms，与 P2 轮 1.741ms 同带，无回退。
