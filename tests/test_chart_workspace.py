@@ -515,12 +515,28 @@ def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypat
                 assert button.winfo_containing(x + button.winfo_width() // 2,
                                                y + button.winfo_height() // 2) is button
 
-        for window_width in (width, 1850, width):
+        # Windows 窗口管理器会把超出屏幕的顶层窗口夹到屏宽：CI 上
+        # 1850/1490 的请求实际只得到 1028，精确宽度断言因此失败
+        # （run 45880715345，两档同错）。先探明本屏实际允许的最大
+        # 宽度，再按该上限取目标宽度；大屏上探明值不小于请求值，
+        # 不改变原有覆盖。单行断言只在当前宽度确实容得下一行时
+        # 才要求，与 fit_topbar 的换行条件是同一口径。
+        dialog.top.geometry('10000x700+0+0')
+        root.update()
+        max_width = dialog.top.winfo_width()
+        wide = min(1850, max_width)
+        narrow = min(width, max_width)
+
+        def one_row_fits():
+            return sum(child.winfo_reqwidth()
+                       for child in topbar.winfo_children()) <= topbar.winfo_width()
+
+        for window_width in (narrow, wide, narrow):
             dialog.top.geometry(f'{window_width}x700+0+0')
             root.update()
             assert dialog.top.winfo_width() == window_width
             check_controls()
-            if window_width == 1850:
+            if window_width == wide and one_row_fits():
                 assert len({button.winfo_rooty() for button in controls}) == 1
 
         undo_button.invoke()
