@@ -173,38 +173,62 @@ class ChartWorkspaceDialog:
         return self._preview if self._preview is not None else self.history.value
 
     def _build(self):
-        topbar = tk.Frame(self.top, bg=CONTROL_BG, height=42)
+        row_height = 42
+        topbar = tk.Frame(self.top, bg=CONTROL_BG, height=row_height)
         topbar.pack(fill=tk.X)
         topbar.pack_propagate(False)
-        tk.Label(topbar, text=f'{self.code}  {self.name}', bg=CONTROL_BG, fg=TEXT,
-                 font=('Microsoft YaHei UI', 11, 'bold'), padx=12).pack(side=tk.LEFT, fill=tk.Y)
+        periods = tk.Frame(topbar, bg=CONTROL_BG)
+        actions = tk.Frame(topbar, bg=CONTROL_BG)
+        actions.pack(side=tk.RIGHT, fill=tk.Y)
+        periods.pack(side=tk.LEFT, fill=tk.Y)
+
         self.tf_buttons = {}
         for key, label in TF_LABELS:
-            button = tk.Button(topbar, text=label, command=lambda v=key: self.change_timeframe(v),
+            button = tk.Button(periods, text=label, command=lambda v=key: self.change_timeframe(v),
                                bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT,
                                activeforeground='white', relief=tk.FLAT, padx=8)
-            button.pack(side=tk.LEFT, fill=tk.Y)
             self.tf_buttons[key] = button
-        self.replay_button = self._top_button(topbar, '回放', self.toggle_replay, glyph='replay', size=22)
-        snap = tk.Menubutton(topbar, text='快照', compound=tk.LEFT,
-                             image=control_icon(topbar, 'camera', 22), bg=CONTROL_BG, fg=TEXT,
+        # Give the controls space before the title so long names can be clipped safely.
+        self.replay_button = self._top_button(periods, '回放', self.toggle_replay,
+                                              side=tk.RIGHT, glyph='replay', size=22)
+        for button in reversed(self.tf_buttons.values()):
+            button.pack(side=tk.RIGHT, fill=tk.Y)
+        tk.Label(periods, text=f'{self.code}  {self.name}', bg=CONTROL_BG, fg=TEXT,
+                 font=('Microsoft YaHei UI', 11, 'bold'), padx=12).pack(side=tk.LEFT, fill=tk.Y)
+
+        snap = tk.Menubutton(actions, text='快照', compound=tk.LEFT,
+                             image=control_icon(actions, 'camera', 22), bg=CONTROL_BG, fg=TEXT,
                              activebackground=ACCENT, relief=tk.FLAT, padx=10)
         snap.pack(side=tk.RIGHT, fill=tk.Y)
         snap.menu = tk.Menu(snap, tearoff=False)
         snap['menu'] = snap.menu
         snap.menu.add_command(label='保存干净图表 PNG…', command=self.save_snapshot)
         snap.menu.add_command(label='复制图像到剪贴板', command=self.copy_snapshot)
-        alarm = tk.Menubutton(topbar, text='闹钟', compound=tk.RIGHT,
-                              image=control_icon(topbar, 'alert', 22), bg=CONTROL_BG, fg=TEXT,
+        alarm = tk.Menubutton(actions, text='闹钟', compound=tk.RIGHT,
+                              image=control_icon(actions, 'alert', 22), bg=CONTROL_BG, fg=TEXT,
                               activebackground=ACCENT, relief=tk.FLAT, padx=10)
         alarm.pack(side=tk.RIGHT, fill=tk.Y)
         alarm.menu = tk.Menu(alarm, tearoff=False); alarm['menu'] = alarm.menu
         alarm.menu.add_command(label='创建收盘 K 线提醒…', command=self.alert_dialog)
         alarm.menu.add_command(label='立即检查已载入 K 线', command=self.check_alerts)
-        self._top_button(topbar, '指标', self.indicator_dialog, side=tk.RIGHT)
-        self._top_button(topbar, '5分数据', self.import_intraday, side=tk.RIGHT)
-        self._top_button(topbar, '', self.undo, side=tk.RIGHT, glyph='undo', size=22)
-        self._top_button(topbar, '', self.redo, side=tk.RIGHT, glyph='redo', size=22)
+        self._top_button(actions, '指标', self.indicator_dialog, side=tk.RIGHT)
+        self._top_button(actions, '5分数据', self.import_intraday, side=tk.RIGHT)
+        self._top_button(actions, '', self.undo, side=tk.RIGHT, glyph='undo', size=22)
+        self._top_button(actions, '', self.redo, side=tk.RIGHT, glyph='redo', size=22)
+
+        def fit_topbar(_event=None):
+            periods_height = max(row_height, periods.winfo_reqheight())
+            actions_height = actions.winfo_reqheight()
+            wrap = periods.winfo_reqwidth() + actions.winfo_reqwidth() > topbar.winfo_width()
+            if wrap:
+                actions.pack_configure(side=tk.BOTTOM, fill=tk.NONE, anchor=tk.E)
+                topbar.configure(height=periods_height + actions_height)
+            else:
+                actions.pack_configure(side=tk.RIGHT, fill=tk.Y)
+                topbar.configure(height=max(periods_height, actions_height))
+
+        topbar.bind('<Configure>', fit_topbar)
+        topbar.after_idle(fit_topbar)
 
         self.replaybar = tk.Frame(self.top, bg=PANEL_BG, height=0)
         self.replay_text = tk.StringVar(value='')

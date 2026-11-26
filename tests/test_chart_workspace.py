@@ -462,3 +462,68 @@ def test_native_position_analysis_matches_risk_lot_leverage_and_precision(kind,t
     obj['web']['leverage'] = float('nan')
     with pytest.raises(ValueError,match='有限正数'):
         validate_document(value)
+
+
+@pytest.mark.native_process
+@pytest.mark.parametrize(('scale', 'width'), [(1.25, 1000), (2.0, 1490)], ids=['125pct', '200pct'])
+def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypatch, scale, width):
+    import tkinter as tk
+    from unittest.mock import Mock
+
+    from gui.chart_workspace import ChartWorkspaceDialog
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.tk.call('tk', 'scaling', scale * 96 / 72)
+        monkeypatch.setattr(ChartWorkspaceDialog, 'schedule_render', lambda self, event=None: None)
+        undo = Mock()
+
+        def undo_spy(self):
+            undo()
+
+        monkeypatch.setattr(ChartWorkspaceDialog, 'undo', undo_spy)
+        dialog = ChartWorkspaceDialog(
+            root, Store(tmp_path), frame=bars(), record={'source': 'test'}, code='sz.000001',
+            name='测试证券（兼容图表窄窗缩放回归样本）',
+        )
+        topbar = dialog.top.winfo_children()[0]
+        def toolbar_controls(parent):
+            for widget in parent.winfo_children():
+                if isinstance(widget, (tk.Button, tk.Menubutton)):
+                    yield widget
+                elif isinstance(widget, tk.Frame):
+                    yield from toolbar_controls(widget)
+
+        controls = list(toolbar_controls(topbar))
+        assert len(controls) == 15
+        undo_button = next(button for button in controls
+                           if isinstance(button, tk.Button) and 'undo_spy' in button.cget('command'))
+        controls.remove(undo_button)
+        controls.insert(0, undo_button)
+
+        def check_controls():
+            for button in controls:
+                assert button.winfo_ismapped(), button
+                assert button.winfo_width() == button.winfo_reqwidth(), button
+                assert button.winfo_height() >= button.winfo_reqheight(), button
+                x, y = button.winfo_rootx(), button.winfo_rooty()
+                assert topbar.winfo_rootx() <= x
+                assert x + button.winfo_width() <= topbar.winfo_rootx() + topbar.winfo_width()
+                assert topbar.winfo_rooty() <= y
+                assert y + button.winfo_height() <= topbar.winfo_rooty() + topbar.winfo_height()
+                assert button.winfo_containing(x + button.winfo_width() // 2,
+                                               y + button.winfo_height() // 2) is button
+
+        for window_width in (width, 1850, width):
+            dialog.top.geometry(f'{window_width}x700+0+0')
+            root.update()
+            assert dialog.top.winfo_width() == window_width
+            check_controls()
+            if window_width == 1850:
+                assert len({button.winfo_rooty() for button in controls}) == 1
+
+        undo_button.invoke()
+        undo.assert_called_once_with()
+    finally:
+        root.destroy()
