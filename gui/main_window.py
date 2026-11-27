@@ -16,10 +16,12 @@ from .data import REALTIME_MARKET_SOURCE
 from .watch_panel import WatchPanel
 from .toolbar import ToolBar
 from .theme import (
+    UI_FONT,
     ACCENT,
     ACCENT_HOVER,
     APP_BG,
     CONTROL_BG,
+    HOVER,
     MUTED,
     PANEL_BG,
     SELECTION,
@@ -63,7 +65,7 @@ class AplusMainWindow(ttk.Window):
         super().__init__(themename="darkly", title=APPLICATION_TITLE, iconphoto=None)
         apply_window_icon(self)
         self._display_scale = self.winfo_fpixels('1i') / 96
-        listing_font = tkfont.Font(root=self, family='Microsoft YaHei UI', size=9)
+        listing_font = tkfont.Font(root=self, family=UI_FONT, size=9)
         listing_height = max(round(26*self._display_scale),
                              listing_font.metrics('linespace')+round(6*self._display_scale))
         self.style.colors.primary = ACCENT
@@ -72,7 +74,7 @@ class AplusMainWindow(ttk.Window):
         self.style.configure("TLabel", background=APP_BG, foreground=TEXT)
         self.style.configure(
             "Treeview",
-            font=("Microsoft YaHei UI", 9),
+            font=(UI_FONT, 9),
             rowheight=listing_height,
             background=PANEL_BG,
             fieldbackground=PANEL_BG,
@@ -86,7 +88,7 @@ class AplusMainWindow(ttk.Window):
         )
         self.style.configure(
             "Treeview.Heading",
-            font=("Microsoft YaHei", 9, "bold"),
+            font=(UI_FONT, 9, "bold"),
             background=CONTROL_BG,
             foreground=TEXT,
             relief="flat",
@@ -229,11 +231,24 @@ class AplusMainWindow(ttk.Window):
         self.rowconfigure(1, weight=1)
 
         # 业务板块使用紧凑顶栏，不再用整高侧栏挤压候选和 K 线。
+        for name, background, foreground in (
+            ("ShellNav.TButton", CONTROL_BG, MUTED),
+            ("ShellSelected.TButton", SELECTION, TEXT),
+        ):
+            self.style.configure(name, font=(UI_FONT, 10), background=background,
+                                 foreground=foreground, bordercolor=background)
+            self.style.map(name, background=[("active", HOVER)],
+                           bordercolor=[("focus", MUTED), ("active", HOVER)])
         self.section_nav = ttk.Frame(self, padding=(8, 6))
         self.section_nav.grid(row=0, column=0, sticky=tk.EW)
         self.auto_quote_button = ttk.Checkbutton(
             self.section_nav, text="自动行情", variable=self.auto_quote_var,
-            command=self._toggle_auto_quotes, bootstyle="success-round-toggle")
+            command=self._toggle_auto_quotes, bootstyle="round-toggle")
+        toggle_style = self.auto_quote_button.cget("style")
+        self.style.layout("ShellAuto." + toggle_style, self.style.layout(toggle_style))
+        self.style.configure("ShellAuto." + toggle_style, font=(UI_FONT, 10))
+        self.style.map("ShellAuto." + toggle_style, background=[("selected", SELECTION)])
+        self.auto_quote_button.configure(style="ShellAuto." + toggle_style)
         self.auto_quote_button.pack(side=tk.LEFT, padx=(0, 12))
         self._section_buttons = {}
         self._pages = {}
@@ -248,10 +263,10 @@ class AplusMainWindow(ttk.Window):
             button = ttk.Button(
                 self.section_nav,
                 text=label,
-                bootstyle="secondary",
+                style="ShellNav.TButton",
                 command=lambda k=key: self._switch_section(k),
             )
-            button.pack(side=tk.LEFT, padx=(0, 5), ipady=2)
+            button.pack(side=tk.LEFT, padx=(0, 4), ipady=2)
             self._section_buttons[key] = button
 
         self.page_host = ttk.Frame(self)
@@ -352,7 +367,7 @@ class AplusMainWindow(ttk.Window):
         self.premarket_status = status_bar = ttk.Frame(premarket, padding=(12, 6))
         status_bar.grid(row=2, column=0, sticky=tk.EW)
         self._status_text = self.toolbar._status
-        ttk.Label(status_bar, textvariable=self._status_text, font=("Consolas", 10),
+        ttk.Label(status_bar, textvariable=self._status_text, font=(UI_FONT, 9),
                   foreground=MUTED).pack(side=tk.RIGHT)
 
         self._switch_section("premarket")
@@ -407,13 +422,13 @@ class AplusMainWindow(ttk.Window):
         ttk.Label(
             page,
             text=title,
-            font=("Microsoft YaHei", 24, "bold"),
+            font=(UI_FONT, 24, "bold"),
             foreground=TEXT,
         ).pack(anchor=tk.W)
         ttk.Label(
             page,
             text=subtitle,
-            font=("Microsoft YaHei", 12),
+            font=(UI_FONT, 12),
             foreground=TEXT,
             wraplength=680,
             justify=tk.LEFT,
@@ -421,7 +436,7 @@ class AplusMainWindow(ttk.Window):
         ttk.Label(
             page,
             text=boundary,
-            font=("Microsoft YaHei", 10),
+            font=(UI_FONT, 10),
             foreground=MUTED,
             wraplength=680,
             justify=tk.LEFT,
@@ -484,12 +499,12 @@ class AplusMainWindow(ttk.Window):
         if key == 'premarket':
             trade_button.pack_forget()
         elif not trade_button.winfo_manager():
-            trade_button.pack(side=tk.LEFT,padx=(0,5),ipady=2,before=self._section_buttons['growth'])
+            trade_button.pack(side=tk.LEFT,padx=(0,4),ipady=2,before=self._section_buttons['growth'])
         if key == 'growth':
             self.after_idle(self._pages[key].start)
         for name, button in self._section_buttons.items():
             button.configure(
-                bootstyle="primary" if name == key else "secondary"
+                style="ShellSelected.TButton" if name == key else "ShellNav.TButton"
             )
         if key == "other":
             self.trade_management.reload()

@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import simpledialog, ttk
 from ttkbootstrap.widgets import ToolTip
 
-from .workspace_icons import icon
+from .workspace_icons import DRAG_HANDLE_DOTS, control_icon, icon
 from .theme import APP_BG, CONTROL_BG, TEXT, MUTED
 from .tree_scroll import AutoHideScrollbar, wheel_scroll_units
 
@@ -145,9 +145,8 @@ class SharedDrawingTools:
         handle = tk.Canvas(self.favorites,autostyle=False,width=round(11*self.scale),height=round(18*self.scale),
                            background='#181818',highlightthickness=0,cursor='fleur')
         self.favorite_handle = handle
-        for x in (3,8):
-            for y in (4,9,14):
-                handle.create_oval(*[v*self.scale for v in (x-1,y-1,x+1,y+1)],fill='#686B71',outline='')
+        for x, y in DRAG_HANDLE_DOTS:
+            handle.create_oval(*[v*self.scale for v in (x-1,y-1,x+1,y+1)],fill='#686B71',outline='')
         handle.grid(row=0,column=0,padx=(0,4))
         ToolTip(handle,text='拖动收藏工具栏',delay=650)
         handle.bind('<ButtonPress-1>',self._drag_start)
@@ -188,8 +187,8 @@ class SharedDrawingTools:
         self.buttons[tool][-1]._group=tool
         if unsupported:
             tk.Label(row,autostyle=False,text='#',font=('Segoe UI',9),background=APP_BG,foreground='#777C84').place(relx=.62,y=0)
-        arrow=tk.Button(row,autostyle=False,text='›',font=('Segoe UI',10),background=APP_BG,foreground=MUTED,
-            activebackground=CONTROL_BG,borderwidth=0,padx=0,width=1,command=lambda:self.menu(tool))
+        arrow=tk.Button(row,autostyle=False,image=control_icon(row, 'chevron-right', 12, MUTED),background=APP_BG,
+            activebackground=CONTROL_BG,borderwidth=0,padx=0,command=lambda:self.menu(tool))
         arrow.pack(side=tk.RIGHT,fill=tk.Y)
         arrow.bind('<ButtonPress-1>',lambda _e:self._dismiss_open_group(tool),add='+')
         ToolTip(arrow,text=title+'：展开子菜单',delay=650)
@@ -267,9 +266,9 @@ class SharedDrawingTools:
                 ToolTip(button,text='功能暂未实现',delay=400)
             popup._entries.append((name,action,button))
             if kind=='tool' and value in self.favorite_buttons:
-                favorite=tk.Button(row,autostyle=False,text='★' if value in self.favorite_selection else '☆',
-                    foreground='#B8BBC2',background='#16181C',activebackground='#30343B',
-                    borderwidth=0,font=('Segoe UI',12),command=lambda t=value:self.toggle_favorite(t))
+                favorite=tk.Button(row,autostyle=False,image=control_icon(popup, 'star', 24, '#C4C6CB',
+                                      filled=value in self.favorite_selection),background='#16181C',activebackground='#30343B',
+                    borderwidth=0,command=lambda t=value:self.toggle_favorite(t))
                 favorite.pack(side=tk.RIGHT,padx=4)
                 ToolTip(favorite,text='添加到／从收藏工具栏移除',delay=600)
         if group=='trash':

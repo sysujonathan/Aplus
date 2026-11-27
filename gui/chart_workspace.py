@@ -26,11 +26,10 @@ from workbench.chart_workspace import (
 )
 from .chart_renderer import render_chart
 from .replay_navigation import candle_readout
+from .workspace_icons import control_icon
 from .theme import ACCENT, APP_BG, BORDER, CHART_BG, CONTROL_BG, MUTED, PANEL_BG, TEXT
 
 
-TOOL_GLYPHS = dict(fib='≋', long='L↑', ray='↦', trend='╱', short='S↓', rectangle='□',
-                   up='↑', down='↓', arrow='➚', path='⌁', channel='∥')
 DRAWING_LABELS = {**dict(TOOLS), 'text': '文字', 'ruler': '价格范围'}
 MINUTE_UNITS = {'1m': 'm1', '5m': 'm5', '15m': 'm15', '30m': 'm30', '1h': 'm60'}
 TF_LABELS = [('1m', '1分'), ('5m', '5分'), ('15m', '15分'), ('30m', '30分'), ('1h', '1小时'),
@@ -174,43 +173,69 @@ class ChartWorkspaceDialog:
         return self._preview if self._preview is not None else self.history.value
 
     def _build(self):
-        topbar = tk.Frame(self.top, bg=CONTROL_BG, height=42)
+        row_height = 42
+        topbar = tk.Frame(self.top, bg=CONTROL_BG, height=row_height)
         topbar.pack(fill=tk.X)
         topbar.pack_propagate(False)
-        tk.Label(topbar, text=f'{self.code}  {self.name}', bg=CONTROL_BG, fg=TEXT,
-                 font=('Microsoft YaHei UI', 11, 'bold'), padx=12).pack(side=tk.LEFT, fill=tk.Y)
+        periods = tk.Frame(topbar, bg=CONTROL_BG)
+        actions = tk.Frame(topbar, bg=CONTROL_BG)
+        actions.pack(side=tk.RIGHT, fill=tk.Y)
+        periods.pack(side=tk.LEFT, fill=tk.Y)
+
         self.tf_buttons = {}
         for key, label in TF_LABELS:
-            button = tk.Button(topbar, text=label, command=lambda v=key: self.change_timeframe(v),
+            button = tk.Button(periods, text=label, command=lambda v=key: self.change_timeframe(v),
                                bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT,
                                activeforeground='white', relief=tk.FLAT, padx=8)
-            button.pack(side=tk.LEFT, fill=tk.Y)
             self.tf_buttons[key] = button
-        self.replay_button = self._top_button(topbar, '⏪ 回放', self.toggle_replay)
-        snap = tk.Menubutton(topbar, text='📷 快照', bg=CONTROL_BG, fg=TEXT,
+        # Give the controls space before the title so long names can be clipped safely.
+        self.replay_button = self._top_button(periods, '回放', self.toggle_replay,
+                                              side=tk.RIGHT, glyph='replay', size=22)
+        for button in reversed(self.tf_buttons.values()):
+            button.pack(side=tk.RIGHT, fill=tk.Y)
+        tk.Label(periods, text=f'{self.code}  {self.name}', bg=CONTROL_BG, fg=TEXT,
+                 font=('Microsoft YaHei UI', 11, 'bold'), padx=12).pack(side=tk.LEFT, fill=tk.Y)
+
+        snap = tk.Menubutton(actions, text='快照', compound=tk.LEFT,
+                             image=control_icon(actions, 'camera', 22), bg=CONTROL_BG, fg=TEXT,
                              activebackground=ACCENT, relief=tk.FLAT, padx=10)
         snap.pack(side=tk.RIGHT, fill=tk.Y)
         snap.menu = tk.Menu(snap, tearoff=False)
         snap['menu'] = snap.menu
         snap.menu.add_command(label='保存干净图表 PNG…', command=self.save_snapshot)
         snap.menu.add_command(label='复制图像到剪贴板', command=self.copy_snapshot)
-        alarm = tk.Menubutton(topbar, text='闹钟＋', bg=CONTROL_BG, fg=TEXT,
+        alarm = tk.Menubutton(actions, text='闹钟', compound=tk.RIGHT,
+                              image=control_icon(actions, 'alert', 22), bg=CONTROL_BG, fg=TEXT,
                               activebackground=ACCENT, relief=tk.FLAT, padx=10)
         alarm.pack(side=tk.RIGHT, fill=tk.Y)
         alarm.menu = tk.Menu(alarm, tearoff=False); alarm['menu'] = alarm.menu
         alarm.menu.add_command(label='创建收盘 K 线提醒…', command=self.alert_dialog)
         alarm.menu.add_command(label='立即检查已载入 K 线', command=self.check_alerts)
-        self._top_button(topbar, '指标', self.indicator_dialog, side=tk.RIGHT)
-        self._top_button(topbar, '5分数据', self.import_intraday, side=tk.RIGHT)
-        self._top_button(topbar, '↶', self.undo, side=tk.RIGHT)
-        self._top_button(topbar, '↷', self.redo, side=tk.RIGHT)
+        self._top_button(actions, '指标', self.indicator_dialog, side=tk.RIGHT)
+        self._top_button(actions, '5分数据', self.import_intraday, side=tk.RIGHT)
+        self._top_button(actions, '', self.undo, side=tk.RIGHT, glyph='undo', size=22)
+        self._top_button(actions, '', self.redo, side=tk.RIGHT, glyph='redo', size=22)
+
+        def fit_topbar(_event=None):
+            periods_height = max(row_height, periods.winfo_reqheight())
+            actions_height = actions.winfo_reqheight()
+            wrap = periods.winfo_reqwidth() + actions.winfo_reqwidth() > topbar.winfo_width()
+            if wrap:
+                actions.pack_configure(side=tk.BOTTOM, fill=tk.NONE, anchor=tk.E)
+                topbar.configure(height=periods_height + actions_height)
+            else:
+                actions.pack_configure(side=tk.RIGHT, fill=tk.Y)
+                topbar.configure(height=max(periods_height, actions_height))
+
+        topbar.bind('<Configure>', fit_topbar)
+        topbar.after_idle(fit_topbar)
 
         self.replaybar = tk.Frame(self.top, bg=PANEL_BG, height=0)
         self.replay_text = tk.StringVar(value='')
         self._top_button(self.replaybar, '退出回放', self.exit_replay)
-        self._top_button(self.replaybar, '◀', lambda: self.replay_step(-1))
-        self.play_button = self._top_button(self.replaybar, '▶', self.replay_play)
-        self._top_button(self.replaybar, '▶|', lambda: self.replay_step(1))
+        self._top_button(self.replaybar, '', lambda: self.replay_step(-1), glyph='step-back')
+        self.play_button = self._top_button(self.replaybar, '', self.replay_play, glyph='play')
+        self._top_button(self.replaybar, '', lambda: self.replay_step(1), glyph='step-forward')
         self.speed_var = tk.StringVar(value='1x')
         ttk.Combobox(self.replaybar, textvariable=self.speed_var, state='readonly', width=5,
                      values=('.2x', '.5x', '1x', '2x', '5x')).pack(side=tk.LEFT, padx=6)
@@ -218,40 +243,81 @@ class ChartWorkspaceDialog:
 
         body = tk.Frame(self.top, bg=APP_BG)
         body.pack(fill=tk.BOTH, expand=True)
-        left = tk.Frame(body, bg=CONTROL_BG, width=48)
-        left.pack(side=tk.LEFT, fill=tk.Y)
-        left.pack_propagate(False)
-        tk.Button(left, text='✚', command=lambda: self.select_tool(None), bg=CONTROL_BG,
+        tools_panel = tk.Frame(body, bg=CONTROL_BG)
+        tools_panel.pack(side=tk.LEFT, fill=tk.Y)
+        tools_panel.rowconfigure(0, weight=1)
+        tools_view = tk.Canvas(tools_panel, bg=CONTROL_BG, width=48, height=1,
+                               borderwidth=0, highlightthickness=0)
+        tools_view.grid(row=0, column=0, sticky=tk.NS)
+        tools_scroll = ttk.Scrollbar(tools_panel, orient=tk.VERTICAL, command=tools_view.yview)
+        tools_view.configure(yscrollcommand=tools_scroll.set)
+        left = tk.Frame(tools_view, bg=CONTROL_BG)
+        tools_window = tools_view.create_window(0, 0, window=left, anchor=tk.NW)
+
+        def fit_tools(_event=None):
+            height = left.winfo_reqheight()
+            viewport_height = tools_view.winfo_height()
+            tools_view.itemconfigure(tools_window, height=max(height, viewport_height))
+            tools_view.configure(scrollregion=(0, 0, tools_view.winfo_width(), height))
+            if height > viewport_height:
+                tools_scroll.grid(row=0, column=1, sticky=tk.NS)
+            else:
+                tools_scroll.grid_remove()
+
+        def reveal_focused_tool(event):
+            viewport_height = tools_view.winfo_height()
+            content_height = left.winfo_reqheight()
+            if content_height <= viewport_height:
+                return
+            viewport_top = tools_view.canvasy(0)
+            tool_top = event.widget.winfo_y()
+            tool_bottom = tool_top + event.widget.winfo_height()
+            if tool_top < viewport_top:
+                tools_view.yview_moveto(tool_top / content_height)
+            elif tool_bottom > viewport_top + viewport_height:
+                tools_view.yview_moveto((tool_bottom - viewport_height) / content_height)
+
+        left.bind('<Configure>', fit_tools)
+        tools_view.bind('<Configure>', fit_tools)
+        tk.Button(left, image=control_icon(left, 'cross', 24, '#C4C6CB'), command=lambda: self.select_tool(None), bg=CONTROL_BG,
                   fg=TEXT, relief=tk.FLAT).pack(fill=tk.X, pady=(5, 2))
         for key, label in TOOLS:
-            b = tk.Button(left, text=TOOL_GLYPHS[key], command=lambda v=key: self.select_tool(v),
+            b = tk.Button(left, image=control_icon(left, key, 24, '#C4C6CB'), command=lambda v=key: self.select_tool(v),
                           bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT,
-                          activeforeground='white', relief=tk.FLAT, height=1)
+                          activeforeground='white', relief=tk.FLAT)
             b.pack(fill=tk.X, pady=1)
             self._tooltip(b, label)
         tk.Frame(left, bg=BORDER, height=1).pack(fill=tk.X, pady=4)
-        eye = tk.Menubutton(left, text='◉', bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
+        eye = tk.Menubutton(left, image=control_icon(left, 'eye', 24, '#C4C6CB'), bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
         eye.pack(fill=tk.X, pady=2)
         eye.menu = tk.Menu(eye, tearoff=False); eye['menu'] = eye.menu
         eye.menu.add_command(label='隐藏／显示所有图形', command=lambda: self.toggle_hide('drawings'))
         eye.menu.add_command(label='隐藏／显示所有指标', command=lambda: self.toggle_hide('indicators'))
         eye.menu.add_command(label='隐藏／显示策略证据', command=self.toggle_strategy)
         eye.menu.add_command(label='隐藏／显示全部', command=lambda: self.toggle_hide('all'))
-        trash = tk.Menubutton(left, text='♲', bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
+        trash = tk.Menubutton(left, image=control_icon(left, 'trash', 24, '#C4C6CB'), bg=CONTROL_BG, fg=TEXT, relief=tk.FLAT)
         trash.pack(side=tk.BOTTOM, fill=tk.X, pady=6)
         trash.menu = tk.Menu(trash, tearoff=False); trash['menu'] = trash.menu
         trash.menu.add_command(label='移除所有图形', command=lambda: self.remove_scope('drawings'))
         trash.menu.add_command(label='移除所有指标', command=lambda: self.remove_scope('indicators'))
         trash.menu.add_command(label='移除图形与指标', command=lambda: self.remove_scope('all'))
+        for widget in left.winfo_children():
+            if isinstance(widget, (tk.Button, tk.Menubutton)):
+                widget.bind('<FocusIn>', reveal_focused_tool, add='+')
+        # Size to the DPI-scaled icons once, so a hover label cannot resize the chart.
+        tools_width = max(48, *(widget.winfo_reqwidth() for widget in left.winfo_children()))
+        tools_view.configure(width=tools_width)
+        tools_view.itemconfigure(tools_window, width=tools_width)
 
         center = tk.Frame(body, bg=CHART_BG)
         center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         fav = tk.Frame(center, bg=CONTROL_BG)
         fav.place(relx=.5, y=8, anchor=tk.N, height=38)
-        tk.Label(fav, text='⠿', bg=CONTROL_BG, fg=MUTED, padx=7).pack(side=tk.LEFT)
+        tk.Label(fav, image=control_icon(fav, 'drag-handle', 18, '#686B71'),
+                 bg=CONTROL_BG, padx=7).pack(side=tk.LEFT)
         for key, label in TOOLS:
-            b = tk.Button(fav, text=TOOL_GLYPHS[key], command=lambda v=key: self.select_tool(v),
-                          bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT, relief=tk.FLAT, width=3)
+            b = tk.Button(fav, image=control_icon(fav, key, 24, '#C4C6CB'), command=lambda v=key: self.select_tool(v),
+                          bg=CONTROL_BG, fg=TEXT, activebackground=ACCENT, relief=tk.FLAT)
             b.pack(side=tk.LEFT); self._tooltip(b, label)
         self.canvas = tk.Canvas(center, bg=CHART_BG, highlightthickness=0, cursor='crosshair')
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -277,28 +343,30 @@ class ChartWorkspaceDialog:
         self.tree.pack(fill=tk.BOTH, expand=True, padx=6)
         self.tree.bind('<<TreeviewSelect>>', self._tree_select)
         self.tree.bind('<Double-1>', lambda _e: self.edit_selected())
-        actions = tk.Frame(right, bg=PANEL_BG)
-        actions.pack(fill=tk.X, padx=6, pady=6)
+        panel_actions = tk.Frame(right, bg=PANEL_BG)
+        panel_actions.pack(fill=tk.X, padx=6, pady=6)
         for label, command in [('编辑', self.edit_selected), ('显隐', self.toggle_selected),
                                ('删除', self.delete_selected)]:
-            tk.Button(actions, text=label, command=command, bg=CONTROL_BG, fg=TEXT,
+            tk.Button(panel_actions, text=label, command=command, bg=CONTROL_BG, fg=TEXT,
                       relief=tk.FLAT).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         self.status = tk.StringVar(value='图形是分析草稿；不会写入交易计划或持仓')
         tk.Label(self.top, textvariable=self.status, bg=CONTROL_BG, fg=MUTED,
                  anchor=tk.W, padx=9).pack(fill=tk.X)
         self.refresh_tree()
 
-    def _top_button(self, parent, text, command, *, side=tk.LEFT):
+    def _top_button(self, parent, text, command, *, side=tk.LEFT, glyph=None, size=20):
         button = tk.Button(parent, text=text, command=command, bg=CONTROL_BG, fg=TEXT,
                            activebackground=ACCENT, activeforeground='white', relief=tk.FLAT, padx=9)
+        if glyph:
+            button.configure(image=control_icon(parent, glyph, size), compound=tk.LEFT)
         button.pack(side=side, fill=tk.Y)
         return button
 
     @staticmethod
     def _tooltip(widget, text):
-        widget.bind('<Enter>', lambda _e: widget.configure(text=text[:4]))
-        glyph = widget.cget('text')
-        widget.bind('<Leave>', lambda _e: widget.configure(text=glyph))
+        image = widget.cget('image')
+        widget.bind('<Enter>', lambda _e: widget.configure(text=text[:4], image=''))
+        widget.bind('<Leave>', lambda _e: widget.configure(text='', image=image))
 
     def schedule_render(self, _event=None):
         if self._closed:
@@ -785,13 +853,14 @@ class ChartWorkspaceDialog:
     def replay_play(self):
         if self.replay_index is None: return
         self.replay_playing = not self.replay_playing
-        self.play_button.configure(text='Ⅱ' if self.replay_playing else '▶')
+        self.play_button.configure(
+            image=control_icon(self.play_button, 'pause' if self.replay_playing else 'play', 20))
         if self.replay_playing: self._replay_tick()
 
     def _replay_tick(self):
         if not self.replay_playing or self.replay_index is None: return
         if self.replay_index >= len(self.frame)-1:
-            self.replay_playing = False; self.play_button.configure(text='▶'); return
+            self.replay_playing = False; self.play_button.configure(image=control_icon(self.play_button, 'play', 20)); return
         self.replay_step(1)
         try: speed = float(self.speed_var.get().rstrip('x'))
         except ValueError: speed = 1

@@ -11,6 +11,9 @@ from datetime import date
 
 import ttkbootstrap as ttk
 
+from .workspace_icons import control_icon
+from .theme import MUTED, UI_FONT
+
 WEEKDAYS = ("一", "二", "三", "四", "五", "六", "日")
 EMPTY_HINT = "当前没有可用的交易日：交易日历未覆盖，或尚未同步。"
 
@@ -49,7 +52,7 @@ class DatePicker(ttk.Toplevel):
         self.body.pack(fill=tk.BOTH, expand=True)
         self._place_near(parent)
         if not self.index:
-            ttk.Label(self.body, text=EMPTY_HINT, wraplength=240).grid(
+            ttk.Label(self.body, text=EMPTY_HINT, wraplength=240, foreground=MUTED, font=(UI_FONT, 9)).grid(
                 row=0, column=0, columnspan=3, pady=8, sticky=tk.W)
             ttk.Button(self.body, text="关闭", bootstyle="secondary",
                        command=self.destroy).grid(row=1, column=2, sticky=tk.E)
@@ -79,14 +82,14 @@ class DatePicker(ttk.Toplevel):
         self.month_box = ttk.Combobox(header, textvariable=self.month_var, width=4,
                                       state="readonly", values=self._months())
         self.month_box.pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(header, text="✕", width=3, bootstyle="secondary-outline",
+        ttk.Button(header, image=control_icon(self, "close", 12, MUTED), width=3, bootstyle="secondary-outline",
                    command=self.destroy).pack(side=tk.RIGHT)
         for column, name in enumerate(WEEKDAYS):
-            ttk.Label(self.body, text=name, anchor=tk.CENTER, width=3).grid(
+            ttk.Label(self.body, text=name, font=(UI_FONT, 9), anchor=tk.CENTER, width=3).grid(
                 row=1, column=column, padx=1, pady=(0, 2))
         self.grid_holder = ttk.Frame(self.body)
         self.grid_holder.grid(row=2, column=0, columnspan=7)
-        ttk.Label(self.body, text="灰色为休市或未验证，不可选。", foreground="#888888").grid(
+        ttk.Label(self.body, text="灰色为休市或未验证，不可选。", foreground=MUTED, font=(UI_FONT, 9)).grid(
             row=3, column=0, columnspan=7, sticky=tk.W, pady=(8, 0))
         self.year_box.bind("<<ComboboxSelected>>", lambda _event: self._on_period_change())
         self.month_box.bind("<<ComboboxSelected>>", lambda _event: self._render_days())

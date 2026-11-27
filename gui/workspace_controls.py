@@ -9,7 +9,7 @@ from workbench.workspace_layouts import (DEFAULT_PERIOD_FAVORITES, SHAPES, SYNC_
                                          new_layout, save_period_favorite, validate_layout)
 from .chart_items import ChartItem
 from .theme import APP_BG, CONTROL_BG, TEXT, MUTED
-from .workspace_icons import icon
+from .workspace_icons import control_icon, icon
 
 PERIOD_LABELS = {'m1':'1分钟', 'm5':'5分钟', 'm15':'15分钟', 'm30':'30分钟',
                  'm60':'1小时', 'daily':'日线', 'weekly':'周线', 'monthly':'月线'}
@@ -85,11 +85,13 @@ class WorkspaceControls:
         self.layout_button=self._top_button(None,'图表布局：选择行列',self._open_layout_picker,
                                            parent=self.right,requires_chart=False)
         self.layout_button.bind('<ButtonPress-1>',self._dismiss_layout_on_press,add='+')
-        self.layout_manager=self._menu_button(self.right,text='默认布局')
+        self.layout_manager=self._menu_button(self.right,text='默认布局', compound=tk.RIGHT,
+            image=control_icon(self.grid, 'chevron-down', 12, TEXT))
         ToolTip(self.layout_manager,text='管理已保存布局',delay=650)
         self.layout_shortcuts = tk.Frame(self.right,autostyle=False,background=APP_BG)
         self.layout_shortcuts.pack(side=tk.LEFT)
-        self.sync_button=self._menu_button(self.right,text='联动 ⌄')
+        self.sync_button=self._menu_button(self.right,text='联动', compound=tk.RIGHT,
+            image=control_icon(self.grid, 'chevron-down', 12, TEXT))
         sync_menu = self._menu(self.sync_button)
         for key, label in zip(SYNC_KEYS, ('标的','周期','十字线','时间位置','可见日期范围')):
             sync_menu.add_checkbutton(label=label, variable=self.sync[key], command=self.preferences_changed)
@@ -125,7 +127,7 @@ class WorkspaceControls:
         if grid.on_trade:
             self.trade_button = self._top_button(None,'打开交易管理',grid.on_trade,text='交易',
                                                  parent=self.right,requires_chart=False)
-        more=self._menu_button(self.left_actions,text='⋯')
+        more=self._menu_button(self.left_actions, image=control_icon(self.grid, 'more', 14, TEXT))
         menu=self._menu(more)
         menu.add_command(label='对象树', command=lambda:self.command('action','objects'))
         menu.add_separator()
@@ -140,7 +142,8 @@ class WorkspaceControls:
         self.ranges=tk.Frame(self.bottom,autostyle=False,background=APP_BG)
         self.ranges.pack(side=tk.LEFT)
         self.range_buttons=[]
-        self.range_more=self._menu_button(self.ranges,text='日期范围 ⌄')
+        self.range_more=self._menu_button(self.ranges,text='日期范围', compound=tk.RIGHT,
+            image=control_icon(self.grid, 'chevron-down', 12, TEXT))
         range_menu=self._menu(self.range_more)
         self.range_more.configure(menu=range_menu)
         self._top_actions.append(self.range_more)
@@ -292,7 +295,7 @@ class WorkspaceControls:
                 font=('Microsoft YaHei UI',10),padx=5,pady=4,command=lambda p=period:self.select_period(p))
             ToolTip(button,text=f'活动图周期：{PERIOD_LABELS[period]}',delay=650)
             self.period_buttons[period]=button
-        self.period_more=tk.Button(strip,autostyle=False,text='⌄',foreground=TEXT,background=APP_BG,
+        self.period_more=tk.Button(strip,autostyle=False,image=control_icon(strip, 'chevron-down', 12, TEXT), foreground=TEXT,background=APP_BG,
                                    borderwidth=0,padx=5,pady=4,command=self._open_period_picker)
         self._pack_period_favorites()
         ToolTip(self.period_more,text='更多图表周期',delay=650)
@@ -334,7 +337,7 @@ class WorkspaceControls:
                                borderwidth=0, foreground=TEXT, activebackground=CONTROL_BG,
                                activeforeground=TEXT, pady=3, command=lambda p=period:self._choose_period(p))
             choice.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            star = tk.Button(row, autostyle=False, width=3, borderwidth=0, background='#17191D',
+            star = tk.Button(row, autostyle=False, borderwidth=0, background='#17191D',
                              activebackground=CONTROL_BG, activeforeground=TEXT, pady=3,
                              command=lambda p=period:self._toggle_period_favorite(p))
             star.pack(side=tk.RIGHT)
@@ -383,7 +386,8 @@ class WorkspaceControls:
                 choice.configure(state=tk.NORMAL if period in available else tk.DISABLED,
                                  background='#33363B' if period==current else '#17191D')
                 favorite = period in self.favorite_periods
-                popup.stars[period].configure(text='★' if favorite else '☆', foreground=TEXT if favorite else MUTED)
+                popup.stars[period].configure(
+                    image=control_icon(popup, 'star', 24, '#C4C6CB', filled=favorite))
 
     def _paint_period_strip(self,state,ready):
         current=state.get('timeframe')
@@ -666,7 +670,7 @@ class WorkspaceControls:
                          command=self._toggle_favorite_layout)
         menu.add_command(label='归档当前布局（保留画线）…', command=self.delete)
         name=self.current['name']
-        self.layout_manager.configure(menu=menu,text=(name if len(name)<=8 else name[:7]+'…')+' ⌄')
+        self.layout_manager.configure(menu=menu,text=name if len(name)<=8 else name[:7]+'…')
         previous = getattr(self,'_saved_layout_menu',None)
         if previous is not None:
             previous.destroy()

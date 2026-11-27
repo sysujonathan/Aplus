@@ -18,7 +18,8 @@ from tkinter import messagebox, simpledialog, filedialog
 from tkinter import font as tkfont
 import ttkbootstrap as ttk
 
-from .theme import APP_BG, PANEL_BG, TEXT
+from .workspace_icons import control_icon
+from .theme import APP_BG, MUTED, PANEL_BG, TEXT, UI_FONT
 from workbench.watch_views import WatchViews, FLAGS, COLUMNS, import_codes, export_rows
 from .tree_scroll import (
     attach_vertical_scrollbar,
@@ -71,7 +72,7 @@ class WatchPanel(ttk.Frame):
         self.list_name = tk.StringVar()
         self.list_button = ttk.Menubutton(heading, textvariable=self.list_name, bootstyle='secondary')
         self.list_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.settings_button = ttk.Button(heading, text='⋯', width=3, command=self._settings_menu, bootstyle='secondary-outline')
+        self.settings_button = ttk.Button(heading, image=control_icon(self, 'more', 14, TEXT), width=3, command=self._settings_menu, bootstyle='secondary-outline')
         self.settings_button.pack(side=tk.RIGHT, padx=3)
         self.query = tk.StringVar()
         search = ttk.Entry(self, textvariable=self.query)
@@ -121,13 +122,13 @@ class WatchPanel(ttk.Frame):
         for color, value in FLAGS.items():
             self.tree.tag_configure('flag:' + color, foreground=value)
         self.hint = tk.StringVar(value='自选表设置无法读取，原设置已保留；暂用全部关注' if self.views.error else '拖动排序 · 拖出列表放入图格')
-        self.hint_label=ttk.Label(self,textvariable=self.hint,foreground='#9BA7B4',wraplength=360)
+        self.hint_label=ttk.Label(self,textvariable=self.hint,foreground=MUTED, font=(UI_FONT, 9),wraplength=360)
         self.hint_label.pack(fill=tk.X,pady=3)
         self._read_error=False
         self.hint_label.bind('<Button-1>',lambda _:self.reload() if self._read_error else None)
         self.tree.bind('<Motion>', self._hover_row, add='+')
         self._hover_code = None
-        self._remove_hover = ttk.Button(self.tree, text='×', width=2, bootstyle='secondary',
+        self._remove_hover = ttk.Button(self.tree, image=control_icon(self, 'close', 12, MUTED), width=2, bootstyle='secondary',
             command=lambda: self._remove_from_list(self._hover_code) if self._hover_code else None)
         self._alert_hover = ttk.Button(self.tree, text='♧', width=2, bootstyle='secondary',
             command=lambda: self.on_alert(self._hover_code) if self.on_alert and self._hover_code else None)
@@ -930,7 +931,7 @@ class _PlanDialog:
         self.top.grab_set()
         self.top.resizable(False, False)
 
-        ttk.Label(self.top, text=f"{code} → {state}", font=("Microsoft YaHei", 10, "bold")).grid(
+        ttk.Label(self.top, text=f"{code} → {state}", font=(UI_FONT, 11, "bold")).grid(
             row=0, column=0, columnspan=2, sticky=tk.W, padx=8, pady=(8, 2)
         )
         self._vars = {}
