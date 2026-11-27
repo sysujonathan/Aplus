@@ -264,6 +264,19 @@ class ChartWorkspaceDialog:
             else:
                 tools_scroll.grid_remove()
 
+        def reveal_focused_tool(event):
+            viewport_height = tools_view.winfo_height()
+            content_height = left.winfo_reqheight()
+            if content_height <= viewport_height:
+                return
+            viewport_top = tools_view.canvasy(0)
+            tool_top = event.widget.winfo_y()
+            tool_bottom = tool_top + event.widget.winfo_height()
+            if tool_top < viewport_top:
+                tools_view.yview_moveto(tool_top / content_height)
+            elif tool_bottom > viewport_top + viewport_height:
+                tools_view.yview_moveto((tool_bottom - viewport_height) / content_height)
+
         left.bind('<Configure>', fit_tools)
         tools_view.bind('<Configure>', fit_tools)
         tk.Button(left, image=control_icon(left, 'cross', 24, '#C4C6CB'), command=lambda: self.select_tool(None), bg=CONTROL_BG,
@@ -288,6 +301,9 @@ class ChartWorkspaceDialog:
         trash.menu.add_command(label='移除所有图形', command=lambda: self.remove_scope('drawings'))
         trash.menu.add_command(label='移除所有指标', command=lambda: self.remove_scope('indicators'))
         trash.menu.add_command(label='移除图形与指标', command=lambda: self.remove_scope('all'))
+        for widget in left.winfo_children():
+            if isinstance(widget, (tk.Button, tk.Menubutton)):
+                widget.bind('<FocusIn>', reveal_focused_tool, add='+')
         # Size to the DPI-scaled icons once, so a hover label cannot resize the chart.
         tools_width = max(48, *(widget.winfo_reqwidth() for widget in left.winfo_children()))
         tools_view.configure(width=tools_width)

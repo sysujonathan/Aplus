@@ -597,3 +597,67 @@ def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypat
                 if widget.winfo_class() == 'TCombobox':
                     Publisher.unsubscribe(widget.winfo_pathname(widget.winfo_id()))
         root.destroy()
+
+
+@pytest.mark.native_process
+@pytest.mark.parametrize('direction', ['forward', 'backward'])
+def test_compat_chart_sidebar_keyboard_focus_scrolls_into_view(tmp_path, monkeypatch, direction):
+    import tkinter as tk
+
+    from ttkbootstrap.publisher import Publisher
+
+    from gui.chart_workspace import ChartWorkspaceDialog
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        root.tk.call('tk', 'scaling', 2 * 96 / 72)
+        monkeypatch.setattr(ChartWorkspaceDialog, 'schedule_render', lambda self, event=None: None)
+        dialog = ChartWorkspaceDialog(
+            root, Store(tmp_path), frame=bars(), record={'source': 'test'}, code='sz.000001',
+            name='测试证券',
+        )
+        replay_combo = next(widget for widget in dialog.replaybar.winfo_children()
+                            if widget.winfo_class() == 'TCombobox')
+        Publisher.unsubscribe(replay_combo.winfo_pathname(replay_combo.winfo_id()))
+        dialog.top.minsize(980, 1)
+        dialog.top.geometry('980x300')
+        root.update()
+        body = dialog.top.winfo_children()[2]
+        view = body.winfo_children()[0].winfo_children()[0]
+        tools = view.winfo_children()[0]
+        buttons = [widget for widget in tools.winfo_children() if isinstance(widget, tk.Button)]
+        height = view.winfo_height()
+        content_height = tools.winfo_reqheight()
+        assert content_height > height
+
+        def bottom(widget):
+            return widget.winfo_y() + widget.winfo_height()
+
+        if direction == 'forward':
+            target = next(button for button in buttons if button.winfo_y() >= height)
+            source = target.tk_focusPrev()
+            start = bottom(source) - height
+            expected = bottom(target) - height
+            assert source.tk_focusNext() is target
+        else:
+            target = buttons[2]
+            source = target.tk_focusNext()
+            start = source.winfo_y()
+            expected = target.winfo_y()
+            assert source.tk_focusPrev() is target
+
+        view.yview_moveto(start / content_height)
+        root.update()
+        before = view.canvasy(0)
+        assert before <= source.winfo_y() < bottom(source) <= before + height
+        assert bottom(target) <= before or target.winfo_y() >= before + height
+        # Deliver the event from Tk's traversal target without involving window activation.
+        source.event_generate('<FocusIn>')
+        assert view.canvasy(0) == before
+        target.event_generate('<FocusIn>')
+        root.update()
+        assert view.canvasy(0) == expected
+        assert expected <= target.winfo_y() < bottom(target) <= expected + height
+    finally:
+        root.destroy()
