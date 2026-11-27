@@ -465,29 +465,38 @@ def test_native_position_analysis_matches_risk_lot_leverage_and_precision(kind,t
 
 
 @pytest.mark.native_process
-@pytest.mark.parametrize(('scale', 'width'), [(1.25, 1000), (2.0, 1490)], ids=['125pct', '200pct'])
-def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypatch, scale, width):
+@pytest.mark.parametrize(
+    ('scale', 'width', 'height'),
+    [(1.25, 1000, 700), (1.5, 1100, 620), (2.0, 1490, 850), (2.0, 1490, 700)],
+    ids=['125pct', '150pct', '200pct', '200pct-undo-regression'],
+)
+def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypatch, scale, width, height):
     import tkinter as tk
     from unittest.mock import Mock
 
-    from gui.chart_workspace import ChartWorkspaceDialog
+    from gui.chart_workspace import TOOLS, ChartWorkspaceDialog
 
     root = tk.Tk()
     root.withdraw()
+    dialog = None
     try:
         root.tk.call('tk', 'scaling', scale * 96 / 72)
         monkeypatch.setattr(ChartWorkspaceDialog, 'schedule_render', lambda self, event=None: None)
-        undo = Mock()
+        undo, hide, remove = Mock(), Mock(), Mock()
 
         def undo_spy(self):
             undo()
 
         monkeypatch.setattr(ChartWorkspaceDialog, 'undo', undo_spy)
+        monkeypatch.setattr(ChartWorkspaceDialog, 'toggle_hide', lambda self, scope: hide(scope))
+        monkeypatch.setattr(ChartWorkspaceDialog, 'remove_scope', lambda self, scope: remove(scope))
         dialog = ChartWorkspaceDialog(
             root, Store(tmp_path), frame=bars(), record={'source': 'test'}, code='sz.000001',
             name='测试证券（兼容图表窄窗缩放回归样本）',
         )
-        topbar = dialog.top.winfo_children()[0]
+        topbar, _, body, _ = dialog.top.winfo_children()
+        tools_view, tools_scroll = body.winfo_children()[0].winfo_children()
+        tools = tools_view.winfo_children()[0]
         def toolbar_controls(parent):
             for widget in parent.winfo_children():
                 if isinstance(widget, (tk.Button, tk.Menubutton)):
@@ -496,24 +505,29 @@ def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypat
                     yield from toolbar_controls(widget)
 
         controls = list(toolbar_controls(topbar))
+        left_controls = list(toolbar_controls(tools))
         assert len(controls) == 15
+        assert len(left_controls) == len(TOOLS) + 3
         undo_button = next(button for button in controls
                            if isinstance(button, tk.Button) and 'undo_spy' in button.cget('command'))
-        controls.remove(undo_button)
-        controls.insert(0, undo_button)
+        eye, trash = [widget for widget in left_controls if isinstance(widget, tk.Menubutton)]
+        assert eye.menu.entrycget(0, 'label') == '隐藏／显示所有图形'
+        assert trash.menu.entrycget(0, 'label') == '移除所有图形'
 
-        def check_controls():
-            for button in controls:
-                assert button.winfo_ismapped(), button
-                assert button.winfo_width() == button.winfo_reqwidth(), button
-                assert button.winfo_height() >= button.winfo_reqheight(), button
-                x, y = button.winfo_rootx(), button.winfo_rooty()
-                assert topbar.winfo_rootx() <= x
-                assert x + button.winfo_width() <= topbar.winfo_rootx() + topbar.winfo_width()
-                assert topbar.winfo_rooty() <= y
-                assert y + button.winfo_height() <= topbar.winfo_rooty() + topbar.winfo_height()
-                assert button.winfo_containing(x + button.winfo_width() // 2,
-                                               y + button.winfo_height() // 2) is button
+        def check_control(widget):
+            # Every ancestor must contain the button even when another window covers the dialog.
+            assert widget.winfo_ismapped(), widget
+            assert widget.winfo_width() >= widget.winfo_reqwidth(), widget
+            assert widget.winfo_height() >= widget.winfo_reqheight(), widget
+            x, y = widget.winfo_rootx(), widget.winfo_rooty()
+            parent = widget.master
+            while True:
+                px, py = parent.winfo_rootx(), parent.winfo_rooty()
+                assert px <= x and x + widget.winfo_width() <= px + parent.winfo_width(), widget
+                assert py <= y and y + widget.winfo_height() <= py + parent.winfo_height(), widget
+                if parent is dialog.top:
+                    break
+                parent = parent.master
 
         # Windows 窗口管理器会把超出屏幕的顶层窗口夹到屏宽：CI 上
         # 1850/1490 的请求实际只得到 1028，精确宽度断言因此失败
@@ -521,7 +535,7 @@ def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypat
         # 宽度，再按该上限取目标宽度；大屏上探明值不小于请求值，
         # 不改变原有覆盖。单行断言只在当前宽度确实容得下一行时
         # 才要求，与 fit_topbar 的换行条件是同一口径。
-        dialog.top.geometry('10000x700+0+0')
+        dialog.top.geometry(f'10000x{height}+0+0')
         root.update()
         max_width = dialog.top.winfo_width()
         wide = min(1850, max_width)
@@ -532,14 +546,54 @@ def test_compat_chart_toolbar_remains_reachable_when_resized(tmp_path, monkeypat
                        for child in topbar.winfo_children()) <= topbar.winfo_width()
 
         for window_width in (narrow, wide, narrow):
-            dialog.top.geometry(f'{window_width}x700+0+0')
+            dialog.top.geometry(f'{window_width}x{height}+0+0')
             root.update()
             assert dialog.top.winfo_width() == window_width
-            check_controls()
+            for widget in controls:
+                check_control(widget)
             if window_width == wide and one_row_fits():
                 assert len({button.winfo_rooty() for button in controls}) == 1
+            content_height = tools.winfo_height()
+            overflow = content_height > tools_view.winfo_height()
+            assert bool(tools_scroll.winfo_ismapped()) == overflow
+            if overflow:
+                check_control(tools_scroll)
+            for widget in left_controls:
+                if overflow:
+                    root.tk.call(tools_scroll.cget('command'), 'moveto', widget.winfo_y() / content_height)
+                    root.update()
+                check_control(widget)
 
-        undo_button.invoke()
+        cover = tk.Toplevel(root)
+        cover.overrideredirect(True)
+        cover.attributes('-topmost', True)
+        cover.geometry(f'{dialog.top.winfo_width()}x{dialog.top.winfo_height()}'
+                       f'+{dialog.top.winfo_rootx()}+{dialog.top.winfo_rooty()}')
+        cover.lift()
+        root.update()
+        assert cover.winfo_viewable()
+        for widget in [*controls, eye, trash]:
+            check_control(widget)
+        x, y = undo_button.winfo_width() // 2, undo_button.winfo_height() // 2
+        for event in ('<Enter>', '<ButtonPress-1>', '<ButtonRelease-1>', '<Leave>'):
+            undo_button.event_generate(event, x=x, y=y)
         undo.assert_called_once_with()
+        eye.menu.invoke(0)
+        trash.menu.invoke(0)
+        hide.assert_called_once_with('drawings')
+        remove.assert_called_once_with('drawings')
     finally:
+        # ttkbootstrap keeps a process-wide popdown subscription for the
+        # replay combobox, keyed by its widget path. The conftest fixture
+        # resets Style.instance after each test, so the next case builds a
+        # fresh Style and republishes to this destroyed widget, which raises
+        # TclError. Drop the stale entry before destroying the root, so the
+        # four cases can run in one process (Linux; Windows runs each case
+        # in its own process via native_process).
+        replaybar = getattr(dialog, 'replaybar', None) if dialog is not None else None
+        if replaybar is not None:
+            from ttkbootstrap.publisher import Publisher
+            for widget in replaybar.winfo_children():
+                if widget.winfo_class() == 'TCombobox':
+                    Publisher.unsubscribe(widget.winfo_pathname(widget.winfo_id()))
         root.destroy()

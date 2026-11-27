@@ -243,9 +243,29 @@ class ChartWorkspaceDialog:
 
         body = tk.Frame(self.top, bg=APP_BG)
         body.pack(fill=tk.BOTH, expand=True)
-        left = tk.Frame(body, bg=CONTROL_BG, width=48)
-        left.pack(side=tk.LEFT, fill=tk.Y)
-        left.pack_propagate(False)
+        tools_panel = tk.Frame(body, bg=CONTROL_BG)
+        tools_panel.pack(side=tk.LEFT, fill=tk.Y)
+        tools_panel.rowconfigure(0, weight=1)
+        tools_view = tk.Canvas(tools_panel, bg=CONTROL_BG, width=48, height=1,
+                               borderwidth=0, highlightthickness=0)
+        tools_view.grid(row=0, column=0, sticky=tk.NS)
+        tools_scroll = ttk.Scrollbar(tools_panel, orient=tk.VERTICAL, command=tools_view.yview)
+        tools_view.configure(yscrollcommand=tools_scroll.set)
+        left = tk.Frame(tools_view, bg=CONTROL_BG)
+        tools_window = tools_view.create_window(0, 0, window=left, anchor=tk.NW)
+
+        def fit_tools(_event=None):
+            height = left.winfo_reqheight()
+            viewport_height = tools_view.winfo_height()
+            tools_view.itemconfigure(tools_window, height=max(height, viewport_height))
+            tools_view.configure(scrollregion=(0, 0, tools_view.winfo_width(), height))
+            if height > viewport_height:
+                tools_scroll.grid(row=0, column=1, sticky=tk.NS)
+            else:
+                tools_scroll.grid_remove()
+
+        left.bind('<Configure>', fit_tools)
+        tools_view.bind('<Configure>', fit_tools)
         tk.Button(left, image=control_icon(left, 'cross', 24, '#C4C6CB'), command=lambda: self.select_tool(None), bg=CONTROL_BG,
                   fg=TEXT, relief=tk.FLAT).pack(fill=tk.X, pady=(5, 2))
         for key, label in TOOLS:
@@ -268,6 +288,10 @@ class ChartWorkspaceDialog:
         trash.menu.add_command(label='移除所有图形', command=lambda: self.remove_scope('drawings'))
         trash.menu.add_command(label='移除所有指标', command=lambda: self.remove_scope('indicators'))
         trash.menu.add_command(label='移除图形与指标', command=lambda: self.remove_scope('all'))
+        # Size to the DPI-scaled icons once, so a hover label cannot resize the chart.
+        tools_width = max(48, *(widget.winfo_reqwidth() for widget in left.winfo_children()))
+        tools_view.configure(width=tools_width)
+        tools_view.itemconfigure(tools_window, width=tools_width)
 
         center = tk.Frame(body, bg=CHART_BG)
         center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
